@@ -1,0 +1,10 @@
+name = "leanr"
+version = "0.1.0"
+defaultTargets = ["leanr"]
+
+[[lean_lib]]
+name = "Leanr"
+
+[[lean_exe]]
+name = "leanr"
+root = "Main"
