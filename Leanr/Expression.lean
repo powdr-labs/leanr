@@ -1,4 +1,5 @@
 import Mathlib.Data.ZMod.Basic
+import Init.Data.ToString.Basic
 
 -- TODO could use generic Field instead of ZMod p
 
@@ -116,3 +117,22 @@ def Expression.simplify {p : ℕ} (e : Expression p) : Expression p :=
 -- Expression.simplify does not modify the semantics of the expression.
 theorem simplify_correct {p : ℕ} (e : Expression p) :
   Expression.equivalent e e.simplify := by sorry
+
+
+instance {p} : Add (Expression p) where
+  add x y := Expression.simplifying_add x y
+
+instance {p} : Mul (Expression p) where
+  mul x y := Expression.simplifying_mul x y
+
+instance {p} : OfNat (Expression p) (n : Nat) where
+  ofNat := .const (n % p)
+
+instance {p} : ToString (Expression p) where
+  toString :=
+    let rec toStr : Expression p → String
+      | .const n => toString n.val
+      | .var x => x
+      | .add e1 e2 => s!"({toStr e1} + {toStr e2})"
+      | .mul e1 e2 => s!"({toStr e1} * {toStr e2})"
+    toStr
