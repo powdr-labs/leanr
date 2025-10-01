@@ -41,7 +41,7 @@ def find_and_apply_assignments {p : ℕ}
   (constraints : List (AlgebraicConstraint p)) :
   List (AlgebraicConstraint p) :=
   let assignments := find_assignments constraints
-  constraints.map (fun c =>
+  let new_constraints := constraints.map (fun c =>
     assignments.foldl (fun acc a => acc.substitute a.var a.value) c)
-  -- new_constraints.filterMap fun c =>
-  --   if c.trivial then none else some c
+  new_constraints.filterMap fun c =>
+    if c.trivial? then none else some c

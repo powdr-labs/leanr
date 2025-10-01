@@ -16,6 +16,10 @@ def AlgebraicConstraint.substitute {p : ℕ}
 
 def AlgebraicConstraint.trivial {p : ℕ}
   (c : AlgebraicConstraint p) : Prop :=
+  c.expression = .const 0
+
+def AlgebraicConstraint.trivial? {p : ℕ}
+  (c : AlgebraicConstraint p) : Bool :=
   match c.expression with
-  | .const c => if c.val = 0 then true else false
-  | _ => false
+  | .const k => k.val = 0
+  | _        => false
