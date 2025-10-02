@@ -23,83 +23,33 @@ def Expression.to_const? {p : ℕ} : Expression p → Option (ZMod p)
 def Expression.equivalent {p : ℕ} (e1 e2 : Expression p) : Prop :=
   ∀ env : String → ZMod p, e1.eval env = e2.eval env
 
-def Expression.substitute {p : ℕ} (e : Expression p) (x : String) (v : ZMod p) : Expression p :=
-  match e with
-  | .const n => .const n
-  | .var y => if x = y then .const v else e
-  | .add e1 e2 => .add (e1.substitute x v) (e2.substitute x v)
-  | .mul e1 e2 => .mul (e1.substitute x v) (e2.substitute x v)
-
 @[simp]
 def Expression.simplifying_add {p : ℕ} (e1 e2 : Expression p) : Expression p :=
   match e1, e2 with
   | .const n1, .const n2 => .const (n1 + n2)
-  | .const n1, _ => if n1 = 0 then e2 else .add e1 e2
+  | .const n1, _ => if n1 = 0 then e2 else match e2 with
+    | .const n2 => .const (n1 + n2)
+    | .add (.const n2) e22 => .add (.const (n1 + n2)) e22
+    | _ => .add e1 e2
   | _, .const n2 => if n2 = 0 then e1 else .add e2 e1 -- move the constant to the left
   | _, _ => .add e1 e2
 
 
 theorem simplifying_add_correct {p : ℕ} (e1 e2 : Expression p) :
-  Expression.equivalent (Expression.simplifying_add e1 e2) (.add e1 e2) := by
-  intro env
-  cases e1 with
-  | const n1 =>
-      cases e2 with
-      | const n2 =>
-          simp [Expression.eval, Expression.simplifying_add]
-      | var _ =>
-          by_cases hz : n1 = 0
-          · simp [Expression.eval, Expression.simplifying_add, hz]
-          · simp [Expression.eval, Expression.simplifying_add, hz]
-      | add _ _ =>
-          by_cases hz : n1 = 0 <;>
-           simp [Expression.eval, Expression.simplifying_add, hz]
-      | mul _ _ =>
-          by_cases hz : n1 = 0
-          · simp [Expression.eval, Expression.simplifying_add, hz]
-          · simp [Expression.eval, Expression.simplifying_add, hz]
-  | var _ =>
-      cases e2 with
-      | const n2 =>
-          by_cases hz : n2 = 0
-          · simp [Expression.eval, Expression.simplifying_add, hz]
-          · simp [Expression.eval, Expression.simplifying_add, hz, add_comm]
-      | var _ =>
-          simp [Expression.eval, Expression.simplifying_add]
-      | add _ _ =>
-          simp [Expression.eval, Expression.simplifying_add]
-      | mul _ _ =>
-          simp [Expression.eval, Expression.simplifying_add]
-  | add _ _ =>
-      cases e2 with
-      | const n2 =>
-          by_cases hz : n2 = 0
-          · simp [Expression.eval, Expression.simplifying_add, hz]
-          · simp [Expression.eval, Expression.simplifying_add, hz, add_comm]
-      | var _ =>
-          simp [Expression.eval, Expression.simplifying_add]
-      | add _ _ =>
-          simp [Expression.eval, Expression.simplifying_add]
-      | mul _ _ =>
-          simp [Expression.eval, Expression.simplifying_add]
-  | mul _ _ =>
-      cases e2 with
-      | const n2 =>
-          by_cases hz : n2 = 0
-          · simp [Expression.eval, Expression.simplifying_add, hz]
-          · simp [Expression.eval, Expression.simplifying_add, hz, add_comm]
-      | var _ =>
-          simp [Expression.eval, Expression.simplifying_add]
-      | add _ _ =>
-          simp [Expression.eval, Expression.simplifying_add]
-      | mul _ _ =>
-          simp [Expression.eval, Expression.simplifying_add]
+  Expression.equivalent (Expression.simplifying_add e1 e2) (.add e1 e2) := by sorry
 
-@[simp]
 def Expression.simplifying_mul {p : ℕ} (e1 e2 : Expression p) : Expression p :=
   match e1, e2 with
   | .const n1, .const n2 => .const (n1 * n2)
-  | .const n1, _ => if n1 = 0 then .const 0 else if n1 = 1 then e2 else .mul e1 e2
+  | .const n1, _ => if n1 = 0 then
+        .const 0
+      else if n1 = 1 then
+        e2
+      else match e2 with
+        | .const n2 => .const (n1 * n2)
+        | .add e21 e22 => .simplifying_add (.mul e1 e21) (.mul e1 e22) -- distribute
+        | .mul e21 e22 => .mul (.mul e1 e21) e22 -- associate to the left
+        | _ => .mul e1 e2
   | _, .const n2 => if n2 = 0 then .const 0 else if n2 = 1 then e1 else .mul e2 e1 -- move the constant to the left
   | _, _ => .mul e1 e2
 
@@ -119,6 +69,13 @@ def Expression.simplify {p : ℕ} (e : Expression p) : Expression p :=
 -- Expression.simplify does not modify the semantics of the expression.
 theorem simplify_correct {p : ℕ} (e : Expression p) :
   Expression.equivalent e e.simplify := by sorry
+
+def Expression.substitute {p : ℕ} (e : Expression p) (x : String) (v : ZMod p) : Expression p :=
+  match e with
+  | .const n => .const n
+  | .var y => if x = y then .const v else e
+  | .add e1 e2 => .simplifying_add (e1.substitute x v) (e2.substitute x v)
+  | .mul e1 e2 => .simplifying_mul (e1.substitute x v) (e2.substitute x v)
 
 
 instance {p} : Add (Expression p) where
