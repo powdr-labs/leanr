@@ -16,7 +16,7 @@ def Expression.eval {p : ℕ} (e : Expression p) (env : String → ZMod p): ZMod
   | .add e1 e2 => e1.eval env + e2.eval env
   | .mul e1 e2 => e1.eval env * e2.eval env
 
-def Expression.to_const? {p : ℕ} : Expression p → Option (ZMod p)
+def Expression.toConstant? {p : ℕ} : Expression p → Option (ZMod p)
   | .const n => some n
   | _ => none
 
