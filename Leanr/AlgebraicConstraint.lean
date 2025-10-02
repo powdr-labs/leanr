@@ -23,3 +23,9 @@ def AlgebraicConstraint.trivial? {p : ℕ}
   match c.expression with
   | .const k => k.val = 0
   | _        => false
+
+instance {p : ℕ} : ToString (AlgebraicConstraint p) where
+  toString c := toString c.expression
+
+instance {p : ℕ} : ToString (List (AlgebraicConstraint p)) where
+  toString cs := String.intercalate "\n" (cs.map toString)

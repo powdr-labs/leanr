@@ -23,13 +23,6 @@ def Expression.to_const? {p : ℕ} : Expression p → Option (ZMod p)
 def Expression.equivalent {p : ℕ} (e1 e2 : Expression p) : Prop :=
   ∀ env : String → ZMod p, e1.eval env = e2.eval env
 
-def Expression.substitute {p : ℕ} (e : Expression p) (x : String) (v : ZMod p) : Expression p :=
-  match e with
-  | .const n => .const n
-  | .var y => if x = y then .const v else e
-  | .add e1 e2 => .add (e1.substitute x v) (e2.substitute x v)
-  | .mul e1 e2 => .mul (e1.substitute x v) (e2.substitute x v)
-
 @[simp]
 def Expression.simplifying_add {p : ℕ} (e1 e2 : Expression p) : Expression p :=
   match e1, e2 with
@@ -119,6 +112,13 @@ def Expression.simplify {p : ℕ} (e : Expression p) : Expression p :=
 -- Expression.simplify does not modify the semantics of the expression.
 theorem simplify_correct {p : ℕ} (e : Expression p) :
   Expression.equivalent e e.simplify := by sorry
+
+def Expression.substitute {p : ℕ} (e : Expression p) (x : String) (v : ZMod p) : Expression p :=
+  match e with
+  | .const n => .const n
+  | .var y => if x = y then .const v else e
+  | .add e1 e2 => .simplifying_add (e1.substitute x v) (e2.substitute x v)
+  | .mul e1 e2 => .simplifying_mul (e1.substitute x v) (e2.substitute x v)
 
 
 instance {p} : Add (Expression p) where
