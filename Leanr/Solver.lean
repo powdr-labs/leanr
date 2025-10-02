@@ -63,8 +63,8 @@ def solve {p : ℕ}
   decreasing_by
     simpa [solve, new_constraints]
 
-/-- info: (4 + (11 + (3 * (11 + z)))) -/
+/-- info: (2 + ((7 + (3 * z)) + (3 * k))) -/
 #guard_msgs in
-#eval (solve [ { expression := expr { 2 * x + 3 * (y + z) + 4 } },
+#eval (solve [ { expression := expr { 2 * x + 3 * (y + z + k) + 4 } },
                  { expression := expr { x + 1 } },
                  { expression := expr { y + 2 } } ] : List (AlgebraicConstraint 13))
