@@ -1,7 +1,7 @@
-import Leanr.Expression
+import Leanr.GroupedExpression
 
 structure AlgebraicConstraint (p : ℕ) where
-  expression : Expression p
+  expression : GroupedExpression p
 
 def AlgebraicConstraint.is_satisfied_by {p : ℕ}
   (c : AlgebraicConstraint p)
@@ -16,13 +16,11 @@ def AlgebraicConstraint.substitute {p : ℕ}
 
 def AlgebraicConstraint.trivial {p : ℕ}
   (c : AlgebraicConstraint p) : Prop :=
-  c.expression = .const 0
+  c.expression.toConstant? = some 0
 
 def AlgebraicConstraint.trivial? {p : ℕ}
   (c : AlgebraicConstraint p) : Bool :=
-  match c.expression with
-  | .const k => k.val = 0
-  | _        => false
+  c.expression.toConstant? = some 0
 
 instance {p : ℕ} : ToString (AlgebraicConstraint p) where
   toString c := toString c.expression

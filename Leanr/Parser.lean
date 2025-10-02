@@ -13,20 +13,20 @@ syntax ident : expr
 syntax "expr" "{" expr "}" : term
 
 macro_rules
-  | `(expr {$x + $y}) => `(Expression.simplifying_add (expr {$x}) (expr {$y}))
-  | `(expr {$x * $y}) => `(Expression.simplifying_mul (expr {$x}) (expr {$y}))
+  | `(expr {$x + $y}) => `(Expression.add (expr {$x}) (expr {$y}))
+  | `(expr {$x * $y}) => `(Expression.mul (expr {$x}) (expr {$y}))
   | `(expr {($x)}) => `(expr {$x})
   | `(expr {$n:num}) => `(.const (OfNat.ofNat $n))
   | `(expr {$x:ident}) => `(.var $(Lean.quote x.getId.toString))
 
-/-- info: (2 * x) -/
+/-- info: ((2 * x) + 0) -/
 #guard_msgs in
 #eval (expr { 2 * x + 0 } : Expression 9)
 
-/-- info: (4 + ((2 * x) + (3 * y))) -/
+/-- info: (((2 * x) + (3 * y)) + 4) -/
 #guard_msgs in
 #eval ((expr { 2 * x + 3 * y + 4 }) : Expression 9)
 
-/-- info: ((2 * x) + (3 * y)) -/
+/-- info: (((2 * x) + (3 * y)) + 0) -/
 #guard_msgs in
 #eval ((expr { 2 * x + 3 * y + 4 }) : Expression 4)

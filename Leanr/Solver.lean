@@ -8,20 +8,18 @@ structure Assignment {p : ℕ} where
 --- Try to solve an affine constraint with at most one variable.
 def solve_constraint? {p : ℕ}
   (constraint : AlgebraicConstraint p) : Option (Assignment (p := p)) :=
-  -- After simplification, we know that constants are always on the left.
-  -- So we solve expressions of the form
-  --  x
-  --  k + x
-  --  c * x
-  --  k + c * x
-  match constraint.expression with
-  | .var x => some { var := x, value := 0 }
-  | .add (.const k) (.var x) => some { var := x, value := -k }
-  | .mul (.const c) (.var x) =>
-    if c = 0 then none else some { var := x, value := c⁻¹ * 0 }
-  | .add (.const k) (.mul (.const c) (.var x)) =>
-    if c = 0 then none else some { var := x, value := c⁻¹ * -k }
-  | _ => none
+  let e := constraint.expression
+  if !e.quadratic.isEmpty then
+    none
+  else match e.affine.toList with
+    | [] => none
+    | [(x, c)] =>
+      if c = 0 then
+        -- actually unreachable
+        none
+      else
+        some { var := x, value := -c⁻¹ * e.offset }
+    | _ :: _ :: _ => none -- more than one variable
 
 -- TODO theorem: solve plus substitute yields trivial constraint.
 
@@ -63,8 +61,8 @@ def solve {p : ℕ}
   decreasing_by
     simpa [solve, new_constraints]
 
-/-- info: (2 + ((7 + (3 * z)) + (3 * k))) -/
+/-- info: 9 + 3 * k + 3 * z -/
 #guard_msgs in
-#eval (solve [ { expression := expr { 2 * x + 3 * (y + z + k) + 4 } },
-                 { expression := expr { x + 1 } },
-                 { expression := expr { y + 2 } } ] : List (AlgebraicConstraint 13))
+#eval (solve [ { expression := .ofExpression expr { 2 * x + 3 * (y + z + k) + 4 } },
+                 { expression := .ofExpression expr { x + 1 } },
+                 { expression := .ofExpression expr { y + 2 } } ] : List (AlgebraicConstraint 13))
