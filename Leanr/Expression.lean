@@ -30,6 +30,7 @@ def Expression.substitute {p : ℕ} (e : Expression p) (x : String) (v : ZMod p)
   | .add e1 e2 => .add (e1.substitute x v) (e2.substitute x v)
   | .mul e1 e2 => .mul (e1.substitute x v) (e2.substitute x v)
 
+@[simp]
 def Expression.simplifying_add {p : ℕ} (e1 e2 : Expression p) : Expression p :=
   match e1, e2 with
   | .const n1, .const n2 => .const (n1 + n2)
@@ -94,6 +95,7 @@ theorem simplifying_add_correct {p : ℕ} (e1 e2 : Expression p) :
       | mul _ _ =>
           simp [Expression.eval, Expression.simplifying_add]
 
+@[simp]
 def Expression.simplifying_mul {p : ℕ} (e1 e2 : Expression p) : Expression p :=
   match e1, e2 with
   | .const n1, .const n2 => .const (n1 * n2)
