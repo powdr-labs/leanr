@@ -223,8 +223,7 @@ def parseBusInteraction {p : ℕ}
 
 
 /-- Main entry: parse a whole document into (bus interactions, loose expressions). -/
-def parseSystem {p : ℕ}
-  (s : String) : Except String (List (BusInteraction (Expression p)) × List (AlgebraicConstraint p)) := do
+def parseSystem {p : ℕ} (s : String) : Except String (System p) := do
   let lines := s.splitOn "\n"
   let mut currentBusId : Option (Expression p) := none
   let mut busInteractions : List (BusInteraction (Expression p)) := []
@@ -253,7 +252,12 @@ def parseSystem {p : ℕ}
         -- an algebraic constraint
         let c ← parseAlgebraicConstraint (p := p) line
         algebraicConstraints := c :: algebraicConstraints
-  pure (busInteractions.reverse, algebraicConstraints.reverse)
+  let system := {
+    constraints := algebraicConstraints.reverse,
+    bus_interactions := busInteractions.reverse,
+    assignments := []
+  }
+  pure system
 
 /-- Public entry point: parse whole string (must consume all non-space input). -/
 def parse {p : ℕ} (s : String) : Except String (Expression p) := do
@@ -320,11 +324,5 @@ BusInteraction { bus_id: 3, multiplicity: (is_valid * 1), payload: [(((15360 * w
     // Algebraic constraints:
     is_valid * (is_valid - 1) = 0"
   match parseSystem (p := 0x1dffff) input with
-  | .ok (busInteractions, constraints) =>
-    let system : System 0x1dffff := {
-      constraints := constraints,
-      bus_interactions := busInteractions,
-      assignments := []
-    }
-    system
+  | .ok system => system
   | .error _ => System.fromConstraints []
