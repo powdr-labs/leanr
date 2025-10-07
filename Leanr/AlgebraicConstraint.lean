@@ -62,6 +62,9 @@ structure Assignment {p : ℕ} where
   var : String
   value : ZMod p
 
+instance {p : ℕ} : ToString (Assignment (p := p)) where
+  toString a := a.var ++ " = " ++ toString a.value.val
+
 --- Try to solve an affine constraint with at most one variable.
 def AlgebraicConstraint.solve? {p : ℕ}
   (constraint : AlgebraicConstraint p) : Option (Assignment (p := p)) :=
