@@ -1,6 +1,18 @@
 import Leanr.AlgebraicConstraint
 import Leanr.Parser
 
+structure System {p : ℕ} where
+  constraints: List (AlgebraicConstraint p)
+  assignments: List (Assignment (p := p))
+
+instance {p : ℕ} : ToString (System (p := p)) where
+  toString s :=
+    "Assignments:\n" ++
+    String.intercalate "\n" (s.assignments.map toString) ++
+    "\nConstraints:\n" ++
+    String.intercalate "\n" (s.constraints.map toString)
+
+
 def find_assignment {p : ℕ}
   (constraints : List (AlgebraicConstraint p)) : Option (Assignment (p := p)) × List (AlgebraicConstraint p) :=
   match constraints with
@@ -12,26 +24,35 @@ def find_assignment {p : ℕ}
       let (a, rest) := find_assignment cs
       (a, c :: rest)
 
-def solve_step {p : ℕ}
-  (constraints : List (AlgebraicConstraint p)) : List (AlgebraicConstraint p) :=
-  match find_assignment constraints with
-  | (none, _) => constraints
+def solve_step {p : ℕ} (system : System (p := p)) : System (p := p) :=
+  match find_assignment system.constraints with
+  | (none, _) => system
   | (some assignment, constraints) =>
-    constraints.map (fun c => c.substitute assignment.var assignment.value)
+    {
+      constraints := constraints.map (fun c => c.substitute assignment.var assignment.value),
+      assignments := assignment :: system.assignments
+    }
 
-def solve {p : ℕ}
-  (constraints : List (AlgebraicConstraint p)) : List (AlgebraicConstraint p) :=
-  let new_constraints := solve_step constraints
-  if new_constraints.length < constraints.length then
-    solve new_constraints
+def solve {p : ℕ} (system : System (p := p)) : System (p := p) :=
+  let new_system := solve_step system
+  if new_system.constraints.length < system.constraints.length then
+    solve new_system
   else
-    new_constraints
-  termination_by constraints.length
+    new_system
+  termination_by system.constraints.length
   decreasing_by
-    simpa [solve, new_constraints]
+    simpa [solve]
 
-/-- info: 8 + 10 * k + 10 * z -/
+def System.fromConstraints {p : ℕ}
+  (constraints : List (AlgebraicConstraint p)) : System (p := p) :=
+  { constraints := constraints, assignments := [] }
+
+/-- info: Assignments:
+y = 11
+x = 12
+Constraints:
+8 + 10 * k + 10 * z -/
 #guard_msgs in
-#eval (solve [ .assertZero expr { 2 * x + 3 * (y + z + k) * x + 4 },
+#eval (solve (System.fromConstraints (p := 13) [ .assertZero expr { 2 * x + 3 * (y + z + k) * x + 4 },
                  .assertZero expr { x + 1 },
-                .assertZero expr { y + 2 } ] : List (AlgebraicConstraint 13))
+                .assertZero expr { y + 2 } ]))
