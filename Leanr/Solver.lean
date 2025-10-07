@@ -4,7 +4,7 @@ import Leanr.Parser
 
 structure System {p : ℕ} where
   constraints: List (AlgebraicConstraint p)
-  bus_interactions: List (BusInteraction p)
+  bus_interactions: List (BusInteraction (Expression p))
   assignments: List (Assignment (p := p))
 
 instance {p : ℕ} : ToString (System (p := p)) where
