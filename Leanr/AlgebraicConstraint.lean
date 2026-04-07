@@ -1,23 +1,24 @@
 import Leanr.AffineExpression
 import Leanr.Expression
 
+variable {p : ℕ} [Fact (Nat.Prime p)]
+
 inductive AlgebraicConstraint (p : ℕ) where
   | affine (e : AffineExpression p)
   | general (e : Expression p)
 
-def AlgebraicConstraint.assertZero {p : ℕ}
-  (e : Expression p) : AlgebraicConstraint p :=
+def AlgebraicConstraint.assertZero (e : Expression p) : AlgebraicConstraint p :=
   match AffineExpression.ofExpression? e with
   | some ae => .affine ae
   | none => .general e
 
-def AlgebraicConstraint.substitute {p : ℕ}
+def AlgebraicConstraint.substitute
   (c : AlgebraicConstraint p)
   (x : String)
   (v : ZMod p) : AlgebraicConstraint p :=
   match c with
   | .affine e => .affine (e.substitute x v)
-  | .general e => AlgebraicConstraint.assertZero (e.substitute x v)
+  | .general e => .assertZero (e.substitute x v)
 
 def AlgebraicConstraint.toConstant? {p : ℕ}
   (c : AlgebraicConstraint p) : Option (ZMod p) :=
@@ -49,12 +50,12 @@ def AlgebraicConstraint.trivial? {p : ℕ}
   | .affine e => e.toConstant?
   | .general e => e.toConstant?
 
-instance {p : ℕ} : ToString (AlgebraicConstraint p) where
+instance : ToString (AlgebraicConstraint p) where
   toString c := match c with
     | .affine e => toString e
     | .general e => toString e
 
-instance {p : ℕ} : ToString (List (AlgebraicConstraint p)) where
+instance : ToString (List (AlgebraicConstraint p)) where
   toString cs := String.intercalate "\n" (cs.map toString)
 
 

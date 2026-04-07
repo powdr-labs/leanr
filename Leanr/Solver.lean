@@ -2,12 +2,14 @@ import Leanr.AlgebraicConstraint
 import Leanr.BusInteraction
 import Leanr.Parser
 
+variable {p : ℕ} [Fact (Nat.Prime p)]
+
 structure System (p : ℕ) where
   constraints: List (AlgebraicConstraint p)
   bus_interactions: List (BusInteraction (Expression p))
   assignments: List (Assignment (p := p))
 
-instance {p : ℕ} : ToString (System (p := p)) where
+instance : ToString (System (p := p)) where
   toString s :=
     "Assignments:\n" ++
     String.intercalate "\n" (s.assignments.map toString) ++
@@ -17,7 +19,7 @@ instance {p : ℕ} : ToString (System (p := p)) where
     String.intercalate "\n" (s.bus_interactions.map toString)
 
 
-def find_assignment {p : ℕ}
+def find_assignment
   (constraints : List (AlgebraicConstraint p)) : Option (Assignment (p := p)) × List (AlgebraicConstraint p) :=
   match constraints with
   | [] => (none, [])
@@ -28,7 +30,7 @@ def find_assignment {p : ℕ}
       let (a, rest) := find_assignment cs
       (a, c :: rest)
 
-def solve_step {p : ℕ} (system : System (p := p)) : System (p := p) :=
+def solve_step (system : System (p := p)) : System (p := p) :=
   match find_assignment system.constraints with
   | (none, _) => system
   | (some assignment, constraints) =>
@@ -38,7 +40,7 @@ def solve_step {p : ℕ} (system : System (p := p)) : System (p := p) :=
       assignments := assignment :: system.assignments
     }
 
-def solve {p : ℕ} (system : System (p := p)) : System (p := p) :=
+def solve (system : System (p := p)) : System (p := p) :=
   let new_system := solve_step system
   if new_system.constraints.length < system.constraints.length then
     solve new_system
@@ -51,6 +53,9 @@ def solve {p : ℕ} (system : System (p := p)) : System (p := p) :=
 def System.fromConstraints {p : ℕ}
   (constraints : List (AlgebraicConstraint p)) : System (p := p) :=
   { constraints := constraints, bus_interactions := [], assignments := [] }
+
+instance : Fact (Nat.Prime 13) where
+  out := by norm_num
 
 /-- info: Assignments:
 y = 11

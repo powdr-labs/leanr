@@ -28,15 +28,15 @@ is_valid * (is_valid - 1) = 0
 
 structure PState where
   s : String
-  i : String.Pos := 0
+  i : String.Pos.Raw := 0
 
 namespace P
 
-def eof (st : PState) : Bool := st.i ≥ st.s.endPos
+def eof (st : PState) : Bool := st.i ≥ st.s.endPos.offset
 
-def peek (st : PState) : Option Char := st.s.get? st.i
+def peek (st : PState) : Option Char := String.Pos.Raw.get? st.s st.i
 
-def step (st : PState) : PState := { st with i := st.s.next st.i }
+def step (st : PState) : PState := { st with i := String.Pos.Raw.next st.s st.i }
 
 partial def skipSpaces (st : PState) : PState :=
   match peek st with
@@ -60,7 +60,7 @@ partial def expectString (expected : String) (st : PState) : Except String PStat
     if i = expected.length then
       return st
     else
-      let some c := expected.get? ⟨i⟩
+      let some c := String.Pos.Raw.get? expected ⟨i⟩
         | throw "internal error in expectString"
       match peek st with
       | some d =>
@@ -186,7 +186,7 @@ partial def parseExpressionList {p : ℕ} (st : PState) : Except String (List (E
           pure (List.reverse (e :: acc), st)
   loop [] st
 
-def parseAlgebraicConstraint {p : ℕ} (s : String) : Except String (AlgebraicConstraint p) := do
+def parseAlgebraicConstraint {p : ℕ} [Fact (Nat.Prime p)] (s : String) : Except String (AlgebraicConstraint p) := do
   let (lhs, st) ← parseExpr { s }
   let st ← expect '=' st
   let (rhs, st) ← parseExpr st
@@ -198,7 +198,7 @@ def parseAlgebraicConstraint {p : ℕ} (s : String) : Except String (AlgebraicCo
 
 /-- Trim ASCII whitespace both ends. -/
 def trim (s : String) : String :=
-  s.dropWhile Char.isWhitespace |>.dropRightWhile Char.isWhitespace
+  s.trimAscii.toString
 
 /-- Parse a `mult=..., args=[...]` line. -/
 def parseBusInteraction {p : ℕ}
@@ -208,7 +208,7 @@ def parseBusInteraction {p : ℕ}
   let line := trim line
   if !line.startsWith "mult=" then
     throw "expected line starting with `mult=`"
-  let st : PState := { s := line.drop 5 }
+  let st : PState := { s := (line.drop 5).toString }
   let (multiplicity, st) ← parseExpr (p := p) st
   let st ← expect ',' st
   let st ← expectString "args" st
@@ -223,7 +223,7 @@ def parseBusInteraction {p : ℕ}
 
 
 /-- Main entry: parse a whole document into (bus interactions, loose expressions). -/
-def parseSystem {p : ℕ} (s : String) : Except String (System p) := do
+def parseSystem {p : ℕ} [Fact (Nat.Prime p)] (s : String) : Except String (System p) := do
   let lines := s.splitOn "\n"
   let mut currentBusId : Option (Expression p) := none
   let mut busInteractions : List (BusInteraction (Expression p)) := []
@@ -233,11 +233,11 @@ def parseSystem {p : ℕ} (s : String) : Except String (System p) := do
     if line.isEmpty then
       continue
     else if line.startsWith "//" then
-      let rest := trim (line.drop 2)
+      let rest := trim (line.drop 2).toString
       if rest.startsWith "Bus" then
         -- try to parse bus ID
-        let rest := trim (rest.drop 3)
-        let idDigits := rest.takeWhile (fun c => c.isDigit)
+        let rest := trim (rest.drop 3).toString
+        let idDigits := (rest.takeWhile Char.isDigit).toString
         match idDigits.toNat? with
         | some n => currentBusId := some (Expression.const (n : ZMod p))
         | none => currentBusId := none
@@ -267,6 +267,13 @@ def parse {p : ℕ} (s : String) : Except String (Expression p) := do
     pure e
   else
     throw s!"unexpected trailing input at {st.i.byteIdx}"
+
+instance : Fact (Nat.Prime 101) where
+  out := by norm_num
+instance : Fact (Nat.Prime 7) where
+  out := by norm_num
+instance : Fact (Nat.Prime 0x1dffff) where
+  out := by norm_num
 
 
 /-- info: "(((x * 3) + (y * (z + 2))) + 5)" -/

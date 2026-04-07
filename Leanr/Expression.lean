@@ -21,7 +21,7 @@ def Expression.toConstant? {p : ℕ} : Expression p → Option (ZMod p)
   | _ => none
 
 def Expression.equivalent {p : ℕ} (e1 e2 : Expression p) : Prop :=
-  ∀ env : String → ZMod p, e1.eval env = e2.eval env
+  e1.eval = e2.eval
 
 @[simp]
 def Expression.simplifying_add {p : ℕ} (e1 e2 : Expression p) : Expression p :=
