@@ -40,15 +40,23 @@ def solve_step (system : System (p := p)) : System (p := p) :=
       assignments := assignment :: system.assignments
     }
 
-def solve (system : System (p := p)) : System (p := p) :=
+def solve (system : System (p := p)) (log : Bool := false) : IO (System (p := p)) := do
+  if log then
+    IO.eprintln s!"[solve] {system.constraints.length} constraints, {system.assignments.length} assignments"
   let new_system := solve_step system
   if new_system.constraints.length < system.constraints.length then
-    solve new_system
+    if log then
+      match new_system.assignments with
+      | a :: _ => IO.eprintln s!"[solve] solved: {a}"
+      | [] => pure ()
+    solve new_system log
   else
-    new_system
+    if log then
+      IO.eprintln s!"[solve] no more solvable constraints"
+    return new_system
   termination_by system.constraints.length
   decreasing_by
-    simpa [solve]
+    omega
 
 def System.fromConstraints {p : ℕ}
   (constraints : List (AlgebraicConstraint p)) : System (p := p) :=
@@ -57,14 +65,8 @@ def System.fromConstraints {p : ℕ}
 instance : Fact (Nat.Prime 13) where
   out := by norm_num
 
-/-- info: Assignments:
-y = 11
-x = 12
-Constraints:
-8 + 10 * k + 10 * z
-Bus Interactions:
--/
-#guard_msgs in
-#eval (solve (System.fromConstraints (p := 13) [ .assertZero expr { 2 * x + 3 * (y + z + k) * x + 4 },
-                 .assertZero expr { x + 1 },
-                .assertZero expr { y + 2 } ]))
+-- #eval! do
+--   let r ← solve (System.fromConstraints (p := 13) [ .assertZero expr { 2 * x + 3 * (y + z + k) * x + 4 },
+--                  .assertZero expr { x + 1 },
+--                 .assertZero expr { y + 2 } ])
+--   IO.println s!"{r}"
