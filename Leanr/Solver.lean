@@ -49,10 +49,12 @@ def update_range_constraints_from_assignments
     | none => m.insert a.var newRc
 
 /-- One round: find all solvable assignments, then apply them all at once. -/
-def solve_round (system : System (p := p)) (log : Bool) : IO (System (p := p)) := do
+def solve_round (system : System (p := p))
+    (rc : Std.HashMap String (RangeConstraint p))
+    (log : Bool) : IO (System (p := p) × Std.HashMap String (RangeConstraint p)) := do
   let (newAssignments, remaining) := find_all_assignments system.constraints
   if newAssignments.isEmpty then
-    return system
+    return (system, rc)
   if log then
     IO.eprintln s!"[solve] found {newAssignments.size} assignments in this round"
   -- Build a HashMap for O(1) lookup during substitution
@@ -60,18 +62,17 @@ def solve_round (system : System (p := p)) (log : Bool) : IO (System (p := p)) :
     newAssignments.foldl (init := (∅ : Std.HashMap String (ZMod p))) fun m a => m.insert a.var a.value
   let constraints := substitute_all_constraints remaining env
   let bus := substitute_all_bus system.bus_interactions env
-  let rc := update_range_constraints_from_assignments system.range_constraints newAssignments
-  return {
+  let rc := update_range_constraints_from_assignments rc newAssignments
+  return ({
     constraints := constraints,
     bus_interactions := bus,
     assignments := system.assignments ++ newAssignments,
-    range_constraints := rc
-  }
+  }, rc)
 
 def solve (system : System (p := p)) (log : Bool := false) : IO (System (p := p)) := do
   if log then
     IO.eprintln s!"[solve] {system.constraints.size} constraints, {system.bus_interactions.size} bus, {system.assignments.size} assignments"
-  let new_system ← solve_round system log
+  let (new_system, _rc) ← solve_round system ∅ log
   if new_system.constraints.size < system.constraints.size then
     solve new_system log
   else

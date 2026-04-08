@@ -11,6 +11,7 @@ import Leanr.StringParser
 import Leanr.JsonParser
 import Leanr.OpenVM
 import Leanr.RangeConstraint
+import Leanr.RangeConstraint.Proofs
 import Leanr.Expression.Proofs
 import Leanr.AffineExpression.Proofs
 import Leanr.AlgebraicConstraint.Proofs
