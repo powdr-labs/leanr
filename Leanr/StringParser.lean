@@ -311,7 +311,9 @@ BusInteraction { bus_id: 1, multiplicity: (is_valid * 1), payload: [1, 8, 0, 0, 
 BusInteraction { bus_id: 3, multiplicity: (is_valid * 1), payload: [reads_aux__0__base__timestamp_lt_aux__lower_decomp__0_0, 17] }
 BusInteraction { bus_id: 3, multiplicity: (is_valid * 1), payload: [((((15360 * reads_aux__0__base__prev_timestamp_0) + (15360 * reads_aux__0__base__timestamp_lt_aux__lower_decomp__0_0)) + 15360) + (1966078 * (15360 * from_state__timestamp_0))), 12] }
 BusInteraction { bus_id: 3, multiplicity: (is_valid * 1), payload: [writes_aux__base__timestamp_lt_aux__lower_decomp__0_0, 17] }
-BusInteraction { bus_id: 3, multiplicity: (is_valid * 1), payload: [(((15360 * writes_aux__base__prev_timestamp_0) + (15360 * writes_aux__base__timestamp_lt_aux__lower_decomp__0_0)) + (1966078 * ((15360 * from_state__timestamp_0) + 15360))), 12] }-/
+BusInteraction { bus_id: 3, multiplicity: (is_valid * 1), payload: [(((15360 * writes_aux__base__prev_timestamp_0) + (15360 * writes_aux__base__timestamp_lt_aux__lower_decomp__0_0)) + (1966078 * ((15360 * from_state__timestamp_0) + 15360))), 12] }
+Range Constraints:
+-/
 #guard_msgs in
 #eval
   let input :=

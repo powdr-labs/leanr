@@ -1,6 +1,7 @@
 import Mathlib.Data.ZMod.Basic
 import Mathlib.Tactic.Ring
 import Init.Data.ToString.Basic
+import Leanr.RangeConstraint
 
 -- TODO could use generic Field instead of ZMod p
 
@@ -97,3 +98,12 @@ instance {p} : ToString (Expression p) where
       | .add e1 e2 => s!"({toStr e1} + {toStr e2})"
       | .mul e1 e2 => s!"({toStr e1} * {toStr e2})"
     toStr
+
+/-- Compute the range constraint of an expression given range constraints for variables. -/
+def Expression.rangeConstraint {p : ℕ}
+    (e : Expression p) (env : String → RangeConstraint p) : RangeConstraint p :=
+  match e with
+  | .const n => ↑n
+  | .var x => env x
+  | .add e1 e2 => e1.rangeConstraint env + e2.rangeConstraint env
+  | .mul e1 e2 => e1.rangeConstraint env * e2.rangeConstraint env

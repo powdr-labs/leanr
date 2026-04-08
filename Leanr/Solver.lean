@@ -38,6 +38,16 @@ def substitute_all_bus
       result := result.push bi'
   result
 
+/-- Update range constraints with newly solved assignments (single-value constraints). -/
+def update_range_constraints_from_assignments
+    (rc : Std.HashMap String (RangeConstraint p))
+    (assignments : Array (Assignment (p := p))) : Std.HashMap String (RangeConstraint p) :=
+  assignments.foldl (init := rc) fun m a =>
+    let newRc : RangeConstraint p := ↑a.value
+    match m[a.var]? with
+    | some existing => m.insert a.var (existing.conjunction newRc)
+    | none => m.insert a.var newRc
+
 /-- One round: find all solvable assignments, then apply them all at once. -/
 def solve_round (system : System (p := p)) (log : Bool) : IO (System (p := p)) := do
   let (newAssignments, remaining) := find_all_assignments system.constraints
@@ -50,10 +60,12 @@ def solve_round (system : System (p := p)) (log : Bool) : IO (System (p := p)) :
     newAssignments.foldl (init := (∅ : Std.HashMap String (ZMod p))) fun m a => m.insert a.var a.value
   let constraints := substitute_all_constraints remaining env
   let bus := substitute_all_bus system.bus_interactions env
+  let rc := update_range_constraints_from_assignments system.range_constraints newAssignments
   return {
     constraints := constraints,
     bus_interactions := bus,
-    assignments := system.assignments ++ newAssignments
+    assignments := system.assignments ++ newAssignments,
+    range_constraints := rc
   }
 
 def solve (system : System (p := p)) (log : Bool := false) : IO (System (p := p)) := do

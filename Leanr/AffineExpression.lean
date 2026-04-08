@@ -87,3 +87,9 @@ def AffineExpression.toStr (e : AffineExpression p) : String :=
 
 instance {p} [Fact (Nat.Prime p)] : ToString (AffineExpression p) where
   toString := fun e => e.toStr
+
+/-- Compute the range constraint of an affine expression given range constraints for variables. -/
+def AffineExpression.rangeConstraint
+    (e : AffineExpression p) (env : String → RangeConstraint p) : RangeConstraint p :=
+  let init : RangeConstraint p := ↑e.offset
+  e.affine.foldl (fun (acc : RangeConstraint p) k (v : ZMod p) => acc + (↑v) * env k) init
