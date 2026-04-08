@@ -219,7 +219,7 @@ def parseBusInteraction {p : ℕ}
   let st := skipSpaces st
   if !eof st then
     throw s!"unexpected trailing input at {st.i.byteIdx}"
-  pure { busId := busId, multiplicity := multiplicity, payload := payload }
+  pure { busId := busId, multiplicity := multiplicity, payload := payload.toArray }
 
 
 /-- Main entry: parse a whole document into (bus interactions, loose expressions). -/
@@ -268,11 +268,11 @@ def parse {p : ℕ} (s : String) : Except String (Expression p) := do
   else
     throw s!"unexpected trailing input at {st.i.byteIdx}"
 
-instance : Fact (Nat.Prime 101) where
+instance instFactPrime101 : Fact (Nat.Prime 101) where
   out := by norm_num
-instance : Fact (Nat.Prime 7) where
+instance instFactPrime7 : Fact (Nat.Prime 7) where
   out := by norm_num
-instance : Fact (Nat.Prime 0x1dffff) where
+instance instFactPrime0x1dffff : Fact (Nat.Prime 0x1dffff) where
   out := by norm_num
 
 

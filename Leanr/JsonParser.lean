@@ -4,29 +4,6 @@ import Leanr.Expression
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
-/-- A bus map entry describing the type of a bus. -/
-inductive BusType where
-  | executionBridge
-  | memory
-  | pcLookup
-  | other (name : String)
-  deriving Repr, BEq
-
-instance : ToString BusType where
-  toString
-    | .executionBridge => "ExecutionBridge"
-    | .memory => "Memory"
-    | .pcLookup => "PcLookup"
-    | .other name => name
-
-/-- Mapping from bus IDs to their types. -/
-def BusMap := List (Nat × BusType)
-
-instance : ToString BusMap where
-  toString bm :=
-    let entries := bm.map fun (id, ty) => s!"  {id}: {ty}"
-    "BusMap:\n" ++ String.intercalate "\n" entries
-
 private def parseBusType (j : Lean.Json) : Except String BusType :=
   match j with
   | Lean.Json.str "ExecutionBridge" => .ok .executionBridge
@@ -38,7 +15,7 @@ private def parseBusType (j : Lean.Json) : Except String BusType :=
     | some ("Other", Lean.Json.str name) => .ok (.other name)
     | some ("Other", Lean.Json.obj inner) =>
       match inner.toList.head? with
-      | some (name, _) => .ok (.other name)
+      | some (name, val) => .ok (.other s!"{name}:{val}")
       | none => .error "empty Other object in bus_map"
     | some (k, _) => .ok (.other k)
     | none => .error "empty object in bus_map"
@@ -111,7 +88,7 @@ private def parseBusInteraction (j : Lean.Json) : Except String (BusInteraction 
   pure {
     busId := busId,
     multiplicity := multiplicity,
-    payload := payload
+    payload := payload.toArray
   }
 
 /-- Parse a JSON string into a `System` and `BusMap`, starting at the `machine` key. -/

@@ -1,16 +1,16 @@
 import Leanr.Expression
-import Leanr
+import Leanr.RangeConstraint
 
 structure BusInteraction (e : Type) where
   busId : e
   multiplicity : e
-  payload : List e
+  payload : Array e
 
 instance {p : ℕ} : ToString (BusInteraction (Expression p)) where
   toString bi :=
     "BusInteraction { bus_id: " ++ toString bi.busId ++
     ", multiplicity: " ++ toString bi.multiplicity ++
-    ", payload: [" ++ String.intercalate ", " (bi.payload.map toString) ++ "] }"
+    ", payload: [" ++ String.intercalate ", " (bi.payload.toList.map toString) ++ "] }"
 
 def BusInteraction.substitute {p : ℕ}
   (bi : BusInteraction (Expression p))
@@ -35,3 +35,26 @@ def BusInteraction.substituteAll {p : ℕ}
 structure BusInteractionHandler (p : ℕ) where
   isBusStateful : ZMod p → Bool
   handleBusInteraction : BusInteraction (RangeConstraint p) → BusInteraction (RangeConstraint p)
+
+/-- A bus map entry describing the type of a bus. -/
+inductive BusType where
+  | executionBridge
+  | memory
+  | pcLookup
+  | other (name : String)
+  deriving Repr, BEq
+
+instance : ToString BusType where
+  toString
+    | .executionBridge => "ExecutionBridge"
+    | .memory => "Memory"
+    | .pcLookup => "PcLookup"
+    | .other name => name
+
+/-- Mapping from bus IDs to their types. -/
+def BusMap := List (Nat × BusType)
+
+instance : ToString BusMap where
+  toString bm :=
+    let entries := bm.map fun (id, ty) => s!"  {id}: {ty}"
+    "BusMap:\n" ++ String.intercalate "\n" entries
