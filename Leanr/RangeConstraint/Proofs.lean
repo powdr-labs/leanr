@@ -456,12 +456,169 @@ theorem RangeConstraint.mul_inRange {p : ℕ} [NeZero p]
         exact ⟨Nat.mul_le_mul hx1lo hx2lo, Nat.mul_le_mul hx1hi hx2hi⟩
       · exact unconstrained_inRange _
 
-/-- Conjunction preserves range. -/
-theorem RangeConstraint.conjunction_inRange {p : ℕ} [NeZero p]
-    (rc1 rc2 : RangeConstraint p) (x : ZMod p)
-    (h1 : rc1.inRange x) (h2 : rc2.inRange x) :
-    (rc1.conjunction rc2).inRange x := by
-  sorry
+-- Note: conjunction_inRange is NOT provable without mask information because
+-- the cross-refine-range-from-mask step can shrink the range below what inRange alone guarantees.
+-- Use conjunction_sound instead.
+
+-- ===== Shifted-range and intersection helpers for conjunction =====
+
+/-- x &&& m = x implies x ≤ m. -/
+theorem nat_and_eq_implies_le (x m : Nat) (h : x &&& m = x) : x ≤ m := by
+  have := @Nat.and_le_right x m; omega
+
+private theorem nat_min_lt_of_lt (a b c : Nat) (h : a < c) : Nat.min a b < c := by
+  simp only [Nat.min_def]; split_ifs <;> omega
+
+private theorem nat_min_mono (a : Nat) {b c : Nat} (h : b ≤ c) : Nat.min a b ≤ Nat.min a c := by
+  simp only [Nat.min_def]; split_ifs <;> omega
+
+/-- If rc is non-wrapping after shift and rc.inRange x, extract shifted bounds. -/
+private theorem inRange_shifted {p : ℕ} [NeZero p]
+    (rc : RangeConstraint p) (x shift : ZMod p)
+    (hir : rc.inRange x)
+    (hnw : (rc.min - shift).val ≤ (rc.max - shift).val) :
+    (rc.min - shift).val ≤ (x - shift).val ∧
+    (x - shift).val ≤ (rc.max - shift).val := by
+  rw [RangeConstraint.inRange_iff_offset] at hir
+  have hxs : x - shift = (x - rc.min) + (rc.min - shift) := by ring
+  have hms : rc.max - shift = (rc.max - rc.min) + (rc.min - shift) := by ring
+  set d := (rc.max - rc.min).val; set s := (rc.min - shift).val; set c := (x - rc.min).val
+  have hd_lt : d < p := ZMod.val_lt _; have hs_lt : s < p := ZMod.val_lt _
+  have hds_lt : d + s < p := by
+    by_contra h; push_neg at h
+    have hval : (rc.max - shift).val = (d + s) % p := by rw [hms, ZMod.val_add]
+    have : (d + s) % p = d + s - p := by
+      conv_lhs => rw [show d + s = p + (d + s - p) from by omega]
+      rw [Nat.add_mod_left]; exact Nat.mod_eq_of_lt (by omega)
+    omega
+  rw [show (x - shift).val = c + s from by rw [hxs, ZMod.val_add, Nat.mod_eq_of_lt (by omega)],
+      show (rc.max - shift).val = d + s from by rw [hms, ZMod.val_add, Nat.mod_eq_of_lt (by omega)]]
+  omega
+
+/-- If both ranges are non-wrapping after shift and x is in both,
+    then the intersection is non-empty and contains x. -/
+private theorem both_nonwrap_intersection {p : ℕ} [NeZero p]
+    (rc1 rc2 : RangeConstraint p) (x shift : ZMod p)
+    (h1r : rc1.inRange x) (h2r : rc2.inRange x)
+    (h1nw : (rc1.min - shift).val ≤ (rc1.max - shift).val)
+    (h2nw : (rc2.min - shift).val ≤ (rc2.max - shift).val) :
+    let lo := Nat.max (rc1.min - shift).val (rc2.min - shift).val
+    let hi := Nat.min (rc1.max - shift).val (rc2.max - shift).val
+    lo ≤ hi ∧ lo ≤ (x - shift).val ∧ (x - shift).val ≤ hi := by
+  simp only
+  have ⟨h1lo, h1hi⟩ := inRange_shifted rc1 x shift h1r h1nw
+  have ⟨h2lo, h2hi⟩ := inRange_shifted rc2 x shift h2r h2nw
+  simp only [Nat.max_def, Nat.min_def]; split_ifs <;> omega
+
+/-- The intersection range [lo+shift.val, hi+shift.val] contains x. -/
+private theorem intersection_range_inRange {p : ℕ} [NeZero p]
+    (shift : ZMod p) (lo hi : Nat) (x : ZMod p)
+    (hlo : lo ≤ (x - shift).val) (hhi : (x - shift).val ≤ hi) (hhi_bound : hi < p) :
+    (RangeConstraint.mk 0 (↑(lo + shift.val) : ZMod p) (↑(hi + shift.val) : ZMod p)).inRange x := by
+  have hs_lt : shift.val < p := ZMod.val_lt shift
+  have hlo_bound : lo < p := by omega
+  have hle : lo ≤ hi := by omega
+  rw [RangeConstraint.inRange_iff_offset]; simp only
+  have hdiff : (↑(hi + shift.val) : ZMod p) - ↑(lo + shift.val) = ↑(hi - lo) := by
+    rw [Nat.cast_add hi shift.val, Nat.cast_add lo shift.val]
+    rw [show (↑hi : ZMod p) + ↑shift.val - (↑lo + ↑shift.val) = ↑hi - ↑lo from by ring]
+    exact (Nat.cast_sub hle).symm
+  rw [hdiff, show (↑(hi - lo) : ZMod p).val = hi - lo from by
+    rw [ZMod.val_natCast, Nat.mod_eq_of_lt (by omega)]]
+  have hxdiff : x - (↑(lo + shift.val) : ZMod p) = (x - shift) - ↑lo := by
+    rw [Nat.cast_add lo shift.val]
+    have : (↑(shift.val) : ZMod p) = shift := by
+      simp only [ZMod.natCast_val, ZMod.cast_id']; exact rfl
+    rw [show (↑lo : ZMod p) + ↑shift.val = ↑lo + (↑shift.val : ZMod p) from rfl, this]; ring
+  rw [hxdiff, ZMod_val_sub (x - shift) (↑lo : ZMod p),
+      show (↑lo : ZMod p).val = lo from by rw [ZMod.val_natCast, Nat.mod_eq_of_lt hlo_bound]]
+  simp only [hlo, ite_true]; omega
+
+set_option maxHeartbeats 4000000 in
+/-- Post-loop refinement: given base_mask, range (lmin, lmax) and x satisfying both,
+    the cross-refined RC allows x. -/
+private theorem post_loop_allows {p : ℕ} [NeZero p]
+    (base_mask : Nat) (lmin lmax x : ZMod p)
+    (hbase : x.val &&& base_mask = x.val)
+    (hir : (RangeConstraint.mk 0 lmin lmax).inRange x) :
+    let mask' := if lmin.val ≤ lmax.val then base_mask &&& maskFromBits (numBits lmax.val)
+                 else base_mask
+    let (fmin, fmax) :=
+      if mask' < p then
+        if lmin.val ≤ lmax.val then
+          ((↑(Nat.min mask' lmin.val) : ZMod p), (↑(Nat.min mask' lmax.val) : ZMod p))
+        else if lmin.val > mask' then
+          ((0 : ZMod p), (↑(Nat.min mask' lmax.val) : ZMod p))
+        else (lmin, lmax)
+      else (lmin, lmax)
+    ({ mask := mask', min := fmin, max := fmax } : RangeConstraint p).allowsValue x = true := by
+  simp only
+  have hxle_bm : x.val ≤ base_mask := nat_and_eq_implies_le _ _ hbase
+  simp only [RangeConstraint.inRange] at hir
+  rw [RangeConstraint.allowsValue_iff]
+  by_cases hnw : lmin.val ≤ lmax.val
+  · simp only [hnw, ite_true] at hir ⊢
+    have hfmb : x.val &&& maskFromBits (numBits lmax.val) = x.val := by
+      rcases Nat.eq_zero_or_pos lmax.val with h0 | h0
+      · rw [h0] at hir; rw [show x.val = 0 from by omega]; exact Nat.zero_and _
+      · exact fits_maskFromBits x.val lmax.val hir.2 h0
+    have hmask_ok : x.val &&& (base_mask &&& maskFromBits (numBits lmax.val)) = x.val :=
+      nat_and_conj x.val base_mask (maskFromBits (numBits lmax.val)) hbase hfmb
+    have hxle_mask := nat_and_eq_implies_le _ _ hmask_ok
+    refine ⟨?_, hmask_ok⟩
+    by_cases hlt : base_mask &&& maskFromBits (numBits lmax.val) < p
+    · simp only [hlt, ite_true]
+      set m := base_mask &&& maskFromBits (numBits lmax.val)
+      have hmin_lt : Nat.min m lmin.val < p := nat_min_lt_of_lt m lmin.val p hlt
+      have hmax_lt : Nat.min m lmax.val < p := nat_min_lt_of_lt m lmax.val p hlt
+      have hle : Nat.min m lmin.val ≤ Nat.min m lmax.val := nat_min_mono m hnw
+      have hval_min : (↑(Nat.min m lmin.val) : ZMod p).val = Nat.min m lmin.val := by
+        rw [ZMod.val_natCast, Nat.mod_eq_of_lt hmin_lt]
+      have hval_max : (↑(Nat.min m lmax.val) : ZMod p).val = Nat.min m lmax.val := by
+        rw [ZMod.val_natCast, Nat.mod_eq_of_lt hmax_lt]
+      simp only [hval_min, hval_max, hle, ite_true]
+      constructor
+      · simp only [Nat.min_def]; split_ifs <;> omega
+      · simp only [Nat.min_def]; split_ifs <;> omega
+    · simp only [hlt, ite_false, hnw, ite_true]; exact hir
+  · have hnw' : ¬(lmin.val ≤ lmax.val) := hnw
+    simp only [hnw', ite_false] at hir ⊢
+    refine ⟨?_, hbase⟩
+    by_cases hlt : base_mask < p
+    · simp only [hlt, ite_true]
+      by_cases hgt : base_mask < lmin.val
+      · simp only [hgt, ite_true]
+        have hmax_lt : Nat.min base_mask lmax.val < p := nat_min_lt_of_lt base_mask lmax.val p hlt
+        have hval_max : (↑(Nat.min base_mask lmax.val) : ZMod p).val = Nat.min base_mask lmax.val := by
+          rw [ZMod.val_natCast, Nat.mod_eq_of_lt hmax_lt]
+        simp only [ZMod.val_zero, hval_max, Nat.zero_le, ite_true]
+        constructor
+        · trivial
+        · rcases hir with hleft | hright
+          · omega
+          · simp only [Nat.min_def]; split_ifs <;> omega
+      · have : ¬(lmin.val > base_mask) := by omega
+        simp only [this, ite_false, hnw', ite_false]; exact hir
+    · have : ¬(base_mask < p) := by omega
+      simp only [this, ite_false, hnw', ite_false]; exact hir
+
+/-- One loop iteration: if both ranges are non-wrapping after shift, the intersection
+    is non-empty and its range contains x. -/
+private theorem loop_iter_sound {p : ℕ} [NeZero p]
+    (rc1 rc2 : RangeConstraint p) (x shift : ZMod p)
+    (h1r : rc1.inRange x) (h2r : rc2.inRange x)
+    (h1nw : (rc1.min - shift).val ≤ (rc1.max - shift).val)
+    (h2nw : (rc2.min - shift).val ≤ (rc2.max - shift).val) :
+    Nat.max (rc1.min - shift).val (rc2.min - shift).val ≤
+    Nat.min (rc1.max - shift).val (rc2.max - shift).val ∧
+    (RangeConstraint.mk 0
+      (↑(Nat.max (rc1.min - shift).val (rc2.min - shift).val + shift.val) : ZMod p)
+      (↑(Nat.min (rc1.max - shift).val (rc2.max - shift).val + shift.val) : ZMod p)).inRange x := by
+  have ⟨hle, hxlo, hxhi⟩ := both_nonwrap_intersection rc1 rc2 x shift h1r h2r h1nw h2nw
+  constructor
+  · exact hle
+  · exact intersection_range_inRange shift _ _ x hxlo hxhi
+      (by simp only [Nat.min_def]; split_ifs <;> exact ZMod.val_lt _)
 
 -- ===== Main soundness theorems =====
 
@@ -492,10 +649,6 @@ theorem RangeConstraint.neg_sound {p : ℕ} [NeZero p]
       unfold RangeConstraint.unconstrained; simp only
       apply nat_and_two_pow_sub_one
       exact lt_of_lt_of_le (ZMod.val_lt (-x)) (Nat.lt_pow_succ_log_self (by omega) p).le
-
-/-- x &&& m = x implies x ≤ m. -/
-theorem nat_and_eq_implies_le (x m : Nat) (h : x &&& m = x) : x ≤ m := by
-  have := @Nat.and_le_right x m; omega
 
 -- ===== Bitwise addition carry theory =====
 
@@ -871,9 +1024,53 @@ theorem RangeConstraint.mul_sound {p : Nat} [NeZero p]
       · -- unconstrained fallback
         exact unconstrained_allows_any _
 
+set_option maxHeartbeats 16000000 in
 /-- Conjunction is sound. -/
 theorem RangeConstraint.conjunction_sound {p : ℕ} [NeZero p]
     (rc1 rc2 : RangeConstraint p) (x : ZMod p)
     (h1 : rc1.allowsValue x = true) (h2 : rc2.allowsValue x = true) :
     (rc1.conjunction rc2).allowsValue x = true := by
-  unfold RangeConstraint.conjunction; sorry
+  rw [RangeConstraint.allowsValue_iff] at h1 h2
+  obtain ⟨h1r, h1m⟩ := h1
+  obtain ⟨h2r, h2m⟩ := h2
+  have hmask : x.val &&& (rc1.mask &&& rc2.mask) = x.val :=
+    nat_and_conj x.val rc1.mask rc2.mask h1m h2m
+  unfold RangeConstraint.conjunction
+  dsimp only [Id.run, instForInOfForIn', ForIn.forIn, forIn', List.forIn', List.forIn'.loop,
+    bind, Bind.bind, pure, Pure.pure]
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
+  by_cases h1nw : (rc1.min - rc1.min).val ≤ (rc1.max - rc1.min).val ∧
+                  (rc2.min - rc1.min).val ≤ (rc2.max - rc1.min).val
+  · -- First shift (rc1.min) makes both non-wrapping
+    simp only [h1nw, ite_true, and_self]
+    have ⟨hle1, hir1⟩ := loop_iter_sound rc1 rc2 x rc1.min h1r h2r h1nw.1 h1nw.2
+    by_cases hle1' : Nat.max (rc1.min - rc1.min).val (rc2.min - rc1.min).val ≤
+                     Nat.min (rc1.max - rc1.min).val (rc2.max - rc1.min).val
+    · simp only [hle1', ite_true]
+      exact post_loop_allows (rc1.mask &&& rc2.mask) _ _ x hmask hir1
+    · omega -- contradiction: hle1 says lo ≤ hi
+  · -- First shift fails
+    simp only [h1nw, ite_false]
+    push_neg at h1nw
+    by_cases h2nw : (rc1.min - rc2.min).val ≤ (rc1.max - rc2.min).val ∧
+                    (rc2.min - rc2.min).val ≤ (rc2.max - rc2.min).val
+    · -- Second shift (rc2.min) makes both non-wrapping
+      simp only [h2nw, ite_true, and_self]
+      have ⟨hle2, hir2⟩ := loop_iter_sound rc1 rc2 x rc2.min h1r h2r h2nw.1 h2nw.2
+      by_cases hle2' : Nat.max (rc1.min - rc2.min).val (rc2.min - rc2.min).val ≤
+                       Nat.min (rc1.max - rc2.min).val (rc2.max - rc2.min).val
+      · simp only [hle2', ite_true]
+        exact post_loop_allows (rc1.mask &&& rc2.mask) _ _ x hmask hir2
+      · omega
+    · -- Both shifts fail: fallback to smaller interval
+      simp only [h2nw, ite_false]
+      push_neg at h2nw
+      by_cases hfw : rc1.rangeWidth ≤ rc2.rangeWidth
+      · simp only [hfw, ite_true]
+        exact post_loop_allows (rc1.mask &&& rc2.mask) _ _ x hmask
+          (show (RangeConstraint.mk 0 rc1.min rc1.max).inRange x from by
+            simp only [RangeConstraint.inRange]; exact h1r)
+      · simp only [hfw, ite_false]
+        exact post_loop_allows (rc1.mask &&& rc2.mask) _ _ x hmask
+          (show (RangeConstraint.mk 0 rc2.min rc2.max).inRange x from by
+            simp only [RangeConstraint.inRange]; exact h2r)
