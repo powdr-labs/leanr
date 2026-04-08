@@ -159,31 +159,64 @@ theorem hashmap_from_assignments_agrees
   rw [← Array.foldl_toList]
   exact list_foldl_insert_agrees _ env h _ (by intro x v hxv; simp at hxv)
 
+/-- updateRangeConstraint preserves the system. -/
+@[simp]
+theorem updateRangeConstraint_system (state : SolverState p) (x : String) (rc : RangeConstraint p) :
+    (state.updateRangeConstraint x rc).1.system = state.system := by
+  simp [SolverState.updateRangeConstraint]
+  split <;> rfl
+
+private theorem foldl_updates_preserves_system
+    (updates : List (String × RangeConstraint p))
+    (state : SolverState p) (b : Bool) :
+    (updates.foldl (fun (acc : SolverState p × Bool) (pair : String × RangeConstraint p) =>
+      let r := acc.1.updateRangeConstraint pair.1 pair.2
+      (r.1, acc.2 || r.2)) (state, b)).1.system = state.system := by
+  induction updates generalizing state b with
+  | nil => rfl
+  | cons hd tl ih =>
+    simp only [List.foldl_cons]
+    rw [ih]
+    exact updateRangeConstraint_system ..
+
+/-- Bus interaction processing only changes range_constraints, not the system. -/
+theorem process_all_bus_interactions_system (state : SolverState p) (handler : BusInteractionHandler p) :
+    (process_all_bus_interactions state handler).1.system = state.system := by
+  unfold process_all_bus_interactions
+  exact foldl_updates_preserves_system _ _ _
+
 /-- One round of pure solving preserves satisfiability. -/
-theorem solve_round_pure_preserves (system : System (p := p)) (env : String → ZMod p)
-    (h_sat : system.satisfies env) :
-    (solve_round_pure system).satisfies env := by
+theorem solve_round_pure_preserves (state : SolverState p) (handler : BusInteractionHandler p)
+    (env : String → ZMod p)
+    (h_sat : state.system.satisfies env) :
+    (solve_round_pure state handler).system.satisfies env := by
   unfold solve_round_pure
-  have fas := find_all_assignments_sound system.constraints env h_sat
-  rcases h_eq : find_all_assignments system.constraints with ⟨assignments, remaining⟩
+  have fas := find_all_assignments_sound state.system.constraints env h_sat
+  rcases h_eq : find_all_assignments state.system.constraints with ⟨assignments, remaining⟩
   rw [h_eq] at fas
   obtain ⟨h_assign, h_remain⟩ := fas
-  simp only
-  split_ifs
-  · exact h_sat
-  · intro c hc
+  simp only [h_eq]
+  split_ifs with h_empty
+  · -- No assignments: bus interaction processing preserves system
+    rw [process_all_bus_interactions_system]
+    exact h_sat
+  · -- Assignments found: substitute, then bus interaction processing preserves system
+    rw [process_all_bus_interactions_system]
+    simp only [System.satisfies]
+    intro c hc
     exact substituteAll_preserves_satisfaction _ _ env
       (hashmap_from_assignments_agrees _ env h_assign) h_remain c hc
 
 /-- The solver preserves satisfiability: if all original constraints are satisfied by `env`,
     then all remaining constraints after solving are also satisfied by `env`. -/
-theorem solve_sound (system : System (p := p)) (env : String → ZMod p)
-    (h_sat : system.satisfies env) :
-    (solve_pure system).satisfies env := by
+theorem solve_sound (state : SolverState p) (handler : BusInteractionHandler p)
+    (env : String → ZMod p)
+    (h_sat : state.system.satisfies env) :
+    (solve_pure state handler).system.satisfies env := by
   rw [solve_pure]
-  have h_round := solve_round_pure_preserves system env h_sat
+  have h_round := solve_round_pure_preserves state handler env h_sat
   split_ifs with h
-  · exact solve_sound (solve_round_pure system) env h_round
+  · exact solve_sound (solve_round_pure state handler) handler env h_round
   · exact h_round
-  termination_by system.constraints.size
+  termination_by state.system.constraints.size
   decreasing_by omega

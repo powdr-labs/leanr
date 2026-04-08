@@ -94,3 +94,19 @@ def AffineExpression.rangeConstraint
     (e : AffineExpression p) (env : String → RangeConstraint p) : RangeConstraint p :=
   let init : RangeConstraint p := ↑e.offset
   e.affine.foldl (fun (acc : RangeConstraint p) k (v : ZMod p) => acc + (↑v) * env k) init
+
+/-- For an affine expression `k * x + rest = 0`, solving for `x` gives `x = -rest/k`.
+    Returns the range constraint of `-rest/k`, which is the range constraint of the
+    expression with variable `x` removed and divided by `-coeff`. -/
+def AffineExpression.solvedRangeConstraint
+    (e : AffineExpression p) (x : String) (env : String → RangeConstraint p) : Option (RangeConstraint p) := do
+  let coeff ← e.affine[x]?
+  if coeff = 0 then none
+  else
+    let inv_neg_coeff := -(coeff⁻¹)
+    -- Compute range constraint of (offset + sum_{k ≠ x} coeff_k * var_k) * inv_neg_coeff
+    let rest_rc : RangeConstraint p :=
+      let init : RangeConstraint p := ↑e.offset
+      e.affine.foldl (fun (acc : RangeConstraint p) k (v : ZMod p) =>
+        if k == x then acc else acc + (↑v) * env k) init
+    some (rest_rc.multiple inv_neg_coeff)

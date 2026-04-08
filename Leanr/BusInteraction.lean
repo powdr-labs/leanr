@@ -6,6 +6,10 @@ structure BusInteraction (e : Type) where
   multiplicity : e
   payload : Array e
 
+/-- All fields of the bus interaction (bus ID, multiplicity, and payload). -/
+def BusInteraction.fields (bi : BusInteraction e) : List e :=
+  [bi.busId, bi.multiplicity] ++ bi.payload.toList
+
 instance {p : ℕ} : ToString (BusInteraction (Expression p)) where
   toString bi :=
     "BusInteraction { bus_id: " ++ toString bi.busId ++
@@ -35,6 +39,14 @@ def BusInteraction.substituteAll {p : ℕ}
 structure BusInteractionHandler (p : ℕ) where
   isBusStateful : ZMod p → Bool
   handleBusInteraction : BusInteraction (RangeConstraint p) → BusInteraction (RangeConstraint p)
+
+/-- Convert all fields of a bus interaction to range constraints. -/
+def BusInteraction.toRangeConstraints {p : ℕ}
+    (bi : BusInteraction (Expression p))
+    (env : String → RangeConstraint p) : BusInteraction (RangeConstraint p) :=
+  { busId := bi.busId.rangeConstraint env,
+    multiplicity := bi.multiplicity.rangeConstraint env,
+    payload := bi.payload.map (fun e => e.rangeConstraint env) }
 
 /-- A bus map entry describing the type of a bus. -/
 inductive BusType where
