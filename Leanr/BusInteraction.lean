@@ -22,6 +22,16 @@ def BusInteraction.substitute {p : ℕ}
     payload := bi.payload.map (fun e => e.substitute x v)
   }
 
+/-- Substitute all variables in the map at once. -/
+def BusInteraction.substituteAll {p : ℕ}
+  (bi : BusInteraction (Expression p))
+  (env : Std.HashMap String (ZMod p)) : BusInteraction (Expression p) :=
+  {
+    busId := bi.busId.substituteAll env,
+    multiplicity := bi.multiplicity.substituteAll env,
+    payload := bi.payload.map (fun e => e.substituteAll env)
+  }
+
 structure BusInteractionHandler (p : ℕ) where
   isBusStateful : ZMod p → Bool
   handleBusInteraction : BusInteraction (RangeConstraint p) → BusInteraction (RangeConstraint p)

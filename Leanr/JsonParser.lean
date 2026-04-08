@@ -141,9 +141,9 @@ def parseJsonSystem (jsonStr : String) : Except String (System p × BusMap) := d
   let busMap ← parseBusMap busMapJson
 
   let system : System p := {
-    constraints := constraints,
-    bus_interactions := busInteractions,
-    assignments := []
+    constraints := constraints.toArray,
+    bus_interactions := busInteractions.toArray,
+    assignments := #[]
   }
   pure (system, busMap)
 
@@ -157,6 +157,6 @@ instance instFactPrimeBabyBear : Fact (Nat.Prime 2013265921) where
   let contents ← IO.FS.readFile "apc_reth_op_bug.json"
   match parseJsonSystem (p := 2013265921) contents with
   | .ok (system, busMap) =>
-    IO.println s!"Parsed {system.constraints.length} constraints, {system.bus_interactions.length} bus interactions, {busMap.length} bus types"
+    IO.println s!"Parsed {system.constraints.size} constraints, {system.bus_interactions.size} bus interactions, {busMap.length} bus types"
   | .error e =>
     IO.println s!"Error: {e}"

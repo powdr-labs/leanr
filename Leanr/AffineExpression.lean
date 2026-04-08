@@ -203,6 +203,24 @@ def AffineExpression.substitute
       · exact e.nonzero v'
   }
 
+/-- Substitute all variables in the map at once. -/
+def AffineExpression.substituteAll (e : AffineExpression p) (env : Std.HashMap String (ZMod p)) : AffineExpression p :=
+  let (offset, affine) := e.affine.foldl (init := (e.offset, Std.TreeMap.empty (α := String) (β := ZMod p)))
+    fun (off, aff) k v =>
+      match env[k]? with
+      | some val => (off + v * val, aff)
+      | none =>
+        let aff' := aff.insert k v
+        (off, aff')
+  { offset := offset, affine := affine.filter (fun _ v => v ≠ 0) }
+
+/-- substituteAll preserves evaluation when the substitution map agrees with env. -/
+theorem AffineExpression.substituteAll_eval (e : AffineExpression p)
+    (m : Std.HashMap String (ZMod p)) (env : String → ZMod p)
+    (h : ∀ x v, m[x]? = some v → env x = v) :
+    (e.substituteAll m).eval env = e.eval env := by
+  sorry -- requires TreeMap foldl reasoning
+
 def AffineExpression.toStr (e : AffineExpression p) : String :=
     let parts : List String :=
       (if e.offset ≠ 0 then [toString e.offset.val] else []) ++

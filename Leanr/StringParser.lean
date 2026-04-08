@@ -253,9 +253,9 @@ def parseSystem {p : ℕ} [Fact (Nat.Prime p)] (s : String) : Except String (Sys
         let c ← parseAlgebraicConstraint (p := p) line
         algebraicConstraints := c :: algebraicConstraints
   let system := {
-    constraints := algebraicConstraints.reverse,
-    bus_interactions := busInteractions.reverse,
-    assignments := []
+    constraints := algebraicConstraints.reverse.toArray,
+    bus_interactions := busInteractions.reverse.toArray,
+    assignments := #[]
   }
   pure system
 
