@@ -137,9 +137,86 @@ theorem ofExpression_correct' (e : Expression p) (h_isSome : (AffineExpression.o
   | mul e1 e2 ih1 ih2 =>
     simp [AffineExpression.ofExpression?, Expression.eval, ih1, ih2]
 
+/-! ### Helper lemmas for substituteAll_eval -/
+
+private theorem insert_sum_eq
+    (t : Std.TreeMap String (ZMod p)) (k : String) (v : ZMod p)
+    (f : String × ZMod p → ZMod p) (h_not_mem : k ∉ t) :
+    ((t.insert k v).toList.map f).sum = f (k, v) + (t.toList.map f).sum := by
+  have perm := Std.TreeMap.toList_insert_perm (t := t) (k := k) (v := v)
+  rw [(perm.map f).sum_eq]
+  simp only [List.map_cons, List.sum_cons]; congr 1
+  have : t.toList.filter (fun x => decide (¬(k == x.1) = true)) = t.toList := by
+    rw [List.filter_eq_self]; intro x hx; simp only [decide_eq_true_eq]
+    intro heq; rw [beq_iff_eq] at heq; subst heq
+    exact absurd (Std.TreeMap.mem_toList_iff_getElem?_eq_some.mp hx)
+      (by rw [Std.TreeMap.getElem?_eq_none h_not_mem]; simp)
+  simp only [this]
+
+private theorem toList_pairwise_keys (t : Std.TreeMap String (ZMod p)) :
+    t.toList.Pairwise (fun a b => a.1 ≠ b.1) :=
+  List.Pairwise.imp (fun {a b} (h : ¬compare a.1 b.1 = .eq) (heq : a.1 = b.1) =>
+    h (heq ▸ compare_eq_iff_eq.mpr rfl))
+    Std.TreeMap.distinct_keys_toList
+
+private theorem subst_foldl_correct
+    (l : List (String × ZMod p))
+    (m : Std.HashMap String (ZMod p))
+    (env : String → ZMod p)
+    (h_map : ∀ x v, m[x]? = some v → env x = v)
+    (init_off : ZMod p)
+    (init_aff : Std.TreeMap String (ZMod p))
+    (h_distinct : l.Pairwise (fun a b => a.1 ≠ b.1))
+    (h_disjoint : ∀ x ∈ l, (x.1 : String) ∉ init_aff) :
+    let (off', aff') := l.foldl (fun (acc : ZMod p × Std.TreeMap String (ZMod p)) (entry : String × ZMod p) =>
+      let (off, aff) := acc
+      let (k, v) := entry
+      match m[k]? with
+      | some val => (off + v * val, aff)
+      | none => (off, aff.insert k v)) (init_off, init_aff)
+    off' + (aff'.toList.map (fun (k, v) => v * env k)).sum =
+    init_off + (init_aff.toList.map (fun (k, v) => v * env k)).sum +
+    (l.map (fun (k, v) => v * env k)).sum := by
+  induction l generalizing init_off init_aff with
+  | nil => simp
+  | cons hd tl ih =>
+    simp only [List.foldl_cons, List.map_cons, List.sum_cons]
+    obtain ⟨k, v⟩ := hd
+    simp only [List.pairwise_cons] at h_distinct
+    obtain ⟨h_not_in_tl, h_tl_distinct⟩ := h_distinct
+    have h_k_not_in_aff : k ∉ init_aff := h_disjoint (k, v) (List.mem_cons.mpr (Or.inl rfl))
+    match h : m[k]? with
+    | some val =>
+      have h_disjoint' : ∀ x ∈ tl, (x.1 : String) ∉ init_aff :=
+        fun x hx => h_disjoint x (List.mem_cons.mpr (Or.inr hx))
+      rw [ih (init_off + v * val) init_aff h_tl_distinct h_disjoint']
+      have := h_map k val h; rw [this]; ring
+    | none =>
+      have h_disjoint' : ∀ x ∈ tl, (x.1 : String) ∉ (init_aff.insert k v) := by
+        intro x hx
+        rw [Std.TreeMap.mem_insert]
+        push Not
+        constructor
+        · intro heq
+          rw [compare_eq_iff_eq] at heq
+          exact h_not_in_tl x hx heq
+        · exact h_disjoint x (List.mem_cons.mpr (Or.inr hx))
+      rw [ih init_off (init_aff.insert k v) h_tl_distinct h_disjoint']
+      rw [insert_sum_eq init_aff k v _ h_k_not_in_aff]
+      ring
+
 /-- substituteAll preserves evaluation when the substitution map agrees with env. -/
 theorem AffineExpression.substituteAll_eval (e : AffineExpression p)
     (m : Std.HashMap String (ZMod p)) (env : String → ZMod p)
     (h : ∀ x v, m[x]? = some v → env x = v) :
     (e.substituteAll m).eval env = e.eval env := by
-  sorry -- requires TreeMap foldl reasoning
+  rw [eval_eq_offset_add_sum, eval_eq_offset_add_sum e]
+  unfold substituteAll
+  rw [Std.TreeMap.toList_filter, List.map_filter_ne_zero_sum]
+  rw [Std.TreeMap.foldl_eq_foldl_toList]
+  have h_distinct := toList_pairwise_keys e.affine
+  have h_disjoint : ∀ x ∈ e.affine.toList, (x.1 : String) ∉ (∅ : Std.TreeMap String (ZMod p)) :=
+    fun x _ => Std.TreeMap.not_mem_emptyc
+  have := subst_foldl_correct e.affine.toList m env h e.offset ∅ h_distinct h_disjoint
+  simp at this
+  exact this
