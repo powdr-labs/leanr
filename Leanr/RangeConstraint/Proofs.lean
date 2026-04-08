@@ -319,12 +319,97 @@ theorem ZMod_val_mul {p : ℕ} [NeZero p] (a b : ZMod p)
   rw [show a * b = ((a.val * b.val : ℕ) : ZMod p) from by push_cast; simp [ZMod.natCast_val]]
   rw [ZMod.val_natCast, Nat.mod_eq_of_lt h]
 
+/-- The overflow range [1, 0] contains all values. -/
+theorem overflow_range_inRange {p : ℕ} [NeZero p] (v : ZMod p) :
+    RangeConstraint.inRange { mask := 0, min := (1 : ZMod p), max := (0 : ZMod p) } v := by
+  unfold RangeConstraint.inRange; simp only
+  have hp : 0 < p := NeZero.pos p
+  by_cases hp1 : p = 1
+  · subst hp1; simp [show (1 : ZMod 1).val = 0 from by decide,
+      show (0 : ZMod 1).val = 0 from by decide, Subsingleton.elim v 0]
+  · rw [show (1 : ZMod p).val = 1 from by
+        rw [show (1 : ZMod p) = ((1 : ℕ) : ZMod p) from Nat.cast_one.symm,
+            ZMod.val_natCast, Nat.mod_eq_of_lt (by omega)],
+      ZMod.val_zero, if_neg (by omega)]
+    cases Nat.eq_zero_or_pos v.val with
+    | inl h => right; omega
+    | inr h => left; omega
+
+/-- inRange doesn't depend on the mask field. -/
+theorem RangeConstraint.inRange_mask_irrelevant {p : ℕ}
+    (m1 m2 : Nat) (lo hi : ZMod p) (v : ZMod p) :
+    RangeConstraint.inRange { mask := m1, min := lo, max := hi } v ↔
+    RangeConstraint.inRange { mask := m2, min := lo, max := hi } v := by
+  unfold inRange; simp
+
+/-- rangeMultiple preserves range membership. -/
+theorem rangeMultiple_inRange {p : ℕ} [NeZero p]
+    (lo hi factor x : ZMod p)
+    (h : RangeConstraint.inRange { mask := 0, min := lo, max := hi } x) :
+    RangeConstraint.inRange { mask := 0, min := (rangeMultiple lo hi factor).1,
+                               max := (rangeMultiple lo hi factor).2 } (factor * x) := by
+  have hp : 0 < p := NeZero.pos p
+  unfold rangeMultiple; simp only
+  set w := if hi + 1 == lo then p else (hi - lo + 1).val
+  by_cases hle : w * factor.val ≤ p
+  · simp only [hle, ite_true]
+    rw [RangeConstraint.inRange_iff_offset] at h ⊢; simp only at h ⊢
+    rw [show factor * x - lo * factor = factor * (x - lo) from by ring,
+        show hi * factor - lo * factor = factor * (hi - lo) from by ring]
+    have hspan : (hi - lo).val < w :=
+      RangeConstraint.span_lt_rangeWidth ({ mask := 0, min := lo, max := hi } : RangeConstraint p)
+    by_cases hf0 : factor.val = 0
+    · rw [show factor = 0 from by rwa [ZMod.val_eq_zero] at hf0]; simp
+    · have hfs : factor.val * (hi - lo).val < p := by
+        have h1 : factor.val * (hi - lo).val < factor.val * w :=
+          (Nat.mul_lt_mul_left (by omega)).mpr hspan
+        have h2 : factor.val * w = w * factor.val := Nat.mul_comm _ _; omega
+      have hfd : factor.val * (x - lo).val < p := by
+        have := Nat.mul_le_mul_left factor.val h; omega
+      rw [show factor * (x - lo) = ((factor.val * (x - lo).val : ℕ) : ZMod p) from by
+            push_cast; simp [ZMod.natCast_val],
+          show factor * (hi - lo) = ((factor.val * (hi - lo).val : ℕ) : ZMod p) from by
+            push_cast; simp [ZMod.natCast_val],
+          ZMod.val_natCast, ZMod.val_natCast, Nat.mod_eq_of_lt hfd, Nat.mod_eq_of_lt hfs]
+      exact Nat.mul_le_mul_left _ h
+  · push Not at hle
+    simp only [show ¬(w * factor.val ≤ p) from by omega, ite_false]
+    exact overflow_range_inRange _
+
 /-- Scalar multiplication preserves range. -/
 theorem RangeConstraint.multiple_inRange {p : ℕ} [NeZero p]
     (rc : RangeConstraint p) (f x : ZMod p)
     (h : rc.inRange x) :
     (rc.multiple f).inRange (f * x) := by
-  sorry
+  unfold RangeConstraint.multiple; simp only
+  by_cases hlh : f.val ≤ p / 2
+  · simp only [hlh, ite_true]
+    rw [inRange_mask_irrelevant _ 0]
+    exact rangeMultiple_inRange rc.min rc.max f x
+      ((inRange_mask_irrelevant rc.mask 0 rc.min rc.max x).mp h)
+  · push Not at hlh
+    simp only [show ¬(f.val ≤ p / 2) from by omega, ite_false]
+    rw [inRange_mask_irrelevant _ 0, show f * x = (-f) * (-x) from by ring]
+    have hnir := neg_inRange rc x h
+    unfold neg fromRange at hnir
+    exact rangeMultiple_inRange (-rc.max) (-rc.min) (-f) (-x)
+      ((inRange_mask_irrelevant _ 0 _ _ _).mp hnir)
+
+/-- If toSingleValue? returns some v and x is in range, then x = v. -/
+theorem toSingleValue_eq {p : ℕ} [NeZero p]
+    (rc : RangeConstraint p) (v x : ZMod p)
+    (hsv : rc.toSingleValue? = some v) (h : rc.inRange x) : x = v := by
+  unfold RangeConstraint.toSingleValue? at hsv
+  split at hsv
+  · rename_i hcond
+    injection hsv with hsv; subst hsv
+    simp only [Bool.and_eq_true_iff] at hcond
+    rw [beq_iff_eq] at hcond
+    unfold RangeConstraint.inRange at h
+    have : rc.min.val = rc.max.val := congr_arg ZMod.val hcond.1
+    rw [if_pos (by omega : rc.min.val ≤ rc.max.val)] at h
+    exact ZMod.val_injective p (by omega)
+  · contradiction
 
 /-- Multiplication preserves range. -/
 theorem RangeConstraint.mul_inRange {p : ℕ} [NeZero p]
@@ -333,15 +418,21 @@ theorem RangeConstraint.mul_inRange {p : ℕ} [NeZero p]
     (rc1.mul rc2).inRange (x1 * x2) := by
   unfold RangeConstraint.mul
   split
-  · -- b.toSingleValue? = some v → multiple
-    sorry
+  · -- b.toSingleValue? = some v
+    next v hv =>
+    have hx2v : x2 = v := toSingleValue_eq rc2 v x2 hv h2
+    subst hx2v
+    rw [show x1 * x2 = x2 * x1 from mul_comm x1 x2]
+    exact multiple_inRange rc1 x2 x1 h1
   · split
-    · -- a.toSingleValue? = some v → multiple
-      sorry
-    · -- Neither is single value
-      split
-      · -- fromRange case: non-wrapping and max1*max2 < p
-        rename_i hb ha hcond
+    · -- a.toSingleValue? = some v
+      next hb v hv =>
+      have hx1v : x1 = v := toSingleValue_eq rc1 v x1 hv h1
+      subst hx1v
+      exact multiple_inRange rc2 x1 x2 h2
+    · split
+      · -- fromRange case
+        next hb ha hcond =>
         simp only [Bool.and_eq_true_iff, decide_eq_true_eq] at hcond
         obtain ⟨⟨hle1, hle2⟩, hmul⟩ := hcond
         unfold inRange at h1 h2
@@ -363,8 +454,7 @@ theorem RangeConstraint.mul_inRange {p : ℕ} [NeZero p]
         simp only [hle_range, ite_true]
         rw [ZMod_val_mul x1 x2 hmulx, hval_lo, hval_hi]
         exact ⟨Nat.mul_le_mul hx1lo hx2lo, Nat.mul_le_mul hx1hi hx2hi⟩
-      · -- Unconstrained fallback
-        exact unconstrained_inRange _
+      · exact unconstrained_inRange _
 
 /-- Conjunction preserves range. -/
 theorem RangeConstraint.conjunction_inRange {p : ℕ} [NeZero p]
@@ -403,16 +493,28 @@ theorem RangeConstraint.neg_sound {p : ℕ} [NeZero p]
       apply nat_and_two_pow_sub_one
       exact lt_of_lt_of_le (ZMod.val_lt (-x)) (Nat.lt_pow_succ_log_self (by omega) p).le
 
+/-- x &&& m = x implies x ≤ m. -/
+theorem nat_and_eq_implies_le (x m : Nat) (h : x &&& m = x) : x ≤ m := by
+  have := @Nat.and_le_right x m; omega
+
+/-- Core mask lemma for addition: if all bits of x1 are in m1 and all bits of x2 are in m2,
+    then all bits of (x1+x2) are in (m1+m2)|||m1|||m2.
+    Proof sketch: at each bit position i, the result bit comes from either:
+    - x1[i] XOR x2[i] (covered by m1|||m2), or
+    - carry propagation from lower bits (covered by m1+m2, via carry monotonicity). -/
+theorem add_mask_preservation (x1 x2 m1 m2 : Nat)
+    (h1 : x1 &&& m1 = x1) (h2 : x2 &&& m2 = x2) :
+    (x1 + x2) &&& ((m1 + m2) ||| m1 ||| m2) = x1 + x2 := by
+  sorry -- Requires carry-tracking induction on bit positions
+
 /-- Addition is sound: if rc1 allows x1 and rc2 allows x2,
-    then (rc1.add rc2) allows (x1 + x2). -/
+    then (rc1.add rc2) allows (x1 + x2).
+    Range part proved by add_inRange. Mask part uses add_mask_preservation. -/
 theorem RangeConstraint.add_sound {p : ℕ} [NeZero p]
     (rc1 rc2 : RangeConstraint p) (x1 x2 : ZMod p)
     (h1 : rc1.allowsValue x1 = true) (h2 : rc2.allowsValue x2 = true) :
     (rc1.add rc2).allowsValue (x1 + x2) = true := by
-  -- Overflow cases return unconstrained (trivially sound).
-  -- Non-overflow: range widths don't exceed p, so [min1+min2, max1+max2] is sound;
-  -- mask (m1+m2) ||| m1 ||| m2 covers all bits of (x1+x2) since val(x1+x2) ≤ val(x1)+val(x2).
-  unfold RangeConstraint.add; simp; sorry
+  sorry -- Depends on add_mask_preservation; range part follows from add_inRange
 
 /-- Subtraction is sound: follows from add_sound and neg_sound. -/
 theorem RangeConstraint.sub_sound {p : ℕ} [NeZero p]
