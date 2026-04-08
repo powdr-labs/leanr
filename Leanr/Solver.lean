@@ -48,28 +48,7 @@ def update_range_constraints_from_assignments
     | some existing => m.insert a.var (existing.conjunction newRc)
     | none => m.insert a.var newRc
 
-/-- One round: find all solvable assignments, then apply them all at once. -/
-def solve_round (system : System (p := p))
-    (rc : Std.HashMap String (RangeConstraint p))
-    (log : Bool) : IO (System (p := p) × Std.HashMap String (RangeConstraint p)) := do
-  let (newAssignments, remaining) := find_all_assignments system.constraints
-  if newAssignments.isEmpty then
-    return (system, rc)
-  if log then
-    IO.eprintln s!"[solve] found {newAssignments.size} assignments in this round"
-  -- Build a HashMap for O(1) lookup during substitution
-  let env : Std.HashMap String (ZMod p) :=
-    newAssignments.foldl (init := (∅ : Std.HashMap String (ZMod p))) fun m a => m.insert a.var a.value
-  let constraints := substitute_all_constraints remaining env
-  let bus := substitute_all_bus system.bus_interactions env
-  let rc := update_range_constraints_from_assignments rc newAssignments
-  return ({
-    constraints := constraints,
-    bus_interactions := bus,
-    assignments := system.assignments ++ newAssignments,
-  }, rc)
-
-/-- Pure version of solve_round (no IO logging). -/
+/-- One round: find all solvable assignments, then apply them all at once (pure). -/
 def solve_round_pure (system : System (p := p)) : System (p := p) :=
   let (newAssignments, remaining) := find_all_assignments system.constraints
   if newAssignments.isEmpty then
@@ -85,7 +64,7 @@ def solve_round_pure (system : System (p := p)) : System (p := p) :=
       assignments := system.assignments ++ newAssignments,
     }
 
-/-- Pure version of solve (no IO logging). Iterates until no more assignments can be found. -/
+/-- Iterates solve_round_pure until no more assignments can be found. -/
 def solve_pure (system : System (p := p)) : System (p := p) :=
   let new_system := solve_round_pure system
   if h : new_system.constraints.size < system.constraints.size then
@@ -95,16 +74,18 @@ def solve_pure (system : System (p := p)) : System (p := p) :=
   termination_by system.constraints.size
   decreasing_by omega
 
+/-- Solve with optional logging. Delegates to solve_round_pure for the actual computation. -/
 def solve (system : System (p := p)) (log : Bool := false) : IO (System (p := p)) := do
   if log then
     IO.eprintln s!"[solve] {system.constraints.size} constraints, {system.bus_interactions.size} bus, {system.assignments.size} assignments"
-  let (new_system, _rc) ← solve_round system ∅ log
+  let new_system := solve_round_pure system
   if new_system.constraints.size < system.constraints.size then
+    if log then
+      IO.eprintln s!"[solve] solved {system.constraints.size - new_system.constraints.size} constraints in this round"
     solve new_system log
   else
     if log then
       IO.eprintln s!"[solve] no more solvable constraints"
     return new_system
   termination_by system.constraints.size
-  decreasing_by
-    omega
+  decreasing_by omega
