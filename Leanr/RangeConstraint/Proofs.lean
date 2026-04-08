@@ -103,6 +103,76 @@ theorem RangeConstraint.fromRange_allows_wrap {p : ℕ} [NeZero p]
     apply nat_and_two_pow_sub_one
     exact lt_of_lt_of_le (ZMod.val_lt v) (Nat.lt_pow_succ_log_self (by omega) p).le
 
+-- ===== Range-only predicate and soundness =====
+
+/-- Whether a value falls in the range [min, max] (wrapping supported). -/
+def RangeConstraint.inRange {p : ℕ} (rc : RangeConstraint p) (v : ZMod p) : Prop :=
+  if rc.min.val ≤ rc.max.val then
+    rc.min.val ≤ v.val ∧ v.val ≤ rc.max.val
+  else
+    rc.min.val ≤ v.val ∨ v.val ≤ rc.max.val
+
+/-- allowsValue implies inRange. -/
+theorem RangeConstraint.allowsValue_inRange {p : ℕ} (rc : RangeConstraint p) (v : ZMod p)
+    (h : rc.allowsValue v = true) : rc.inRange v := by
+  rw [allowsValue_iff] at h; exact h.1
+
+/-- Negation preserves range: if x ∈ [min, max] then -x ∈ [-max, -min]. -/
+theorem RangeConstraint.neg_inRange {p : ℕ} [NeZero p]
+    (rc : RangeConstraint p) (x : ZMod p)
+    (h : rc.inRange x) :
+    (rc.neg).inRange (-x) := by
+  -- rc.neg = fromRange (-rc.max) (-rc.min), so neg.min = -rc.max, neg.max = -rc.min
+  -- Key: ZMod.neg_val: (-a).val = if a = 0 then 0 else p - a.val
+  -- If x ∈ [min, max] (non-wrapping): min.val ≤ x.val ≤ max.val
+  --   When all nonzero: p - max.val ≤ p - x.val ≤ p - min.val → -x ∈ [-max, -min] non-wrapping
+  --   Zero cases need care but fromRange handles wrapping
+  -- If x ∈ [min, max] (wrapping): min.val ≤ x.val ∨ x.val ≤ max.val → similar reversal
+  sorry
+
+/-- Addition preserves range: if x1 ∈ rc1's range and x2 ∈ rc2's range,
+    then x1 + x2 ∈ (rc1.add rc2)'s range. -/
+theorem RangeConstraint.add_inRange {p : ℕ} [NeZero p]
+    (rc1 rc2 : RangeConstraint p) (x1 x2 : ZMod p)
+    (h1 : rc1.inRange x1) (h2 : rc2.inRange x2) :
+    (rc1.add rc2).inRange (x1 + x2) := by
+  -- The add range is either (min1+min2, max1+max2) when widths don't overflow,
+  -- or (0, p-1) (unconstrained) when they do.
+  -- Unconstrained case is trivial.
+  -- Non-overflow case: the key insight is that if widths sum ≤ p,
+  -- then the sum range [min1+min2, max1+max2] contains x1+x2 in ZMod.
+  sorry
+
+/-- Subtraction preserves range (follows from add + neg). -/
+theorem RangeConstraint.sub_inRange {p : ℕ} [NeZero p]
+    (rc1 rc2 : RangeConstraint p) (x1 x2 : ZMod p)
+    (h1 : rc1.inRange x1) (h2 : rc2.inRange x2) :
+    (rc1.sub rc2).inRange (x1 - x2) := by
+  unfold RangeConstraint.sub
+  rw [show x1 - x2 = x1 + (-x2) from sub_eq_add_neg x1 x2]
+  exact add_inRange rc1 rc2.neg x1 (-x2) h1 (neg_inRange rc2 x2 h2)
+
+/-- Scalar multiplication preserves range. -/
+theorem RangeConstraint.multiple_inRange {p : ℕ} [NeZero p]
+    (rc : RangeConstraint p) (f x : ZMod p)
+    (h : rc.inRange x) :
+    (rc.multiple f).inRange (f * x) := by
+  sorry
+
+/-- Multiplication preserves range. -/
+theorem RangeConstraint.mul_inRange {p : ℕ} [NeZero p]
+    (rc1 rc2 : RangeConstraint p) (x1 x2 : ZMod p)
+    (h1 : rc1.inRange x1) (h2 : rc2.inRange x2) :
+    (rc1.mul rc2).inRange (x1 * x2) := by
+  sorry
+
+/-- Conjunction preserves range. -/
+theorem RangeConstraint.conjunction_inRange {p : ℕ} [NeZero p]
+    (rc1 rc2 : RangeConstraint p) (x : ZMod p)
+    (h1 : rc1.inRange x) (h2 : rc2.inRange x) :
+    (rc1.conjunction rc2).inRange x := by
+  sorry
+
 -- ===== Main soundness theorems =====
 
 /-- Negation is sound: if rc allows x, then rc.neg allows -x. -/
@@ -127,7 +197,7 @@ theorem RangeConstraint.add_sound {p : ℕ} [NeZero p]
   -- Overflow cases return unconstrained (trivially sound).
   -- Non-overflow: range widths don't exceed p, so [min1+min2, max1+max2] is sound;
   -- mask (m1+m2) ||| m1 ||| m2 covers all bits of (x1+x2) since val(x1+x2) ≤ val(x1)+val(x2).
-  unfold RangeConstraint.add; sorry
+  unfold RangeConstraint.add; simp; sorry
 
 /-- Subtraction is sound: follows from add_sound and neg_sound. -/
 theorem RangeConstraint.sub_sound {p : ℕ} [NeZero p]
