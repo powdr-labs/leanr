@@ -71,15 +71,15 @@ private theorem find_forIn_loop_preserves
     (acc_r : Array (AlgebraicConstraint p))
     (h_a : ∀ a ∈ acc_a.toList, env a.var = a.value)
     (h_r : ∀ c ∈ acc_r.toList, AlgebraicConstraint.eval c env = 0) :
-    let result := (Array.forIn'.loop constraints
+    let result := Array.forIn'.loop constraints
       (fun (c : AlgebraicConstraint p) (_ : c ∈ constraints)
-        (r : Array (Assignment (p := p)) × Array (AlgebraicConstraint p)) =>
+        (r : MProd (Array (Assignment (p := p))) (Array (AlgebraicConstraint p))) =>
         (match c.solve? with
-        | some a => ForInStep.yield (r.1.push a, r.2)
-        | none => ForInStep.yield (r.1, r.2.push c) : Id (ForInStep _)))
-      i hi (acc_a, acc_r) : Id _)
-    (∀ a ∈ result.1.toList, env a.var = a.value) ∧
-    (∀ c ∈ result.2.toList, AlgebraicConstraint.eval c env = 0) := by
+        | some a => ForInStep.yield ⟨r.fst.push a, r.snd⟩
+        | none => ForInStep.yield ⟨r.fst, r.snd.push c⟩ : Id (ForInStep _)))
+      i hi ⟨acc_a, acc_r⟩
+    (∀ a ∈ result.fst.toList, env a.var = a.value) ∧
+    (∀ c ∈ result.snd.toList, AlgebraicConstraint.eval c env = 0) := by
   induction i generalizing acc_a acc_r with
   | zero => rw [Array.forIn'.loop.eq_1]; exact ⟨h_a, h_r⟩
   | succ n ih =>
@@ -125,8 +125,6 @@ theorem find_all_assignments_sound
     (∀ c ∈ remaining.toList, AlgebraicConstraint.eval c env = 0) := by
   show (∀ a ∈ (find_all_assignments constraints).1.toList, env a.var = a.value) ∧
     (∀ c ∈ (find_all_assignments constraints).2.toList, AlgebraicConstraint.eval c env = 0)
-  delta find_all_assignments Id.run forIn
-  dsimp only [pure, Pure.pure, bind, Bind.bind, Prod.fst, Prod.snd]
   exact find_forIn_loop_preserves constraints env h_sat constraints.size (le_refl _) #[] #[]
     (by intro a ha; simp at ha) (by intro c hc; simp at hc)
 

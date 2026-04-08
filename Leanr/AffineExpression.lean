@@ -32,7 +32,8 @@ def AffineExpression.toConstant? (e : AffineExpression p) : Option (ZMod p) :=
 instance {p} : Add (AffineExpression p) where
   add x y := {
     offset := x.offset + y.offset,
-    affine := (x.affine.mergeWith (fun _ v1 v2 => (v1 + v2)) y.affine).filter (fun _ v => v ≠ 0),
+    affine := (y.affine.foldl (fun acc k v =>
+      acc.alter k (fun | some v' => some (v' + v) | none => some v)) x.affine).filter (fun _ v => v ≠ 0),
   }
 
 instance {p} : HMul (ZMod p) (AffineExpression p) (AffineExpression p) where

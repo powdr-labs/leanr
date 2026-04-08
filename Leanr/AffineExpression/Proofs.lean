@@ -54,22 +54,136 @@ private theorem List.map_filter_ne_zero_sum (l : List (String × ZMod p)) (env :
     · simp [h, ih]
     · simp [h, ih]
 
-theorem TreeMap_mergeWith_add_sum (t₁ t₂ : Std.TreeMap String (ZMod p)) (env : String → ZMod p) :
-    ((t₁.mergeWith (fun _ v1 v2 => v1 + v2) t₂).toList.map (fun (k, v) => v * env k)).sum =
+/-! ### Helpers for TreeMap foldl+alter sum (used in eval_of_add) -/
+
+omit [Fact (Nat.Prime p)] in
+private theorem toList_nodup (t : Std.TreeMap String (ZMod p)) : t.toList.Nodup :=
+  List.Pairwise.imp (fun {a b} hab heq => hab (by
+    rw [congr_arg Prod.fst heq]; exact compare_eq_iff_eq.mpr rfl))
+    Std.TreeMap.distinct_keys_toList
+
+omit [Fact (Nat.Prime p)] in
+private theorem toList_pairwise_keys (t : Std.TreeMap String (ZMod p)) :
+    t.toList.Pairwise (fun a b => a.1 ≠ b.1) :=
+  List.Pairwise.imp (fun {a b} (h : ¬compare a.1 b.1 = .eq) (heq : a.1 = b.1) =>
+    h (heq ▸ compare_eq_iff_eq.mpr rfl))
+    Std.TreeMap.distinct_keys_toList
+
+omit [Fact (Nat.Prime p)] in
+private theorem toList_perm_of_getElem_eq (t1 t2 : Std.TreeMap String (ZMod p))
+    (h : ∀ k : String, (t1 : Std.TreeMap String (ZMod p))[k]? =
+                        (t2 : Std.TreeMap String (ZMod p))[k]?) :
+    t1.toList.Perm t2.toList := by
+  rw [List.perm_ext_iff_of_nodup (toList_nodup t1) (toList_nodup t2)]
+  intro ⟨k, v⟩; simp only [Std.TreeMap.mem_toList_iff_getElem?_eq_some, h]
+
+private theorem alter_add_toList_perm (t : Std.TreeMap String (ZMod p)) (k : String) (v : ZMod p) :
+    (t.alter k (fun | some v' => some (v' + v) | none => some v)).toList.Perm
+    ((k, (t[k]?.getD 0) + v) :: (t.toList.filter (fun x => decide (¬(k == x.1) = true)))) :=
+  (toList_perm_of_getElem_eq _ _ (fun k' => by
+    rw [Std.TreeMap.getElem?_alter, Std.TreeMap.getElem?_insert]
+    split
+    · cases hk : (t : Std.TreeMap String (ZMod p))[k]? <;> simp [Option.getD]
+    · rfl)).trans Std.TreeMap.toList_insert_perm
+
+omit [Fact (Nat.Prime p)] in
+private theorem filter_beq_to_ne (k : String) (l : List (String × ZMod p)) :
+    l.filter (fun x => decide (¬(k == x.1) = true)) = l.filter (fun x => decide (x.1 ≠ k)) := by
+  congr 1; ext x
+  apply decide_eq_decide.mpr
+  constructor
+  · intro h heq; apply h; subst heq; simp [BEq.beq]
+  · intro h hbeq; apply h; exact (beq_iff_eq.mp hbeq).symm
+
+private theorem sum_split_at_key (l : List (String × ZMod p)) (k : String) (val : ZMod p)
+    (h_mem : (k, val) ∈ l) (h_distinct : l.Pairwise (fun a b => a.1 ≠ b.1))
+    (env : String → ZMod p) :
+    (l.map (fun (k, v) => v * env k)).sum =
+    val * env k +
+    ((l.filter (fun x => decide (x.1 ≠ k))).map (fun (k, v) => v * env k)).sum := by
+  induction l with
+  | nil => simp at h_mem
+  | cons hd tl ih =>
+    rw [List.pairwise_cons] at h_distinct
+    obtain ⟨h_neq_tl, h_tl_distinct⟩ := h_distinct
+    rcases List.mem_cons.mp h_mem with rfl | h_in_tl
+    · have h_filter_cons : ((k, val) :: tl).filter (fun x => decide (x.1 ≠ k)) =
+          tl.filter (fun x => decide (x.1 ≠ k)) :=
+        List.filter_cons_of_neg (by simp)
+      have h_filter_tl : tl.filter (fun x => decide (x.1 ≠ k)) = tl := by
+        rw [List.filter_eq_self]
+        intro x hx; exact decide_eq_true_eq.mpr (h_neq_tl x hx).symm
+      simp only [List.map_cons, List.sum_cons, h_filter_cons, h_filter_tl]
+    · have h_ne : hd.1 ≠ k :=
+        fun heq => by subst heq; exact absurd rfl (h_neq_tl ⟨_, val⟩ h_in_tl)
+      have h_filter_cons : (hd :: tl).filter (fun x => decide (x.1 ≠ k)) =
+          hd :: tl.filter (fun x => decide (x.1 ≠ k)) :=
+        List.filter_cons_of_pos (decide_eq_true_eq.mpr h_ne)
+      simp only [List.map_cons, List.sum_cons, h_filter_cons]
+      rw [ih h_in_tl h_tl_distinct]; ring
+
+private theorem sum_eq_key_plus_rest (t : Std.TreeMap String (ZMod p)) (k : String)
+    (env : String → ZMod p) :
+    (t.toList.map (fun (k, v) => v * env k)).sum =
+    (t[k]?.getD 0) * env k +
+    ((t.toList.filter (fun x => decide (x.1 ≠ k))).map (fun (k, v) => v * env k)).sum := by
+  cases hk : (t : Std.TreeMap String (ZMod p))[k]? with
+  | none =>
+    simp only [Option.getD, zero_mul, zero_add]
+    have hfilt : t.toList.filter (fun x => decide (x.1 ≠ k)) = t.toList := by
+      rw [List.filter_eq_self]
+      intro x hx; simp only [decide_eq_true_eq]
+      intro heq; subst heq
+      exact absurd (Std.TreeMap.mem_toList_iff_getElem?_eq_some.mp hx) (by rw [hk]; exact nofun)
+    rw [hfilt]
+  | some val =>
+    simp only [Option.getD]
+    exact sum_split_at_key t.toList k val
+      (Std.TreeMap.mem_toList_iff_getElem?_eq_some.mpr hk)
+      (toList_pairwise_keys t) env
+
+private theorem alter_add_sum_eq (t : Std.TreeMap String (ZMod p)) (k : String) (v : ZMod p)
+    (env : String → ZMod p) :
+    ((t.alter k (fun | some v' => some (v' + v) | none => some v)).toList.map
+      (fun (k, v) => v * env k)).sum =
+    (t.toList.map (fun (k, v) => v * env k)).sum + v * env k := by
+  rw [((alter_add_toList_perm t k v).map _).sum_eq, List.map_cons, List.sum_cons,
+    filter_beq_to_ne, sum_eq_key_plus_rest t k env]; ring
+
+private theorem foldl_alter_add_sum (t1 : Std.TreeMap String (ZMod p))
+    (l2 : List (String × ZMod p)) (env : String → ZMod p) :
+    ((l2.foldl (fun acc (entry : String × ZMod p) =>
+      acc.alter entry.1 (fun | some v' => some (v' + entry.2) | none => some entry.2)) t1).toList.map
+      (fun (k, v) => v * env k)).sum =
+    (t1.toList.map (fun (k, v) => v * env k)).sum +
+    (l2.map (fun (k, v) => v * env k)).sum := by
+  induction l2 generalizing t1 with
+  | nil => simp
+  | cons hd tl ih =>
+    simp only [List.foldl_cons, List.map_cons, List.sum_cons]
+    rw [ih, alter_add_sum_eq]; ring
+
+theorem TreeMap_foldl_alter_add_sum (t₁ t₂ : Std.TreeMap String (ZMod p))
+    (env : String → ZMod p) :
+    ((t₂.foldl (fun acc k v =>
+      acc.alter k (fun | some v' => some (v' + v) | none => some v)) t₁).toList.map
+      (fun (k, v) => v * env k)).sum =
     (t₁.toList.map (fun (k, v) => v * env k)).sum +
     (t₂.toList.map (fun (k, v) => v * env k)).sum := by
-  sorry
+  rw [Std.TreeMap.foldl_eq_foldl_toList]
+  exact foldl_alter_add_sum t₁ t₂.toList env
 
 @[simp]
 theorem AffineExpression.eval_of_add (x y : AffineExpression p) (env : String → ZMod p) :
   (x + y).eval env = x.eval env + y.eval env := by
   rw [eval_eq_offset_add_sum, eval_eq_offset_add_sum x, eval_eq_offset_add_sum y]
   change (x.offset + y.offset) +
-    (((x.affine.mergeWith (fun _ v1 v2 => v1 + v2) y.affine).filter (fun _ v => v ≠ 0)).toList.map
-      (fun (k, v) => v * env k)).sum =
+    (((y.affine.foldl (fun acc k v =>
+      acc.alter k (fun | some v' => some (v' + v) | none => some v)) x.affine).filter
+        (fun _ v => v ≠ 0)).toList.map (fun (k, v) => v * env k)).sum =
     (x.offset + (x.affine.toList.map (fun (k, v) => v * env k)).sum) +
     (y.offset + (y.affine.toList.map (fun (k, v) => v * env k)).sum)
-  rw [Std.TreeMap.toList_filter, List.map_filter_ne_zero_sum, TreeMap_mergeWith_add_sum]
+  rw [Std.TreeMap.toList_filter, List.map_filter_ne_zero_sum, TreeMap_foldl_alter_add_sum]
   ring
 
 private theorem TreeMap_map_mul_sum (n : ZMod p) (t : Std.TreeMap String (ZMod p))
@@ -139,6 +253,7 @@ theorem ofExpression_correct' (e : Expression p) (h_isSome : (AffineExpression.o
 
 /-! ### Helper lemmas for substituteAll_eval -/
 
+omit [Fact (Nat.Prime p)] in
 private theorem insert_sum_eq
     (t : Std.TreeMap String (ZMod p)) (k : String) (v : ZMod p)
     (f : String × ZMod p → ZMod p) (h_not_mem : k ∉ t) :
@@ -152,12 +267,6 @@ private theorem insert_sum_eq
     exact absurd (Std.TreeMap.mem_toList_iff_getElem?_eq_some.mp hx)
       (by rw [Std.TreeMap.getElem?_eq_none h_not_mem]; simp)
   simp only [this]
-
-private theorem toList_pairwise_keys (t : Std.TreeMap String (ZMod p)) :
-    t.toList.Pairwise (fun a b => a.1 ≠ b.1) :=
-  List.Pairwise.imp (fun {a b} (h : ¬compare a.1 b.1 = .eq) (heq : a.1 = b.1) =>
-    h (heq ▸ compare_eq_iff_eq.mpr rfl))
-    Std.TreeMap.distinct_keys_toList
 
 private theorem subst_foldl_correct
     (l : List (String × ZMod p))
