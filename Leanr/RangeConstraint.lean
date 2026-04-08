@@ -120,7 +120,7 @@ def RangeConstraint.neg {p : ℕ}
 
 /-- Compute [min, max] of factor * [lo, hi], or the full range if it overflows. -/
 def rangeMultiple {p : ℕ} (lo hi factor : ZMod p) : ZMod p × ZMod p :=
-  let width := if hi.val + 1 == lo.val then p
+  let width := if hi + 1 == lo then p
                else (hi - lo + 1).val
   if width * factor.val ≤ p then
     (lo * factor, hi * factor)
