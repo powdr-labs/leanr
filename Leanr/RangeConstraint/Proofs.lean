@@ -653,6 +653,18 @@ private theorem fits_maskFromBits' (n m : Nat) (h : n ≤ m) :
   · subst hm; simp at h; subst h; simp [Nat.zero_and]
   · exact fits_maskFromBits n m h hm
 
+/-- When mask sum < p, val of ZMod sum equals Nat sum. -/
+private theorem val_add_of_masks_lt {p : ℕ} [NeZero p]
+    (x1 x2 : ZMod p) (m1 m2 : Nat)
+    (hm1 : x1.val &&& m1 = x1.val) (hm2 : x2.val &&& m2 = x2.val)
+    (hmov : ¬(m1 + m2 ≥ p)) :
+    (x1 + x2).val = x1.val + x2.val := by
+  push Not at hmov
+  have : x1.val + x2.val < p := by
+    have := nat_and_eq_implies_le _ _ hm1
+    have := nat_and_eq_implies_le _ _ hm2; omega
+  rw [ZMod.val_add]; exact Nat.mod_eq_of_lt this
+
 set_option maxHeartbeats 800000 in
 /-- Addition is sound: if rc1 allows x1 and rc2 allows x2,
     then (rc1.add rc2) allows (x1 + x2).
@@ -663,12 +675,9 @@ theorem RangeConstraint.add_sound {p : ℕ} [NeZero p]
     (rc1.add rc2).allowsValue (x1 + x2) = true := by
   have hm1 := ((rc1.allowsValue_iff x1).mp h1).2
   have hm2 := ((rc2.allowsValue_iff x2).mp h2).2
-  have hle1 := nat_and_eq_implies_le _ _ hm1
-  have hle2 := nat_and_eq_implies_le _ _ hm2
   have hir_add := RangeConstraint.add_inRange rc1 rc2 _ _
     (rc1.allowsValue_inRange x1 h1) (rc2.allowsValue_inRange x2 h2)
   have hv_lt := ZMod.val_lt (x1 + x2)
-  have hp : 0 < p := NeZero.pos p
   rw [RangeConstraint.allowsValue_iff]
   refine ⟨hir_add, ?_⟩
   unfold RangeConstraint.add; simp only []
@@ -682,23 +691,17 @@ theorem RangeConstraint.add_sound {p : ℕ} [NeZero p]
         (add_inRange_val_le_max rc1 rc2 (x1+x2) hir_add hrange hnonwrap)
   -- range_ok, nonwrap, no mask_ov: maskSum &&& maskFromBits
   · next hrange hnonwrap hmov =>
-    push Not at hmov
-    have hsum_lt : x1.val + x2.val < p := by omega
-    have hval_eq : (x1+x2).val = x1.val + x2.val := by
-      rw [ZMod.val_add]; exact Nat.mod_eq_of_lt hsum_lt
-    rw [hval_eq]
+    rw [val_add_of_masks_lt x1 x2 _ _ hm1 hm2 hmov]
     apply nat_and_conj
     · exact add_mask_preservation x1.val x2.val rc1.mask rc2.mask hm1 hm2
     · have hb := add_inRange_val_le_max rc1 rc2 (x1+x2) hir_add hrange hnonwrap
-      rw [hval_eq] at hb
+      rw [val_add_of_masks_lt x1 x2 _ _ hm1 hm2 hmov] at hb
       exact fits_maskFromBits' _ _ hb
   -- range_ok, wrap, mask_ov: unc.mask
   · exact unc_mask_covers_val _
   -- range_ok, wrap, no mask_ov: maskSum
   · next _ _ hmov =>
-    push Not at hmov
-    rw [show (x1+x2).val = x1.val + x2.val from by
-      rw [ZMod.val_add]; exact Nat.mod_eq_of_lt (by omega)]
+    rw [val_add_of_masks_lt x1 x2 _ _ hm1 hm2 hmov]
     exact add_mask_preservation x1.val x2.val rc1.mask rc2.mask hm1 hm2
   -- range_ov, nonwrap, mask_ov: unc.mask &&& maskFromBits(numBits unc.max.val)
   · apply nat_and_conj
@@ -706,20 +709,18 @@ theorem RangeConstraint.add_sound {p : ℕ} [NeZero p]
     · exact fits_maskFromBits_p_minus_1 _ hv_lt
   -- range_ov, nonwrap, no mask_ov: maskSum &&& maskFromBits
   · next _ _ hmov =>
-    push Not at hmov
-    have hsum_lt : x1.val + x2.val < p := by omega
-    rw [show (x1+x2).val = x1.val + x2.val from by
-      rw [ZMod.val_add]; exact Nat.mod_eq_of_lt hsum_lt]
+    rw [val_add_of_masks_lt x1 x2 _ _ hm1 hm2 hmov]
     apply nat_and_conj
     · exact add_mask_preservation x1.val x2.val rc1.mask rc2.mask hm1 hm2
-    · exact fits_maskFromBits_p_minus_1 _ hsum_lt
+    · exact fits_maskFromBits_p_minus_1 _ (by
+        have := nat_and_eq_implies_le _ _ hm1
+        have := nat_and_eq_implies_le _ _ hm2
+        push Not at hmov; omega)
   -- range_ov, wrap, mask_ov: unc.mask
   · exact unc_mask_covers_val _
   -- range_ov, wrap, no mask_ov: maskSum
   · next _ _ hmov =>
-    push Not at hmov
-    rw [show (x1+x2).val = x1.val + x2.val from by
-      rw [ZMod.val_add]; exact Nat.mod_eq_of_lt (by omega)]
+    rw [val_add_of_masks_lt x1 x2 _ _ hm1 hm2 hmov]
     exact add_mask_preservation x1.val x2.val rc1.mask rc2.mask hm1 hm2
 
 /-- Subtraction is sound: follows from add_sound and neg_sound. -/
@@ -733,19 +734,142 @@ theorem RangeConstraint.sub_sound {p : ℕ} [NeZero p]
   rw [show x1 - x2 = x1 + (-x2) from sub_eq_add_neg x1 x2]
   exact add_sound rc1 rc2.neg x1 (-x2) h1 hneg
 
+-- ===== Helpers for multiple_sound =====
+
+/-- Shift preserves bitwise AND: (a <<< n) &&& (b <<< n) = (a &&& b) <<< n. -/
+theorem and_shiftLeft (a b n : Nat) : (a <<< n) &&& (b <<< n) = (a &&& b) <<< n := by
+  apply Nat.eq_of_testBit_eq; intro i
+  simp [Nat.testBit_and, Nat.testBit_shiftLeft]
+  cases (decide (i ≥ n)) <;> simp
+
+/-- A nonzero value with n &&& (n-1) = 0 is 2^(log2 n). -/
+theorem pow2_eq_of_and_pred (n : Nat) (hn : n ≠ 0) (hpow : n &&& (n-1) = 0) :
+    n = 2^n.log2 := by
+  have h := (Nat.and_sub_one_eq_zero_iff_isPowerOfTwo hn).mp hpow
+  obtain ⟨k, hk⟩ := h; subst hk; rw [Nat.log2_two_pow]
+
+/-- When factor is a power of 2, the shifted mask covers the product value. -/
+theorem shift_mask_covers {p : Nat} [NeZero p]
+    (x : ZMod p) (mask : Nat) (f : ZMod p)
+    (hmask : x.val &&& mask = x.val)
+    (hfv_ne : f.val ≠ 0)
+    (hpow2 : f.val &&& (f.val - 1) = 0)
+    (hshift_lt : mask <<< Nat.log2 f.val < p) :
+    (f * x).val &&& (mask <<< Nat.log2 f.val) = (f * x).val := by
+  have hle := nat_and_eq_implies_le _ _ hmask
+  have hlog := pow2_eq_of_and_pred f.val hfv_ne hpow2
+  have hval_prod : f.val * x.val < p := by
+    calc f.val * x.val
+      _ ≤ f.val * mask := Nat.mul_le_mul_left f.val hle
+      _ = 2^f.val.log2 * mask := by rw [← hlog]
+      _ = mask * 2^f.val.log2 := Nat.mul_comm _ _
+      _ = mask <<< f.val.log2 := (Nat.shiftLeft_eq mask f.val.log2).symm
+      _ < p := hshift_lt
+  have hval_eq : (f * x).val = f.val * x.val := by
+    rw [show f * x = ((f.val * x.val : Nat) : ZMod p) from by push_cast; simp [ZMod.natCast_val]]
+    rw [ZMod.val_natCast, Nat.mod_eq_of_lt hval_prod]
+  rw [hval_eq, show f.val * x.val = x.val * f.val from Nat.mul_comm _ _,
+      show x.val * f.val = x.val * 2^f.val.log2 from by rw [← hlog],
+      ← Nat.shiftLeft_eq, and_shiftLeft, hmask]
+
+/-- Extract the mask condition from fromRange when inRange holds. -/
+private theorem fromRange_mask_of_inRange {p : Nat} [NeZero p]
+    (lo hi v : ZMod p)
+    (h : (RangeConstraint.fromRange lo hi).inRange v) :
+    v.val &&& (RangeConstraint.fromRange lo hi).mask = v.val :=
+  ((RangeConstraint.allowsValue_iff _ _).mp
+    (RangeConstraint.fromRange_allowsValue_of_inRange lo hi v h)).2
+
+set_option maxHeartbeats 1600000 in
 /-- Scalar multiplication is sound. -/
-theorem RangeConstraint.multiple_sound {p : ℕ} [NeZero p]
+theorem RangeConstraint.multiple_sound {p : Nat} [NeZero p]
     (rc : RangeConstraint p) (f x : ZMod p)
     (h : rc.allowsValue x = true) :
     (rc.multiple f).allowsValue (f * x) = true := by
-  unfold RangeConstraint.multiple; sorry
+  have hir := RangeConstraint.multiple_inRange rc f x (RangeConstraint.allowsValue_inRange rc x h)
+  have hmask := ((RangeConstraint.allowsValue_iff rc x).mp h).2
+  rw [RangeConstraint.allowsValue_iff]; refine ⟨hir, ?_⟩
+  show (f * x).val &&& (RangeConstraint.multiple rc f).mask = (f * x).val
+  unfold RangeConstraint.multiple; simp only []
+  split
+  · -- f.val == 0: maskOpt = some 0
+    rename_i hf0
+    dsimp only [bind, pure, Bind.bind, Pure.pure, Option.bind]
+    simp only [Option.getD_some]
+    have : f.val = 0 := by simpa using hf0
+    have : f = 0 := (ZMod.val_eq_zero f).mp this
+    rw [this, zero_mul, ZMod.val_zero, Nat.zero_and]
+  · -- f.val ≠ 0
+    rename_i hf0
+    have hfne : f.val ≠ 0 := by simpa using hf0
+    simp only [guard]
+    split
+    · -- power of 2 factor
+      rename_i hpow
+      split
+      · -- shifted mask fits in p
+        rename_i hshift
+        dsimp only [bind, pure, Bind.bind, Pure.pure, Option.bind]
+        simp only [Option.getD_some]
+        rw [beq_iff_eq] at hpow
+        exact shift_mask_covers x rc.mask f hmask hfne hpow hshift
+      · -- shifted too large, fallback to fromRange mask
+        dsimp only [bind, pure, failure, Bind.bind, Pure.pure, Alternative.failure, Option.bind]
+        simp only [Option.getD_none]
+        exact fromRange_mask_of_inRange _ _ _
+          ((RangeConstraint.inRange_mask_irrelevant _ _ _ _ _).mp hir)
+    · -- not power of 2, fallback to fromRange mask
+      dsimp only [bind, pure, failure, Bind.bind, Pure.pure, Alternative.failure, Option.bind]
+      simp only [Option.getD_none]
+      exact fromRange_mask_of_inRange _ _ _
+        ((RangeConstraint.inRange_mask_irrelevant _ _ _ _ _).mp hir)
 
+set_option maxHeartbeats 800000 in
 /-- Multiplication is sound. -/
-theorem RangeConstraint.mul_sound {p : ℕ} [NeZero p]
+theorem RangeConstraint.mul_sound {p : Nat} [NeZero p]
     (rc1 rc2 : RangeConstraint p) (x1 x2 : ZMod p)
     (h1 : rc1.allowsValue x1 = true) (h2 : rc2.allowsValue x2 = true) :
     (rc1.mul rc2).allowsValue (x1 * x2) = true := by
-  unfold RangeConstraint.mul; sorry
+  unfold RangeConstraint.mul
+  split
+  · -- b.toSingleValue? = some v
+    next v hv =>
+    have hx2v := toSingleValue_eq rc2 v x2 hv (allowsValue_inRange rc2 x2 h2)
+    subst hx2v; rw [mul_comm]
+    exact multiple_sound rc1 x2 x1 h1
+  · split
+    · -- a.toSingleValue? = some v
+      next _ v hv =>
+      have hx1v := toSingleValue_eq rc1 v x1 hv (allowsValue_inRange rc1 x1 h1)
+      subst hx1v
+      exact multiple_sound rc2 x1 x2 h2
+    · split
+      · -- fromRange case
+        next _ _ hcond =>
+        simp only [Bool.and_eq_true_iff, decide_eq_true_eq] at hcond
+        obtain ⟨⟨hle1, hle2⟩, hmul⟩ := hcond
+        have h1r := allowsValue_inRange rc1 x1 h1
+        have h2r := allowsValue_inRange rc2 x2 h2
+        unfold inRange at h1r h2r
+        rw [if_pos hle1] at h1r; rw [if_pos hle2] at h2r
+        obtain ⟨hx1lo, hx1hi⟩ := h1r; obtain ⟨hx2lo, hx2hi⟩ := h2r
+        have hmulx : x1.val * x2.val < p := by
+          calc x1.val * x2.val ≤ rc1.max.val * rc2.max.val := Nat.mul_le_mul hx1hi hx2hi
+          _ < p := hmul
+        exact fromRange_allowsValue_of_inRange _ _ _ (by
+          unfold inRange fromRange; simp only
+          have hval_lo : (rc1.min * rc2.min).val = rc1.min.val * rc2.min.val :=
+            ZMod_val_mul rc1.min rc2.min (by
+              calc rc1.min.val * rc2.min.val ≤ rc1.max.val * rc2.max.val :=
+                    Nat.mul_le_mul (by omega) (by omega)
+              _ < p := hmul)
+          have hval_hi : (rc1.max * rc2.max).val = rc1.max.val * rc2.max.val :=
+            ZMod_val_mul rc1.max rc2.max hmul
+          rw [if_pos (by rw [hval_lo, hval_hi]; exact Nat.mul_le_mul (by omega) (by omega)),
+              ZMod_val_mul x1 x2 hmulx, hval_lo, hval_hi]
+          exact ⟨Nat.mul_le_mul hx1lo hx2lo, Nat.mul_le_mul hx1hi hx2hi⟩)
+      · -- unconstrained fallback
+        exact unconstrained_allows_any _
 
 /-- Conjunction is sound. -/
 theorem RangeConstraint.conjunction_sound {p : ℕ} [NeZero p]
