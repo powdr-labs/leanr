@@ -70,7 +70,7 @@ def RangeConstraint.byte {p : ℕ} : RangeConstraint p :=
 
 /-- The number of elements in the range [min, max] (inclusive, wrapping). -/
 def RangeConstraint.rangeWidth {p : ℕ} (rc : RangeConstraint p) : Nat :=
-  if rc.max.val + 1 == rc.min.val then p
+  if rc.max + 1 == rc.min then p
   else (rc.max - rc.min + 1).val
 
 /-- Intersect two range constraints (conjunction).

@@ -1,4 +1,5 @@
 import Leanr.RangeConstraint
+import Mathlib.Tactic.Ring
 
 -- ===== Bitwise helper lemmas =====
 
@@ -103,6 +104,23 @@ theorem RangeConstraint.fromRange_allows_wrap {p : ℕ} [NeZero p]
     apply nat_and_two_pow_sub_one
     exact lt_of_lt_of_le (ZMod.val_lt v) (Nat.lt_pow_succ_log_self (by omega) p).le
 
+-- ===== ZMod val arithmetic helpers =====
+
+/-- val of a ZMod subtraction, with wrapping. -/
+theorem ZMod_val_sub {p : ℕ} [NeZero p] (a b : ZMod p) :
+    (a - b).val = if b.val ≤ a.val then a.val - b.val else a.val + p - b.val := by
+  split
+  case isTrue h => exact ZMod.val_sub h
+  case isFalse h =>
+    push Not at h
+    rw [show a - b = a + (-b) from sub_eq_add_neg a b, ZMod.val_add, ZMod.neg_val']
+    have hb : b.val < p := ZMod.val_lt b
+    by_cases hb0 : b.val = 0
+    · omega
+    · rw [Nat.mod_eq_of_lt (by omega : p - b.val < p),
+          Nat.mod_eq_of_lt (by omega : a.val + (p - b.val) < p)]
+      omega
+
 -- ===== Range-only predicate and soundness =====
 
 /-- Whether a value falls in the range [min, max] (wrapping supported). -/
@@ -111,6 +129,95 @@ def RangeConstraint.inRange {p : ℕ} (rc : RangeConstraint p) (v : ZMod p) : Pr
     rc.min.val ≤ v.val ∧ v.val ≤ rc.max.val
   else
     rc.min.val ≤ v.val ∨ v.val ≤ rc.max.val
+
+/-- inRange is equivalent to (v - min).val ≤ (max - min).val (offset form). -/
+theorem RangeConstraint.inRange_iff_offset {p : ℕ} [NeZero p]
+    (rc : RangeConstraint p) (v : ZMod p) :
+    rc.inRange v ↔ (v - rc.min).val ≤ (rc.max - rc.min).val := by
+  have hp : 0 < p := NeZero.pos p
+  have hv : v.val < p := ZMod.val_lt v
+  have hmin : rc.min.val < p := ZMod.val_lt rc.min
+  have hmax : rc.max.val < p := ZMod.val_lt rc.max
+  unfold inRange
+  rw [ZMod_val_sub v rc.min, ZMod_val_sub rc.max rc.min]
+  by_cases hle : rc.min.val ≤ rc.max.val
+  · by_cases hvm : rc.min.val ≤ v.val
+    · simp only [if_pos hle, if_pos hvm]; constructor <;> omega
+    · push Not at hvm
+      simp only [if_pos hle, if_neg (show ¬(rc.min.val ≤ v.val) from by omega)]
+      constructor
+      · intro ⟨h1, _⟩; omega
+      · intro h; exfalso; omega
+  · push Not at hle
+    by_cases hvm : rc.min.val ≤ v.val
+    · simp only [if_neg (show ¬(rc.min.val ≤ rc.max.val) from by omega), if_pos hvm]
+      constructor
+      · intro _; omega
+      · intro _; exact Or.inl hvm
+    · push Not at hvm
+      simp only [if_neg (show ¬(rc.min.val ≤ rc.max.val) from by omega),
+                  if_neg (show ¬(rc.min.val ≤ v.val) from by omega)]
+      constructor
+      · intro h; cases h with
+        | inl h => omega
+        | inr h => omega
+      · intro h; exact Or.inr (by omega)
+
+/-- The unconstrained range contains every value. -/
+theorem RangeConstraint.unconstrained_inRange {p : ℕ} [NeZero p] (v : ZMod p) :
+    (RangeConstraint.unconstrained (p := p)).inRange v := by
+  have hp : 0 < p := NeZero.pos p
+  have hv : v.val < p := ZMod.val_lt v
+  unfold unconstrained inRange
+  simp only [ZMod.val_zero, ZMod.val_natCast, Nat.mod_eq_of_lt (by omega : p - 1 < p)]
+  split <;> omega
+
+/-- The width of unconstrained is p. -/
+theorem RangeConstraint.unconstrained_rangeWidth {p : ℕ} [NeZero p] :
+    (RangeConstraint.unconstrained (p := p)).rangeWidth = p := by
+  have hp : 0 < p := NeZero.pos p
+  unfold unconstrained rangeWidth
+  simp only
+  have hcast : ((p - 1 : ℕ) : ZMod p) + 1 = (0 : ZMod p) := by
+    rw [show (1 : ZMod p) = ((1 : ℕ) : ZMod p) from Nat.cast_one.symm,
+        ← Nat.cast_add, show p - 1 + 1 = p from by omega, ZMod.natCast_self]
+  rw [show (((p - 1 : ℕ) : ZMod p) + 1 == (0 : ZMod p)) = true from beq_iff_eq.mpr hcast]
+  simp
+
+/-- The span (max - min).val is strictly less than rangeWidth. -/
+theorem RangeConstraint.span_lt_rangeWidth {p : ℕ} [NeZero p] (rc : RangeConstraint p) :
+    (rc.max - rc.min).val < rc.rangeWidth := by
+  have hp : 0 < p := NeZero.pos p
+  unfold rangeWidth
+  by_cases hfull : (rc.max + 1 == rc.min) = true
+  · simp [hfull]; exact ZMod.val_lt _
+  · simp [hfull]
+    have hne : ¬(rc.max + 1 = rc.min) := fun h => hfull (beq_iff_eq.mpr h)
+    have hp2 : 2 ≤ p := by
+      by_contra hlt
+      push Not at hlt
+      have hp1 : p = 1 := by omega
+      subst hp1
+      exact hne (Subsingleton.elim _ _)
+    have hspan_lt : (rc.max - rc.min).val < p - 1 := by
+      by_contra hge
+      push Not at hge
+      have hval : (rc.max - rc.min).val = p - 1 := by
+        have := ZMod.val_lt (rc.max - rc.min); omega
+      have hd1_val : (rc.max - rc.min + 1).val = 0 := by
+        conv => lhs; rw [show rc.max - rc.min + 1 = rc.max - rc.min + ((1 : ℕ) : ZMod p) from by norm_cast]
+        rw [ZMod.val_add, ZMod.val_natCast, Nat.mod_eq_of_lt (by omega : 1 < p), hval,
+            show p - 1 + 1 = p from by omega, Nat.mod_self]
+      have hd1_zero : rc.max - rc.min + 1 = 0 := (ZMod.val_eq_zero _).mp hd1_val
+      have : rc.max + 1 = rc.min := by
+        have h1 : rc.max + 1 = (rc.max - rc.min + 1) + rc.min := by ring
+        rw [hd1_zero, zero_add] at h1
+        exact h1
+      exact hne this
+    suffices h : (rc.max - rc.min + 1).val = (rc.max - rc.min).val + 1 by omega
+    conv => lhs; rw [show rc.max - rc.min + 1 = rc.max - rc.min + ((1 : ℕ) : ZMod p) from by norm_cast]
+    rw [ZMod.val_add, ZMod.val_natCast, Nat.mod_eq_of_lt (by omega : 1 < p),
+        Nat.mod_eq_of_lt (by omega)]
 
 /-- allowsValue implies inRange. -/
 theorem RangeConstraint.allowsValue_inRange {p : ℕ} (rc : RangeConstraint p) (v : ZMod p)
@@ -122,12 +229,6 @@ theorem RangeConstraint.neg_inRange {p : ℕ} [NeZero p]
     (rc : RangeConstraint p) (x : ZMod p)
     (h : rc.inRange x) :
     (rc.neg).inRange (-x) := by
-  -- rc.neg = fromRange (-rc.max) (-rc.min), so neg.min = -rc.max, neg.max = -rc.min
-  -- Key: ZMod.neg_val: (-a).val = if a = 0 then 0 else p - a.val
-  -- If x ∈ [min, max] (non-wrapping): min.val ≤ x.val ≤ max.val
-  --   When all nonzero: p - max.val ≤ p - x.val ≤ p - min.val → -x ∈ [-max, -min] non-wrapping
-  --   Zero cases need care but fromRange handles wrapping
-  -- If x ∈ [min, max] (wrapping): min.val ≤ x.val ∨ x.val ≤ max.val → similar reversal
   sorry
 
 /-- Addition preserves range: if x1 ∈ rc1's range and x2 ∈ rc2's range,
@@ -136,12 +237,25 @@ theorem RangeConstraint.add_inRange {p : ℕ} [NeZero p]
     (rc1 rc2 : RangeConstraint p) (x1 x2 : ZMod p)
     (h1 : rc1.inRange x1) (h2 : rc2.inRange x2) :
     (rc1.add rc2).inRange (x1 + x2) := by
-  -- The add range is either (min1+min2, max1+max2) when widths don't overflow,
-  -- or (0, p-1) (unconstrained) when they do.
-  -- Unconstrained case is trivial.
-  -- Non-overflow case: the key insight is that if widths sum ≤ p,
-  -- then the sum range [min1+min2, max1+max2] contains x1+x2 in ZMod.
-  sorry
+  have hp : 0 < p := NeZero.pos p
+  unfold RangeConstraint.add
+  simp only
+  by_cases hwidth : rc1.rangeWidth + rc2.rangeWidth ≤ (RangeConstraint.unconstrained (p := p)).rangeWidth
+  · -- Non-overflow: result is [min1+min2, max1+max2]
+    simp only [hwidth, ite_true]
+    rw [inRange_iff_offset] at h1 h2 ⊢
+    have heq1 : x1 + x2 - (rc1.min + rc2.min) = (x1 - rc1.min) + (x2 - rc2.min) := by ring
+    have heq2 : rc1.max + rc2.max - (rc1.min + rc2.min) = (rc1.max - rc1.min) + (rc2.max - rc2.min) := by ring
+    rw [heq1, heq2, unconstrained_rangeWidth] at *
+    have hs1 := span_lt_rangeWidth rc1
+    have hs2 := span_lt_rangeWidth rc2
+    rw [ZMod.val_add, ZMod.val_add,
+        Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]
+    omega
+  · -- Overflow: result is unconstrained
+    push Not at hwidth
+    simp only [show ¬(rc1.rangeWidth + rc2.rangeWidth ≤ (RangeConstraint.unconstrained (p := p)).rangeWidth) from by omega, ite_false]
+    exact unconstrained_inRange _
 
 /-- Subtraction preserves range (follows from add + neg). -/
 theorem RangeConstraint.sub_inRange {p : ℕ} [NeZero p]
