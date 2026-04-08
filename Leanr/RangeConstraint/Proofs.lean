@@ -497,16 +497,163 @@ theorem RangeConstraint.neg_sound {p : ℕ} [NeZero p]
 theorem nat_and_eq_implies_le (x m : Nat) (h : x &&& m = x) : x ≤ m := by
   have := @Nat.and_le_right x m; omega
 
-/-- Core mask lemma for addition: if all bits of x1 are in m1 and all bits of x2 are in m2,
-    then all bits of (x1+x2) are in (m1+m2)|||m1|||m2.
-    Proof sketch: at each bit position i, the result bit comes from either:
-    - x1[i] XOR x2[i] (covered by m1|||m2), or
-    - carry propagation from lower bits (covered by m1+m2, via carry monotonicity). -/
+-- ===== Bitwise addition carry theory =====
+
+/-- Carry function for binary addition. -/
+def addCarry (x y : Nat) : Nat → Bool
+  | 0 => false
+  | i + 1 => (x.testBit i && y.testBit i) ||
+              (x.testBit i && addCarry x y i) ||
+              (y.testBit i && addCarry x y i)
+
+/-- Generalized carry with initial carry bit. -/
+def genCarry (x y : Nat) (c : Bool) : Nat → Bool
+  | 0 => c
+  | i + 1 => (x.testBit i && y.testBit i) ||
+              (x.testBit i && genCarry x y c i) ||
+              (y.testBit i && genCarry x y c i)
+
+theorem addCarry_eq_genCarry (x y i : Nat) : addCarry x y i = genCarry x y false i := by
+  induction i with
+  | zero => rfl
+  | succ n ih => unfold addCarry genCarry; rw [ih]
+
+/-- Carry shifts: genCarry at (i+1) equals genCarry of halved inputs at i. -/
+theorem genCarry_succ_shift (x y : Nat) (c : Bool) (i : Nat) :
+    genCarry x y c (i + 1) = genCarry (x / 2) (y / 2) (genCarry x y c 1) i := by
+  induction i with
+  | zero => unfold genCarry; rfl
+  | succ n ih =>
+    show (x.testBit (n + 1) && y.testBit (n + 1) ||
+          x.testBit (n + 1) && genCarry x y c (n + 1) ||
+          y.testBit (n + 1) && genCarry x y c (n + 1)) =
+         ((x / 2).testBit n && (y / 2).testBit n ||
+          (x / 2).testBit n && genCarry (x / 2) (y / 2) (genCarry x y c 1) n ||
+          (y / 2).testBit n && genCarry (x / 2) (y / 2) (genCarry x y c 1) n)
+    rw [Nat.testBit_succ, Nat.testBit_succ, ih]
+
+/-- Parity of sum with carry. -/
+theorem testBit_zero_add (x y : Nat) (c : Bool) :
+    (x + y + c.toNat).testBit 0 = (x.testBit 0).xor ((y.testBit 0).xor c) := by
+  simp only [Nat.testBit_zero]
+  have hx : x % 2 = 0 ∨ x % 2 = 1 := Nat.mod_two_eq_zero_or_one x
+  have hy : y % 2 = 0 ∨ y % 2 = 1 := Nat.mod_two_eq_zero_or_one y
+  rcases hx with hx | hx <;> rcases hy with hy | hy <;> cases c <;> simp [hx, hy, Bool.xor]
+  all_goals omega
+
+/-- Division by 2 of sum distributes with carry. -/
+theorem add_div2_eq (x y : Nat) (c : Bool) :
+    (x + y + c.toNat) / 2 = x / 2 + y / 2 + (genCarry x y c 1).toNat := by
+  unfold genCarry
+  simp only [genCarry, Nat.testBit_zero]
+  have hx : x % 2 = 0 ∨ x % 2 = 1 := Nat.mod_two_eq_zero_or_one x
+  have hy : y % 2 = 0 ∨ y % 2 = 1 := Nat.mod_two_eq_zero_or_one y
+  have hxd := Nat.div_add_mod x 2
+  have hyd := Nat.div_add_mod y 2
+  rcases hx with hx | hx <;> rcases hy with hy | hy <;> cases c <;> simp [hx, hy] <;> omega
+
+/-- testBit of sum equals XOR with carry (generalized). -/
+theorem testBit_add_gen (x y : Nat) (c : Bool) (i : Nat) :
+    (x + y + c.toNat).testBit i = (x.testBit i).xor ((y.testBit i).xor (genCarry x y c i)) := by
+  induction i generalizing x y c with
+  | zero => exact testBit_zero_add x y c
+  | succ n ih =>
+    rw [Nat.testBit_succ, Nat.testBit_succ, Nat.testBit_succ]
+    rw [genCarry_succ_shift, add_div2_eq]
+    exact ih (x / 2) (y / 2) (genCarry x y c 1)
+
+/-- testBit of sum equals XOR with carry. -/
+theorem testBit_add (x y i : Nat) :
+    (x + y).testBit i = (x.testBit i).xor ((y.testBit i).xor (addCarry x y i)) := by
+  rw [addCarry_eq_genCarry]; have := testBit_add_gen x y false i; simp at this; exact this
+
+/-- If x's bits are subset of m's, then x.testBit i → m.testBit i. -/
+theorem and_eq_self_testBit (x m : Nat) (h : x &&& m = x) (i : Nat)
+    (hxi : x.testBit i = true) : m.testBit i = true := by
+  have hi := congr_arg (·.testBit i) h
+  simp only [Nat.testBit_and] at hi
+  rw [hxi, Bool.true_and] at hi; exact hi
+
+/-- Carry monotonicity: if x ⊆ m and y ⊆ n bitwise, carry(x,y) ≤ carry(m,n). -/
+theorem carry_monotone (x1 x2 m1 m2 : Nat) (i : Nat)
+    (h1 : x1 &&& m1 = x1) (h2 : x2 &&& m2 = x2)
+    (hc : addCarry x1 x2 i = true) : addCarry m1 m2 i = true := by
+  induction i with
+  | zero => simp [addCarry] at hc
+  | succ n ih =>
+    unfold addCarry at hc ⊢
+    have hx1m := and_eq_self_testBit x1 m1 h1 n
+    have hx2m := and_eq_self_testBit x2 m2 h2 n
+    cases hx1n : x1.testBit n <;> cases hx2n : x2.testBit n
+    · simp [hx1n, hx2n] at hc
+    · simp [hx1n, hx2n] at hc; simp [hx2m hx2n, ih hc]
+    · simp [hx1n, hx2n] at hc; simp [hx1m hx1n, ih hc]
+    · simp [hx1m hx1n, hx2m hx2n]
+
+/-- Core mask lemma for addition: if x1 ⊆ m1 and x2 ⊆ m2 bitwise,
+    then (x1+x2) ⊆ (m1+m2) ||| m1 ||| m2 bitwise. -/
 theorem add_mask_preservation (x1 x2 m1 m2 : Nat)
     (h1 : x1 &&& m1 = x1) (h2 : x2 &&& m2 = x2) :
     (x1 + x2) &&& ((m1 + m2) ||| m1 ||| m2) = x1 + x2 := by
-  sorry -- Requires carry-tracking induction on bit positions
+  apply Nat.eq_of_testBit_eq; intro i
+  rw [Nat.testBit_and, Nat.testBit_or, Nat.testBit_or]
+  by_cases hb : (x1 + x2).testBit i
+  · rw [hb]; simp
+    rw [testBit_add] at hb
+    by_cases hx1 : x1.testBit i <;> by_cases hx2 : x2.testBit i
+    · left; right; exact and_eq_self_testBit x1 m1 h1 i hx1
+    · left; right; exact and_eq_self_testBit x1 m1 h1 i hx1
+    · right; exact and_eq_self_testBit x2 m2 h2 i hx2
+    · -- Both false, carry must be true
+      simp [hx1, hx2, Bool.xor] at hb
+      have hcm := carry_monotone x1 x2 m1 m2 i h1 h2 hb
+      rw [testBit_add m1 m2 i]
+      by_cases hm1 : m1.testBit i <;> by_cases hm2 : m2.testBit i
+      · left; left; simp [hm1, hm2, Bool.xor, hcm]
+      · left; right; exact hm1
+      · right; exact hm2
+      · left; left; simp [hm1, hm2, Bool.xor, hcm]
+  · simp [show (x1 + x2).testBit i = false by simp_all]
 
+/-- Extract inRange bound from add result in range-ok nonwrap case. -/
+private theorem add_inRange_val_le_max {p : ℕ} [NeZero p]
+    (rc1 rc2 : RangeConstraint p) (v : ZMod p)
+    (hir : (rc1.add rc2).inRange v)
+    (hrange : rc1.rangeWidth + rc2.rangeWidth ≤
+      (RangeConstraint.unconstrained (p := p)).rangeWidth)
+    (hnonwrap : (rc1.min + rc2.min).val ≤ (rc1.max + rc2.max).val) :
+    v.val ≤ (rc1.max + rc2.max).val := by
+  unfold RangeConstraint.add RangeConstraint.inRange at hir
+  simp only [] at hir; rw [if_pos hrange] at hir
+  simp only [] at hir; rw [if_pos hnonwrap] at hir
+  exact hir.2
+
+/-- unc.mask covers any value in ZMod p. -/
+private theorem unc_mask_covers_val {p : ℕ} [NeZero p] (v : ZMod p) :
+    v.val &&& (RangeConstraint.unconstrained (p := p)).mask = v.val := by
+  have hp : 0 < p := NeZero.pos p
+  exact nat_and_two_pow_sub_one _ _
+    (lt_of_lt_of_le (ZMod.val_lt v) (Nat.lt_pow_succ_log_self (by omega) p).le)
+
+/-- val < p → val fits maskFromBits(numBits (p-1)). -/
+private theorem fits_maskFromBits_p_minus_1 {p : ℕ} [NeZero p] (n : Nat) (h : n < p) :
+    n &&& maskFromBits (numBits ((p - 1 : Nat) : ZMod p).val) = n := by
+  have hp : 0 < p := NeZero.pos p
+  rw [show ((p - 1 : Nat) : ZMod p).val = p - 1 from by
+    rw [ZMod.val_natCast]; exact Nat.mod_eq_of_lt (by omega)]
+  rcases Nat.eq_zero_or_pos (p - 1) with hp1 | hp1
+  · have : p = 1 := by omega
+    subst this; simp at h; subst h; simp [Nat.zero_and]
+  · exact fits_maskFromBits _ _ (by omega) hp1
+
+/-- fits_maskFromBits extended to handle max=0. -/
+private theorem fits_maskFromBits' (n m : Nat) (h : n ≤ m) :
+    n &&& maskFromBits (numBits m) = n := by
+  rcases Nat.eq_zero_or_pos m with hm | hm
+  · subst hm; simp at h; subst h; simp [Nat.zero_and]
+  · exact fits_maskFromBits n m h hm
+
+set_option maxHeartbeats 800000 in
 /-- Addition is sound: if rc1 allows x1 and rc2 allows x2,
     then (rc1.add rc2) allows (x1 + x2).
     Range part proved by add_inRange. Mask part uses add_mask_preservation. -/
@@ -514,7 +661,66 @@ theorem RangeConstraint.add_sound {p : ℕ} [NeZero p]
     (rc1 rc2 : RangeConstraint p) (x1 x2 : ZMod p)
     (h1 : rc1.allowsValue x1 = true) (h2 : rc2.allowsValue x2 = true) :
     (rc1.add rc2).allowsValue (x1 + x2) = true := by
-  sorry -- Depends on add_mask_preservation; range part follows from add_inRange
+  have hm1 := ((rc1.allowsValue_iff x1).mp h1).2
+  have hm2 := ((rc2.allowsValue_iff x2).mp h2).2
+  have hle1 := nat_and_eq_implies_le _ _ hm1
+  have hle2 := nat_and_eq_implies_le _ _ hm2
+  have hir_add := RangeConstraint.add_inRange rc1 rc2 _ _
+    (rc1.allowsValue_inRange x1 h1) (rc2.allowsValue_inRange x2 h2)
+  have hv_lt := ZMod.val_lt (x1 + x2)
+  have hp : 0 < p := NeZero.pos p
+  rw [RangeConstraint.allowsValue_iff]
+  refine ⟨hir_add, ?_⟩
+  unfold RangeConstraint.add; simp only []
+  -- 8 branches from: range overflow × non-wrapping × mask overflow
+  split <;> split <;> split
+  -- range_ok, nonwrap, mask_ov: unc.mask &&& maskFromBits
+  · next hrange hnonwrap _ =>
+    apply nat_and_conj
+    · exact unc_mask_covers_val _
+    · exact fits_maskFromBits' _ _
+        (add_inRange_val_le_max rc1 rc2 (x1+x2) hir_add hrange hnonwrap)
+  -- range_ok, nonwrap, no mask_ov: maskSum &&& maskFromBits
+  · next hrange hnonwrap hmov =>
+    push Not at hmov
+    have hsum_lt : x1.val + x2.val < p := by omega
+    have hval_eq : (x1+x2).val = x1.val + x2.val := by
+      rw [ZMod.val_add]; exact Nat.mod_eq_of_lt hsum_lt
+    rw [hval_eq]
+    apply nat_and_conj
+    · exact add_mask_preservation x1.val x2.val rc1.mask rc2.mask hm1 hm2
+    · have hb := add_inRange_val_le_max rc1 rc2 (x1+x2) hir_add hrange hnonwrap
+      rw [hval_eq] at hb
+      exact fits_maskFromBits' _ _ hb
+  -- range_ok, wrap, mask_ov: unc.mask
+  · exact unc_mask_covers_val _
+  -- range_ok, wrap, no mask_ov: maskSum
+  · next _ _ hmov =>
+    push Not at hmov
+    rw [show (x1+x2).val = x1.val + x2.val from by
+      rw [ZMod.val_add]; exact Nat.mod_eq_of_lt (by omega)]
+    exact add_mask_preservation x1.val x2.val rc1.mask rc2.mask hm1 hm2
+  -- range_ov, nonwrap, mask_ov: unc.mask &&& maskFromBits(numBits unc.max.val)
+  · apply nat_and_conj
+    · exact unc_mask_covers_val _
+    · exact fits_maskFromBits_p_minus_1 _ hv_lt
+  -- range_ov, nonwrap, no mask_ov: maskSum &&& maskFromBits
+  · next _ _ hmov =>
+    push Not at hmov
+    have hsum_lt : x1.val + x2.val < p := by omega
+    rw [show (x1+x2).val = x1.val + x2.val from by
+      rw [ZMod.val_add]; exact Nat.mod_eq_of_lt hsum_lt]
+    apply nat_and_conj
+    · exact add_mask_preservation x1.val x2.val rc1.mask rc2.mask hm1 hm2
+    · exact fits_maskFromBits_p_minus_1 _ hsum_lt
+  -- range_ov, wrap, mask_ov: unc.mask
+  · exact unc_mask_covers_val _
+  -- range_ov, wrap, no mask_ov: maskSum
+  · next _ _ hmov =>
+    push Not at hmov
+    rw [show (x1+x2).val = x1.val + x2.val from by
+      rw [ZMod.val_add]; exact Nat.mod_eq_of_lt (by omega)]
+    exact add_mask_preservation x1.val x2.val rc1.mask rc2.mask hm1 hm2
 
 /-- Subtraction is sound: follows from add_sound and neg_sound. -/
 theorem RangeConstraint.sub_sound {p : ℕ} [NeZero p]
