@@ -69,6 +69,32 @@ def solve_round (system : System (p := p))
     assignments := system.assignments ++ newAssignments,
   }, rc)
 
+/-- Pure version of solve_round (no IO logging). -/
+def solve_round_pure (system : System (p := p)) : System (p := p) :=
+  let (newAssignments, remaining) := find_all_assignments system.constraints
+  if newAssignments.isEmpty then
+    system
+  else
+    let env : Std.HashMap String (ZMod p) :=
+      newAssignments.foldl (init := (∅ : Std.HashMap String (ZMod p))) fun m a => m.insert a.var a.value
+    let constraints := substitute_all_constraints remaining env
+    let bus := substitute_all_bus system.bus_interactions env
+    {
+      constraints := constraints,
+      bus_interactions := bus,
+      assignments := system.assignments ++ newAssignments,
+    }
+
+/-- Pure version of solve (no IO logging). Iterates until no more assignments can be found. -/
+def solve_pure (system : System (p := p)) : System (p := p) :=
+  let new_system := solve_round_pure system
+  if h : new_system.constraints.size < system.constraints.size then
+    solve_pure new_system
+  else
+    new_system
+  termination_by system.constraints.size
+  decreasing_by omega
+
 def solve (system : System (p := p)) (log : Bool := false) : IO (System (p := p)) := do
   if log then
     IO.eprintln s!"[solve] {system.constraints.size} constraints, {system.bus_interactions.size} bus, {system.assignments.size} assignments"

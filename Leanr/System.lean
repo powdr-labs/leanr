@@ -20,3 +20,7 @@ instance : ToString (System (p := p)) where
 def System.fromConstraints {p : ℕ}
   (constraints : List (AlgebraicConstraint p)) : System (p := p) :=
   { constraints := constraints.toArray, bus_interactions := #[], assignments := #[] }
+
+/-- A system's constraints are all satisfied by `env`. -/
+def System.satisfies (s : System p) (env : String → ZMod p) : Prop :=
+  ∀ c ∈ s.constraints.toList, AlgebraicConstraint.eval c env = 0

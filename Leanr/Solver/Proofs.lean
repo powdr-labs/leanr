@@ -8,10 +8,6 @@ instance instFactPrime13 : Fact (Nat.Prime 13) where
 
 /-! ## Correctness -/
 
-/-- A system's constraints are all satisfied by `env`. -/
-def System.satisfies (s : System p) (env : String → ZMod p) : Prop :=
-  ∀ c ∈ s.constraints.toList, AlgebraicConstraint.eval c env = 0
-
 /-- Dropping a constraint whose constant value is 0 preserves satisfiability. -/
 theorem toConstant_zero_satisfied {c : AlgebraicConstraint p} {env : String → ZMod p}
     (h : c.toConstant? = some 0) : c.eval env = 0 := by
@@ -128,9 +124,66 @@ theorem find_all_assignments_sound
   exact find_forIn_loop_preserves constraints env h_sat constraints.size (le_refl _) #[] #[]
     (by intro a ha; simp at ha) (by intro c hc; simp at hc)
 
+/-! ### HashMap from assignments -/
+
+/-- Helper: List.foldl insert on a HashMap preserves agreement with env. -/
+private theorem list_foldl_insert_agrees
+    (assignments : List (Assignment (p := p)))
+    (env : String → ZMod p)
+    (h : ∀ a ∈ assignments, env a.var = a.value)
+    (acc : Std.HashMap String (ZMod p))
+    (h_acc : ∀ x v, acc[x]? = some v → env x = v) :
+    ∀ x v, (assignments.foldl (fun m (a : Assignment (p := p)) => m.insert a.var a.value) acc)[x]? = some v →
+      env x = v := by
+  induction assignments generalizing acc with
+  | nil => simpa using h_acc
+  | cons a as ih =>
+    simp only [List.foldl_cons]
+    apply ih
+    · intro b hb; exact h b (List.mem_cons_of_mem _ hb)
+    · intro x v hxv
+      rw [Std.HashMap.getElem?_insert] at hxv
+      split_ifs at hxv with heq
+      · cases hxv
+        rw [← beq_iff_eq.mp heq]
+        exact h a List.mem_cons_self
+      · exact h_acc x v hxv
+
+/-- A HashMap built from all assignments agrees with the environment. -/
+theorem hashmap_from_assignments_agrees
+    (assignments : Array (Assignment (p := p)))
+    (env : String → ZMod p)
+    (h : ∀ a ∈ assignments.toList, env a.var = a.value) :
+    ∀ x v, (assignments.foldl (init := (∅ : Std.HashMap String (ZMod p)))
+      fun m a => m.insert a.var a.value)[x]? = some v → env x = v := by
+  rw [← Array.foldl_toList]
+  exact list_foldl_insert_agrees _ env h _ (by intro x v hxv; simp at hxv)
+
+/-- One round of pure solving preserves satisfiability. -/
+theorem solve_round_pure_preserves (system : System (p := p)) (env : String → ZMod p)
+    (h_sat : system.satisfies env) :
+    (solve_round_pure system).satisfies env := by
+  unfold solve_round_pure
+  have fas := find_all_assignments_sound system.constraints env h_sat
+  rcases h_eq : find_all_assignments system.constraints with ⟨assignments, remaining⟩
+  rw [h_eq] at fas
+  obtain ⟨h_assign, h_remain⟩ := fas
+  simp only
+  split_ifs
+  · exact h_sat
+  · intro c hc
+    exact substituteAll_preserves_satisfaction _ _ env
+      (hashmap_from_assignments_agrees _ env h_assign) h_remain c hc
+
 /-- The solver preserves satisfiability: if all original constraints are satisfied by `env`,
     then all remaining constraints after solving are also satisfied by `env`. -/
-theorem solve_sound (system : System (p := p)) (env : String → ZMod p) (log : Bool)
+theorem solve_sound (system : System (p := p)) (env : String → ZMod p)
     (h_sat : system.satisfies env) :
-    ∀ s, solve system log = pure s → s.satisfies env := by
-  sorry -- follows from find_all_assignments_sound and substituteAll_preserves_satisfaction
+    (solve_pure system).satisfies env := by
+  rw [solve_pure]
+  have h_round := solve_round_pure_preserves system env h_sat
+  split_ifs with h
+  · exact solve_sound (solve_round_pure system) env h_round
+  · exact h_round
+  termination_by system.constraints.size
+  decreasing_by omega
