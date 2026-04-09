@@ -1,4 +1,5 @@
 import Leanr.AffineExpression
+import Leanr.RangeConstraint.Proofs
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
@@ -329,3 +330,182 @@ theorem AffineExpression.substituteAll_eval (e : AffineExpression p)
   have := subst_foldl_correct e.affine.toList m env h e.offset ∅ h_distinct h_disjoint
   simp at this
   exact this
+
+/-! ### Range constraint soundness -/
+
+/-- A singleton range constraint allows its value. -/
+theorem RangeConstraint.coe_allowsValue (v : ZMod p) :
+    (↑v : RangeConstraint p).allowsValue v = true := by
+  rw [allowsValue_iff]
+  simp only [le_refl, ite_true, and_self, true_and]
+  exact Nat.and_self v.val
+
+/-- Helper: foldl over a list combining RCs is sound.
+    If `acc_rc` allows `acc_val`, and for each `(k, v)` in `l`, `rc_env k` allows `val_env k`,
+    then the result allows `acc_val + Σ v * val_env k`. -/
+private theorem rangeConstraint_foldl_sound
+    (l : List (String × ZMod p))
+    (rc_env : String → RangeConstraint p)
+    (val_env : String → ZMod p)
+    (h_env : ∀ k, ∀ pair ∈ l, pair.1 = k → (rc_env k).allowsValue (val_env k) = true)
+    (acc_rc : RangeConstraint p) (acc_val : ZMod p)
+    (h_acc : acc_rc.allowsValue acc_val = true) :
+    (l.foldl (fun (acc : RangeConstraint p) (entry : String × ZMod p) =>
+      acc + (↑entry.2 : RangeConstraint p) * rc_env entry.1) acc_rc).allowsValue
+      (acc_val + (l.map (fun (k, v) => v * val_env k)).sum) = true := by
+  induction l generalizing acc_rc acc_val with
+  | nil => simpa
+  | cons hd tl ih =>
+    simp only [List.foldl_cons, List.map_cons, List.sum_cons]
+    have h_hd : (rc_env hd.1).allowsValue (val_env hd.1) = true :=
+      h_env hd.1 hd List.mem_cons_self rfl
+    have h_coe : (↑hd.2 : RangeConstraint p).allowsValue hd.2 = true :=
+      RangeConstraint.coe_allowsValue hd.2
+    have h_mul : ((↑hd.2 : RangeConstraint p) * rc_env hd.1).allowsValue (hd.2 * val_env hd.1) = true :=
+      RangeConstraint.mul_sound _ _ _ _ h_coe h_hd
+    have h_add : (acc_rc + (↑hd.2 : RangeConstraint p) * rc_env hd.1).allowsValue
+        (acc_val + hd.2 * val_env hd.1) = true :=
+      RangeConstraint.add_sound _ _ _ _ h_acc h_mul
+    have h_env' : ∀ k, ∀ pair ∈ tl, pair.1 = k → (rc_env k).allowsValue (val_env k) = true :=
+      fun k pair hp hk => h_env k pair (List.mem_cons_of_mem _ hp) hk
+    convert ih h_env' _ _ h_add using 1
+    ring
+
+/-- The range constraint of an affine expression is sound:
+    if every variable's RC allows its actual value, then the expression RC allows
+    the expression's actual value. -/
+theorem AffineExpression.rangeConstraint_sound
+    (ae : AffineExpression p) (rc_env : String → RangeConstraint p)
+    (val_env : String → ZMod p)
+    (h_env : ∀ v, (rc_env v).allowsValue (val_env v) = true) :
+    (ae.rangeConstraint rc_env).allowsValue (ae.eval val_env) = true := by
+  rw [eval_eq_offset_add_sum]
+  unfold AffineExpression.rangeConstraint
+  rw [Std.TreeMap.foldl_eq_foldl_toList]
+  exact rangeConstraint_foldl_sound ae.affine.toList rc_env val_env
+    (fun k _ _ _ => h_env k) _ _ (RangeConstraint.coe_allowsValue ae.offset)
+
+/-- Helper: foldl over a list that skips one variable is sound.
+    The value side uses the same foldl structure with skip. -/
+private theorem rest_foldl_sound
+    (l : List (String × ZMod p))
+    (x : String)
+    (rc_env : String → RangeConstraint p)
+    (val_env : String → ZMod p)
+    (h_env : ∀ k, ∀ pair ∈ l, pair.1 = k → k ≠ x → (rc_env k).allowsValue (val_env k) = true)
+    (acc_rc : RangeConstraint p) (acc_val : ZMod p)
+    (h_acc : acc_rc.allowsValue acc_val = true) :
+    (l.foldl (fun (acc : RangeConstraint p) (entry : String × ZMod p) =>
+      if entry.1 == x then acc else acc + (↑entry.2 : RangeConstraint p) * rc_env entry.1) acc_rc).allowsValue
+      (l.foldl (fun (acc : ZMod p) (entry : String × ZMod p) =>
+        if entry.1 == x then acc else acc + entry.2 * val_env entry.1) acc_val) = true := by
+  induction l generalizing acc_rc acc_val with
+  | nil => simpa
+  | cons hd tl ih =>
+    simp only [List.foldl_cons]
+    by_cases h_eq : hd.1 == x
+    · simp only [h_eq, ite_true]
+      exact ih (fun k pair hp hk hne => h_env k pair (List.mem_cons_of_mem _ hp) hk hne)
+        _ _ h_acc
+    · simp only [h_eq, ite_false]
+      have h_ne : hd.1 ≠ x := fun heq => h_eq (beq_iff_eq.mpr heq)
+      have h_hd : (rc_env hd.1).allowsValue (val_env hd.1) = true :=
+        h_env hd.1 hd List.mem_cons_self rfl h_ne
+      have h_mul : ((↑hd.2 : RangeConstraint p) * rc_env hd.1).allowsValue (hd.2 * val_env hd.1) = true :=
+        RangeConstraint.mul_sound _ _ _ _ (RangeConstraint.coe_allowsValue hd.2) h_hd
+      exact ih (fun k pair hp hk hne => h_env k pair (List.mem_cons_of_mem _ hp) hk hne)
+        _ _ (RangeConstraint.add_sound _ _ _ _ h_acc h_mul)
+
+/-- The "rest value": evaluation of an affine expression excluding variable x. -/
+def AffineExpression.restEval (e : AffineExpression p) (x : String) (val_env : String → ZMod p) : ZMod p :=
+  e.affine.foldl (fun (acc : ZMod p) k (v : ZMod p) =>
+    if k == x then acc else acc + v * val_env k) e.offset
+
+/-- The rest RC computed in solvedRangeConstraint allows the negated-scaled rest value. -/
+theorem AffineExpression.solvedRangeConstraint_sound
+    (ae : AffineExpression p) (x : String) (coeff : ZMod p)
+    (rc_env : String → RangeConstraint p) (val_env : String → ZMod p)
+    (h_env : ∀ v, v ≠ x → (rc_env v).allowsValue (val_env v) = true)
+    (h_mem : ae.affine[x]? = some coeff) (h_coeff : coeff ≠ 0) :
+    ∃ rc, ae.solvedRangeConstraint x rc_env = some rc ∧
+      rc.allowsValue (-(coeff⁻¹) * ae.restEval x val_env) = true := by
+  unfold solvedRangeConstraint
+  simp only [h_mem, h_coeff, ite_false, bind, Option.bind, pure, Pure.pure]
+  refine ⟨_, rfl, ?_⟩
+  apply RangeConstraint.multiple_sound
+  rw [Std.TreeMap.foldl_eq_foldl_toList]
+  unfold restEval
+  rw [Std.TreeMap.foldl_eq_foldl_toList]
+  exact rest_foldl_sound ae.affine.toList x rc_env val_env
+    (fun k _ _ hk hne => h_env k hne) _ _ (RangeConstraint.coe_allowsValue ae.offset)
+
+/-- Helper: the skip-x foldl equals init + Σ_{k≠x} coeff_k * val_env k. -/
+private theorem restEval_foldl_eq_sum (l : List (String × ZMod p)) (x : String) (val_env : String → ZMod p)
+    (init : ZMod p) :
+    l.foldl (fun (acc : ZMod p) (entry : String × ZMod p) =>
+      if entry.1 == x then acc else acc + entry.2 * val_env entry.1) init =
+    init + ((l.filter (fun e => decide (e.1 ≠ x))).map (fun (k, v) => v * val_env k)).sum := by
+  induction l generalizing init with
+  | nil => simp
+  | cons hd tl ih =>
+    simp only [List.foldl_cons, List.filter_cons]
+    by_cases h_eq : hd.1 == x
+    · have : decide (hd.1 ≠ x) = false := by
+        simp [decide_eq_false_iff_not]; exact beq_iff_eq.mp h_eq
+      simp only [h_eq, ite_true, this, ite_false]
+      exact ih init
+    · have : decide (hd.1 ≠ x) = true := by
+        simp [decide_eq_true_eq]; exact fun h => h_eq (beq_iff_eq.mpr h)
+      simp only [h_eq, ite_false, this, ite_true, List.map_cons, List.sum_cons]
+      simp only [show (false = true) = False from by simp, ite_false]
+      rw [ih (init + hd.2 * val_env hd.1)]; ring
+
+private theorem restEval_eq_sum (ae : AffineExpression p) (x : String) (val_env : String → ZMod p) :
+    ae.restEval x val_env = ae.offset +
+      ((ae.affine.toList.filter (fun e => decide (e.1 ≠ x))).map (fun (k, v) => v * val_env k)).sum := by
+  unfold AffineExpression.restEval
+  rw [Std.TreeMap.foldl_eq_foldl_toList]
+  exact restEval_foldl_eq_sum _ _ _ _
+
+/-- Splitting eval into x-contribution and rest. -/
+theorem AffineExpression.eval_split (ae : AffineExpression p) (x : String) (coeff : ZMod p)
+    (val_env : String → ZMod p)
+    (h_mem : ae.affine[x]? = some coeff) :
+    ae.eval val_env = coeff * val_env x + ae.restEval x val_env := by
+  rw [eval_eq_offset_add_sum, restEval_eq_sum]
+  rw [sum_eq_key_plus_rest ae.affine x val_env]
+  simp only [Option.getD, h_mem]
+  ring
+
+/-- Main soundness theorem: if field_rc allows ae.eval and all variable RCs are sound,
+    then the deduced RC for variable x allows val_env x.
+    This is the core algebraic identity: coeff⁻¹ * (coeff * x + rest) + (-(coeff⁻¹)) * rest = x. -/
+theorem AffineExpression.deduce_variable_sound
+    (ae : AffineExpression p) (x : String) (coeff : ZMod p)
+    (field_rc : RangeConstraint p) (rc_env : String → RangeConstraint p) (val_env : String → ZMod p)
+    (h_field : field_rc.allowsValue (ae.eval val_env) = true)
+    (h_env : ∀ v, v ≠ x → (rc_env v).allowsValue (val_env v) = true)
+    (h_mem : ae.affine[x]? = some coeff) (h_coeff : coeff ≠ 0) :
+    (field_rc.multiple coeff⁻¹ +
+      (ae.solvedRangeConstraint x rc_env).get
+        (by unfold solvedRangeConstraint; simp [h_mem, h_coeff, bind, Option.bind])).allowsValue
+      (val_env x) = true := by
+  obtain ⟨rc, h_rc_eq, h_rc_allows⟩ := solvedRangeConstraint_sound ae x coeff rc_env val_env h_env h_mem h_coeff
+  have h_get : (ae.solvedRangeConstraint x rc_env).get
+      (by unfold solvedRangeConstraint; simp [h_mem, h_coeff, bind, Option.bind]) = rc := by
+    simp [h_rc_eq]
+  rw [h_get]
+  have h_scaled : (field_rc.multiple coeff⁻¹).allowsValue (coeff⁻¹ * ae.eval val_env) = true :=
+    RangeConstraint.multiple_sound field_rc coeff⁻¹ (ae.eval val_env) h_field
+  have h_sum := RangeConstraint.add_sound
+    (field_rc.multiple coeff⁻¹) rc
+    (coeff⁻¹ * ae.eval val_env) (-(coeff⁻¹) * ae.restEval x val_env)
+    h_scaled h_rc_allows
+  rw [eval_split ae x coeff val_env h_mem] at h_sum
+  have h_inv : coeff * coeff⁻¹ = 1 := mul_inv_cancel₀ h_coeff
+  have h_val_eq : val_env x =
+      coeff⁻¹ * (coeff * val_env x + ae.restEval x val_env) + -(coeff⁻¹) * ae.restEval x val_env := by
+    ring_nf; rw [h_inv]; ring
+  show (field_rc.multiple coeff⁻¹ + rc).allowsValue (val_env x) = true
+  rw [h_val_eq, show field_rc.multiple coeff⁻¹ + rc = (field_rc.multiple coeff⁻¹).add rc from rfl]
+  exact h_sum
