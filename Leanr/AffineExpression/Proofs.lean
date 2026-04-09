@@ -41,6 +41,13 @@ theorem AffineExpression.eval_of_var (x : String) :
   unfold AffineExpression.eval AffineExpression.var
   simp [Std.TreeMap.foldl_eq_foldl_toList]
 
+-- Structural equality between mergeWith and foldl+alter is not provable without
+-- access to internal BalancedTree invariants. Use the semantic version below instead.
+-- theorem TreeMap.mergeWith_sem {α β : Type} (cmp : α → α → Ordering)
+--     (f : α → β → β → β) (t₁ t₂ : Std.TreeMap α β cmp) :
+--     Std.TreeMap.mergeWith f t₁ t₂ =
+--     t₂.foldl (fun t a b₂ => t.alter a fun | none => some b₂ | some b₁ => f a b₁ b₂) t₁
+
 private theorem List.map_filter_ne_zero_sum (l : List (String × ZMod p)) (env : String → ZMod p) :
     (l.filter (fun q => decide (q.2 ≠ 0)) |>.map (fun (k, v) => v * env k)).sum =
     (l.map (fun (k, v) => v * env k)).sum := by
