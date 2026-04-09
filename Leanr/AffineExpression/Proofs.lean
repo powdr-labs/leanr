@@ -41,12 +41,159 @@ theorem AffineExpression.eval_of_var (x : String) :
   unfold AffineExpression.eval AffineExpression.var
   simp [Std.TreeMap.foldl_eq_foldl_toList]
 
--- Structural equality between mergeWith and foldl+alter is not provable without
--- access to internal BalancedTree invariants. Use the semantic version below instead.
--- theorem TreeMap.mergeWith_sem {α β : Type} (cmp : α → α → Ordering)
---     (f : α → β → β → β) (t₁ t₂ : Std.TreeMap α β cmp) :
---     Std.TreeMap.mergeWith f t₁ t₂ =
---     t₂.foldl (fun t a b₂ => t.alter a fun | none => some b₂ | some b₁ => f a b₁ b₂) t₁
+/-! ### TreeMap.mergeWith semantics (pointwise get?) -/
+
+private def List.findValue? {α β : Type} (cmp : α → α → Ordering) (k : α) :
+    List (α × β) → Option β
+  | [] => none
+  | (a, b) :: rest => if cmp k a = .eq then some b else findValue? cmp k rest
+
+private theorem findValue?_none_of_forall {β : Type} (k : String) (l : List (String × β))
+    (h : ∀ p ∈ l, compare k p.1 ≠ .eq) :
+    List.findValue? compare k l = none := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    simp only [List.findValue?, h hd (List.mem_cons_self), ↓reduceIte]
+    exact ih (fun p hp => h p (List.mem_cons_of_mem _ hp))
+
+private theorem findValue?_tail_none {β : Type} (k : String)
+    (hd : String × β) (tl : List (String × β))
+    (h_eq : compare hd.1 k = Ordering.eq)
+    (h_distinct : (hd :: tl).Pairwise (fun a b => compare a.1 b.1 ≠ .eq)) :
+    List.findValue? compare k tl = none := by
+  apply findValue?_none_of_forall
+  intro p hp h_eq2
+  exact (List.pairwise_cons.mp h_distinct).1 p hp (Std.TransCmp.eq_trans h_eq h_eq2)
+
+private theorem foldl_alter_get?
+    {β : Type} (f : String → β → β → β)
+    (l : List (String × β))
+    (init : Std.DTreeMap.Internal.Impl.BalancedTree String (fun _ => β))
+    (h_wf : init.impl.WF)
+    (k : String)
+    (h_distinct : l.Pairwise (fun a b => compare a.1 b.1 ≠ .eq)) :
+    Std.DTreeMap.Internal.Impl.Const.get?
+      (List.foldl
+        (fun (a : Std.DTreeMap.Internal.Impl.BalancedTree String (fun _ => β))
+             (b : String × β) =>
+          (Std.DTreeMap.Internal.Impl.Const.alter b.fst
+            (fun x => match x with
+              | none => some b.snd
+              | some b1 => some (f b.fst b1 b.snd))
+            a.impl a.balanced_impl).toBalancedTree)
+        init l).impl k =
+    match Std.DTreeMap.Internal.Impl.Const.get? init.impl k,
+          l.findValue? compare k with
+    | some v1, some v2 => some (f k v1 v2)
+    | some v1, none => some v1
+    | none, some v2 => some v2
+    | none, none => none := by
+  induction l generalizing init with
+  | nil =>
+    simp only [List.foldl_nil, List.findValue?]
+    cases Std.DTreeMap.Internal.Impl.Const.get? init.impl k <;> rfl
+  | cons hd tl ih =>
+    simp only [List.foldl_cons]
+    have h_wf2 : (Std.DTreeMap.Internal.Impl.Const.alter hd.1
+      (fun x => match x with
+        | none => some hd.2
+        | some b1 => some (f hd.1 b1 hd.2))
+      init.impl init.balanced_impl).toBalancedTree.impl.WF :=
+      h_wf.constAlter
+    rw [ih _ h_wf2 h_distinct.tail]
+    simp only [Std.DTreeMap.Internal.Impl.SizedBalancedTree.toBalancedTree]
+    rw [Std.DTreeMap.Internal.Impl.Const.get?_alter h_wf]
+    simp only [List.findValue?]
+    by_cases h_eq : compare hd.1 k = Ordering.eq
+    · have h_k : hd.1 = k := Std.compare_eq_iff_eq.mp h_eq
+      have h_eq2 : compare k hd.1 = .eq :=
+        Std.OrientedCmp.eq_comm.mp h_eq
+      simp only [h_eq, h_eq2, ↓reduceIte]
+      rw [findValue?_tail_none k hd tl h_eq h_distinct]
+      simp only [h_k]
+      cases Std.DTreeMap.Internal.Impl.Const.get? init.impl k
+        <;> rfl
+    · have h_ne : compare k hd.1 ≠ .eq :=
+        fun h => h_eq (Std.OrientedCmp.eq_comm.mp h)
+      simp only [h_eq, h_ne, ↓reduceIte]
+
+private theorem const_toList_eq_map_toListModel {β : Type}
+    (t : Std.DTreeMap.Internal.Impl String (fun _ => β)) :
+    Std.DTreeMap.Internal.Impl.Const.toList t =
+    t.toListModel.map (fun p => (p.1, p.2)) := by
+  unfold Std.DTreeMap.Internal.Impl.Const.toList
+  rw [Std.DTreeMap.Internal.Impl.foldr_eq_foldr_toList]
+  rw [Std.DTreeMap.Internal.Impl.toList_eq_toListModel]
+  induction t.toListModel with
+  | nil => rfl
+  | cons hd tl ih =>
+    simp only [List.foldr_cons, List.map_cons]; rw [ih]
+
+private theorem Const_toList_pairwise_distinct {β : Type}
+    (t : Std.DTreeMap.Internal.Impl String (fun _ => β))
+    (h_wf : t.WF) :
+    (Std.DTreeMap.Internal.Impl.Const.toList t).Pairwise
+      (fun a b => compare a.1 b.1 ≠ .eq) := by
+  rw [const_toList_eq_map_toListModel]
+  have h_ord := h_wf.ordered
+  unfold Std.DTreeMap.Internal.Impl.Ordered at h_ord
+  rw [List.pairwise_map]
+  exact h_ord.imp (fun {a b} h_lt h_eq => by
+    rw [h_eq] at h_lt; exact absurd h_lt (by decide))
+
+private theorem findValue?_map_eq_getValue? {β : Type} (k : String)
+    (l : List ((_ : String) × β)) :
+    List.findValue? compare k (l.map (fun p => (p.1, p.2))) =
+    Std.Internal.List.getValue? k l := by
+  induction l with
+  | nil => simp [List.findValue?, Std.Internal.List.getValue?_nil]
+  | cons hd tl ih =>
+    simp only [List.map_cons, List.findValue?]
+    by_cases h : compare k hd.1 = .eq
+    · simp only [h, ↓reduceIte]
+      have h_eq : k = hd.1 := Std.compare_eq_iff_eq.mp h
+      subst h_eq
+      rw [Std.Internal.List.getValue?_cons_self]
+    · simp only [h, ↓reduceIte, ih]
+      have h_beq : (hd.1 == k) = false := by
+        rw [beq_eq_false_iff_ne]
+        intro h_eq; subst h_eq
+        exact h (Std.compare_eq_iff_eq.mpr rfl)
+      rw [Std.Internal.List.getValue?_cons_of_false h_beq]
+
+private theorem findValue?_eq_Const_get? {β : Type}
+    (t : Std.DTreeMap.Internal.Impl String (fun _ => β))
+    (h_wf : t.WF) (k : String) :
+    List.findValue? compare k
+      (Std.DTreeMap.Internal.Impl.Const.toList t) =
+    Std.DTreeMap.Internal.Impl.Const.get? t k := by
+  rw [const_toList_eq_map_toListModel]
+  rw [findValue?_map_eq_getValue?]
+  rw [Std.DTreeMap.Internal.Impl.Const.get?_eq_getValue? h_wf.ordered]
+
+omit [Fact (Nat.Prime p)] in
+theorem TreeMap.get?_mergeWith {β : Type}
+    (f : String → β → β → β)
+    (t1 t2 : Std.TreeMap String β compare) (k : String) :
+    (Std.TreeMap.mergeWith f t1 t2).get? k =
+    match t1.get? k, t2.get? k with
+    | some v1, some v2 => some (f k v1 v2)
+    | some v1, none => some v1
+    | none, some v2 => some v2
+    | none, none => none := by
+  simp only [Std.TreeMap.mergeWith, Std.TreeMap.get?]
+  simp only [Std.DTreeMap.Const.mergeWith, Std.DTreeMap.Const.get?]
+  simp only [Std.DTreeMap.Internal.Impl.Const.mergeWith]
+  rw [Std.DTreeMap.Internal.Impl.Const.foldl_eq_foldl_toList]
+  have h1 := foldl_alter_get? f
+    (Std.DTreeMap.Internal.Impl.Const.toList t2.inner.inner)
+    ⟨t1.inner.inner, t1.inner.wf.balanced⟩
+    t1.inner.wf k
+    (Const_toList_pairwise_distinct _ t2.inner.wf)
+  simp only [findValue?_eq_Const_get? t2.inner.inner t2.inner.wf k]
+    at h1
+  exact h1
 
 private theorem List.map_filter_ne_zero_sum (l : List (String × ZMod p)) (env : String → ZMod p) :
     (l.filter (fun q => decide (q.2 ≠ 0)) |>.map (fun (k, v) => v * env k)).sum =
