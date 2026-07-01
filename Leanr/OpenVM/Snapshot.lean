@@ -150,24 +150,13 @@ opcode_add_flag_0 * (2005401601 * (b__2_0 + c__2_0 + 2013265920 * a__2_0 + 20054
 opcode_sub_flag_0 * (2005401601 * (a__2_0 + c__2_0 + 2013265920 * b__2_0 + 2005401601 * (a__1_0 + c__1_0 + 2013265920 * b__1_0 + 2005401601 * (a__0_0 + c__0_0 + 2013265920 * b__0_0))) * (2005401601 * (a__2_0 + c__2_0 + 2013265920 * b__2_0 + 2005401601 * (a__1_0 + c__1_0 + 2013265920 * b__1_0 + 2005401601 * (a__0_0 + c__0_0 + 2013265920 * b__0_0))) + 2013265920)) = 0
 opcode_add_flag_0 * (2005401601 * (b__3_0 + c__3_0 + 2013265920 * a__3_0 + 2005401601 * (b__2_0 + c__2_0 + 2013265920 * a__2_0 + 2005401601 * (b__1_0 + c__1_0 + 2013265920 * a__1_0 + 2005401601 * (b__0_0 + c__0_0 + 2013265920 * a__0_0)))) * (2005401601 * (b__3_0 + c__3_0 + 2013265920 * a__3_0 + 2005401601 * (b__2_0 + c__2_0 + 2013265920 * a__2_0 + 2005401601 * (b__1_0 + c__1_0 + 2013265920 * a__1_0 + 2005401601 * (b__0_0 + c__0_0 + 2013265920 * a__0_0)))) + 2013265920)) = 0
 opcode_sub_flag_0 * (2005401601 * (a__3_0 + c__3_0 + 2013265920 * b__3_0 + 2005401601 * (a__2_0 + c__2_0 + 2013265920 * b__2_0 + 2005401601 * (a__1_0 + c__1_0 + 2013265920 * b__1_0 + 2005401601 * (a__0_0 + c__0_0 + 2013265920 * b__0_0)))) * (2005401601 * (a__3_0 + c__3_0 + 2013265920 * b__3_0 + 2005401601 * (a__2_0 + c__2_0 + 2013265920 * b__2_0 + 2005401601 * (a__1_0 + c__1_0 + 2013265920 * b__1_0 + 2005401601 * (a__0_0 + c__0_0 + 2013265920 * b__0_0)))) + 2013265920)) = 0
-0 = 0
 1 + 2013265920 * (c__0_0 + c__1_0 * 256 + c__2_0 * 65536) = 0
 c__2_0 + 2013265920 * c__3_0 = 0
 c__2_0 * (255 + 2013265920 * c__2_0) = 0
 (opcode_add_flag_0 + opcode_sub_flag_0 + opcode_xor_flag_0 + opcode_or_flag_0 + opcode_and_flag_0) * (from_state__timestamp_0 + 2013265920 * reads_aux__0__base__prev_timestamp_0 + 2013265920 + 2013265920 * (reads_aux__0__base__timestamp_lt_aux__lower_decomp__0_0 + reads_aux__0__base__timestamp_lt_aux__lower_decomp__1_0 * 131072)) = 0
-0 = 0
-0 = 0
 (opcode_add_flag_0 + opcode_sub_flag_0 + opcode_xor_flag_0 + opcode_or_flag_0 + opcode_and_flag_0) * (from_state__timestamp_0 + 2 + 2013265920 * writes_aux__base__prev_timestamp_0 + 2013265920 + 2013265920 * (writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + writes_aux__base__timestamp_lt_aux__lower_decomp__1_0 * 131072)) = 0
 2013265920 * (opcode_add_flag_0 + opcode_sub_flag_0 + opcode_xor_flag_0 + opcode_or_flag_0 + opcode_and_flag_0) + 1 = 0
-0 = 0
-512 + (opcode_sub_flag_0 + opcode_xor_flag_0 * 2 + opcode_or_flag_0 * 3 + opcode_and_flag_0 * 4) + 2013265409 = 0
-0 = 0
-0 = 0
-0 = 0
-0 = 0
-0 = 0
-0 = 0
-0 = 0"
+512 + (opcode_sub_flag_0 + opcode_xor_flag_0 * 2 + opcode_or_flag_0 * 3 + opcode_and_flag_0 * 4) + 2013265409 = 0"
 
 /-- The optimizer's output on the ported machine. -/
 def addiOptimized : ConstraintSystem babyBear := optimizer addiInput (openVmBusSemantics babyBear)

@@ -69,3 +69,13 @@ Worked: yes. Eliminates exactly the 5 constant-pinned variables `from_state__pc_
 `rs1_ptr_0=8`, `rs2_0=1`, `rs2_as_0=0` (the last is the cascade trigger). **Impact: 36 → 31,
 effectiveness 36/31 ≈ 1.16.** `reads_aux__1__…` now survive only inside interactions whose
 multiplicity became `0` (removed once zero-mult bus dropping lands).
+
+### 3. Trivial-constraint removal (`TrivialConstraint.lean`) — cascade enabler
+Idea: drop algebraic constraints whose fold is the literal `0` (via `filterConstraints_correct`);
+`Expression.isConstZero` is the decidable check, and the dropped-are-zero obligation is discharged
+by `fold_eval` + `isConstZero_sound`. Added into the fixpoint loop (fix → fold → drop-trivial).
+Worked: yes — output algebraic constraints dropped from 32 to 21 (removed `1-1`, `0-0`, the five
+now-satisfied `x=const` defining constraints, and the `rs2_as_0 * (…)` constraints that folded to
+`0`). Field-free. **Impact: effectiveness unchanged at 36/31 (no variable is removed by this pass
+alone — the freed aux variables still live in zero-multiplicity interactions), but it is the
+prerequisite that isolates them for the next pass.**

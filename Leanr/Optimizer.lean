@@ -2,6 +2,7 @@ import Leanr.OptimizerPasses.Basic
 import Leanr.OptimizerPasses.Identity
 import Leanr.OptimizerPasses.ConstantFold
 import Leanr.OptimizerPasses.ConstantSubst
+import Leanr.OptimizerPasses.TrivialConstraint
 
 set_option autoImplicit false
 
@@ -20,10 +21,11 @@ import it here, and `.andThen` it into `pipeline` below. That is the only edit n
 correctness proof follows automatically from the pass's own `PassCorrect`. -/
 
 /-- The optimization pipeline: the sequence of verified passes that make up the optimizer.
-    Fold once, then iterate "eliminate one constant-pinned variable, then re-fold" to a fixpoint.
-    Extend it by composing passes with `.andThen`. -/
+    Fold once, then iterate "substitute one constant-pinned variable, re-fold, drop trivial
+    constraints" to a fixpoint. Extend it by composing passes with `.andThen`. -/
 def pipeline : VerifiedPass p :=
-  constantFoldPass.andThen ((constantFixPass.andThen constantFoldPass).iterate 12)
+  constantFoldPass.andThen
+    (((constantFixPass.andThen constantFoldPass).andThen trivialConstraintDropPass).iterate 12)
 
 /-- The circuit optimizer: run the pipeline and project out the resulting constraint system. -/
 def optimizer (cs : ConstraintSystem p) (busSemantics : BusSemantics p) : ConstraintSystem p :=
