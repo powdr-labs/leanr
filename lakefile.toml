@@ -1,6 +1,6 @@
 name = "leanr"
 version = "0.1.0"
-defaultTargets = ["leanr"]
+defaultTargets = ["Leanr", "leanr"]
 
 [[require]]
 name = "mathlib"
