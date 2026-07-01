@@ -57,3 +57,15 @@ detection passes rely on, and collapses `c * 0` to a literal `0` once substituti
 Worked: yes — the snapshot is now visibly folded (e.g. `0 + opcode_add_flag_0 + …` → `opcode_add_flag_0 + …`,
 `2013265920 * 1` → `2013265920`). Correctness is free from `mapExpr_correct` (only `fold_eval`, one
 induction, no field). **Impact: effectiveness still 1 (36 → 36); shape only, as expected for an enabler.**
+
+### 2. Constant substitution (`ConstantSubst.lean`) — first real reduction
+Idea: after folding, a variable pinned to a constant shows up as `x` (⇒ `x=0`) or `x + const d`
+(⇒ `x=-d`). `solveConst` detects these; `substFromConstraint` (a generic combinator: find the first
+solvable constraint, substitute via the proven `subst_correct`, else identity) turns it into a pass.
+The entailment `env x = c` comes from the constraint being `0` under `satisfies`, proved by
+`linear_combination`. Pipeline now folds, then iterates "substitute one constant, re-fold" to a
+fixpoint (`VerifiedPass.iterate`). No field/primality — works over any commutative ring.
+Worked: yes. Eliminates exactly the 5 constant-pinned variables `from_state__pc_0=0`, `rd_ptr_0=8`,
+`rs1_ptr_0=8`, `rs2_0=1`, `rs2_as_0=0` (the last is the cascade trigger). **Impact: 36 → 31,
+effectiveness 36/31 ≈ 1.16.** `reads_aux__1__…` now survive only inside interactions whose
+multiplicity became `0` (removed once zero-mult bus dropping lands).

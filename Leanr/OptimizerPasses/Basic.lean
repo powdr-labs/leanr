@@ -109,3 +109,10 @@ def VerifiedPass.andThen (f g : VerifiedPass p) : VerifiedPass p :=
     ⟨r2.val,
      ConstraintSystem.equivalentTo_trans r2.property.1 r1.property.1,
      fun h => r2.property.2 (r1.property.2 h)⟩
+
+/-- Iterate a pass `n` times. Used to run local, one-step passes (e.g. "substitute one variable")
+    to a fixpoint: each application is a `VerifiedPass`, so the composite is correct by construction.
+    A pass that finds nothing to do returns its input unchanged, so extra iterations are harmless. -/
+def VerifiedPass.iterate (f : VerifiedPass p) : Nat → VerifiedPass p
+  | 0 => VerifiedPass.id
+  | n + 1 => (f.iterate n).andThen f
