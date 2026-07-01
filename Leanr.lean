@@ -8,7 +8,8 @@ import Leanr.Legacy.BusInteraction
 import Leanr.Legacy.System
 import Leanr.Legacy.Solver
 import Leanr.Spec
-import Leanr.Optimizer
+import Leanr.Spec.Dsl
+import Leanr.IdentityOptimizer
 import Leanr.Legacy.StringParser
 import Leanr.JsonParser
 import Leanr.Legacy.OpenVM
