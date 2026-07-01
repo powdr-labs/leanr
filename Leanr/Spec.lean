@@ -53,6 +53,12 @@ structure BusSemantics (p : ℕ) where
       whether the bus interaction message exists in the lookup table. -/
   accepts (busInteractionMessage : BusInteraction (ZMod p)) : Bool
 
+/-- A concrete bus interaction message: which bus, and the tuple sent. -/
+abbrev BusMessage (p : ℕ) := Nat × List (ZMod p)
+
+/-- Net effect on the stateful buses: each message mapped to its summed multiplicity. -/
+abbrev BusEffect (p : ℕ) := BusMessage p →₀ ZMod p
+
 --------- Constraint System ---------
 
 /-- A constraint system representing a single zkVM chip. -/
@@ -63,7 +69,7 @@ structure ConstraintSystem (p : ℕ) where
 /-- The side effects of a constraint system under a given environment and bus semantics.
     The side effects are the tuples sent to the *stateful* buses.-/
 noncomputable def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
-    (busSemantics : BusSemantics p) (env : String → ZMod p) : (Nat × List (ZMod p)) →₀ ZMod p :=
+    (busSemantics : BusSemantics p) (env : String → ZMod p) : BusEffect p :=
   (cs.busInteractions.filter (fun bi => busSemantics.isStateful bi.busId)
     |>.map (fun bi =>
       let m := bi.eval env
