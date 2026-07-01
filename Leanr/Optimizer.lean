@@ -5,6 +5,7 @@ import Leanr.OptimizerPasses.ConstantSubst
 import Leanr.OptimizerPasses.TrivialConstraint
 import Leanr.OptimizerPasses.ZeroMultBus
 import Leanr.OptimizerPasses.Affine
+import Leanr.OptimizerPasses.Normalize
 
 set_option autoImplicit false
 
@@ -29,8 +30,8 @@ correctness proof follows automatically from the pass's own `PassCorrect`. -/
     Extend it by composing passes with `.andThen`. -/
 def pipeline : VerifiedPass p :=
   constantFoldPass.andThen
-    ((((affineSubstPass.andThen constantFoldPass).andThen trivialConstraintDropPass).andThen
-      zeroMultBusDropPass).iterate 16)
+    (((((affineSubstPass.andThen normalizePass).andThen constantFoldPass).andThen
+      trivialConstraintDropPass).andThen zeroMultBusDropPass).iterate 16)
 
 /-- The circuit optimizer: run the pipeline and project out the resulting constraint system. -/
 def optimizer (cs : ConstraintSystem p) (busSemantics : BusSemantics p) : ConstraintSystem p :=

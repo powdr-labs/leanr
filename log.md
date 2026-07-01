@@ -108,3 +108,17 @@ Worked: yes. Beyond the 5 constants it eliminates `c__2_0` (`c2 = c3`), `c__0_0`
 linear expression), this reduces the column count — the dominant proving cost the metric tracks —
 without raising constraint degree, though it does grow some expression sizes (the selectors appear
 in many multiplicities). **Impact: 28 → 24, effectiveness 36/24 = 3/2 = 1.5.**
+
+### 6. Affine normalization / collect-like-terms (`Normalize.lean`) — cascade unlock + de-bloat
+Idea: `linearize` only *concatenates* terms, so after affine inlines a flag, a selector sum like
+`add + sub + xor + or + and` carries cancelling terms (`x + (-1)·x`) that never collapse. Add a
+term-**merge** (`mergeTerms`, via an incremental `addCoeff` with a local eval lemma — sidestepping a
+"regroup-sum-by-key" proof) plus zero-dropping, giving `LinExpr.norm`. `Expression.normalize` then
+replaces each maximal affine subexpression by its merged form; correct for free via `mapExpr_correct`
+(only `normalize_eval`). Field-free.
+Worked: yes, with a compounding effect. (a) The selector sum collapses to the constant `1`, so a
+constraint `selector * X = 0` folds to `1 * X` → `X`, exposing the previously non-linear timestamp
+constraints as affine — the affine pass then eliminates `from_state__timestamp_0` and a second
+timestamp variable. (b) Merging also *undoes* the expression bloat from step 5's selector inlining:
+the rendered circuit shrinks from ~16 KB to ~7.6 KB (smaller than before step 5). **Impact: 24 → 22,
+effectiveness 36/22 = 18/11 ≈ 1.64, with a cleaner (smaller) circuit than any previous step.**
