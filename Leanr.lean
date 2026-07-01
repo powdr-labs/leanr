@@ -10,9 +10,8 @@ import Leanr.Legacy.Solver
 import Leanr.Spec
 import Leanr.Utils.Dsl
 import Leanr.Utils.Size
-import Leanr.IdentityOptimizer
+import Leanr.Optimizer
 import Leanr.Legacy.StringParser
-import Leanr.JsonParser
 import Leanr.Legacy.OpenVM
 import Leanr.Legacy.RangeConstraint
 import Leanr.Legacy.RangeConstraint.Proofs

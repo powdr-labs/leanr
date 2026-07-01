@@ -1,7 +1,7 @@
 import Leanr.Spec
 import Leanr.Utils.Dsl
 import Leanr.Utils.Size
-import Leanr.IdentityOptimizer
+import Leanr.Optimizer
 import Leanr.OpenVM.Semantics
 
 /-!
