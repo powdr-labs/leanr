@@ -122,3 +122,27 @@ constraints as affine — the affine pass then eliminates `from_state__timestamp
 timestamp variable. (b) Merging also *undoes* the expression bloat from step 5's selector inlining:
 the rendered circuit shrinks from ~16 KB to ~7.6 KB (smaller than before step 5). **Impact: 24 → 22,
 effectiveness 36/22 = 18/11 ≈ 1.64, with a cleaner (smaller) circuit than any previous step.**
+
+### 7. Concrete correctness capstone (`OpenVM/SnapshotCorrect.lean`)
+Not an optimization — a machine-checked instance of `optimizer_maintainsCorrectness` for the exact
+snapshot circuit: `addiOptimized.equivalentTo addiInput (openVmBusSemantics babyBear)` and invariant
+preservation. Depends only on the three standard Mathlib axioms (`propext`, `Classical.choice`,
+`Quot.sound`) — no `sorry`/`native_decide`/custom axiom. Notably it needs **no** primality instance:
+every pass is field-agnostic, so correctness holds over any modulus (stronger than the prime-field
+setting). **Impact: effectiveness unchanged; adds a concrete verified equivalence for the test case.**
+
+---
+
+## Summary
+
+Starting from the identity (effectiveness `1`, 36 variables), a pipeline of six general,
+individually-proven passes — constant folding, affine substitution (subsuming constant
+substitution), affine normalization, trivial-constraint removal, and zero-multiplicity bus removal,
+iterated to a fixpoint — reduces the ADD-immediate circuit to **22 variables, effectiveness 18/11 ≈
+1.64**, while also shrinking the rendered circuit below its original size. Every pass is proven
+`PassCorrect` with no `sorry`/`admit`/`axiom`/`native_decide`, and every pass is field-agnostic
+(works over any commutative ring, not just prime `babyBear`), so the whole optimizer is correct over
+any modulus. The remaining variables (the `xor`/`or`/`and` opcode selectors and the byte-range
+limbs) are constrained only non-linearly; eliminating them would require prime-field, circuit-
+specific one-hot/boolean case analysis, deliberately deprioritized in favour of general, portable
+optimizations.
