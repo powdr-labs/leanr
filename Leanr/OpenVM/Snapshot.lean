@@ -1,5 +1,5 @@
 import Leanr.Spec
-import Leanr.Spec.Dsl
+import Leanr.Utils.Dsl
 import Leanr.IdentityOptimizer
 import Leanr.OpenVM.Semantics
 
