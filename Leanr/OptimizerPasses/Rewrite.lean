@@ -127,3 +127,84 @@ theorem ConstraintSystem.filterConstraints_correct (cs : ConstraintSystem p) (bs
     exact ⟨env, (hiff env).2 hsat, by rw [hside]; exact BusState.equiv_refl _⟩
   · intro hinv env hsat bi hbi
     exact hinv env ((hiff env).1 hsat) bi hbi
+
+/-! ## Removing zero-multiplicity bus interactions -/
+
+/-- Keep only the bus interactions satisfying `keep`; algebraic constraints untouched. -/
+def ConstraintSystem.filterBus (cs : ConstraintSystem p) (keep : BusInteraction (Expression p) → Bool) :
+    ConstraintSystem p :=
+  { cs with busInteractions := cs.busInteractions.filter keep }
+
+/-- Net multiplicity is unchanged by dropping (via `keep = false`) bus interactions whose evaluated
+    multiplicity is `0`: such an interaction contributes `0` to every message's net multiplicity, so
+    the two bus states are `≈`-equal. -/
+theorem multiplicitySum_filterBus (bs : BusSemantics p) (env : String → ZMod p)
+    (keep : BusInteraction (Expression p) → Bool) (message : BusMessage p)
+    (bis : List (BusInteraction (Expression p)))
+    (h0 : ∀ bi ∈ bis, keep bi = false → (bi.eval env).multiplicity = 0) :
+    multiplicitySum message
+      ((bis.filter (fun bi => bs.isStateful bi.busId)).map
+        (fun bi => let m := bi.eval env; ((m.busId, m.payload), m.multiplicity)))
+    = multiplicitySum message
+      (((bis.filter keep).filter (fun bi => bs.isStateful bi.busId)).map
+        (fun bi => let m := bi.eval env; ((m.busId, m.payload), m.multiplicity))) := by
+  induction bis with
+  | nil => rfl
+  | cons bi rest ih =>
+      have hrest : ∀ b ∈ rest, keep b = false → (b.eval env).multiplicity = 0 :=
+        fun b hb => h0 b (List.mem_cons_of_mem _ hb)
+      by_cases hkeep : keep bi = true
+      · by_cases hstate : bs.isStateful bi.busId = true
+        · rw [List.filter_cons_of_pos (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) hstate,
+              List.filter_cons_of_pos hkeep,
+              List.filter_cons_of_pos (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) hstate]
+          simp only [List.map_cons, multiplicitySum, ih hrest]
+        · rw [List.filter_cons_of_neg (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) hstate,
+              List.filter_cons_of_pos hkeep,
+              List.filter_cons_of_neg (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) hstate]
+          exact ih hrest
+      · have hbi0 : (bi.eval env).multiplicity = 0 :=
+          h0 bi (List.mem_cons_self ..) (by simpa using hkeep)
+        by_cases hstate : bs.isStateful bi.busId = true
+        · rw [List.filter_cons_of_pos (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) hstate,
+              List.filter_cons_of_neg hkeep]
+          simp only [List.map_cons, multiplicitySum, hbi0, ite_self, zero_add]
+          exact ih hrest
+        · rw [List.filter_cons_of_neg (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) hstate,
+              List.filter_cons_of_neg hkeep]
+          exact ih hrest
+
+/-- **Correctness of zero-multiplicity bus removal.** Dropping bus interactions whose multiplicity
+    is identically `0` is equivalence- and invariant-preserving: their `violatesConstraint`
+    obligation is vacuous (multiplicity `≠ 0` is false), and a `0`-multiplicity stateful entry adds
+    `0` to every net multiplicity. Unlike cancelling opposite-sign pairs, this drops no real
+    obligation, so it is sound for *arbitrary* bus semantics. -/
+theorem ConstraintSystem.filterBus_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (keep : BusInteraction (Expression p) → Bool)
+    (h : ∀ bi ∈ cs.busInteractions, keep bi = false → ∀ env, (bi.eval env).multiplicity = 0) :
+    PassCorrect cs (cs.filterBus keep) bs := by
+  have hiff : ∀ env, (cs.filterBus keep).satisfies bs env ↔ cs.satisfies bs env := by
+    intro env
+    simp only [ConstraintSystem.satisfies, ConstraintSystem.filterBus]
+    constructor
+    · rintro ⟨hc, hb⟩
+      refine ⟨hc, fun bi hbimem => ?_⟩
+      by_cases hk : keep bi = true
+      · exact hb bi (List.mem_filter.2 ⟨hbimem, hk⟩)
+      · intro hne; exact absurd (h bi hbimem (by simpa using hk) env) hne
+    · rintro ⟨hc, hb⟩
+      exact ⟨hc, fun bi hbimem => hb bi (List.mem_filter.1 hbimem).1⟩
+  have hside : ∀ env, cs.sideEffects bs env ≈ (cs.filterBus keep).sideEffects bs env := by
+    intro env message
+    simp only [ConstraintSystem.sideEffects, ConstraintSystem.filterBus]
+    exact multiplicitySum_filterBus bs env keep message cs.busInteractions
+      (fun bi hbi hkf => h bi hbi hkf env)
+  refine ⟨⟨?_, ?_⟩, ?_⟩
+  · intro env hsat
+    exact ⟨env, (hiff env).1 hsat, BusState.equiv_symm (hside env)⟩
+  · intro env hsat
+    exact ⟨env, (hiff env).2 hsat, hside env⟩
+  · intro hinv env hsat bi hbi
+    have hbimem : bi ∈ cs.busInteractions :=
+      (List.mem_filter.1 (by simpa only [ConstraintSystem.filterBus] using hbi)).1
+    exact hinv env ((hiff env).1 hsat) bi hbimem
