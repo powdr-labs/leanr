@@ -1,5 +1,6 @@
 import Leanr.Spec
 import Leanr.Utils.Dsl
+import Leanr.Utils.Size
 import Leanr.IdentityOptimizer
 import Leanr.OpenVM.Semantics
 
@@ -174,5 +175,8 @@ example : identityOptimizer addiInput (openVmBusSemantics babyBear) = addiInput 
 -- (`identityOptimizer` returns its input, so this also guards the ported `addiInput` data.)
 -- To regenerate `addiInputSnapshot`, run: #eval IO.println (render addiInput)
 #guard matchesSnapshot (identityOptimizer addiInput (openVmBusSemantics babyBear)) addiInputSnapshot
+
+-- The identity optimizer changes nothing, so it shrinks the circuit by a factor of 1.
+#guard effectiveness identityOptimizer addiInput (openVmBusSemantics babyBear) == 1
 
 end Leanr.OpenVM.Snapshot

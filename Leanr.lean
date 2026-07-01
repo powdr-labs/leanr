@@ -9,6 +9,7 @@ import Leanr.System
 import Leanr.Solver
 import Leanr.Spec
 import Leanr.Utils.Dsl
+import Leanr.Utils.Size
 import Leanr.IdentityOptimizer
 import Leanr.StringParser
 import Leanr.JsonParser
