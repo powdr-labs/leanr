@@ -6,6 +6,7 @@ import Leanr.Utils.Size
 import Leanr.OptimizerPasses.Subst
 import Leanr.OptimizerPasses.Rewrite
 import Leanr.OptimizerPasses.ConstantFold
+import Leanr.OptimizerPasses.ConstantSubst
 import Leanr.Optimizer
 import Leanr.OpenVM.Semantics
 import Leanr.OpenVM.Snapshot
