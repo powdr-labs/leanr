@@ -7,9 +7,10 @@ variable {p : ℕ} [Fact p.Prime]
 -- None of the proofs below need `p` to be prime; they are purely structural.
 omit [Fact p.Prime]
 
-/-- The identity optimizer: it returns the constraint system unchanged.
-    This is the trivial optimizer that does nothing, serving as a baseline. -/
-def identityOptimizer (cs : ConstraintSystem p) (_ : BusSemantics p) : ConstraintSystem p :=
+/-- The circuit optimizer. Currently the identity: it returns the constraint system
+    unchanged. This is the starting point for an optimizer that actually shrinks the
+    circuit while preserving correctness. -/
+def optimizer (cs : ConstraintSystem p) (_ : BusSemantics p) : ConstraintSystem p :=
   cs
 
 /-- `≈` on `BusState` is reflexive: every message trivially has the same net
@@ -28,10 +29,8 @@ theorem ConstraintSystem.equivalentTo_refl (cs : ConstraintSystem p) (busSemanti
     cs.equivalentTo cs busSemantics :=
   ⟨cs.implies_refl busSemantics, cs.implies_refl busSemantics⟩
 
-/-- The identity optimizer maintains correctness: it returns the system unchanged, so it is
-    equivalent to the input, preserves invariants, and (leaving every expression as-is) never
-    changes any degree — hence trivially respects the degree bound. -/
+/-- The optimizer maintains correctness. -/
 theorem optimizer_maintainsCorrectness :
-    optimizerMaintainsCorrectness (p := p) identityOptimizer :=
-  ⟨fun cs busSemantics => ⟨cs.equivalentTo_refl busSemantics, id⟩,
-   fun _ _ h => h⟩
+    optimizerMaintainsCorrectness (p := p) optimizer :=
+  fun cs busSemantics =>
+    ⟨cs.equivalentTo_refl busSemantics, id⟩
