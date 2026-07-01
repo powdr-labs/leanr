@@ -10,6 +10,8 @@ import Leanr.Legacy.Solver
 import Leanr.Spec
 import Leanr.Utils.Dsl
 import Leanr.Utils.Size
+import Leanr.OptimizerPasses.Subst
+import Leanr.OptimizerPasses.Rewrite
 import Leanr.Optimizer
 import Leanr.Legacy.StringParser
 import Leanr.Legacy.OpenVM
