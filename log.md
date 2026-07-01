@@ -79,3 +79,16 @@ now-satisfied `x=const` defining constraints, and the `rs2_as_0 * (…)` constra
 `0`). Field-free. **Impact: effectiveness unchanged at 36/31 (no variable is removed by this pass
 alone — the freed aux variables still live in zero-multiplicity interactions), but it is the
 prerequisite that isolates them for the next pass.**
+
+### 4. Zero-multiplicity bus removal (`ZeroMultBus.lean`) — realizes the cascade
+Idea: drop bus interactions whose multiplicity folds to the literal `0`, via a new proven core
+`filterBus_correct`. The correctness has two parts: the dropped interaction's `violatesConstraint`
+obligation is vacuous (multiplicity `≠ 0` is false), and a `0`-multiplicity stateful entry adds `0`
+to every message's net multiplicity so the bus states stay `≈`-equal (`multiplicitySum_filterBus`,
+by induction on the interaction list). This is the *only* spec-safe bus removal — cancelling
+opposite-sign pairs is rejected as unsound for arbitrary bus semantics (it would drop real
+`violatesConstraint` obligations). Field-free. Added last in the fixpoint cycle.
+Worked: yes. Once `rs2_as_0 := 0` zeroes the second read's multiplicities, those interactions are
+dropped, removing the last occurrences of `reads_aux__1__base__prev_timestamp_0` and the two
+`reads_aux__1__…lower_decomp…` limbs. **Impact: 31 → 28, effectiveness 36/28 = 9/7 ≈ 1.29.** This
+completes the general, field-free portion (8 variables eliminated from 36).

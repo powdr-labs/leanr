@@ -8,6 +8,7 @@ import Leanr.OptimizerPasses.Rewrite
 import Leanr.OptimizerPasses.ConstantFold
 import Leanr.OptimizerPasses.ConstantSubst
 import Leanr.OptimizerPasses.TrivialConstraint
+import Leanr.OptimizerPasses.ZeroMultBus
 import Leanr.Optimizer
 import Leanr.OpenVM.Semantics
 import Leanr.OpenVM.Snapshot
