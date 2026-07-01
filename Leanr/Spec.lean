@@ -1,4 +1,5 @@
 import Mathlib.Data.ZMod.Basic
+import Mathlib.Data.Finsupp.Basic
 
 set_option autoImplicit false
 
@@ -20,34 +21,47 @@ def Expression.eval (e : Expression p) (env : String → ZMod p) : ZMod p :=
   | .add e1 e2 => e1.eval env + e2.eval env
   | .mul e1 e2 => e1.eval env * e2.eval env
 
-/-- A bus interaction, consisting of a bus ID, a multiplicity, and a payload. -/
 structure BusInteraction (α : Type) where
   busId : Nat
   multiplicity : α
   payload : List α
 
-/-- Evaluates a bus interaction under an assignment `env` of variables to a bus interaction message. -/
-def BusInteraction.eval (bi : BusInteraction (Expression p)) (env : String → ZMod p) : BusInteraction (ZMod p) :=
+def BusInteraction.eval (bi : BusInteraction (Expression p)) (env : String → ZMod p) :
+    BusInteraction (ZMod p) :=
   { busId := bi.busId,
     multiplicity := bi.multiplicity.eval env,
     payload := bi.payload.map (fun e => e.eval env) }
 
-/-- A constraint system. -/
+structure BusSemantics (p : ℕ) where
+  isStateful : Nat → Bool
+  accepts : BusInteraction (ZMod p) → Bool
+
 structure ConstraintSystem (p : ℕ) where
   algebraicConstraints : List (Expression p)
   busInteractions : List (BusInteraction (Expression p))
 
-/-- `env` satisfies all constraints in `s` -/
-def ConstraintSystem.satisfies (s : ConstraintSystem p) (env : String → ZMod p) : Prop :=
-  ∀ c ∈ s.algebraicConstraints, c.eval env = 0
+noncomputable def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
+    (busSemantics : BusSemantics p) (env : String → ZMod p) : (Nat × List (ZMod p)) →₀ ZMod p :=
+  (cs.busInteractions.filter (fun bi => busSemantics.isStateful bi.busId) |>.map (fun bi =>
+    let m := bi.eval env
+    Finsupp.single (m.busId, m.payload) m.multiplicity)).sum
 
-/-- The satisfiability of `self` implies the satisfiability of `other` -/
-def ConstraintSystem.impliesSatisfiabilityOf (self other : ConstraintSystem p) : Prop :=
-  ∀ env, (self.satisfies env → ∃ env', other.satisfies env')
+def ConstraintSystem.satisfies (s : ConstraintSystem p) (busSemantics : BusSemantics p)
+    (env : String → ZMod p) : Prop :=
+  (∀ c ∈ s.algebraicConstraints, c.eval env = 0) ∧
+  (∀ bi ∈ s.busInteractions, busSemantics.accepts (bi.eval env))
 
-/-- `self` and `other` are equivalent if they imply each other's satisfiability -/
-def ConstraintSystem.equivalentTo (self other : ConstraintSystem p) : Prop :=
-  self.impliesSatisfiabilityOf other ∧ other.impliesSatisfiabilityOf self
+def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
+    Prop :=
+  ∀ env, self.satisfies busSemantics env →
+    ∃ env', other.satisfies busSemantics env' ∧
+      self.sideEffects busSemantics env = other.sideEffects busSemantics env'
 
-def optimizerMaintainsCircuitEquivalence (optimizer : ConstraintSystem p → ConstraintSystem p) : Prop :=
-  ∀ s, (optimizer s).equivalentTo s
+def ConstraintSystem.equivalentTo (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
+    Prop :=
+  self.implies other busSemantics ∧ other.implies self busSemantics
+
+def optimizerMaintainsCircuitEquivalence (optimizer : ConstraintSystem p → ConstraintSystem p) :
+    Prop :=
+  ∀ constraintSystem busSemantics,
+    (optimizer constraintSystem).equivalentTo constraintSystem busSemantics
