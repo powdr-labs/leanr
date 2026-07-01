@@ -12,6 +12,7 @@ import Leanr.IdentityOptimizer
 import Leanr.StringParser
 import Leanr.JsonParser
 import Leanr.OpenVM
+import Leanr.OpenVM.Semantics
 import Leanr.RangeConstraint
 import Leanr.RangeConstraint.Proofs
 import Leanr.Expression.Proofs
