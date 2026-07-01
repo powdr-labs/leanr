@@ -9,8 +9,9 @@ import Leanr.OpenVM.Semantics
 
 Ports the constraint system that is the **input** to powdr's `optimize()`
 (`autoprecompiles/src/optimizer.rs`) for a single OpenVM ADD-immediate instruction
-(`add(rd=8, rs1=8, rs2=1, rs2_as=0)`, the OpenVM analogue of RISC-V `addi`), and asserts
-that leanr's `identityOptimizer` returns the same machine.
+(`add(rd=8, rs1=8, rs2=1, rs2_as=0)`, the OpenVM analogue of RISC-V `addi`), runs `optimizer`
+on it, and snapshots the *output*. The snapshot currently equals the input rendering because
+`optimizer` is still the identity; regenerate it once the optimizer starts changing the circuit.
 
 The machine was dumped from powdr just before `optimize()` (36 columns, 20 bus interactions,
 32 constraints). Bus IDs follow the OpenVM default bus map (0/1/2/3/6), matching
@@ -168,15 +169,17 @@ rs2_as_0 + 2013265920 * 0 = 0
 0 + 2013265920 * 0 = 0
 0 + 2013265920 * 0 = 0"
 
-/-- The identity optimizer returns the *same* machine (definitional equality). -/
-example : identityOptimizer addiInput (openVmBusSemantics babyBear) = addiInput := rfl
+/-- The optimizer's output on the ported machine. -/
+def addiOptimized : ConstraintSystem babyBear := optimizer addiInput (openVmBusSemantics babyBear)
 
--- Snapshot check: rendering the identity optimizer's output reproduces the stored snapshot.
--- (`identityOptimizer` returns its input, so this also guards the ported `addiInput` data.)
--- To regenerate `addiInputSnapshot`, run: #eval IO.println (render addiInput)
-#guard matchesSnapshot (identityOptimizer addiInput (openVmBusSemantics babyBear)) addiInputSnapshot
+-- Snapshot check: rendering the optimizer's output reproduces the stored snapshot.
+-- To regenerate `addiInputSnapshot`, run: #eval IO.println (render addiOptimized)
+#guard matchesSnapshot addiOptimized addiInputSnapshot
 
--- The identity optimizer changes nothing, so it shrinks the circuit by a factor of 1.
-#guard effectiveness identityOptimizer addiInput (openVmBusSemantics babyBear) == 1
+-- A correct optimizer must never grow the circuit, i.e. effectiveness ≥ 1.
+#guard (1 : ℚ) ≤ effectiveness optimizer addiInput (openVmBusSemantics babyBear)
+
+-- Measured shrink factor of the optimizer on this machine.
+#eval s!"effectiveness: {effectiveness optimizer addiInput (openVmBusSemantics babyBear)}"
 
 end Leanr.OpenVM.Snapshot
