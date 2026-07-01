@@ -47,3 +47,13 @@ Added the reusable proof cores above (`Subst.lean`, `Rewrite.lean`) and this log
 still the identity, so the snapshot and effectiveness (`1`) are unchanged; this commit only lays
 the foundation. The substitution correctness proof (the linchpin) is complete and general.
 **Impact: none yet (36 → 36 variables).** Worked: yes (builds, cores proven).
+
+### 1. Constant folding / algebraic normalization (`ConstantFold.lean`) — enabler
+Idea: a bottom-up eval-preserving rewrite (`Expression.fold`) that folds `const∘const`, drops
+`+0`, and handles `*0`/`*1`, applied to every expression via the proven `mapExpr_correct`. Ranked
+#1 by the idea workflow purely as an *enabler*: it removes no variable directly, but canonicalizes
+the DSL sugar (`x - c` = `x + (-1)*c`, `2013265920 * 1`, `0 + …`) into the normal forms the later
+detection passes rely on, and collapses `c * 0` to a literal `0` once substitution plants a zero.
+Worked: yes — the snapshot is now visibly folded (e.g. `0 + opcode_add_flag_0 + …` → `opcode_add_flag_0 + …`,
+`2013265920 * 1` → `2013265920`). Correctness is free from `mapExpr_correct` (only `fold_eval`, one
+induction, no field). **Impact: effectiveness still 1 (36 → 36); shape only, as expected for an enabler.**
