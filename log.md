@@ -92,3 +92,19 @@ Worked: yes. Once `rs2_as_0 := 0` zeroes the second read's multiplicities, those
 dropped, removing the last occurrences of `reads_aux__1__base__prev_timestamp_0` and the two
 `reads_aux__1__…lower_decomp…` limbs. **Impact: 31 → 28, effectiveness 36/28 = 9/7 ≈ 1.29.** This
 completes the general, field-free portion (8 variables eliminated from 36).
+
+### 5. Affine substitution / linear elimination (`Affine.lean`) — generalizes constant substitution
+Idea: the general form of variable elimination. Normalize a constraint to a linear form
+`a₀ + Σ aᵢ·vᵢ` (`linearize`, with `linearize_eval` proving it eval-preserving; returns `none` on a
+genuine variable×variable product). If some variable `x` has a unit coefficient (`±1`), solve
+`x = ∓(a₀ + rest)` and substitute via the proven `subst_correct`. The entailment `env x = t`
+comes from `LinExpr.eval_split` (coefficient/remainder decomposition) + the constraint being `0`.
+Fed to the same `substFromConstraint` combinator; replaces `constantFixPass` in the pipeline (a
+constant is the 0-term affine case). Purely equational — unit coefficients are units in **any**
+commutative ring, so still no field/primality needed (a generality strength: works over any modulus).
+Worked: yes. Beyond the 5 constants it eliminates `c__2_0` (`c2 = c3`), `c__0_0`
+(`c0 = 1 - 256·c1 - 65536·c2`), `opcode_add_flag_0` (`Σ flags = 1`) and `opcode_sub_flag_0`
+(weighted-flag sum `= 0`). Since substitution is *degree-preserving* (a linear variable becomes a
+linear expression), this reduces the column count — the dominant proving cost the metric tracks —
+without raising constraint degree, though it does grow some expression sizes (the selectors appear
+in many multiplicities). **Impact: 28 → 24, effectiveness 36/24 = 3/2 = 1.5.**

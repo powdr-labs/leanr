@@ -16,6 +16,7 @@ import Leanr.OptimizerPasses.ConstantFold
 import Leanr.OptimizerPasses.ConstantSubst
 import Leanr.OptimizerPasses.TrivialConstraint
 import Leanr.OptimizerPasses.ZeroMultBus
+import Leanr.OptimizerPasses.Affine
 import Leanr.Optimizer
 import Leanr.Legacy.StringParser
 import Leanr.Legacy.OpenVM
