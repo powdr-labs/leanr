@@ -1,5 +1,4 @@
 import Mathlib.Data.ZMod.Basic
-import Mathlib.Data.Finsupp.Basic
 
 set_option autoImplicit false
 
@@ -58,8 +57,18 @@ structure BusSemantics (p : ℕ) where
 /-- A concrete bus interaction message: which bus, and the tuple sent. -/
 abbrev BusMessage (p : ℕ) := Nat × List (ZMod p)
 
-/-- Net effect on the stateful buses: each message mapped to its summed multiplicity. -/
-abbrev BusEffect (p : ℕ) := BusMessage p →₀ ZMod p
+/-- The effect on the stateful buses: the messages sent, each with a multiplicity. -/
+abbrev BusState (p : ℕ) := List (BusMessage p × ZMod p)
+
+/-- The net multiplicity with which `message` is sent in `state`. -/
+def multiplicitySum (message : BusMessage p) (state : BusState p) : ZMod p :=
+  match state with
+  | [] => 0
+  | (msg, mult) :: tl => (if msg = message then mult else 0) + multiplicitySum message tl
+
+/-- Two bus states are equal when every message is sent with the same net multiplicity. -/
+instance : HasEquiv (BusState p) :=
+  ⟨fun s t => ∀ message, multiplicitySum message s = multiplicitySum message t⟩
 
 --------- Constraint System ---------
 
@@ -70,13 +79,12 @@ structure ConstraintSystem (p : ℕ) where
 
 /-- The side effects of a constraint system under a given environment and bus semantics.
     The side effects are the tuples sent to the *stateful* buses.-/
-noncomputable def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
-    (busSemantics : BusSemantics p) (env : String → ZMod p) : BusEffect p :=
-  (cs.busInteractions.filter (fun bi => busSemantics.isStateful bi.busId)
+def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
+    (busSemantics : BusSemantics p) (env : String → ZMod p) : BusState p :=
+  cs.busInteractions.filter (fun bi => busSemantics.isStateful bi.busId)
     |>.map (fun bi =>
       let m := bi.eval env
-      Finsupp.single (m.busId, m.payload) m.multiplicity)
-  ).sum
+      ((m.busId, m.payload), m.multiplicity))
 
 /-- Whether a constraint system is satisfied under a given environment and bus semantics. -/
 def ConstraintSystem.satisfies (s : ConstraintSystem p) (busSemantics : BusSemantics p)
@@ -102,7 +110,7 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
     Prop :=
   ∀ env, self.satisfies busSemantics env →
     ∃ env', other.satisfies busSemantics env' ∧
-      self.sideEffects busSemantics env = other.sideEffects busSemantics env'
+      self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
 
 /-- Whether two constraint systems are equivalent under a given bus semantics.
     Two constraint systems are equivalent if each implies the other. -/
@@ -113,7 +121,7 @@ def ConstraintSystem.equivalentTo (self other : ConstraintSystem p) (busSemantic
 /-- Whether an optimizer maintains correctness. This means that, for all constraint systems
     and bus semantics:
     1. The optimized constraint system is equivalent to the original, i.e. it has a satisfying
-       witness iff the original does.
+       witness iff the original does **and** the side effects are the same.
     2. Assuming the original constraint system guarantees invariants, so does the optimized one. -/
 def optimizerMaintainsCorrectness (optimizer : ConstraintSystem p → BusSemantics p → ConstraintSystem p) :
     Prop :=
