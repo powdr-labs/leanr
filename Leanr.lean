@@ -8,6 +8,7 @@ import Leanr.BusInteraction
 import Leanr.System
 import Leanr.Solver
 import Leanr.Spec
+import Leanr.IdentityOptimizer
 import Leanr.StringParser
 import Leanr.JsonParser
 import Leanr.OpenVM
