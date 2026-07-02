@@ -133,20 +133,6 @@ setting). **Impact: effectiveness unchanged; adds a concrete verified equivalenc
 
 ---
 
-## Summary
-
-Starting from the identity (effectiveness `1`, 36 variables), a pipeline of six general,
-individually-proven passes — constant folding, affine substitution (subsuming constant
-substitution), affine normalization, trivial-constraint removal, and zero-multiplicity bus removal,
-iterated to a fixpoint — reduces the ADD-immediate circuit to **22 variables, effectiveness 18/11 ≈
-1.64**, while also shrinking the rendered circuit below its original size. Every pass is proven
-`PassCorrect` with no `sorry`/`admit`/`axiom`/`native_decide`, and every pass is field-agnostic
-(works over any commutative ring, not just prime `babyBear`), so the whole optimizer is correct over
-any modulus. The remaining variables (the `xor`/`or`/`and` opcode selectors and the byte-range
-limbs) are constrained only non-linearly; eliminating them would require prime-field, circuit-
-specific one-hot/boolean case analysis, deliberately deprioritized in favour of general, portable
-optimizations.
-
 ### 8. Finite-domain propagation / boolean case analysis (`DomainProp.lean`) — first prime-field pass
 Idea: many variables are pinned to a *finite domain* by a product-of-affine-factors constraint
 (`x·(x−1)` ⇒ `x ∈ {0,1}`, `c·(255−c)` ⇒ `c ∈ {0,255}`); over an integral domain a product is zero
@@ -245,3 +231,27 @@ coefficients — the first one now renders literally as `(b₀ + c₀ − a₀) 
 the immediate-limb constraint as `(c₀ + 256·c₁ − 1) · (…) = 0` — exactly the form a hand-written
 circuit would use. **Impact: variables unchanged (19, effectiveness 36/19 ≈ 1.89); rendered
 circuit 2519 → 2402 bytes; whole-optimizer idempotence retained.**
+
+## Summary
+
+Starting from the identity (effectiveness `1`, 36 variables), a pipeline of individually-proven
+passes — constant folding, occurrence-cost affine substitution with unit-coefficient pivots,
+finite-domain propagation (boolean/one-hot case analysis over prime fields), affine
+normalization, trivial-constraint removal, zero-multiplicity bus removal, and tautology-lookup
+removal, iterated to a true structural fixpoint, then canonicalized by monic scaling — reduces
+the ADD-immediate circuit to **19 variables, effectiveness 36/19 ≈ 1.89**, with 15 bus
+interactions and 5 monic algebraic constraints (2402 rendered bytes; e.g. the first carry
+constraint is literally `(b₀ + c₀ − a₀) · (b₀ + c₀ − a₀ − 256) = 0`). Every pass is proven
+`PassCorrect` with no `sorry`/`admit`/`axiom`/`native_decide` (the public theorems depend only on
+`propext`, `Classical.choice`, `Quot.sound`), and the optimizer remains modulus-agnostic: the one
+prime-field pass decides `p.Prime` at runtime and is the identity otherwise.
+
+The remaining 19 variables are at the **generic floor**, confirmed both by hand analysis and by
+two adversarial idea panels (ideate → merge → refute): 15 appear in stateful bus payloads and are
+observable in the side effects; the range-decomposition limbs are required for satisfiability
+transfer; and the immediate limbs `c₀ = 1, c₁ = 0` — though true in every satisfying assignment —
+are pinned only by lookup-table facts whose generic derivation would require probing the opaque
+`violatesConstraint` across the whole field (~2³¹ evaluations inside a decidable certificate that
+runs on every build). Going below 19 on this example therefore requires either VM-specific table
+axioms in the bus semantics (out of scope: the spec is frozen) or an interactive/offline
+certificate mechanism.
