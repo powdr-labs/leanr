@@ -6,6 +6,7 @@ import Leanr.OptimizerPasses.ConstantSubst
 import Leanr.OptimizerPasses.TrivialConstraint
 import Leanr.OptimizerPasses.ZeroMultBus
 import Leanr.OptimizerPasses.Affine
+import Leanr.OptimizerPasses.Gauss
 import Leanr.OptimizerPasses.Normalize
 import Leanr.OptimizerPasses.DomainProp
 import Leanr.OptimizerPasses.TautoBus
@@ -33,22 +34,32 @@ the only edit needed here; the correctness proof follows automatically from the 
 
 /-- The optimization pipeline: the sequence of verified passes that make up the optimizer.
     Fold once, then iterate the cleanup cycle (`iters` times; see `pipeline` for the default):
-    solve one linear constraint for a
-    unit-coefficient variable and substitute it away, substitute one variable forced by
-    finite-domain enumeration (boolean/one-hot case analysis, bus-fact domains, probed bus
-    obligations; prime `p` only), re-fold, drop trivially-true constraints, drop
-    zero-multiplicity bus interactions, drop stateless interactions whose constant message
-    satisfies the bus table, and add the receive-equals-send equations entailed by the memory
-    discipline. (Affine substitution subsumes constant substitution.) Finally,
-    canonicalize: scale every constraint's affine factors to monic form (zero-set preserving)
-    and re-fold. Extend it by composing passes with `.andThen`. -/
+    batch-eliminate every variable solvable from a linear constraint with a unit-coefficient
+    pivot (`gaussElimPass` — one simultaneous substitution per cycle), normalize and fold,
+    substitute one variable forced by finite-domain enumeration (boolean/one-hot case
+    analysis, bus-fact domains, probed bus obligations; prime `p` only), re-normalize and
+    re-fold, drop trivially-true constraints, drop zero-multiplicity bus interactions, drop
+    stateless interactions whose constant message satisfies the bus table, and add the
+    receive-equals-send equations entailed by the memory discipline. Finally, canonicalize:
+    scale every constraint's affine factors to monic form (zero-set preserving) and re-fold.
+    Extend it by composing passes with `.andThen`. -/
+def cleanupCycle : VerifiedPassW p :=
+  gaussElimPass.withFacts
+    |>.andThen normalizePass.withFacts
+    |>.andThen constantFoldPass.withFacts
+    |>.andThen domainPropPass
+    |>.andThen normalizePass.withFacts
+    |>.andThen constantFoldPass.withFacts
+    |>.andThen trivialConstraintDropPass.withFacts
+    |>.andThen zeroMultBusDropPass.withFacts
+    |>.andThen tautoBusDropPass.withFacts
+    |>.andThen memoryUnifyPass
+
 def pipelineIters (iters : Nat) : VerifiedPassW p :=
-  constantFoldPass.withFacts.andThen
-    (((((((((affineSubstPass.withFacts.andThen domainPropPass).andThen
-      normalizePass.withFacts).andThen constantFoldPass.withFacts).andThen
-      trivialConstraintDropPass.withFacts).andThen zeroMultBusDropPass.withFacts).andThen
-      tautoBusDropPass.withFacts).andThen memoryUnifyPass).iterate iters).andThen
-      (monicScalePass.withFacts.andThen constantFoldPass.withFacts))
+  constantFoldPass.withFacts
+    |>.andThen (cleanupCycle.iterate iters)
+    |>.andThen monicScalePass.withFacts
+    |>.andThen constantFoldPass.withFacts
 
 /-- `pipelineIters` with the default cleanup-cycle count. -/
 def pipeline : VerifiedPassW p := pipelineIters 32

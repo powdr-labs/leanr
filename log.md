@@ -402,3 +402,28 @@ pair-drop discipline lemma; it carries no variables).** The remaining 11 (`a×4,
 rdec₀, rdec₁`) are the floor predicted in `DESIGN-bus-knowledge.md`: all observable in side
 effects except the read-decomposition limbs, which encode genuine witness freedom (the read's
 previous access belongs to the context).
+
+### 19. Batch linear elimination — `SubstMap.lean` + `Gauss.lean` (new benchmark focus)
+The focus shifts from the snapshot to the real benchmark set (`Leanr/OpenVm/Benchmark/`,
+top-100 openvm-eth APCs; measured effectiveness below is on those). Diagnosis: the pipeline
+eliminated ~2 variables per cleanup cycle (one `affineSubstPass` pivot + one `domainPropPass`
+substitution), each cycle costing a full-system rescan — case 1 (511 vars) needed 400 cycles
+/ 197 s to reach its 314-var fixpoint, and the 5000-var cases are unreachable. Two additions:
+(a) **`SubstMap.lean`** — the batch substitution core: `Expression.substF` substitutes a whole
+map `String → Option (Expression p)` in one traversal, with `ConstraintSystem.substF_correct`
+mirroring `subst_correct` (entailment hypothesis per mapped pair). (b) **`Gauss.lean`** —
+batch Gaussian elimination: two sweeps over the constraints, each constraint *reduced* by the
+solutions found so far (`substF` + `normalize`) and solved for a unit-coefficient pivot (the
+proven `pm1PivotsOf`/`unitPivotsOf` candidates), pivots chosen by duplication cost
+(occurrence map precomputed once) with a penalty for rewriting a raw stateless-bus payload
+slot into a compound expression (that would destroy fact-derivable range knowledge). The
+solution map is kept *resolved* (new pivots substituted into stored solutions), carried in a
+proof-bundled `Std.HashMap` (`Solved`, built on `getElem?_insert` /
+`mem_toList_iff_getElem?_eq_some`), and applied in a **single** system traversal. Replaces
+`affineSubstPass` in the cycle (that pass's machinery is still the proof backbone).
+Worked: yes. Case 1: 511→324 vars in 32 cycles / 5.0 s (before: 511→444 in 32 cycles / 3.5 s;
+the old passes needed 400 cycles / 197 s for their 314 fixpoint, which the new pipeline
+reaches at ~100 cycles / 43 s — the remaining slow tail is `domainPropPass`, still
+one-variable-per-cycle, next entry). Cases 2/3 unchanged (134→69, 108→78 — already at the
+old fixpoint; their gap is memory unification). Snapshot unaffected (36/11).
+**Impact: benchmark case 1 effectiveness 1.15 → 1.58 at default iters.**
