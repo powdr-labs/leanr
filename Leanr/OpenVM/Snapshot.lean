@@ -3,6 +3,7 @@ import Leanr.Utils.Dsl
 import Leanr.Utils.Size
 import Leanr.Optimizer
 import Leanr.OpenVM.Semantics
+import Leanr.OpenVM.Facts
 
 /-!
 # OpenVM snapshot test (single ADD-immediate, powdr `single_add_1`)
@@ -28,6 +29,14 @@ open Leanr.OpenVM Leanr.Spec.Dsl
 
 /-- The BabyBear field modulus, `2^31 - 2^27 + 1`. -/
 def babyBear : Nat := 2013265921
+
+instance : NeZero babyBear := ⟨by norm_num [babyBear]⟩
+
+/-- The optimizer under test: instantiated with the proven OpenVM bus facts
+    (`Leanr/OpenVM/Facts.lean`); correct by `optimizerWith_correct`. -/
+def openVmOptimizer (cs : ConstraintSystem babyBear) (_bs : BusSemantics babyBear) :
+    ConstraintSystem babyBear :=
+  optimizerWith cs (openVmBusSemantics babyBear) (openVmFacts babyBear)
 
 def addiInput : ConstraintSystem babyBear where
   algebraicConstraints := [
@@ -127,26 +136,24 @@ mult=1, args=[a__0_0, a__0_0, 0, 1]
 mult=1, args=[a__1_0, a__1_0, 0, 1]
 mult=1, args=[a__2_0, a__2_0, 0, 1]
 mult=1, args=[a__3_0, a__3_0, 0, 1]
-mult=1, args=[c__0_0, c__1_0, 0, 0]
 
 // Algebraic constraints:
-(b__0_0 + c__0_0 + 2013265920 * a__0_0) * (2013265665 + b__0_0 + c__0_0 + 2013265920 * a__0_0) = 0
-(b__1_0 + c__1_0 + 2013265920 * a__1_0 + 2005401601 * b__0_0 + 2005401601 * c__0_0 + 7864320 * a__0_0) * (2013265665 + b__1_0 + c__1_0 + 2013265920 * a__1_0 + 2005401601 * b__0_0 + 2005401601 * c__0_0 + 7864320 * a__0_0) = 0
+(1 + b__0_0 + 2013265920 * a__0_0) * (2013265666 + b__0_0 + 2013265920 * a__0_0) = 0
+(2005401601 + b__1_0 + 2013265920 * a__1_0 + 2005401601 * b__0_0 + 7864320 * a__0_0) * (2005401345 + b__1_0 + 2013265920 * a__1_0 + 2005401601 * b__0_0 + 7864320 * a__0_0) = 0
 (2013235201 + b__2_0 + 2013265920 * a__2_0 + 2005401601 * b__1_0 + 7864320 * a__1_0 + 2013235201 * b__0_0 + 30720 * a__0_0) * (2013234945 + b__2_0 + 2013265920 * a__2_0 + 2005401601 * b__1_0 + 7864320 * a__1_0 + 2013235201 * b__0_0 + 30720 * a__0_0) = 0
-(2013235081 + b__3_0 + 30720 * c__0_0 + 7864320 * c__1_0 + 2013265920 * a__3_0 + 2005401601 * b__2_0 + 7864320 * a__2_0 + 2013235201 * b__1_0 + 30720 * a__1_0 + 2013265801 * b__0_0 + 120 * a__0_0) * (2013234825 + b__3_0 + 30720 * c__0_0 + 7864320 * c__1_0 + 2013265920 * a__3_0 + 2005401601 * b__2_0 + 7864320 * a__2_0 + 2013235201 * b__1_0 + 30720 * a__1_0 + 2013265801 * b__0_0 + 120 * a__0_0) = 0
-(2013265920 + c__0_0 + 256 * c__1_0) * (16711679 + c__0_0 + 256 * c__1_0) = 0"
+(2013265801 + b__3_0 + 2013265920 * a__3_0 + 2005401601 * b__2_0 + 7864320 * a__2_0 + 2013235201 * b__1_0 + 30720 * a__1_0 + 2013265801 * b__0_0 + 120 * a__0_0) * (2013265545 + b__3_0 + 2013265920 * a__3_0 + 2005401601 * b__2_0 + 7864320 * a__2_0 + 2013235201 * b__1_0 + 30720 * a__1_0 + 2013265801 * b__0_0 + 120 * a__0_0) = 0"
 
 /-- The optimizer's output on the ported machine. -/
-def addiOptimized : ConstraintSystem babyBear := optimizer addiInput (openVmBusSemantics babyBear)
+def addiOptimized : ConstraintSystem babyBear := openVmOptimizer addiInput (openVmBusSemantics babyBear)
 
 -- Snapshot check: rendering the optimizer's output reproduces the stored snapshot.
 -- To regenerate `addiInputSnapshot`, run: #eval IO.println (render addiOptimized)
 #guard matchesSnapshot addiOptimized addiInputSnapshot
 
 -- A correct optimizer must never grow the circuit, i.e. effectiveness ≥ 1.
-#guard (1 : ℚ) ≤ effectiveness optimizer addiInput (openVmBusSemantics babyBear)
+#guard (1 : ℚ) ≤ effectiveness openVmOptimizer addiInput (openVmBusSemantics babyBear)
 
 -- Measured shrink factor of the optimizer on this machine.
-#eval s!"effectiveness: {effectiveness optimizer addiInput (openVmBusSemantics babyBear)}"
+#eval s!"effectiveness: {effectiveness openVmOptimizer addiInput (openVmBusSemantics babyBear)}"
 
 end Leanr.OpenVM.Snapshot
