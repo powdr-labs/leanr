@@ -123,7 +123,13 @@ def breaksInvariant (msg : BusInteraction (ZMod p)) : Bool :=
   -- Circuits should not send messages to an unknown bus.
   | none => true
 
-/-- The OpenVM bus semantics, using the hard-coded default bus map. -/
+/-- The OpenVM bus semantics, using the hard-coded default bus map.
+
+    The memory bus (id 1) is declared as a last-write-wins memory
+    (**audited assumption**, justified by OpenVM's offline-memory-checking argument and its
+    per-instruction exclusive timestamp windows): payload layout
+    `[address_space, pointer, data_0, …, data_3, timestamp]`, so the address is slots `[0, 1]`,
+    the timestamp slot `6`, and timestamps are range-checked below `2^29`. -/
 def openVmBusSemantics (p : ℕ) : BusSemantics p where
   isStateful busId :=
     match defaultBusMap busId with
@@ -131,5 +137,8 @@ def openVmBusSemantics (p : ℕ) : BusSemantics p where
     | none => false
   violatesConstraint := violates
   breaksInvariant := breaksInvariant
+  memoryBus busId :=
+    if busId = 1 then some { addressFields := [0, 1], tsField := 6, tsBound := 2 ^ 29 }
+    else none
 
 end Leanr.OpenVM
