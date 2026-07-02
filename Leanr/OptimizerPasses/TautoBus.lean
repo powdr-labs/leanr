@@ -94,28 +94,73 @@ theorem BusInteraction.constMessage?_sound (bi : BusInteraction (Expression p))
 
 /-! ## The correctness core: dropping universally-satisfied stateless interactions -/
 
-/-- Dropping bus interactions that are (a) stateless and (b) never violate a constraint is
-    equivalence- and invariant-preserving: their `violatesConstraint` obligation holds under
-    every assignment, and stateless interactions never enter `sideEffects` (which here stay
-    *equal*, not just `≈`). -/
+/-- Dropping interactions only from buses with no declared memory discipline preserves the
+    memory discipline: every declared bus's message list is untouched. -/
+theorem ConstraintSystem.memoryDiscipline_filterBus_undeclared (cs : ConstraintSystem p)
+    (bs : BusSemantics p) (keep : BusInteraction (Expression p) → Bool)
+    (a : String → ZMod p)
+    (hundecl : ∀ bi ∈ cs.busInteractions, keep bi = false → bs.memoryBus bi.busId = none) :
+    ((cs.filterBus keep).memoryDiscipline bs a ↔ cs.memoryDiscipline bs a) := by
+  unfold ConstraintSystem.memoryDiscipline
+  have hmsgs : ∀ (busId : Nat) (shape : MemoryBusShape), bs.memoryBus busId = some shape →
+      ∀ (l : List (BusInteraction (Expression p))),
+        (∀ bi ∈ l, keep bi = false → bs.memoryBus bi.busId = none) →
+        (l.filter keep).filter (fun bi => bi.busId = busId)
+          = l.filter (fun bi => bi.busId = busId) := by
+    intro busId shape hdecl l hl
+    induction l with
+    | nil => rfl
+    | cons bi rest ih =>
+      have hrest := ih (fun bi' hbi' hk' => hl bi' (List.mem_cons_of_mem _ hbi') hk')
+      by_cases hb : bi.busId = busId
+      · have hkeep : keep bi = true := by
+          by_contra hk
+          have := hl bi (List.mem_cons_self ..) (by simpa using hk)
+          rw [hb, hdecl] at this
+          exact absurd this (by simp)
+        rw [List.filter_cons_of_pos hkeep,
+            List.filter_cons_of_pos (by simpa using hb),
+            List.filter_cons_of_pos (by simpa using hb), hrest]
+      · by_cases hk : keep bi = true
+        · rw [List.filter_cons_of_pos hk,
+              List.filter_cons_of_neg (by simpa using hb),
+              List.filter_cons_of_neg (by simpa using hb), hrest]
+        · rw [List.filter_cons_of_neg (by simpa using hk),
+              List.filter_cons_of_neg (by simpa using hb), hrest]
+  constructor
+  · intro h busId shape hdecl
+    have hd := h busId shape hdecl
+    simp only [ConstraintSystem.filterBus] at hd
+    rwa [hmsgs busId shape hdecl cs.busInteractions hundecl] at hd
+  · intro h busId shape hdecl
+    simp only [ConstraintSystem.filterBus]
+    rw [hmsgs busId shape hdecl cs.busInteractions hundecl]
+    exact h busId shape hdecl
+
+/-- Dropping bus interactions that are (a) stateless, (b) on buses without memory discipline,
+    and (c) never violating a constraint is equivalence- and invariant-preserving: their
+    `violatesConstraint` obligation holds under every assignment, and stateless interactions
+    never enter `sideEffects` (which here stay *equal*, not just `≈`). -/
 theorem ConstraintSystem.filterBusStateless_correct (cs : ConstraintSystem p)
     (bs : BusSemantics p) (keep : BusInteraction (Expression p) → Bool)
     (hstateless : ∀ bi ∈ cs.busInteractions, keep bi = false →
       bs.isStateful bi.busId = false)
+    (hundecl : ∀ bi ∈ cs.busInteractions, keep bi = false → bs.memoryBus bi.busId = none)
     (hok : ∀ bi ∈ cs.busInteractions, keep bi = false → ∀ env,
       bs.violatesConstraint (bi.eval env) = false) :
     PassCorrect cs (cs.filterBus keep) bs := by
   have hiff : ∀ env, (cs.filterBus keep).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
-    simp only [ConstraintSystem.satisfies, ConstraintSystem.filterBus]
+    have hdisc := cs.memoryDiscipline_filterBus_undeclared bs keep env hundecl
+    simp only [ConstraintSystem.satisfies]
     constructor
-    · rintro ⟨hc, hb⟩
-      refine ⟨hc, fun bi hbimem => ?_⟩
+    · rintro ⟨hc, hb, hd⟩
+      refine ⟨hc, fun bi hbimem => ?_, hdisc.1 hd⟩
       by_cases hk : keep bi = true
       · exact hb bi (List.mem_filter.2 ⟨hbimem, hk⟩)
       · intro _; exact hok bi hbimem (by simpa using hk) env
-    · rintro ⟨hc, hb⟩
-      exact ⟨hc, fun bi hbimem => hb bi (List.mem_filter.1 hbimem).1⟩
+    · rintro ⟨hc, hb, hd⟩
+      exact ⟨hc, fun bi hbimem => hb bi (List.mem_filter.1 hbimem).1, hdisc.2 hd⟩
   have hfilter : ∀ (bis : List (BusInteraction (Expression p))),
       (∀ bi ∈ bis, keep bi = false → bs.isStateful bi.busId = false) →
       (bis.filter keep).filter (fun bi => bs.isStateful bi.busId)
@@ -155,7 +200,7 @@ theorem ConstraintSystem.filterBusStateless_correct (cs : ConstraintSystem p)
 
 /-- Is this interaction a tautology: stateless, with a constant message the bus accepts? -/
 def isTautoLookup (bs : BusSemantics p) (bi : BusInteraction (Expression p)) : Bool :=
-  !bs.isStateful bi.busId &&
+  !bs.isStateful bi.busId && (bs.memoryBus bi.busId).isNone &&
     (match bi.constMessage? with
      | some msg => !bs.violatesConstraint msg
      | none => false)
@@ -168,12 +213,17 @@ def tautoBusDropPass : VerifiedPass p := fun cs bs =>
      (by
        intro bi _ hkf
        have htauto : isTautoLookup bs bi = true := by simpa using hkf
-       rw [isTautoLookup, Bool.and_eq_true] at htauto
-       simpa using htauto.1)
+       rw [isTautoLookup, Bool.and_eq_true, Bool.and_eq_true] at htauto
+       simpa using htauto.1.1)
+     (by
+       intro bi _ hkf
+       have htauto : isTautoLookup bs bi = true := by simpa using hkf
+       rw [isTautoLookup, Bool.and_eq_true, Bool.and_eq_true] at htauto
+       simpa [Option.isNone_iff_eq_none] using htauto.1.2)
      (by
        intro bi _ hkf env
        have htauto : isTautoLookup bs bi = true := by simpa using hkf
-       rw [isTautoLookup, Bool.and_eq_true] at htauto
+       rw [isTautoLookup, Bool.and_eq_true, Bool.and_eq_true] at htauto
        have hmsg := htauto.2
        cases hcm : bi.constMessage? with
        | none => rw [hcm] at hmsg; exact absurd hmsg (by simp)

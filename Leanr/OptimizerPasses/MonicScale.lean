@@ -138,11 +138,11 @@ theorem ConstraintSystem.mapConstraintsIff_correct (cs : ConstraintSystem p)
     intro env
     simp only [ConstraintSystem.satisfies, ConstraintSystem.mapConstraints]
     constructor
-    · rintro ⟨hc, hb⟩
-      refine ⟨fun c0 hc0 => ?_, hb⟩
+    · rintro ⟨hc, hb, hd⟩
+      refine ⟨fun c0 hc0 => ?_, hb, hd⟩
       exact (hg c0 env).1 (hc _ (List.mem_map.2 ⟨c0, hc0, rfl⟩))
-    · rintro ⟨hc, hb⟩
-      refine ⟨fun c hc' => ?_, hb⟩
+    · rintro ⟨hc, hb, hd⟩
+      refine ⟨fun c hc' => ?_, hb, hd⟩
       obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 hc'
       exact (hg c0 env).2 (hc c0 hc0)
   have hside : ∀ env, (cs.mapConstraints g).sideEffects bs env = cs.sideEffects bs env :=

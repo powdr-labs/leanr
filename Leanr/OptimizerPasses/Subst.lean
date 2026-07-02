@@ -74,21 +74,53 @@ def ConstraintSystem.subst (cs : ConstraintSystem p) (x : String) (t : Expressio
   { algebraicConstraints := cs.algebraicConstraints.map (·.subst x t),
     busInteractions := cs.busInteractions.map (·.subst x t) }
 
+/-- The evaluated interactions of a substituted system, restricted to one bus, are those of the
+    original under the rebound environment (substitution never changes a bus id). -/
+theorem ConstraintSystem.msgs_subst (cs : ConstraintSystem p) (x : String) (t : Expression p)
+    (busId : Nat) (a : String → ZMod p) :
+    ((cs.subst x t).busInteractions.filter (fun bi => bi.busId = busId)).map
+      (fun bi => bi.eval a)
+    = (cs.busInteractions.filter (fun bi => bi.busId = busId)).map
+      (fun bi => bi.eval (Function.update a x (t.eval a))) := by
+  simp only [ConstraintSystem.subst]
+  rw [List.filter_map]
+  rw [List.filter_congr
+    (fun bi _ => (rfl :
+      ((fun b : BusInteraction (Expression p) => decide (b.busId = busId)) ∘
+        (fun b => b.subst x t)) bi = decide (bi.busId = busId)))]
+  rw [List.map_map]
+  exact List.map_congr_left (fun bi _ => bi.eval_subst x t a)
+
+/-- The memory discipline transfers across substitution. -/
+theorem ConstraintSystem.memoryDiscipline_subst (cs : ConstraintSystem p) (x : String)
+    (t : Expression p) (bs : BusSemantics p) (a : String → ZMod p) :
+    (cs.subst x t).memoryDiscipline bs a
+      ↔ cs.memoryDiscipline bs (Function.update a x (t.eval a)) := by
+  unfold ConstraintSystem.memoryDiscipline
+  constructor
+  · intro h busId shape hdecl
+    have hmsgs := h busId shape hdecl
+    rwa [ConstraintSystem.msgs_subst] at hmsgs
+  · intro h busId shape hdecl
+    rw [ConstraintSystem.msgs_subst]
+    exact h busId shape hdecl
+
 /-- `satisfies` transfers across substitution: the substituted system is satisfied at `a` exactly
     when the original is satisfied at `a` with `x` rebound to `t.eval a`. -/
 theorem ConstraintSystem.satisfies_subst (cs : ConstraintSystem p) (x : String) (t : Expression p)
     (bs : BusSemantics p) (a : String → ZMod p) :
     (cs.subst x t).satisfies bs a ↔ cs.satisfies bs (Function.update a x (t.eval a)) := by
-  simp only [ConstraintSystem.satisfies, ConstraintSystem.subst]
+  have hdisc := cs.memoryDiscipline_subst x t bs a
+  simp only [ConstraintSystem.satisfies, ConstraintSystem.subst] at *
   constructor
-  · rintro ⟨hc, hb⟩
-    refine ⟨fun c0 hc0 => ?_, fun bi0 hbi0 => ?_⟩
+  · rintro ⟨hc, hb, hd⟩
+    refine ⟨fun c0 hc0 => ?_, fun bi0 hbi0 => ?_, hdisc.1 hd⟩
     · have := hc _ (List.mem_map.2 ⟨c0, hc0, rfl⟩)
       rwa [Expression.eval_subst] at this
     · have := hb _ (List.mem_map.2 ⟨bi0, hbi0, rfl⟩)
       rwa [BusInteraction.eval_subst] at this
-  · rintro ⟨hc, hb⟩
-    refine ⟨fun c hc' => ?_, fun bi hbi' => ?_⟩
+  · rintro ⟨hc, hb, hd⟩
+    refine ⟨fun c hc' => ?_, fun bi hbi' => ?_, hdisc.2 hd⟩
     · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 hc'
       rw [Expression.eval_subst]; exact hc c0 hc0
     · obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'

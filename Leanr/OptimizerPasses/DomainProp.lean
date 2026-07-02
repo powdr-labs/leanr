@@ -712,6 +712,6 @@ def domainPropPass : VerifiedPassW p := fun cs bs facts =>
         ⟨cs.subst x (.const c),
          cs.subst_correct x (.const c) bs (fun env hsat =>
            findForced_sound cs.algebraicConstraints bs facts cs.busInteractions x c hf
-             env (fun c' hc' => hsat.1 c' hc') (fun bi hbi => hsat.2 bi hbi))⟩
+             env (fun c' hc' => hsat.1 c' hc') (fun bi hbi => hsat.2.1 bi hbi))⟩
     | none => ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩
   else ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩

@@ -48,16 +48,46 @@ theorem BusInteraction.eval_mapExpr (bi : BusInteraction (Expression p)) (env : 
   intro e _
   simp only [Function.comp_apply, hg]
 
+/-- The evaluated interactions of a rewritten system, restricted to one bus, are unchanged
+    (an eval-preserving map never changes a bus id or a value). -/
+theorem ConstraintSystem.msgs_mapExpr (cs : ConstraintSystem p) (busId : Nat)
+    (env : String → ZMod p) :
+    ((cs.mapExpr g).busInteractions.filter (fun bi => bi.busId = busId)).map
+      (fun bi => bi.eval env)
+    = (cs.busInteractions.filter (fun bi => bi.busId = busId)).map (fun bi => bi.eval env) := by
+  simp only [ConstraintSystem.mapExpr]
+  rw [List.filter_map]
+  rw [List.filter_congr
+    (fun bi _ => (rfl :
+      ((fun b : BusInteraction (Expression p) => decide (b.busId = busId)) ∘
+        (fun b => b.mapExpr g)) bi = decide (bi.busId = busId)))]
+  rw [List.map_map]
+  exact List.map_congr_left (fun bi _ => bi.eval_mapExpr hg env)
+
+/-- The memory discipline is untouched by eval-preserving rewrites. -/
+theorem ConstraintSystem.memoryDiscipline_mapExpr (cs : ConstraintSystem p)
+    (bs : BusSemantics p) (env : String → ZMod p) :
+    (cs.mapExpr g).memoryDiscipline bs env ↔ cs.memoryDiscipline bs env := by
+  unfold ConstraintSystem.memoryDiscipline
+  constructor
+  · intro h busId shape hdecl
+    have hmsgs := h busId shape hdecl
+    rwa [cs.msgs_mapExpr hg] at hmsgs
+  · intro h busId shape hdecl
+    rw [cs.msgs_mapExpr hg]
+    exact h busId shape hdecl
+
 theorem ConstraintSystem.satisfies_mapExpr (cs : ConstraintSystem p) (bs : BusSemantics p)
     (env : String → ZMod p) : (cs.mapExpr g).satisfies bs env ↔ cs.satisfies bs env := by
-  simp only [ConstraintSystem.satisfies, ConstraintSystem.mapExpr]
+  have hdisc := cs.memoryDiscipline_mapExpr hg bs env
+  simp only [ConstraintSystem.satisfies, ConstraintSystem.mapExpr] at *
   constructor
-  · rintro ⟨hc, hb⟩
-    refine ⟨fun c0 hc0 => ?_, fun bi0 hbi0 => ?_⟩
+  · rintro ⟨hc, hb, hd⟩
+    refine ⟨fun c0 hc0 => ?_, fun bi0 hbi0 => ?_, hdisc.1 hd⟩
     · have := hc _ (List.mem_map.2 ⟨c0, hc0, rfl⟩); rwa [hg] at this
     · have := hb _ (List.mem_map.2 ⟨bi0, hbi0, rfl⟩); rwa [bi0.eval_mapExpr hg] at this
-  · rintro ⟨hc, hb⟩
-    refine ⟨fun c hc' => ?_, fun bi hbi' => ?_⟩
+  · rintro ⟨hc, hb, hd⟩
+    refine ⟨fun c hc' => ?_, fun bi hbi' => ?_, hdisc.2 hd⟩
     · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 hc'; rw [hg]; exact hc c0 hc0
     · obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'; rw [bi0.eval_mapExpr hg]; exact hb bi0 hbi0
 
@@ -111,13 +141,13 @@ theorem ConstraintSystem.filterConstraints_correct (cs : ConstraintSystem p) (bs
     intro env
     simp only [ConstraintSystem.satisfies, ConstraintSystem.filterConstraints]
     constructor
-    · rintro ⟨hc, hb⟩
-      refine ⟨fun c hcmem => ?_, hb⟩
+    · rintro ⟨hc, hb, hd⟩
+      refine ⟨fun c hcmem => ?_, hb, hd⟩
       by_cases hk : keep c = true
       · exact hc c (List.mem_filter.2 ⟨hcmem, hk⟩)
       · exact h c hcmem (by simpa using hk) env
-    · rintro ⟨hc, hb⟩
-      exact ⟨fun c hcmem => hc c (List.mem_filter.1 hcmem).1, hb⟩
+    · rintro ⟨hc, hb, hd⟩
+      exact ⟨fun c hcmem => hc c (List.mem_filter.1 hcmem).1, hb, hd⟩
   have hside : ∀ env, (cs.filterConstraints keep).sideEffects bs env = cs.sideEffects bs env :=
     fun _ => rfl
   refine ⟨⟨?_, ?_⟩, ?_⟩
@@ -134,6 +164,85 @@ theorem ConstraintSystem.filterConstraints_correct (cs : ConstraintSystem p) (bs
 def ConstraintSystem.filterBus (cs : ConstraintSystem p) (keep : BusInteraction (Expression p) → Bool) :
     ConstraintSystem p :=
   { cs with busInteractions := cs.busInteractions.filter keep }
+
+/-- Dropping only identically-zero-multiplicity interactions preserves the memory discipline.
+    Needs `(1 : ZMod p) ≠ 0` (i.e. `p ≠ 1`) so that sends (`1`) and receives (`-1`) are
+    genuinely active and therefore never dropped: the discipline's clauses then see exactly the
+    same active messages on both sides. -/
+theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem p)
+    (bs : BusSemantics p) (keep : BusInteraction (Expression p) → Bool)
+    (a : String → ZMod p) (hp1 : (1 : ZMod p) ≠ 0)
+    (h0 : ∀ bi ∈ cs.busInteractions, keep bi = false → ∀ env, (bi.eval env).multiplicity = 0) :
+    ((cs.filterBus keep).memoryDiscipline bs a ↔ cs.memoryDiscipline bs a) := by
+  have hneg : (-1 : ZMod p) ≠ 0 := fun h => hp1 (neg_eq_zero.mp h)
+  unfold ConstraintSystem.memoryDiscipline
+  have hmsgs : ∀ busId : Nat,
+      ((cs.filterBus keep).busInteractions.filter (fun bi => bi.busId = busId)).map
+        (fun bi => bi.eval a)
+      = (((cs.busInteractions.filter (fun bi => bi.busId = busId)).filter keep)).map
+        (fun bi => bi.eval a) := by
+    intro busId
+    simp only [ConstraintSystem.filterBus]
+    rw [List.filter_comm]
+  constructor
+  · intro h busId shape hdecl
+    have hd := h busId shape hdecl
+    rw [hmsgs busId] at hd
+    -- notation for the two message lists
+    set base := cs.busInteractions.filter (fun bi => bi.busId = busId) with hbase
+    obtain ⟨c1, c2, c3⟩ := hd
+    -- an active message of the full list is a message of the filtered list
+    have hact : ∀ m ∈ base.map (fun bi => bi.eval a), m.multiplicity ≠ 0 →
+        m ∈ (base.filter keep).map (fun bi => bi.eval a) := by
+      intro m hm hmne
+      obtain ⟨bi, hbi, rfl⟩ := List.mem_map.1 hm
+      by_cases hk : keep bi = true
+      · exact List.mem_map.2 ⟨bi, List.mem_filter.2 ⟨hbi, hk⟩, rfl⟩
+      · have := h0 bi (List.mem_of_mem_filter hbi) (by simpa using hk) a
+        exact absurd this hmne
+    have hsub : ∀ m ∈ (base.filter keep).map (fun bi => bi.eval a),
+        m ∈ base.map (fun bi => bi.eval a) := by
+      intro m hm
+      obtain ⟨bi, hbi, rfl⟩ := List.mem_map.1 hm
+      exact List.mem_map.2 ⟨bi, List.mem_of_mem_filter hbi, rfl⟩
+    refine ⟨?_, ?_, ?_⟩
+    · intro S hS R hR hSm hRm haddr hts
+      exact c1 S (hact S hS (hSm ▸ hp1)) R (hact R hR (hRm ▸ hneg)) hSm hRm haddr hts
+    · intro S hS S' hS' hSm hS'm haddr hlt hbetween
+      obtain ⟨R, hR, hRm, hRp⟩ := c2 S (hact S hS (hSm ▸ hp1)) S' (hact S' hS' (hS'm ▸ hp1))
+        hSm hS'm haddr hlt
+        (fun S'' hS'' hS''m haddr'' => hbetween S'' (hsub S'' hS'') hS''m haddr'')
+      exact ⟨R, hsub R hR, hRm, hRp⟩
+    · intro m hm hmne
+      exact c3 m (hact m hm hmne) hmne
+  · intro h busId shape hdecl
+    have hd := h busId shape hdecl
+    rw [hmsgs busId]
+    set base := cs.busInteractions.filter (fun bi => bi.busId = busId) with hbase
+    obtain ⟨c1, c2, c3⟩ := hd
+    have hact : ∀ m ∈ base.map (fun bi => bi.eval a), m.multiplicity ≠ 0 →
+        m ∈ (base.filter keep).map (fun bi => bi.eval a) := by
+      intro m hm hmne
+      obtain ⟨bi, hbi, rfl⟩ := List.mem_map.1 hm
+      by_cases hk : keep bi = true
+      · exact List.mem_map.2 ⟨bi, List.mem_filter.2 ⟨hbi, hk⟩, rfl⟩
+      · have := h0 bi (List.mem_of_mem_filter hbi) (by simpa using hk) a
+        exact absurd this hmne
+    have hsub : ∀ m ∈ (base.filter keep).map (fun bi => bi.eval a),
+        m ∈ base.map (fun bi => bi.eval a) := by
+      intro m hm
+      obtain ⟨bi, hbi, rfl⟩ := List.mem_map.1 hm
+      exact List.mem_map.2 ⟨bi, List.mem_of_mem_filter hbi, rfl⟩
+    refine ⟨?_, ?_, ?_⟩
+    · intro S hS R hR hSm hRm haddr hts
+      exact c1 S (hsub S hS) R (hsub R hR) hSm hRm haddr hts
+    · intro S hS S' hS' hSm hS'm haddr hlt hbetween
+      obtain ⟨R, hR, hRm, hRp⟩ := c2 S (hsub S hS) S' (hsub S' hS') hSm hS'm haddr hlt
+        (fun S'' hS'' hS''m haddr'' =>
+          hbetween S'' (hact S'' hS'' (hS''m ▸ hp1)) hS''m haddr'')
+      exact ⟨R, hact R hR (hRm ▸ hneg), hRm, hRp⟩
+    · intro m hm hmne
+      exact c3 m (hsub m hm) hmne
 
 /-- Net multiplicity is unchanged by dropping (via `keep = false`) bus interactions whose evaluated
     multiplicity is `0`: such an interaction contributes `0` to every message's net multiplicity, so
@@ -180,20 +289,21 @@ theorem multiplicitySum_filterBus (bs : BusSemantics p) (env : String → ZMod p
     `0` to every net multiplicity. Unlike cancelling opposite-sign pairs, this drops no real
     obligation, so it is sound for *arbitrary* bus semantics. -/
 theorem ConstraintSystem.filterBus_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (keep : BusInteraction (Expression p) → Bool)
+    (keep : BusInteraction (Expression p) → Bool) (hp1 : (1 : ZMod p) ≠ 0)
     (h : ∀ bi ∈ cs.busInteractions, keep bi = false → ∀ env, (bi.eval env).multiplicity = 0) :
     PassCorrect cs (cs.filterBus keep) bs := by
   have hiff : ∀ env, (cs.filterBus keep).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
-    simp only [ConstraintSystem.satisfies, ConstraintSystem.filterBus]
+    have hdisc := cs.memoryDiscipline_filterBus_zero bs keep env hp1 h
+    simp only [ConstraintSystem.satisfies]
     constructor
-    · rintro ⟨hc, hb⟩
-      refine ⟨hc, fun bi hbimem => ?_⟩
+    · rintro ⟨hc, hb, hd⟩
+      refine ⟨hc, fun bi hbimem => ?_, hdisc.1 hd⟩
       by_cases hk : keep bi = true
       · exact hb bi (List.mem_filter.2 ⟨hbimem, hk⟩)
       · intro hne; exact absurd (h bi hbimem (by simpa using hk) env) hne
-    · rintro ⟨hc, hb⟩
-      exact ⟨hc, fun bi hbimem => hb bi (List.mem_filter.1 hbimem).1⟩
+    · rintro ⟨hc, hb, hd⟩
+      exact ⟨hc, fun bi hbimem => hb bi (List.mem_filter.1 hbimem).1, hdisc.2 hd⟩
   have hside : ∀ env, cs.sideEffects bs env ≈ (cs.filterBus keep).sideEffects bs env := by
     intro env message
     simp only [ConstraintSystem.sideEffects, ConstraintSystem.filterBus]
