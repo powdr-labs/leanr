@@ -718,7 +718,7 @@ def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) :
      fun h => r2.property.2 (r1.property.2 h)⟩
 
 /-- The witness re-encoding pass: for every constraint's (small) variable group whose covered
-    constraints admit few joint values, re-encode the group with `⌈log₂ m⌉` fresh booleans.
+    constraints allow only a few joint values, re-encode the group with `⌈log₂ m⌉` fresh booleans.
     Prime `p` only (booleanity needs an integral domain); identity otherwise. -/
 def reencodePass : VerifiedPass p := fun cs bsem =>
   if hpr : p.Prime then
