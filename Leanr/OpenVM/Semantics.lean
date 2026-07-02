@@ -128,6 +128,14 @@ def openVmBusSemantics (p : ℕ) (busMap : Nat → Option OpenVmBusType := defau
   memoryBus busId :=
     match busMap busId with
     | some .memory => some { addressFields := [0, 1], tsField := 6, tsBound := 2 ^ 29 }
+    -- The execution bridge is a linear-consumption bus (see `BusSemantics.memoryBus`):
+    -- payload `[pc, timestamp]`, a single global cell (empty address). **Audited
+    -- assumption**: each `(pc, ts)` state is produced and consumed exactly once, at most
+    -- one instruction starts per timestamp, timestamps are globally range-checked below
+    -- `2^29`, and the fragment executes in an exclusive contiguous timestamp window, so a
+    -- state produced strictly before another of the fragment's own productions is consumed
+    -- by one of the fragment's own receives.
+    | some .executionBridge => some { addressFields := [], tsField := 1, tsBound := 2 ^ 29 }
     | _ => none
 
 /-- The BabyBear field modulus, `2^31 - 2^27 + 1` — the field all powdr OpenVM exports use. -/

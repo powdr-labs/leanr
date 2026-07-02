@@ -76,7 +76,13 @@ structure BusSemantics (p : ℕ) where
       on this bus (every receive tuple equals some send tuple, timestamps unique per address
       and globally range-checked below `tsBound`), and grants a fragment an exclusive
       timestamp window, so that between two of a fragment's own accesses to an address no
-      other chip can access it. -/
+      other chip can access it.
+
+      The shape also covers *linear-consumption* buses with `addressFields := []` — a single
+      global cell, e.g. an execution bridge whose tuples are `(pc, timestamp)` states: each
+      state is produced once and consumed once, at most one per timestamp, and window
+      exclusivity means a state produced strictly before another of the fragment's own
+      productions is consumed by the fragment itself. -/
   memoryBus (busId : Nat) : Option MemoryBusShape
 
 /-- A concrete bus interaction message: which bus, and the tuple sent. -/
@@ -130,7 +136,12 @@ def MemoryBusShape.tsVal (shape : MemoryBusShape) (m : BusInteraction (ZMod p)) 
        the fragment (window exclusivity: no other chip can access the address in between, so
        the earlier send's consumer is one of the fragment's own receives);
     3. **timestamp range** — active messages carry timestamps below the declared bound (the
-       VM's global timestamp range-checking). -/
+       VM's global timestamp range-checking);
+    4. **timestamp uniqueness** — two active sends (dually, two active receives) to the same
+       address with the same timestamp value carry the same payload (`(address, timestamp)`
+       identifies at most one send and at most one receive across the system — the same
+       global-uniqueness assumption clause 1 relies on, stated send-to-send and
+       receive-to-receive). -/
 def MemoryBusShape.disciplineOn (shape : MemoryBusShape)
     (msgs : List (BusInteraction (ZMod p))) : Prop :=
   (∀ S ∈ msgs, ∀ R ∈ msgs, S.multiplicity = 1 → R.multiplicity = -1 →
@@ -141,7 +152,13 @@ def MemoryBusShape.disciplineOn (shape : MemoryBusShape)
     (∀ S'' ∈ msgs, S''.multiplicity = 1 → shape.address S'' = shape.address S →
       ¬(shape.tsVal S < shape.tsVal S'' ∧ shape.tsVal S'' < shape.tsVal S')) →
     ∃ R ∈ msgs, R.multiplicity = -1 ∧ R.payload = S.payload) ∧
-  (∀ m ∈ msgs, m.multiplicity ≠ 0 → shape.tsVal m < shape.tsBound)
+  (∀ m ∈ msgs, m.multiplicity ≠ 0 → shape.tsVal m < shape.tsBound) ∧
+  (∀ S ∈ msgs, ∀ S' ∈ msgs, S.multiplicity = 1 → S'.multiplicity = 1 →
+    shape.address S = shape.address S' → shape.tsVal S = shape.tsVal S' →
+    S.payload = S'.payload) ∧
+  (∀ R ∈ msgs, ∀ R' ∈ msgs, R.multiplicity = -1 → R'.multiplicity = -1 →
+    shape.address R = shape.address R' → shape.tsVal R = shape.tsVal R' →
+    R.payload = R'.payload)
 
 /-- The memory discipline of a constraint system: every declared memory bus's discipline holds
     for the system's evaluated interactions on that bus. -/
