@@ -571,3 +571,19 @@ Worked: yes, dramatically. Case 2: 57 → 42 vars (2.35× → **3.19×**; powdr 
 274 → 172 (1.86× → **2.97×**; powdr 3.87×), case 3: 76 → 74 (heap chaining needs
 expression-equality addresses, next entry). Snapshot unchanged (36/11). Runtime fine
 (case 1: 10 s at default iters).
+
+### 27. Syntactic address equality in memory unification
+`addrConstsEq` now also accepts an address slot where both payloads carry the *same
+expression* (syntactic equality ⇒ evaluated equality) — non-constant heap pointers
+(`mem_ptr_limbs` sums) can then pair, with in-between exclusion falling back to
+`notBetweenTs`, which works post-entry-26 because all memory timestamps are constant
+offsets of `ts_0`. Sound and free; fires on blocks that access one heap address twice
+(store-then-load). No change on cases 1/3/4 (their heap addresses are all distinct);
+case 12: 464 → 433 (from entry 26's chaining). Also recorded here: entry 26 does **not**
+fire on blocks ending in an *indirect* jump (`ret`/JALR — e.g. case 5): the unknown target
+admits a satisfying "glued execution" assignment (the block re-entered at its own start
+within the window) that breaks any single chosen link while satisfying every order-free
+clause — verified against several candidate clause strengthenings (strict send
+distinctness, matched-but-one, dual receive-side consumption). The only fix found is an
+*order-dependent* audited clause (interactions in program order carry non-decreasing
+timestamps — what powdr assumes de facto); left as a spec question.
