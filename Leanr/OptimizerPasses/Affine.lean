@@ -183,11 +183,37 @@ theorem LinExpr.trySolve_sound (l : LinExpr p) (v x : String) (t : Expression p)
     rw [h2] at hs; rw [hs] at hl
     linear_combination -hl
 
-/-- Solve the linear form for the first `±1`-coefficient variable. -/
+/-- Try to solve the linear form `= 0` for `v` when `v`'s coefficient is a *unit*, verified by
+    the decidable re-check `a * a⁻¹ = 1` (with the ring's `Inv`, so soundness never depends on
+    inversion behaving well): over a prime field every nonzero coefficient qualifies, over
+    `ZMod n` exactly the residues coprime to `n`. Generalizes `trySolve`; kept separate so the
+    solver can *prefer* `±1` pivots, which substitute without rescaling the other coefficients. -/
+def LinExpr.trySolveUnit (l : LinExpr p) (v : String) : Option (String × Expression p) :=
+  if l.coeff v * (l.coeff v)⁻¹ = 1 then
+    some (v, ((l.others v).scale (-(l.coeff v)⁻¹)).toExpr)
+  else none
+
+theorem LinExpr.trySolveUnit_sound (l : LinExpr p) (v x : String) (t : Expression p)
+    (h : l.trySolveUnit v = some (x, t)) (env : String → ZMod p) (hl : l.eval env = 0) :
+    env x = t.eval env := by
+  unfold LinExpr.trySolveUnit at h
+  split_ifs at h with h1
+  simp only [Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl⟩ := h
+  rw [LinExpr.toExpr_eval, LinExpr.scale_eval]
+  have hs := l.eval_split v env
+  have h0 : l.coeff v * env v + (l.others v).eval env = 0 := by rw [← hs]; exact hl
+  linear_combination (l.coeff v)⁻¹ * h0 - env v * h1
+
+/-- Solve the linear form for the first `±1`-coefficient variable; failing that, for the first
+    variable whose coefficient is a unit. -/
 def solveAffineLin (l : LinExpr p) : Option (String × Expression p) :=
   match (l.terms.map Prod.fst).find? (fun v => (l.trySolve v).isSome) with
   | some v => l.trySolve v
-  | none => none
+  | none =>
+    match (l.terms.map Prod.fst).find? (fun v => (l.trySolveUnit v).isSome) with
+    | some v => l.trySolveUnit v
+    | none => none
 
 theorem solveAffineLin_sound (l : LinExpr p) (x : String) (t : Expression p)
     (h : solveAffineLin l = some (x, t)) (env : String → ZMod p) (hl : l.eval env = 0) :
@@ -196,7 +222,10 @@ theorem solveAffineLin_sound (l : LinExpr p) (x : String) (t : Expression p)
   split at h
   · rename_i v _
     exact l.trySolve_sound v x t h env hl
-  · exact absurd h (by simp)
+  · split at h
+    · rename_i v _
+      exact l.trySolveUnit_sound v x t h env hl
+    · exact absurd h (by simp)
 
 /-- Solve a constraint expression for a unit-coefficient variable, if it is affine. -/
 def solveAffine (c : Expression p) : Option (String × Expression p) :=

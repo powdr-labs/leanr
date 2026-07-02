@@ -169,3 +169,16 @@ An idea-panel + adversarial-verification workflow over the remaining circuit fou
 provable idea with variable impact beyond this pass: the surviving 19 (a/b limbs, prev-data limbs,
 prev-timestamps, range-decomposition limbs, c-limbs) are pinned by stateful side effects or by
 lookup-table facts whose generic derivation would require enumerating the whole field.
+
+### 9. Affine solving generalized to unit coefficients (`Affine.lean`)
+Idea: `trySolve` only pivoted on `±1` coefficients, so a constraint like `2x + 4y + 6 = 0` (no
+unit-normalized variable) was unsolvable even over a field where any nonzero coefficient invertible.
+Added `trySolveUnit`: pivot on any coefficient `a` passing the decidable re-check `a * a⁻¹ = 1`
+(the ring's `Inv`, so soundness never trusts inversion — still field-free: over `ZMod n` exactly
+the gcd-1 residues qualify, over a prime field everything nonzero). `solveAffineLin` prefers a
+`±1` pivot (substitutes without rescaling, keeping expressions small) and falls back to a unit
+pivot. With primality this makes single-constraint linear elimination *complete*: combined with
+the iterate-to-fixpoint loop, any variable eliminable by linear reasoning is eliminated.
+Worked: yes (proof via `linear_combination` from `eval_split` + the unit certificate).
+**Impact: snapshot unchanged (36/19 ≈ 1.89) — every solvable constraint here already had a `±1`
+pivot; this is a generality/completeness improvement for other circuits.**
