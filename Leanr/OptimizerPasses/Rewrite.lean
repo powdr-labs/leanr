@@ -190,7 +190,7 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
     rw [hmsgs busId] at hd
     -- notation for the two message lists
     set base := cs.busInteractions.filter (fun bi => bi.busId = busId) with hbase
-    obtain ⟨c1, c2, c3⟩ := hd
+    obtain ⟨c1, c2, c3, c4, c5⟩ := hd
     -- an active message of the full list is a message of the filtered list
     have hact : ∀ m ∈ base.map (fun bi => bi.eval a), m.multiplicity ≠ 0 →
         m ∈ (base.filter keep).map (fun bi => bi.eval a) := by
@@ -205,7 +205,7 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
       intro m hm
       obtain ⟨bi, hbi, rfl⟩ := List.mem_map.1 hm
       exact List.mem_map.2 ⟨bi, List.mem_of_mem_filter hbi, rfl⟩
-    refine ⟨?_, ?_, ?_⟩
+    refine ⟨?_, ?_, ?_, ?_, ?_⟩
     · intro S hS R hR hSm hRm haddr hts
       exact c1 S (hact S hS (hSm ▸ hp1)) R (hact R hR (hRm ▸ hneg)) hSm hRm haddr hts
     · intro S hS S' hS' hSm hS'm haddr hlt hbetween
@@ -215,11 +215,15 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
       exact ⟨R, hsub R hR, hRm, hRp⟩
     · intro m hm hmne
       exact c3 m (hact m hm hmne) hmne
+    · intro S hS S' hS' hSm hS'm haddr hts
+      exact c4 S (hact S hS (hSm ▸ hp1)) S' (hact S' hS' (hS'm ▸ hp1)) hSm hS'm haddr hts
+    · intro R hR R' hR' hRm hR'm haddr hts
+      exact c5 R (hact R hR (hRm ▸ hneg)) R' (hact R' hR' (hR'm ▸ hneg)) hRm hR'm haddr hts
   · intro h busId shape hdecl
     have hd := h busId shape hdecl
     rw [hmsgs busId]
     set base := cs.busInteractions.filter (fun bi => bi.busId = busId) with hbase
-    obtain ⟨c1, c2, c3⟩ := hd
+    obtain ⟨c1, c2, c3, c4, c5⟩ := hd
     have hact : ∀ m ∈ base.map (fun bi => bi.eval a), m.multiplicity ≠ 0 →
         m ∈ (base.filter keep).map (fun bi => bi.eval a) := by
       intro m hm hmne
@@ -233,7 +237,7 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
       intro m hm
       obtain ⟨bi, hbi, rfl⟩ := List.mem_map.1 hm
       exact List.mem_map.2 ⟨bi, List.mem_of_mem_filter hbi, rfl⟩
-    refine ⟨?_, ?_, ?_⟩
+    refine ⟨?_, ?_, ?_, ?_, ?_⟩
     · intro S hS R hR hSm hRm haddr hts
       exact c1 S (hsub S hS) R (hsub R hR) hSm hRm haddr hts
     · intro S hS S' hS' hSm hS'm haddr hlt hbetween
@@ -243,6 +247,10 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
       exact ⟨R, hact R hR (hRm ▸ hneg), hRm, hRp⟩
     · intro m hm hmne
       exact c3 m (hsub m hm) hmne
+    · intro S hS S' hS' hSm hS'm haddr hts
+      exact c4 S (hsub S hS) S' (hsub S' hS') hSm hS'm haddr hts
+    · intro R hR R' hR' hRm hR'm haddr hts
+      exact c5 R (hsub R hR) R' (hsub R' hR') hRm hR'm haddr hts
 
 /-- Net multiplicity is unchanged by dropping (via `keep = false`) bus interactions whose evaluated
     multiplicity is `0`: such an interaction contributes `0` to every message's net multiplicity, so

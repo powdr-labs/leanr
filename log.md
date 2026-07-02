@@ -518,3 +518,35 @@ spec-level declarations in the style of entry 17 (e.g. declaring the execution b
 address-free `MemoryBusShape`, and structured table metadata for the pc lookup) — both are
 one-declaration extensions of existing, already-consumed machinery, deliberately left as
 spec decisions.
+
+### 24. Correction to entries 21/23: the pc lookup is not a wall (no commit yet)
+Investigating Georg's question about the generator-added pins showed the "pc-lookup
+opacity" attribution in entries 21/23 was wrong. The exports contain constraints pinning
+*every* pc-lookup field, including the opcode expression (powdr's
+`symbolic_machine_generator` adds them); the load/store `flags` that survive are *runtime*
+witnesses — the opcode pin leaves exactly four valid flag encodings (the load's shift
+amount, a function of the accessed address), and powdr keeps them too (512 on case 5,
+identical to our output). `is_load`, which the constraints do force, has been eliminated
+since entry 22's joint enumeration (the earlier diagnosis cited a stale render). So the
+remaining leanr-vs-powdr gap reduces to essentially **one** spec decision: the
+execution-bridge discipline (cross-instruction chaining — e.g. case 5 keeps 520 `rsN_data`
+vs powdr's 8). Proposal left uncommitted for review in `SPEC-PROPOSAL-chaining.md`; the
+pc-lookup-table idea is withdrawn there with the evidence.
+
+### 25. Spec extension (Georg-approved): execution-bridge discipline + timestamp uniqueness
+Implements `SPEC-PROPOSAL-chaining.md` after review. (a) `MemoryBusShape.disciplineOn` gains
+a fourth conjunct (stated as two clauses): two active sends — dually, two active receives —
+to the same address with the same timestamp *value* carry the same payload. This is the
+same global-uniqueness assumption clause 1 already relies on, stated send-to-send; for the
+memory bus the audit story is unchanged (offline checking gives per-address timestamp
+uniqueness). (b) `openVmBusSemantics.memoryBus` now also declares the **execution bridge**
+as a linear-consumption instance of the shape: payload `[pc, timestamp]`, *empty* address
+(one global cell — the execution state), `tsBound 2^29`. Audited assumption documented at
+the declaration: each `(pc, ts)` state is produced/consumed exactly once, at most one
+instruction starts per timestamp, and the fragment runs in an exclusive contiguous
+timestamp window. Proof threading: `memoryDiscipline_filterBus_zero` (Rewrite.lean) handles
+the new clauses with the same active/sub-list machinery; the substitution/mapExpr transfer
+lemmas rewrite the message list wholesale and needed no change; the two memory-unify
+soundness proofs only destructure two more conjuncts. No optimizer behavior change yet
+(`checkMemMatchG` needs constant timestamp gaps, which the bridge never has — the consuming
+pass is the next entry). Snapshot unchanged (36/11); full build green.
