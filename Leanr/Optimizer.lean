@@ -7,6 +7,7 @@ import Leanr.OptimizerPasses.ZeroMultBus
 import Leanr.OptimizerPasses.Affine
 import Leanr.OptimizerPasses.Normalize
 import Leanr.OptimizerPasses.DomainProp
+import Leanr.OptimizerPasses.TautoBus
 
 set_option autoImplicit false
 
@@ -28,12 +29,14 @@ correctness proof follows automatically from the pass's own `PassCorrect`. -/
     Fold once, then iterate the cleanup cycle to a fixpoint: solve one linear constraint for a
     unit-coefficient variable and substitute it away, substitute one variable forced by
     finite-domain enumeration (boolean/one-hot case analysis; prime `p` only), re-fold, drop
-    trivially-true constraints, drop zero-multiplicity bus interactions. (Affine substitution
-    subsumes constant substitution.) Extend it by composing passes with `.andThen`. -/
+    trivially-true constraints, drop zero-multiplicity bus interactions, drop stateless
+    interactions whose constant message satisfies the bus table. (Affine substitution subsumes
+    constant substitution.) Extend it by composing passes with `.andThen`. -/
 def pipeline : VerifiedPass p :=
   constantFoldPass.andThen
-    ((((((affineSubstPass.andThen domainPropPass).andThen normalizePass).andThen
-      constantFoldPass).andThen trivialConstraintDropPass).andThen zeroMultBusDropPass).iterate 24)
+    (((((((affineSubstPass.andThen domainPropPass).andThen normalizePass).andThen
+      constantFoldPass).andThen trivialConstraintDropPass).andThen
+      zeroMultBusDropPass).andThen tautoBusDropPass).iterate 24)
 
 /-- The circuit optimizer: run the pipeline and project out the resulting constraint system. -/
 def optimizer (cs : ConstraintSystem p) (busSemantics : BusSemantics p) : ConstraintSystem p :=
