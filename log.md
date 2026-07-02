@@ -146,3 +146,26 @@ any modulus. The remaining variables (the `xor`/`or`/`and` opcode selectors and 
 limbs) are constrained only non-linearly; eliminating them would require prime-field, circuit-
 specific one-hot/boolean case analysis, deliberately deprioritized in favour of general, portable
 optimizations.
+
+### 8. Finite-domain propagation / boolean case analysis (`DomainProp.lean`) — first prime-field pass
+Idea: many variables are pinned to a *finite domain* by a product-of-affine-factors constraint
+(`x·(x−1)` ⇒ `x ∈ {0,1}`, `c·(255−c)` ⇒ `c ∈ {0,255}`); over an integral domain a product is zero
+only if a factor is, and an affine factor has one root — the first place primality is genuinely
+needed (`p.Prime` is *decided at runtime* via the compiler-fast `Nat.decidablePrime`; for composite
+`p` the pass is the identity, so the optimizer's signature and every existing statement stay
+modulus-agnostic). Any constraint whose variables all have finite domains is then decided by
+exhaustive enumeration over the domain product (capped at 4096): if every satisfying assignment
+gives `x = c`, substitute via the proven `subst_correct`. The enumeration certificate
+(`checkForced`) is decidable and is all the proof consumes — the candidate search is proof-free.
+This is SAT-style unit propagation on field elements, and it resolves what no affine reasoning can:
+from `xor, or, and ∈ {0,1}` and `(1 + xor + 2·or + 3·and)·(xor + 2·or + 3·and) = 0` (the residue of
+the one-hot selector constraints after affine elimination of `add`/`sub`), only `(0,0,0)` survives,
+so all three remaining opcode flags are 0. Pipeline: inserted after `affineSubstPass` in the cycle;
+iterate bumped 16 → 24 (now ~14 substitutions to fixpoint). Worked: yes. The cascade also folds the
+bitwise-lookup payloads to `[a_i, a_i, 0, 1]`, drops all five boolean/one-hot constraints and the
+four `sub`-carry constraints, leaving 5 algebraic constraints (4-limb add-carry chain + the
+`c ∈ {0,255}` immediate-limb constraint). **Impact: 22 → 19, effectiveness 36/19 ≈ 1.89.**
+An idea-panel + adversarial-verification workflow over the remaining circuit found no sound,
+provable idea with variable impact beyond this pass: the surviving 19 (a/b limbs, prev-data limbs,
+prev-timestamps, range-decomposition limbs, c-limbs) are pinned by stateful side effects or by
+lookup-table facts whose generic derivation would require enumerating the whole field.
