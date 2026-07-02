@@ -14,6 +14,7 @@ import Leanr.OptimizerPasses.TautoBus
 import Leanr.OptimizerPasses.MonicScale
 import Leanr.OptimizerPasses.MemoryUnify
 import Leanr.OptimizerPasses.MemoryUnifyBatch
+import Leanr.OptimizerPasses.ExecChain
 
 set_option autoImplicit false
 
@@ -55,6 +56,7 @@ def cleanupCycle : VerifiedPassW p :=
     |>.andThen trivialConstraintDropPass.withFacts
     |>.andThen zeroMultBusDropPass.withFacts
     |>.andThen tautoBusDropPass.withFacts
+    |>.andThen execChainPass
     |>.andThen memoryUnifyBatchPass
 
 def pipelineIters (iters : Nat) : VerifiedPassW p :=
