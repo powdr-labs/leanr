@@ -1,6 +1,9 @@
-import Leanr.AlgebraicConstraint
-import Leanr.AffineExpression.Proofs
-import Leanr.Expression.Proofs
+import Leanr.Legacy.AlgebraicConstraint
+import Leanr.Legacy.AffineExpression.Proofs
+import Leanr.Legacy.Expression.Proofs
+
+namespace Legacy
+
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
@@ -48,3 +51,5 @@ theorem AlgebraicConstraint.solve?_sound {p : ℕ} [Fact (Nat.Prime p)]
           rw [h1]; ring
         rw [← ha]; simp [key]
     | _ :: _ :: _ => simp [h_list] at h_solve
+
+end Legacy

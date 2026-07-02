@@ -1,6 +1,9 @@
 import Mathlib.Data.ZMod.Basic
 import Mathlib.Data.Nat.Bitwise
 
+namespace Legacy
+
+
 structure RangeConstraint (p : ℕ) where
   mask : Nat
   min : ZMod p
@@ -191,3 +194,5 @@ instance {p : ℕ} : Add (RangeConstraint p) where add := RangeConstraint.add
 instance {p : ℕ} : Sub (RangeConstraint p) where sub := RangeConstraint.sub
 instance {p : ℕ} : Mul (RangeConstraint p) where mul := RangeConstraint.mul
 instance {p : ℕ} : Neg (RangeConstraint p) where neg := RangeConstraint.neg
+
+end Legacy

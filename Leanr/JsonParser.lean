@@ -1,6 +1,11 @@
 import Lean.Data.Json
-import Leanr.Solver
-import Leanr.Expression
+import Leanr.Legacy.Solver
+import Leanr.Legacy.Expression
+
+-- `JsonParser` is intentionally kept out of the `Legacy` namespace: the JSON
+-- parsing logic is expected to stay useful. It still targets the legacy
+-- `System`/`Expression` types via `open Legacy` for now.
+open Legacy
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 

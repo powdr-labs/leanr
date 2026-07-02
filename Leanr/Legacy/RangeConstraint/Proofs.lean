@@ -1,5 +1,8 @@
-import Leanr.RangeConstraint
+import Leanr.Legacy.RangeConstraint
 import Mathlib.Tactic.Ring
+
+namespace Legacy
+
 
 -- ===== Bitwise helper lemmas =====
 
@@ -1074,3 +1077,5 @@ theorem RangeConstraint.conjunction_sound {p : ℕ} [NeZero p]
         exact post_loop_allows (rc1.mask &&& rc2.mask) _ _ x hmask
           (show (RangeConstraint.mk 0 rc2.min rc2.max).inRange x from by
             simp only [RangeConstraint.inRange]; exact h2r)
+
+end Legacy

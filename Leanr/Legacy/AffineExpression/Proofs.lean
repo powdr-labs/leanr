@@ -1,5 +1,8 @@
-import Leanr.AffineExpression
-import Leanr.RangeConstraint.Proofs
+import Leanr.Legacy.AffineExpression
+import Leanr.Legacy.RangeConstraint.Proofs
+
+namespace Legacy
+
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
@@ -84,7 +87,7 @@ private theorem foldl_alter_get?
             a.impl a.balanced_impl).toBalancedTree)
         init l).impl k =
     match Std.DTreeMap.Internal.Impl.Const.get? init.impl k,
-          l.findValue? compare k with
+          List.findValue? compare k l with
     | some v1, some v2 => some (f k v1 v2)
     | some v1, none => some v1
     | none, some v2 => some v2
@@ -663,3 +666,5 @@ theorem AffineExpression.deduce_variable_sound
   show (field_rc.multiple coeff⁻¹ + rc).allowsValue (val_env x) = true
   rw [h_val_eq, show field_rc.multiple coeff⁻¹ + rc = (field_rc.multiple coeff⁻¹).add rc from rfl]
   exact h_sum
+
+end Legacy

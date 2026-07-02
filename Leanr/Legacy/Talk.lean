@@ -1,5 +1,8 @@
 import Mathlib
 
+namespace Legacy
+
+
 variable {α : Type}
 
 inductive MyList (α : Type) : Type where
@@ -65,3 +68,5 @@ def square (n : ℕ) : ℕ := n * n
 def is_square (n : ℕ) : Prop := ∃ m, n = square m
 
 theorem sixteen_is_square : is_square 16 := by use 4; simp [square]
+
+end Legacy

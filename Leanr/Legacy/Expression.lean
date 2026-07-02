@@ -1,7 +1,10 @@
 import Mathlib.Data.ZMod.Basic
 import Mathlib.Tactic.Ring
 import Init.Data.ToString.Basic
-import Leanr.RangeConstraint
+import Leanr.Legacy.RangeConstraint
+
+namespace Legacy
+
 
 -- TODO could use generic Field instead of ZMod p
 
@@ -107,3 +110,5 @@ def Expression.rangeConstraint {p : ℕ}
   | .var x => env x
   | .add e1 e2 => e1.rangeConstraint env + e2.rangeConstraint env
   | .mul e1 e2 => e1.rangeConstraint env * e2.rangeConstraint env
+
+end Legacy

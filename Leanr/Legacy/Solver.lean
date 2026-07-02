@@ -1,6 +1,9 @@
-import Leanr.System
-import Leanr.Parser
+import Leanr.Legacy.System
+import Leanr.Legacy.Parser
 import Std.Data.HashMap
+
+namespace Legacy
+
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
@@ -171,3 +174,5 @@ def solve (system : System (p := p))
     return new_state.system
   termination_by system.constraints.size
   decreasing_by omega
+
+end Legacy

@@ -1,6 +1,9 @@
-import Leanr.Solver
-import Leanr.AffineExpression.Proofs
-import Leanr.RangeConstraint.Proofs
+import Leanr.Legacy.Solver
+import Leanr.Legacy.AffineExpression.Proofs
+import Leanr.Legacy.RangeConstraint.Proofs
+
+namespace Legacy
+
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
@@ -97,3 +100,5 @@ theorem updateRangeConstraint_sound
   · exact h_cur
   · simp only [SolverState.getRangeConstraint, Std.HashMap.getElem?_insert, beq_self_eq_true, ite_true, Option.getD]
     exact RangeConstraint.conjunction_sound _ _ _ h_cur h_new
+
+end Legacy

@@ -1,18 +1,18 @@
 -- This module serves as the root of the `Leanr` library.
 -- Import modules here that should be built as part of the library.
-import Leanr.Basic
-import Leanr.Expression
-import Leanr.AffineExpression
-import Leanr.AlgebraicConstraint
-import Leanr.BusInteraction
-import Leanr.System
-import Leanr.Solver
-import Leanr.StringParser
+import Leanr.Legacy.Basic
+import Leanr.Legacy.Expression
+import Leanr.Legacy.AffineExpression
+import Leanr.Legacy.AlgebraicConstraint
+import Leanr.Legacy.BusInteraction
+import Leanr.Legacy.System
+import Leanr.Legacy.Solver
+import Leanr.Legacy.StringParser
 import Leanr.JsonParser
-import Leanr.OpenVM
-import Leanr.RangeConstraint
-import Leanr.RangeConstraint.Proofs
-import Leanr.Expression.Proofs
-import Leanr.AffineExpression.Proofs
-import Leanr.AlgebraicConstraint.Proofs
-import Leanr.Solver.Proofs
+import Leanr.Legacy.OpenVM
+import Leanr.Legacy.RangeConstraint
+import Leanr.Legacy.RangeConstraint.Proofs
+import Leanr.Legacy.Expression.Proofs
+import Leanr.Legacy.AffineExpression.Proofs
+import Leanr.Legacy.AlgebraicConstraint.Proofs
+import Leanr.Legacy.Solver.Proofs

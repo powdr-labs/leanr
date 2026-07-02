@@ -1,5 +1,8 @@
-import Leanr.Expression
-import Leanr.RangeConstraint
+import Leanr.Legacy.Expression
+import Leanr.Legacy.RangeConstraint
+
+namespace Legacy
+
 
 structure BusInteraction (e : Type) where
   busId : e
@@ -70,3 +73,5 @@ instance : ToString BusMap where
   toString bm :=
     let entries := bm.map fun (id, ty) => s!"  {id}: {ty}"
     "BusMap:\n" ++ String.intercalate "\n" entries
+
+end Legacy

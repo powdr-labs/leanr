@@ -1,7 +1,10 @@
-import Leanr.Solver
-import Leanr.Expression
+import Leanr.Legacy.Solver
+import Leanr.Legacy.Expression
 
 import Init.Data.ToString.Basic
+
+namespace Legacy
+
 
 
 /--
@@ -334,3 +337,5 @@ BusInteraction { bus_id: 3, multiplicity: (is_valid * 1), payload: [(((15360 * w
   match parseSystem (p := 0x1dffff) input with
   | .ok system => system
   | .error _ => System.fromConstraints []
+
+end Legacy
