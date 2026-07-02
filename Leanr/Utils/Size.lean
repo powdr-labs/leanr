@@ -42,6 +42,12 @@ def ConstraintSystem.variables (cs : ConstraintSystem p) : List String :=
 /-- The circuit size: the number of distinct variables. -/
 def ConstraintSystem.size (cs : ConstraintSystem p) : Nat := cs.variables.length
 
+/-- Number of occurrences of `x` (with multiplicity) across the whole system. Used e.g. to pick
+    substitution pivots that minimize expression duplication. -/
+def ConstraintSystem.occurrences (cs : ConstraintSystem p) (x : String) : Nat :=
+  (cs.algebraicConstraints.flatMap Expression.vars
+    ++ cs.busInteractions.flatMap BusInteraction.vars).count x
+
 /-- How much an optimizer shrinks a given circuit, as the factor `originalSize / optimizedSize`.
     Equals `1` when the size is unchanged; larger is better. Yields `0` if the optimized system
     has no variables (Lean's convention `x / 0 = 0`). -/

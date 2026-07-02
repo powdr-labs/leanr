@@ -110,31 +110,31 @@ def addiInput : ConstraintSystem babyBear where
 /-- The expected rendering of the ported machine (`Leanr.Spec.Dsl.render` format). -/
 def addiInputSnapshot : String :=
 "// Bus 0:
-mult=2013265920, args=[0, 2013265920 + writes_aux__base__prev_timestamp_0 + writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + 131072 * writes_aux__base__timestamp_lt_aux__lower_decomp__1_0]
-mult=1, args=[4, 2 + writes_aux__base__prev_timestamp_0 + writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + 131072 * writes_aux__base__timestamp_lt_aux__lower_decomp__1_0]
+mult=2013265920, args=[0, from_state__timestamp_0]
+mult=1, args=[4, 3 + from_state__timestamp_0]
 // Bus 1:
-mult=2013265920, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, reads_aux__0__base__prev_timestamp_0]
-mult=1, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, 2013265920 + writes_aux__base__prev_timestamp_0 + writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + 131072 * writes_aux__base__timestamp_lt_aux__lower_decomp__1_0]
+mult=2013265920, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, 2013265920 + from_state__timestamp_0 + 2013265920 * reads_aux__0__base__timestamp_lt_aux__lower_decomp__0_0 + 2013134849 * reads_aux__0__base__timestamp_lt_aux__lower_decomp__1_0]
+mult=1, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, from_state__timestamp_0]
 mult=2013265920, args=[1, 8, writes_aux__prev_data__0_0, writes_aux__prev_data__1_0, writes_aux__prev_data__2_0, writes_aux__prev_data__3_0, writes_aux__base__prev_timestamp_0]
-mult=1, args=[1, 8, a__0_0, a__1_0, a__2_0, a__3_0, 1 + writes_aux__base__prev_timestamp_0 + writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + 131072 * writes_aux__base__timestamp_lt_aux__lower_decomp__1_0]
+mult=1, args=[1, 8, a__0_0, a__1_0, a__2_0, a__3_0, 2 + from_state__timestamp_0]
 // Bus 3:
-mult=1, args=[2013265919 + writes_aux__base__prev_timestamp_0 + writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + 131072 * writes_aux__base__timestamp_lt_aux__lower_decomp__1_0 + 2013265920 * reads_aux__0__base__prev_timestamp_0 + 2013134849 * reads_aux__0__base__timestamp_lt_aux__lower_decomp__1_0, 17]
+mult=1, args=[reads_aux__0__base__timestamp_lt_aux__lower_decomp__0_0, 17]
 mult=1, args=[reads_aux__0__base__timestamp_lt_aux__lower_decomp__1_0, 12]
 mult=1, args=[writes_aux__base__timestamp_lt_aux__lower_decomp__0_0, 17]
-mult=1, args=[writes_aux__base__timestamp_lt_aux__lower_decomp__1_0, 12]
+mult=1, args=[2013250561 + 2013250561 * from_state__timestamp_0 + 15360 * writes_aux__base__prev_timestamp_0 + 15360 * writes_aux__base__timestamp_lt_aux__lower_decomp__0_0, 12]
 // Bus 6:
 mult=1, args=[a__0_0, a__0_0, 0, 1]
 mult=1, args=[a__1_0, a__1_0, 0, 1]
 mult=1, args=[a__2_0, a__2_0, 0, 1]
 mult=1, args=[a__3_0, a__3_0, 0, 1]
-mult=1, args=[1 + 2013265665 * c__1_0 + 2013200385 * c__2_0, c__1_0, 0, 0]
+mult=1, args=[c__0_0, c__1_0, 0, 0]
 
 // Algebraic constraints:
-(2005401601 + 2005401601 * b__0_0 + 2013265920 * c__1_0 + 2013265665 * c__2_0 + 7864320 * a__0_0) * (2005401600 + 2005401601 * b__0_0 + 2013265920 * c__1_0 + 2013265665 * c__2_0 + 7864320 * a__0_0) = 0
-(2013235201 + 2005401601 * b__1_0 + 7864320 * a__1_0 + 2013235201 * b__0_0 + 2013265920 * c__2_0 + 30720 * a__0_0) * (2013235200 + 2005401601 * b__1_0 + 7864320 * a__1_0 + 2013235201 * b__0_0 + 2013265920 * c__2_0 + 30720 * a__0_0) = 0
+(2005401601 * b__0_0 + 2005401601 * c__0_0 + 7864320 * a__0_0) * (2013265920 + 2005401601 * b__0_0 + 2005401601 * c__0_0 + 7864320 * a__0_0) = 0
+(2005401601 * b__1_0 + 2005401601 * c__1_0 + 7864320 * a__1_0 + 2013235201 * b__0_0 + 2013235201 * c__0_0 + 30720 * a__0_0) * (2013265920 + 2005401601 * b__1_0 + 2005401601 * c__1_0 + 7864320 * a__1_0 + 2013235201 * b__0_0 + 2013235201 * c__0_0 + 30720 * a__0_0) = 0
 (2013265801 + 2005401601 * b__2_0 + 7864320 * a__2_0 + 2013235201 * b__1_0 + 30720 * a__1_0 + 2013265801 * b__0_0 + 120 * a__0_0) * (2013265800 + 2005401601 * b__2_0 + 7864320 * a__2_0 + 2013235201 * b__1_0 + 30720 * a__1_0 + 2013265801 * b__0_0 + 120 * a__0_0) = 0
-(943718400 + 2005401601 * b__3_0 + 2005401601 * c__2_0 + 7864320 * a__3_0 + 2013235201 * b__2_0 + 30720 * a__2_0 + 2013265801 * b__1_0 + 120 * a__1_0 + 943718400 * b__0_0 + 1069547521 * a__0_0) * (943718399 + 2005401601 * b__3_0 + 2005401601 * c__2_0 + 7864320 * a__3_0 + 2013235201 * b__2_0 + 30720 * a__2_0 + 2013265801 * b__1_0 + 120 * a__1_0 + 943718400 * b__0_0 + 1069547521 * a__0_0) = 0
-c__2_0 * (255 + 2013265920 * c__2_0) = 0"
+(943718280 + 2005401601 * b__3_0 + 7864320 * a__3_0 + 2013235201 * b__2_0 + 30720 * a__2_0 + 2013265801 * b__1_0 + 30720 * c__1_0 + 120 * a__1_0 + 943718400 * b__0_0 + 120 * c__0_0 + 1069547521 * a__0_0) * (943718279 + 2005401601 * b__3_0 + 7864320 * a__3_0 + 2013235201 * b__2_0 + 30720 * a__2_0 + 2013265801 * b__1_0 + 30720 * c__1_0 + 120 * a__1_0 + 943718400 * b__0_0 + 120 * c__0_0 + 1069547521 * a__0_0) = 0
+(2013235201 + 30720 * c__0_0 + 7864320 * c__1_0) * (30975 + 2013235201 * c__0_0 + 2005401601 * c__1_0) = 0"
 
 /-- The optimizer's output on the ported machine. -/
 def addiOptimized : ConstraintSystem babyBear := optimizer addiInput (openVmBusSemantics babyBear)
