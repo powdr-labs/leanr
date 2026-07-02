@@ -255,3 +255,45 @@ are pinned only by lookup-table facts whose generic derivation would require pro
 runs on every build). Going below 19 on this example therefore requires either VM-specific table
 axioms in the bus semantics (out of scope: the spec is frozen) or an interactive/offline
 certificate mechanism.
+
+### Hints from Georg
+
+#### Memory optimizer
+
+If you look at this pair of bus interactions on the memory bus (1):
+```
+mult=1, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, from_state__timestamp_0]
+mult=2013265920, args=[1, 8, writes_aux__prev_data__0_0, writes_aux__prev_data__1_0, writes_aux__prev_data__2_0, writes_aux__prev_data__3_0, writes_aux__base__prev_timestamp_0]
+```
+
+They could cancel out if you set `writes_aux__prev_data__*_0 = b__*_0` and `writes_aux__base__prev_timestamp_0 = from_state__timestamp_0`. This is possible without violating any constraints. That's also a general pattern that often works on the memory bus: Each "access" receives the previous value and sends the new value. If in within one circuit the same address is accessed twice, the first send and second receive can cancel out. This can also be applied iteratively if there are more accesses to the same address.
+
+The received timestamp is usually asserted to be smaller than the current timestamp. That should be the case if you set `writes_aux__base__prev_timestamp_0 = from_state__timestamp_0`.
+Your algorithm can be such that it only considers consecutive pairs of interactions *to the same address*. In theory, this could miss opportunities, because they could be out of order, but in practice, the memory bus interactions are already sorted.
+
+#### Figuring out `c`
+
+You should be able to figure out *all* limbs of `c`.
+
+These are the original constraints (written in a more readable way and ordered differently):
+```
+// The rs2 address space is 0
+rs2_as_0 = 0
+// The rs2 "address" is 1. Turns out, that's actually the *value* of c!
+rs2_0 = 1
+
+// Bus 6 (tuple range checker)
+// => c__0_0 and c__1_0 are bytes!
+mult=0 + opcode_add_flag_0 + opcode_sub_flag_0 + opcode_xor_flag_0 + opcode_or_flag_0 + opcode_and_flag_0 + 2013265920 * rs2_as_0, args=[c__0_0, c__1_0, 0, 0]
+
+// c__2_0 is either 0 or 255
+(1 - rs2_as_0) * (c__2_0 * (255 - c__2_0)) = 0
+
+// c__2_0 == c__3_0
+(1 - rs2_as_0) * (c__2_0 - c__3_0) = 0
+
+// Putting everything together, we have:
+// c__0_0 + c__1_0 * 2^8 + c__2_0 * 2^16 = 1
+// With all the constraints in place, the only solution is c__0_0 = 1, c__1_0 = 0, c__2_0 = 0, c__3_0 = 0!
+(1 - rs2_as_0) * (rs2_0 - (c__0_0 + c__1_0 * 256 + c__2_0 * 65536)) = 0
+```
