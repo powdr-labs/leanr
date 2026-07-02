@@ -99,18 +99,29 @@ def violates (msg : BusInteraction (ZMod p)) : Bool :=
   | none, _ => true
 
 /-- Whether a message breaks an invariant on which soundness depends. -/
-def breaks (msg : BusInteraction (ZMod p)) : Bool :=
-  match defaultBusMap msg.busId, msg.payload with
-  | some .memory, _addressSpace :: _pointer :: b0 :: b1 :: b2 :: b3 :: _timeStamp =>
-    match msg.payload with
-    | addressSpace :: _ =>
-      bif (addressSpace.val == 1 || addressSpace.val == 2) then
-        !([b0, b1, b2, b3].all (fun d => decide (d.val < 256)))
-      else false
-    | _ => false
+def breaksInvariant (msg : BusInteraction (ZMod p)) : Bool :=
+  -- Note that this function is not called for multiplicity = 0
+  match defaultBusMap msg.busId with
+  -- Lookups are only ever sent (multiplicity 1).
+  | some .pcLookup | some .variableRangeChecker | some .bitwiseLookup
+  | some (.tupleRangeChecker _ _) =>
+    !decide (msg.multiplicity = 1)
+  -- The execution bridge is stateful: it is sent (1) or received (-1).
+  | some .executionBridge =>
+    !decide (msg.multiplicity = 1 ∨ msg.multiplicity = -1)
+  -- Memory is stateful (multiplicity 1 or -1), and additionally maintains the invariant
+  -- that data limbs written to the register / main-memory address spaces (1 and 2) are
+  -- byte-range. The payload is `(address_space, pointer, data.. (4 bytes), timestamp)`.
+  | some .memory =>
+    !decide (msg.multiplicity = 1 ∨ msg.multiplicity = -1) ||
+    (match msg.payload with
+      | addressSpace :: _pointer :: b0 :: b1 :: b2 :: b3 :: _timeStamp =>
+        bif (addressSpace.val == 1 || addressSpace.val == 2) then
+          !([b0, b1, b2, b3].all (fun d => decide (d.val < 256)))
+        else false
+      | _ => false)
   -- Circuits should not send messages to an unknown bus.
-  | none, _ => true
-  | _, _ => false
+  | none => true
 
 /-- The OpenVM bus semantics, using the hard-coded default bus map. -/
 def openVmBusSemantics (p : ℕ) : BusSemantics p where
@@ -119,6 +130,6 @@ def openVmBusSemantics (p : ℕ) : BusSemantics p where
     | some t => t.isStateful
     | none => false
   violatesConstraint := violates
-  breaksInvariant := breaks
+  breaksInvariant := breaksInvariant
 
 end Leanr.OpenVM
