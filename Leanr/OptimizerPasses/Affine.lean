@@ -1,7 +1,9 @@
 import Leanr.OptimizerPasses.Subst
+import Leanr.Utils.Size
 import Mathlib.Tactic.LinearCombination
 import Mathlib.Tactic.Ring
 import Mathlib.Algebra.BigOperators.Group.List.Basic
+import Mathlib.Data.List.MinMax
 
 set_option autoImplicit false
 
@@ -239,6 +241,70 @@ theorem solveAffine_sound (c : Expression p) (x : String) (t : Expression p)
   have hl : l.eval env = 0 := by rw [← linearize_eval c l hlin env]; exact hc
   exact solveAffineLin_sound l x t hsl env hl
 
+/-! ## Occurrence-aware pivot selection
+
+`substFromConstraint` substitutes the *first* solvable pivot, which can copy a large solution
+expression into every other occurrence of a heavily-used variable (e.g. inlining a timestamp
+into five bus payloads). Instead we enumerate *all* solvable pivots of all constraints and pick
+the one minimizing an expression-duplication cost. Soundness is per-pivot (each candidate comes
+with the same entailment as before), so the choice heuristic itself carries no proof burden. -/
+
+/-- All solvable pivots of one constraint: for each variable, prefer a `±1` solution, else a
+    unit-coefficient solution. -/
+def pivotsOf (c : Expression p) : List (String × Expression p) :=
+  match linearize c with
+  | none => []
+  | some l =>
+    (l.terms.map Prod.fst).filterMap (fun v =>
+      match l.trySolve v with
+      | some r => some r
+      | none => l.trySolveUnit v)
+
+theorem pivotsOf_sound (c : Expression p) (x : String) (t : Expression p)
+    (h : (x, t) ∈ pivotsOf c) (env : String → ZMod p) (hc : c.eval env = 0) :
+    env x = t.eval env := by
+  unfold pivotsOf at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i l hlin
+    have hl : l.eval env = 0 := by rw [← linearize_eval c l hlin env]; exact hc
+    obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
+    cases htr : l.trySolve v with
+    | some r =>
+        rw [htr] at hv
+        simp only [Option.some.injEq] at hv
+        subst hv
+        exact l.trySolve_sound v x t htr env hl
+    | none =>
+        rw [htr] at hv
+        exact l.trySolveUnit_sound v x t hv env hl
+
+/-- All solvable pivots across a constraint list. -/
+def solvableFrom (all : List (Expression p)) : List (String × Expression p) :=
+  all.flatMap pivotsOf
+
+theorem solvableFrom_sound (all : List (Expression p)) (x : String) (t : Expression p)
+    (h : (x, t) ∈ solvableFrom all) (env : String → ZMod p)
+    (hall : ∀ c ∈ all, c.eval env = 0) : env x = t.eval env := by
+  obtain ⟨c, hc, hp⟩ := List.mem_flatMap.1 h
+  exact pivotsOf_sound c x t hp env (hall c hc)
+
+/-- The duplication cost of substituting `x := t`: every *other* occurrence of `x` is replaced
+    by a copy of `t`. A variable occurring only in its defining constraint costs `0`. -/
+def pivotCost (cs : ConstraintSystem p) (x : String) (t : Expression p) : Nat :=
+  (cs.occurrences x - 1) * (1 + t.vars.length)
+
+/-- The cheapest solvable pivot of the whole system, if any. -/
+def bestAffinePivot (cs : ConstraintSystem p) : Option (String × Expression p) :=
+  (solvableFrom cs.algebraicConstraints).argmin (fun xt => pivotCost cs xt.1 xt.2)
+
 /-- The affine-substitution pass: eliminate one variable pinned by a linear constraint (unit
-    coefficient). Generalizes `constantFixPass`. Iterate (with folding) for a fixpoint. -/
-def affineSubstPass : VerifiedPass p := substFromConstraint solveAffine solveAffine_sound
+    coefficient), choosing the occurrence-cheapest pivot. Generalizes `constantFixPass`.
+    Iterate (with folding) for a fixpoint. -/
+def affineSubstPass : VerifiedPass p := fun cs bs =>
+  match hf : bestAffinePivot cs with
+  | some (x, t) =>
+      ⟨cs.subst x t, cs.subst_correct x t bs (fun env hsat =>
+        solvableFrom_sound cs.algebraicConstraints x t
+          (List.argmin_mem hf) env (fun c hc => hsat.1 c hc))⟩
+  | none => ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩

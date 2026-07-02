@@ -198,3 +198,17 @@ tuple became fully constant back when the constant/affine passes pinned `pc`, `r
 into a satisfied table row (e.g. range checks on values that became in-range constants).
 **Impact: variables unchanged (19, effectiveness 36/19 ≈ 1.89); one interaction and its 9-tuple
 gone from the circuit.**
+
+### 11. Occurrence-aware pivot selection (`Affine.lean`: `bestAffinePivot`)
+Idea: `substFromConstraint` substituted the *first* solvable pivot, which inlined the timestamp
+into five stateful payloads (a 4-term expression copied per occurrence). Now the pass enumerates
+*all* solvable pivots `(x, t)` of all constraints (`solvableFrom`, each candidate carrying the
+same per-constraint entailment as before — the heuristic choice adds zero proof burden) and picks
+the one minimizing `(occurrences(x) − 1) · (1 + |vars(t)|)`, i.e. the least expression
+duplication; a variable occurring only in its defining constraint costs 0. Field-free.
+Worked: yes, with a visibly better circuit: `from_state__timestamp_0` stays a plain variable in
+the execution-bridge/memory payloads, `c__2_0` is eliminated through the rs2 decomposition (a
+`65536`-coefficient unit pivot — entry 9 paying off), the bitwise lookup becomes the literal
+`[c__0_0, c__1_0, 0, 0]`, and the carry chain reads directly over `a/b/c` limbs. **Impact:
+variables unchanged (19, effectiveness 36/19 ≈ 1.89); rendered circuit 3041 → 2470 bytes (−19%),
+now structurally what a hand optimizer would write.**
