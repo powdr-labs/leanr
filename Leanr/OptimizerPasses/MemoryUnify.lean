@@ -226,9 +226,10 @@ def addrConstsEq (shape : MemoryBusShape) (S S' : BusInteraction (Expression p))
   shape.addressFields.all (fun slot =>
     match S.payload[slot]?, S'.payload[slot]? with
     | some e, some e' =>
-      match e.constValue?, e'.constValue? with
-      | some c, some c' => c = c'
-      | _, _ => false
+      decide (e = e') ||
+      (match e.constValue?, e'.constValue? with
+       | some c, some c' => c = c'
+       | _, _ => false)
     | _, _ => false)
 
 theorem addrConstsEq_sound (shape : MemoryBusShape) (S S' : BusInteraction (Expression p))
@@ -243,13 +244,16 @@ theorem addrConstsEq_sound (shape : MemoryBusShape) (S S' : BusInteraction (Expr
   rw [List.getElem?_map, List.getElem?_map]
   split at hs
   · rename_i e e' hP hQ
-    split at hs
-    · rename_i c c' he he'
-      have hcc : c = c' := of_decide_eq_true hs
-      rw [hP, hQ]
-      simp only [Option.map_some]
-      rw [e.constValue?_sound c he env, e'.constValue?_sound c' he' env, hcc]
-    all_goals exact absurd hs (by simp)
+    rcases (Bool.or_eq_true _ _).mp hs with hsyn | hs
+    · have hee : e = e' := of_decide_eq_true hsyn
+      rw [hP, hQ, hee]
+    · split at hs
+      · rename_i c c' he he'
+        have hcc : c = c' := of_decide_eq_true hs
+        rw [hP, hQ]
+        simp only [Option.map_some]
+        rw [e.constValue?_sound c he env, e'.constValue?_sound c' he' env, hcc]
+      all_goals exact absurd hs (by simp)
   all_goals exact absurd hs (by simp)
 
 /-- The timestamp-gap certificate between the two sends. -/
