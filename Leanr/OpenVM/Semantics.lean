@@ -37,6 +37,14 @@ def defaultBusMap : Nat → Option OpenVmBusType
   | 7 => some (.tupleRangeChecker 256 2048)
   | _ => none
 
+/-- A concrete bus map as parsed from a powdr export's `bus_map.bus_ids` field:
+    an association list bus id ↦ bus type. -/
+abbrev BusMap := List (Nat × OpenVmBusType)
+
+/-- View a parsed `BusMap` as the lookup function the semantics consume. -/
+def BusMap.toFun (busMap : BusMap) : Nat → Option OpenVmBusType :=
+  fun busId => busMap.lookup busId
+
 /-- Stateful buses are the execution bridge and memory; the rest are stateless lookups. -/
 def OpenVmBusType.isStateful : OpenVmBusType → Bool
   | .executionBridge => true
@@ -50,8 +58,8 @@ def OpenVmBusType.isStateful : OpenVmBusType → Bool
 private def isByte (x : ZMod p) : Bool := decide (x.val < 256)
 
 /-- Whether a message conflicts with the lookup table of the bus it is sent on. -/
-def violates (msg : BusInteraction (ZMod p)) : Bool :=
-  match defaultBusMap msg.busId, msg.payload with
+def violates (busMap : Nat → Option OpenVmBusType) (msg : BusInteraction (ZMod p)) : Bool :=
+  match busMap msg.busId, msg.payload with
   -- ISSUE:
   -- The PC lookup is a bit special: We would have to know the program to
   -- check whether the PC lookup is valid. So this semantics is **wrong**,
@@ -99,9 +107,9 @@ def violates (msg : BusInteraction (ZMod p)) : Bool :=
   | none, _ => true
 
 /-- Whether a message breaks an invariant on which soundness depends. -/
-def breaksInvariant (msg : BusInteraction (ZMod p)) : Bool :=
+def breaksInvariant (busMap : Nat → Option OpenVmBusType) (msg : BusInteraction (ZMod p)) : Bool :=
   -- Note that this function is not called for multiplicity = 0
-  match defaultBusMap msg.busId with
+  match busMap msg.busId with
   -- Lookups are only ever sent (multiplicity 1).
   | some .pcLookup | some .variableRangeChecker | some .bitwiseLookup
   | some (.tupleRangeChecker _ _) =>
@@ -123,22 +131,30 @@ def breaksInvariant (msg : BusInteraction (ZMod p)) : Bool :=
   -- Circuits should not send messages to an unknown bus.
   | none => true
 
-/-- The OpenVM bus semantics, using the hard-coded default bus map.
+/-- The OpenVM bus semantics for a given bus map (default: the hard-coded default bus map).
 
-    The memory bus (id 1) is declared as a last-write-wins memory
+    The memory bus is declared as a last-write-wins memory
     (**audited assumption**, justified by OpenVM's offline-memory-checking argument and its
     per-instruction exclusive timestamp windows): payload layout
     `[address_space, pointer, data_0, …, data_3, timestamp]`, so the address is slots `[0, 1]`,
-    the timestamp slot `6`, and timestamps are range-checked below `2^29`. -/
-def openVmBusSemantics (p : ℕ) : BusSemantics p where
+    the timestamp slot `6`, and timestamps are range-checked below `2^29`. The payload layout
+    is fixed by OpenVM independently of which bus id the map assigns to memory. -/
+def openVmBusSemantics (p : ℕ) (busMap : Nat → Option OpenVmBusType := defaultBusMap) :
+    BusSemantics p where
   isStateful busId :=
-    match defaultBusMap busId with
+    match busMap busId with
     | some t => t.isStateful
     | none => false
-  violatesConstraint := violates
-  breaksInvariant := breaksInvariant
+  violatesConstraint := violates busMap
+  breaksInvariant := breaksInvariant busMap
   memoryBus busId :=
-    if busId = 1 then some { addressFields := [0, 1], tsField := 6, tsBound := 2 ^ 29 }
-    else none
+    match busMap busId with
+    | some .memory => some { addressFields := [0, 1], tsField := 6, tsBound := 2 ^ 29 }
+    | _ => none
+
+/-- The BabyBear field modulus, `2^31 - 2^27 + 1` — the field all powdr OpenVM exports use. -/
+def babyBear : Nat := 2013265921
+
+instance : NeZero babyBear := ⟨by decide⟩
 
 end Leanr.OpenVM

@@ -28,5 +28,6 @@ import Leanr.Legacy.AffineExpression.Proofs
 import Leanr.Legacy.AlgebraicConstraint.Proofs
 import Leanr.Legacy.Solver.Proofs
 import Leanr.OpenVM.Semantics
+import Leanr.JsonParser
 import Leanr.OpenVM.Snapshot
 import Leanr.OpenVM.SnapshotCorrect

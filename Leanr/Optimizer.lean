@@ -32,7 +32,8 @@ the only edit needed here; the correctness proof follows automatically from the 
 `PassCorrect`. -/
 
 /-- The optimization pipeline: the sequence of verified passes that make up the optimizer.
-    Fold once, then iterate the cleanup cycle to a fixpoint: solve one linear constraint for a
+    Fold once, then iterate the cleanup cycle (`iters` times; see `pipeline` for the default):
+    solve one linear constraint for a
     unit-coefficient variable and substitute it away, substitute one variable forced by
     finite-domain enumeration (boolean/one-hot case analysis, bus-fact domains, probed bus
     obligations; prime `p` only), re-fold, drop trivially-true constraints, drop
@@ -41,28 +42,33 @@ the only edit needed here; the correctness proof follows automatically from the 
     discipline. (Affine substitution subsumes constant substitution.) Finally,
     canonicalize: scale every constraint's affine factors to monic form (zero-set preserving)
     and re-fold. Extend it by composing passes with `.andThen`. -/
-def pipeline : VerifiedPassW p :=
+def pipelineIters (iters : Nat) : VerifiedPassW p :=
   constantFoldPass.withFacts.andThen
     (((((((((affineSubstPass.withFacts.andThen domainPropPass).andThen
       normalizePass.withFacts).andThen constantFoldPass.withFacts).andThen
       trivialConstraintDropPass.withFacts).andThen zeroMultBusDropPass.withFacts).andThen
-      tautoBusDropPass.withFacts).andThen memoryUnifyPass).iterate 32).andThen
+      tautoBusDropPass.withFacts).andThen memoryUnifyPass).iterate iters).andThen
       (monicScalePass.withFacts.andThen constantFoldPass.withFacts))
 
+/-- `pipelineIters` with the default cleanup-cycle count. -/
+def pipeline : VerifiedPassW p := pipelineIters 32
+
 /-- The fact-aware circuit optimizer: run the pipeline with proven knowledge about the bus
-    semantics and project out the resulting constraint system. -/
-def optimizerWith (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs) :
-    ConstraintSystem p :=
-  (pipeline cs bs facts).val
+    semantics and project out the resulting constraint system. `iters` bounds the number of
+    cleanup cycles (each cycle substitutes at most one variable per substitution pass, so large
+    parsed circuits need more than the snapshot default). -/
+def optimizerWith (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (iters : Nat := 32) : ConstraintSystem p :=
+  (pipelineIters iters cs bs facts).val
 
 /-- The fact-aware optimizer is correct: its output is equivalent to its input and preserves
     invariants — the same two clauses `optimizerMaintainsCorrectness` demands, stated per
     instance because nontrivial facts are tied to one semantics. -/
 theorem optimizerWith_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) :
-    ((optimizerWith cs bs facts).equivalentTo cs bs) ∧
-      (cs.guaranteesInvariants bs → (optimizerWith cs bs facts).guaranteesInvariants bs) :=
-  (pipeline cs bs facts).property
+    (facts : BusFacts p bs) (iters : Nat := 32) :
+    ((optimizerWith cs bs facts iters).equivalentTo cs bs) ∧
+      (cs.guaranteesInvariants bs → (optimizerWith cs bs facts iters).guaranteesInvariants bs) :=
+  (pipelineIters iters cs bs facts).property
 
 /-- The fact-free circuit optimizer (public signature fixed for the tooling/snapshot). -/
 def optimizer (cs : ConstraintSystem p) (busSemantics : BusSemantics p) : ConstraintSystem p :=
