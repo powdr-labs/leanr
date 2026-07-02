@@ -232,3 +232,16 @@ and the inverse-constant artifacts are gone. **Impact: variables unchanged (19, 
 36/19 ≈ 1.89); output is now a true, cap-independent fixpoint and the circuit is cleaner
 (2470 → 2519 bytes: the two memory receive rows now carry the full timestamp decomposition
 symmetrically instead of one asymmetric range-check row).**
+
+### 13. Monic scaling of constraint factors (`MonicScale.lean`) — canonicalization
+Idea (from the same panel): an algebraic constraint matters only through its zero set, so it may
+be rescaled by any *unit* — unlike bus expressions, whose values are observable. A new small core
+(`mapConstraintsIff_correct`: rewriting constraints with any pointwise zero-set-preserving map is
+`PassCorrect`) plus a product-tree walk that scales every affine factor to monic form, each step
+carrying a checked unit certificate (`u * v = 1`; the ring's `Inv` only *proposes* the scale, so
+soundness is field-free and holds over any modulus). Runs once after the fixpoint loop, followed
+by a fold. Worked: yes. The carry-chain booleanity constraints shed their `256⁻¹` leading
+coefficients — the first one now renders literally as `(b₀ + c₀ − a₀) · (b₀ + c₀ − a₀ − 256) = 0`,
+the immediate-limb constraint as `(c₀ + 256·c₁ − 1) · (…) = 0` — exactly the form a hand-written
+circuit would use. **Impact: variables unchanged (19, effectiveness 36/19 ≈ 1.89); rendered
+circuit 2519 → 2402 bytes; whole-optimizer idempotence retained.**
