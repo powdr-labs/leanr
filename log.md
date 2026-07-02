@@ -550,3 +550,24 @@ lemmas rewrite the message list wholesale and needed no change; the two memory-u
 soundness proofs only destructure two more conjuncts. No optimizer behavior change yet
 (`checkMemMatchG` needs constant timestamp gaps, which the bridge never has — the consuming
 pass is the next entry). Snapshot unchanged (36/11); full build green.
+
+### 26. Execution-chain unification (`ExecChain.lean`) — the cross-instruction unlock
+The consumer of entry 25's declaration. `MemoryUnifyBatch`'s certificate needs a constant
+timestamp gap between two sends, which execution-bridge sends never have (the gaps are the
+unknowns). New **anchored-maximum** certificate instead: an *anchor* send whose payload is
+refuted against every possible receive (three never-zero routes per slot: difference
+normalizes to a nonzero constant; the `linNeverZero` bounded-negative certificate; capped
+enumeration over `DomainTable` domains — the last handles branch targets like
+`pc + cmp·imm + (1−cmp)·4` with boolean `cmp`) has no in-fragment consumer, so by the
+in-window clause nothing lies strictly above it: it is the timestamp maximum. Any other send
+whose payload is refuted against the anchor's sits *strictly* below it (timestamp-uniqueness
+clause), so — taking the least send above it via `Nat.sInf` — the in-window clause hands it
+an in-fragment consumer, identified among receives by payload refutation. The entailed
+payload equalities are `pc_{k+1} = pc_k + 4` and `ts_{k+1} = ts_k + kₖ`; Gauss substitutes
+them, and from the next cycle on every memory-bus timestamp is a constant offset of `ts_0`,
+so the existing memory unification chains registers **across instructions**. Self-targeting
+loop blocks have no certifiable anchor and are soundly left alone.
+Worked: yes, dramatically. Case 2: 57 → 42 vars (2.35× → **3.19×**; powdr 3.72×), case 1:
+274 → 172 (1.86× → **2.97×**; powdr 3.87×), case 3: 76 → 74 (heap chaining needs
+expression-equality addresses, next entry). Snapshot unchanged (36/11). Runtime fine
+(case 1: 10 s at default iters).
