@@ -427,3 +427,18 @@ reaches at ~100 cycles / 43 s — the remaining slow tail is `domainPropPass`, s
 one-variable-per-cycle, next entry). Cases 2/3 unchanged (134→69, 108→78 — already at the
 old fixpoint; their gap is memory unification). Snapshot unaffected (36/11).
 **Impact: benchmark case 1 effectiveness 1.15 → 1.58 at default iters.**
+
+### 20. Batch finite-domain propagation (`DomainBatch.lean`)
+Same batching treatment for `domainPropPass`, which substituted one forced variable per cycle
+and re-derived every domain by a quadratic scan. `DomainTable` (a proof-carrying
+`Std.HashMap`, built once per cycle) collects domains from product-of-affine constraints
+(`rootsIn`) and fact-bounded raw payload slots (`interactionDomain`), keeping the smallest
+domain per variable; the existing checked certificates (`checkForced`/`checkForcedBi`) are
+then evaluated for *every* constraint and bus obligation against the table, and all forced
+constants are substituted in one `substF` traversal (via the `Solved` machinery from entry
+19 — constants need no resolution). Enumeration caps unchanged. Replaces `domainPropPass` in
+the cycle. Worked: yes. Case 1: 511→284 vars at 32 cycles (was 324; the old passes' 400-cycle
+ceiling was 314 — batch pinning cascades further because all forced values land within one
+cycle). Cases 2/3 unchanged (memory-bound). Snapshot unaffected (36/11). Cycle time rose
+(5.0 s → 11.8 s on case 1: the enumeration now runs every cycle even when converged) — to be
+recovered by fixpoint early-exit. **Impact: case 1 effectiveness 1.58 → 1.80.**
