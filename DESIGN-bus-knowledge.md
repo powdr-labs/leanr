@@ -25,33 +25,83 @@ whole thing is untrusted (the kernel checks it; auditing it adds nothing):
 
 ```lean
 /-- Proven, pass-consumable knowledge about a bus semantics. A "pattern" is a payload template:
-    `some c` entries must match the evaluated message exactly, `none` entries are free. -/
+    `some c` entries must match the evaluated message exactly, `none` entries are free.
+    `Matches (payload : List (ZMod p)) (pattern : List (Option (ZMod p))) : Prop` holds when
+    the lists have equal length and every `some c` pattern entry equals the payload entry. -/
 structure BusFacts (p : ℕ) (bs : BusSemantics p) where
-  /-- Accepted-value bound for payload slot `i` of messages matching a pattern:
-      `slotBound busId pattern i = some B` means accepted payloads have `payload[i].val < B`. -/
-  slotBound : Nat → List (Option (ZMod p)) → Nat → Option Nat
-  slotBound_sound : ∀ m pattern i B, slotBound m.busId pattern i = some B →
-    Matches m.payload pattern → bs.violatesConstraint m = false →
-    ∀ x, m.payload.get? i = some x → x.val < B
+  /-- Accepted-value bound for one payload slot of messages matching a pattern:
+      `slotBound busId pattern slot = some bound` means every *accepted* message on `busId`
+      matching `pattern` has `payload[slot].val < bound`. -/
+  slotBound : (busId : Nat) → (pattern : List (Option (ZMod p))) → (slot : Nat) → Option Nat
+  slotBound_sound :
+    ∀ (m : BusInteraction (ZMod p)) (pattern : List (Option (ZMod p))) (slot bound : Nat)
+      (x : ZMod p),
+      slotBound m.busId pattern slot = some bound →
+      Matches m.payload pattern →
+      bs.violatesConstraint m = false →
+      m.payload.get? slot = some x →
+      x.val < bound
 
-  /-- Functional dependence: slot `out` is a computable function of the whole payload
-      whenever a matching message is accepted (e.g. the XOR slot of a bitwise table). -/
-  slotFun : Nat → List (Option (ZMod p)) → Nat → Option (List (ZMod p) → ZMod p)
-  slotFun_sound : ∀ m pattern out f, slotFun m.busId pattern out = some f →
-    Matches m.payload pattern → bs.violatesConstraint m = false →
-    ∀ x, m.payload.get? out = some x → x = f m.payload
+  /-- Functional dependence: for accepted messages matching the pattern, the value in
+      `outSlot` is *determined* by the rest of the payload, via the computable `f`.
+      `f` receives the payload with `outSlot` zeroed out, so it provably cannot depend on the
+      value it determines — which is what lets a pass *probe* `f` on candidate inputs. -/
+  slotFun : (busId : Nat) → (pattern : List (Option (ZMod p))) → (outSlot : Nat) →
+            Option (List (ZMod p) → ZMod p)
+  slotFun_sound :
+    ∀ (m : BusInteraction (ZMod p)) (pattern : List (Option (ZMod p))) (outSlot : Nat)
+      (f : List (ZMod p) → ZMod p) (z : ZMod p),
+      slotFun m.busId pattern outSlot = some f →
+      Matches m.payload pattern →
+      bs.violatesConstraint m = false →
+      m.payload.get? outSlot = some z →
+      z = f (m.payload.set outSlot 0)
 
   /-- Buses whose messages never violate (e.g. stateful buses carrying no table). -/
-  neverViolates : Nat → Bool
-  neverViolates_sound : ∀ m, neverViolates m.busId = true → bs.violatesConstraint m = false
+  neverViolates : (busId : Nat) → Bool
+  neverViolates_sound :
+    ∀ (m : BusInteraction (ZMod p)),
+      neverViolates m.busId = true →
+      bs.violatesConstraint m = false
 ```
 
 `BusFacts.trivial bs` (all `none`/`false`) exists for every semantics. *Bounds* are the
 primitive rather than explicit value lists: they compose with `ZMod.val` arithmetic (see
-digit-decomposition below) and yield enumerable domains (`List.range B`) exactly when small.
+digit-decomposition below) and yield enumerable domains (`List.range bound`) exactly when small.
 The vocabulary is VM-agnostic — bus ids, arities and functions are all data. If a VM has a
 table that is neither an interval nor functional, the structure extends with new proven fields
 without touching the spec.
+
+### Worked example: `slotFun` for the OpenVM bitwise bus
+
+OpenVM's bitwise-lookup bus (id 6) accepts payloads `[x, y, z, op]`, where `op = 1` rows are
+the XOR table: `x, y` bytes and `z = x ^^^ y`. The fact says exactly that slot 2 is determined
+whenever a message matches the pattern "op is the constant 1":
+
+```lean
+openVmFacts.slotFun 6 [none, none, none, some 1] 2 =
+  some (fun payload =>
+    match payload with
+    | [x, y, _, _] => ((x.val ^^^ y.val : Nat) : ZMod p)
+    | _ => 0)
+```
+
+(All other `(busId, pattern, outSlot)` queries return `none`. The soundness proof is the
+`bitwise_xor_fun` keystone lemma below — 6 lines against the concrete `violates`.)
+
+How the NOT-optimization consumes it, on a circuit containing
+`mult = 1, args = [255, x, z, 1]`:
+
+1. the interaction's obligation (multiplicity `1 ≠ 0`) gives `violatesConstraint = false`;
+2. `slotFun_sound` then gives the entailment `env z = f [255, env x, 0, 1]` — note the zeroed
+   slot 2, so this is well-defined without knowing `z`;
+3. `slotBound` (same pattern, slot 1) gives `(env x).val < 256`;
+4. the pass probes `f [255, v, 0, 1]` for all `v ∈ [0, 256)` — 256 evaluations of *direct
+   code*, no field sweeps — fits the affine candidate `255 − v`, and decidably verifies the
+   fit on all 256 points;
+5. combined: `env z = 255 − env x` holds for every satisfying assignment, and the existing
+   `subst_correct` eliminates `z`. A wrong affine guess fails step 4 and simply skips the
+   optimization; it can never produce a wrong circuit.
 
 ### Feasibility (de-risked)
 
@@ -116,25 +166,41 @@ exactly the kind of thing the audit surface is for.
 
 ### Minimal encoding
 
-One field in `BusSemantics` and one generic conjunct in `satisfies` (defined once, VM-agnostic):
+One field in `BusSemantics` and one generic conjunct in `satisfies` (defined once, VM-agnostic).
+The key is given as a *list of payload positions*, so the payload layout is entirely the VM's
+business — address first, value first, key split across non-adjacent slots: all fine.
 
 ```lean
 structure BusSemantics (p : ℕ) where
   ...
-  /-- `some k`: this stateful bus is a last-write-wins memory whose access key is the first
-      `k` payload entries. Audited assumption: the surrounding VM implements offline memory
-      checking on this bus and grants the fragment an exclusive timestamp window, so within a
-      fragment, consecutive same-key accesses observe each other. -/
-  lastWriteKey : Nat → Option Nat
+  /-- Declares a stateful bus to follow last-write-wins memory discipline.
+      `lastWriteKey busId = some keySlots` means: the payload entries at positions `keySlots`
+      form the access key (the "address"), and all *other* entries are the observed cell
+      content (value limbs, timestamps, ...). `none`: no such discipline (default; e.g. an
+      execution bridge). Audited assumption for `some`: the surrounding VM implements offline
+      memory checking (Blum et al.) on this bus and grants a fragment an exclusive timestamp
+      window, so within a fragment, consecutive same-key accesses observe each other. -/
+  lastWriteKey : (busId : Nat) → Option (List Nat)
 ```
 
-New conjunct in `ConstraintSystem.satisfies` (the *only* semantic change):
+For OpenVM, whose memory payload is `[address_space, pointer, data_0, …, data_3, timestamp]`:
 
-> For any two interactions `i < j` (list order) on a bus with `lastWriteKey = some k`, with no
-> interaction of the same evaluated key strictly between them, if
-> `(bi_i.eval env).multiplicity ≠ 0` and
-> `(bi_j.eval env).multiplicity = −(bi_i.eval env).multiplicity`, then the evaluated payloads
-> of `i` and `j` agree beyond the key prefix.
+```lean
+lastWriteKey := fun busId => if busId = 1 then some [0, 1] else none
+```
+
+A VM that sends `[data_0, …, data_3, addr]` would declare `some [4]`; one with the key split
+around the value, `some [0, 5]`. Nothing about position or contiguity is assumed.
+
+New conjunct in `ConstraintSystem.satisfies` (the *only* semantic change), for
+`keys m := keySlots.map (fun (slot : Nat) => m.payload.get? slot)`:
+
+> For any two interactions at list positions `i < j` on a bus with
+> `lastWriteKey busId = some keySlots`, writing `mᵢ = (busInteractions[i]).eval env` and
+> `mⱼ = (busInteractions[j]).eval env`: if `keys mᵢ = keys mⱼ` (same address), no interaction
+> strictly between `i` and `j` evaluates to that same key (no intervening access), and
+> `mᵢ.multiplicity ≠ 0` with `mⱼ.multiplicity = −mᵢ.multiplicity` (an active send/receive
+> pair), then `mᵢ.payload.get? slot = mⱼ.payload.get? slot` for every `slot ∉ keySlots`.
 
 With this, `writes_aux__prev_data = b` and `W = from_ts` become **entailments of `satisfies`**,
 so the *existing* substitution machinery (`subst_correct`) eliminates them — no change to
@@ -142,11 +208,10 @@ so the *existing* substitution machinery (`subst_correct`) eliminates them — n
 because garbage-witness assignments are no longer satisfying. The cancelled ±pair (now
 syntactically identical payloads) is dropped by a small pass using Layer 1's `neverViolates`.
 
-Audit surface added: the per-VM one-liner (`lastWriteKey 1 = some 2` for OpenVM) plus the
-documented justification above. Caveat to audit consciously: the conjunct uses **list order**
-as the fragment's access order (powdr emits memory interactions sorted; your hint relies on the
-same). A timestamp-ordered formulation is possible but much heavier, for no benefit on
-well-formed inputs.
+Audit surface added: the per-VM one-liner above plus the documented justification. Caveat to
+audit consciously: the conjunct uses **list order** as the fragment's access order (powdr emits
+memory interactions sorted; your hint relies on the same). A timestamp-ordered formulation is
+possible but much heavier, for no benefit on well-formed inputs.
 
 ### Rejected alternative: contextual equivalence
 
@@ -174,8 +239,9 @@ context's).
 1. **Layer 1** — OK to add the `facts` argument via `optimizerWith` and switch the snapshot
    test to `optimizerWith … openVmFacts` (one line)? No spec change, zero audit.
 2. **Layer 2** — OK to add `lastWriteKey` to `BusSemantics` and the adjacency conjunct to
-   `satisfies` (both in `Spec.lean`), plus `lastWriteKey := fun 1 => some 2 | _ => none` in the
-   OpenVM instance? This is the audited part.
+   `satisfies` (both in `Spec.lean`), plus
+   `lastWriteKey := fun busId => if busId = 1 then some [0, 1] else none` in the OpenVM
+   instance? This is the audited part.
 
 Layer 1 is implementable immediately and independently; Layer 2 builds on it (pair dropping and
 digit solving reuse Layer 1 facts) but touches the frozen spec, so it ships second and separately
