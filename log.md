@@ -297,3 +297,44 @@ mult=0 + opcode_add_flag_0 + opcode_sub_flag_0 + opcode_xor_flag_0 + opcode_or_f
 // With all the constraints in place, the only solution is c__0_0 = 1, c__1_0 = 0, c__2_0 = 0, c__3_0 = 0!
 (1 - rs2_as_0) * (rs2_0 - (c__0_0 + c__1_0 * 256 + c__2_0 * 65536)) = 0
 ```
+### 14. Assessment of hint "Memory optimizer" — blocked by the frozen equivalence (no commit)
+The transformation is a *witness choice*, not an entailment: nothing in the circuit forces
+`writes_aux__prev_data__* = b__*` — the optimizer must *pin* locally-free variables that occur in
+a **stateful** payload. Under the frozen spec this is provably impossible, by a countermodel that
+fits in five lines. Take any satisfying `env` with `writes_aux__prev_data = g ≠ b(env)` and
+`W(env) = 42` (locally satisfiable: the prev-data limbs are unconstrained). Then
+`orig.sideEffects env` contains **four distinct** bus-1 messages with net multiplicities
+`⟨(b,R):−1, (b,T):+1, (g,42):−1, (a,T+2):+1⟩`. Any output in which the pair is cancelled (pinned,
+substituted, dropped, or merged) has only two bus-1 interactions, and a list of two stateful
+entries supports at most two distinct messages with nonzero net multiplicity — so no `env'` can
+satisfy `orig.sideEffects env ≈ out.sideEffects env'`, and the `original.implies optimized`
+direction of `equivalentTo` fails. (The support-cardinality of the reachable side-effect set is
+an invariant of `≈`-equivalence; eliminating observable witness freedom shrinks it.) The same
+argument blocks *adding* the constraints `wprev = b` instead of substituting. This is a real gap
+between the frozen spec and powdr's de-facto notion: powdr's cancellation is justified
+*contextually* (a dangling receive can never balance in any global system, so assignments like
+the countermodel's are globally irrelevant — but they are locally satisfying, and the spec
+quantifies over all of them). Licensing this optimization requires a spec-level decision, e.g.
+comparing side effects only up to balanced global completions, or a bus-discipline-aware
+`satisfies`. Deliberately **not** implemented: no `PassCorrect` proof can exist for it.
+
+### 15. Assessment of hint "Figuring out c" — entailment is real, generic derivation is Ω(p) (no commit)
+The chain (`c₂ ∈ {0,255}` ⇒ two affine lines for `(c₀,c₁)`; the bus-6 row `[c₀,c₁,0,0]` with
+multiplicity 1 obliges `violatesConstraint = false`, i.e. bytes; bytes kill the `c₂ = 255` line
+and pin `(c₀,c₁) = (1,0)` on the other) is a genuine entailment of `satisfies` — verified
+pointwise against the real semantics, and it is the first derivation that needs the *bus*
+half of `satisfies`, which the substitution core supports fine. The wall is decidable
+*derivation* inside the optimizer: `violatesConstraint` is an opaque function, so "bytes" can
+only be learned by pointwise probing, and soundness needs the whole solution lines covered — an
+adversarial semantics agreeing with all probes but accepting one unprobed point admits a
+satisfying assignment with a different `c`, so any sound pass must make ~2^32 probes. Measured
+probe cost in the elaboration-time interpreter (which is what runs the snapshot `#guard`):
+2.7 µs ⇒ ≈ 2 × 98 min per optimizer evaluation. Infeasible; deliberately not implemented.
+What would unfreeze it: structured table metadata on `BusSemantics` (a machine-readable range/
+tuple spec per bus id, with `violatesConstraint` proven consistent with it) — then the byte facts
+become O(1) entailments, the line-enumeration pass is cheap (65 536 points), fully general, and
+would take the snapshot to **17 variables (36/17 ≈ 2.12)**; combined with a spec resolution for
+entry 14 (**19 → 13** on its own), the two compose to **11 variables (36/11 ≈ 3.27)**. The same
+opaque-table wall blocks the related decomposition-limb fusion (`wdec0 + 2^17·wdec1 → w` with a
+single 29-bit check, −1 variable): it needs `V([a,17]) = V([b,12]) = false ↔ V([a+2^17·b,29]) =
+false`, unknowable without table knowledge.
