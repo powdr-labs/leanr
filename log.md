@@ -338,3 +338,23 @@ entry 14 (**19 → 13** on its own), the two compose to **11 variables (36/11 �
 opaque-table wall blocks the related decomposition-limb fusion (`wdec0 + 2^17·wdec1 → w` with a
 single 29-bit check, −1 variable): it needs `V([a,17]) = V([b,12]) = false ↔ V([a+2^17·b,29]) =
 false`, unknowable without table knowledge.
+
+### 16. Layer 1: proven bus facts + fact-aware domain propagation (`BusFacts.lean`, `OpenVM/Facts.lean`, `FactPass.lean`, `DomainProp.lean`) — 19 → 17
+Implements the first layer of `DESIGN-bus-knowledge.md`. `BusFacts p bs` carries proven claims
+about a semantics — per-slot value bounds and functional dependences keyed by (busId, constant
+pattern), plus table-free buses — so supplying them adds nothing to the audit surface (a wrong
+fact would not compile; `openVmFacts`' proofs against the concrete `violates` are ~6 lines
+each). `VerifiedPassW` threads facts through the pipeline (`BusFacts.trivial` recovers the
+fact-free `optimizer` and its unchanged `optimizerMaintainsCorrectness`; the snapshot now tests
+`optimizerWith … openVmFacts`, with `optimizerWith_correct` giving the same two correctness
+clauses per instance). Domain propagation gains two new sources of deductions: (a) *fact
+domains* — an interaction with constant nonzero multiplicity carrying `x` in a fact-bounded slot
+gives `x ∈ [0, bound)`; (b) *probed obligations* — a bus interaction whose variables all have
+finite domains is enumerated like a constraint, each point checked directly against the opaque
+`violatesConstraint` (small domains make the previously-infeasible probing cheap: 256–65536
+calls). Worked: yes. The byte bounds on `c__0_0, c__1_0` (from the bitwise row) let the two-line
+constraint enumeration pin `(c₀, c₁) = (1, 0)`; the substitution folds the bitwise row to the
+constant `[1, 0, 0, 0]`, which the tautology pass drops, and the carry chain specializes to
+literal `b + 1 = a` form: `(b₀ + 1 − a₀) · (b₀ + 1 − a₀ − 256) = 0`. **Impact: 19 → 17
+variables, effectiveness 36/17 ≈ 2.12; interactions 15 → 14; the c-limbs, their two-value
+constraint, and the immediate lookup are all gone.**

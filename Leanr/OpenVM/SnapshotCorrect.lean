@@ -23,12 +23,12 @@ open Leanr.OpenVM
 /-- The optimized ADD-immediate circuit is equivalent to the input under the OpenVM bus semantics. -/
 theorem addiOptimized_equivalent :
     addiOptimized.equivalentTo addiInput (openVmBusSemantics babyBear) :=
-  (optimizer_maintainsCorrectness addiInput (openVmBusSemantics babyBear)).1
+  (optimizerWith_correct addiInput (openVmBusSemantics babyBear) (openVmFacts babyBear)).1
 
 /-- If the input circuit guarantees the system invariants, so does the optimized circuit. -/
 theorem addiOptimized_preservesInvariants
     (h : addiInput.guaranteesInvariants (openVmBusSemantics babyBear)) :
     addiOptimized.guaranteesInvariants (openVmBusSemantics babyBear) :=
-  (optimizer_maintainsCorrectness addiInput (openVmBusSemantics babyBear)).2 h
+  (optimizerWith_correct addiInput (openVmBusSemantics babyBear) (openVmFacts babyBear)).2 h
 
 end Leanr.OpenVM.Snapshot
