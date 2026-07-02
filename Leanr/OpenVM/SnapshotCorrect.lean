@@ -8,10 +8,12 @@ file records the *correctness* side for the very same machine: the optimizer's o
 ADD-immediate is provably equivalent to the input, and preserves invariants — a direct instance of
 the general `optimizer_maintainsCorrectness`.
 
-Note there is **no** `Fact (Nat.Prime babyBear)` in sight: every optimization pass is field-agnostic
-(it uses only commutative-ring identities), so the optimizer is correct over *any* modulus — a
-strictly stronger guarantee than the prime-field setting. Primality is available (`Nat.Prime
-babyBear` is provable by `norm_num`) should a future prime-field-specific pass require it.
+Note there is **no** `Fact (Nat.Prime babyBear)` in sight: the optimizer is correct over *any*
+modulus — a strictly stronger guarantee than the prime-field setting. The one pass that needs
+field structure (finite-domain propagation) *decides* `p.Prime` at runtime, carries the fact
+locally, and is the identity for composite `p`, so no primality hypothesis ever reaches the
+statements here (checked: both theorems depend only on `propext`, `Classical.choice`,
+`Quot.sound`).
 -/
 
 namespace Leanr.OpenVM.Snapshot
