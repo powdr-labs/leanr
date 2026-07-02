@@ -10,6 +10,7 @@ import Leanr.OptimizerPasses.Normalize
 import Leanr.OptimizerPasses.DomainProp
 import Leanr.OptimizerPasses.TautoBus
 import Leanr.OptimizerPasses.MonicScale
+import Leanr.OptimizerPasses.MemoryUnify
 
 set_option autoImplicit false
 
@@ -36,15 +37,16 @@ the only edit needed here; the correctness proof follows automatically from the 
     finite-domain enumeration (boolean/one-hot case analysis, bus-fact domains, probed bus
     obligations; prime `p` only), re-fold, drop trivially-true constraints, drop
     zero-multiplicity bus interactions, drop stateless interactions whose constant message
-    satisfies the bus table. (Affine substitution subsumes constant substitution.) Finally,
+    satisfies the bus table, and add the receive-equals-send equations entailed by the memory
+    discipline. (Affine substitution subsumes constant substitution.) Finally,
     canonicalize: scale every constraint's affine factors to monic form (zero-set preserving)
     and re-fold. Extend it by composing passes with `.andThen`. -/
 def pipeline : VerifiedPassW p :=
   constantFoldPass.withFacts.andThen
-    ((((((((affineSubstPass.withFacts.andThen domainPropPass).andThen
+    (((((((((affineSubstPass.withFacts.andThen domainPropPass).andThen
       normalizePass.withFacts).andThen constantFoldPass.withFacts).andThen
       trivialConstraintDropPass.withFacts).andThen zeroMultBusDropPass.withFacts).andThen
-      tautoBusDropPass.withFacts).iterate 24).andThen
+      tautoBusDropPass.withFacts).andThen memoryUnifyPass).iterate 32).andThen
       (monicScalePass.withFacts.andThen constantFoldPass.withFacts))
 
 /-- The fact-aware circuit optimizer: run the pipeline with proven knowledge about the bus
