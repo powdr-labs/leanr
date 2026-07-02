@@ -471,3 +471,23 @@ spec-level decisions (like entry 17's audited memory declaration, e.g. declaring
 execution bridge as a `MemoryBusShape` with empty address — deliberately not done here).
 **Impact: case 2 effectiveness 1.94 → 2.35, case 4 baseline 1.95; snapshot unchanged
 (36/11).**
+
+### 22. Joint domain enumeration + wider fact domains (`DomainBatch.lean`)
+Two upgrades found by diffing residual variable classes against powdr's outputs (apc_033:
+shift-heavy block, powdr 7.85× vs leanr 1.76×). (a) **Joint enumeration**: single-constraint
+enumeration cannot resolve coupled systems like one-hot selectors — the booleanity
+constraints, the sum residue, and the weighted-sum residue only force the flags *together*.
+`forcedOver` now enumerates a target's domain box against **all** constraints and bus
+obligations whose variables lie inside the target's variable set (`coveredCs`/`coveredBis`),
+and collects *every* variable the survivors agree on; the checked certificate
+(`checkForcedM`) and its soundness proof generalize the per-constraint versions.
+(b) `maxDomainBound` 4096 → 65536: a `2^16`/`2^14` range fact now yields a usable domain, so
+after Gauss eliminates one digit of a base-`2^16` decomposition (`to_pc_limbs`, `pc_limbs`),
+probing the *rewritten* range lookup pins the other digit. Cost control (first attempt was
+6–50× slower): targets deduplicated by variable set, *uninformative* targets skipped (a box
+constrained only by the raw range checks that produced its domains can never force
+anything), and a work cap `boxSize × #covered ≤ 2^19`.
+Worked: yes. apc_033: 588 → 436 vars (1.76× → 2.38×; all 104 shift markers/carries pinned),
+case 1: 284 → 274, case 19: 950 → 934; runtimes back at or below the pre-change level
+(case 19: 3.6 s). Snapshot unchanged (36/11). **Impact: shift-heavy cases gain ~0.3–0.6×
+effectiveness; full-sweep aggregate re-measured next.**

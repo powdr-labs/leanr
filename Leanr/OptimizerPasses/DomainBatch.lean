@@ -161,152 +161,156 @@ def addBusDoms [NeZero p] {cs : ConstraintSystem p} {bs : BusSemantics p}
         | none => addVars xs T
     addBusDoms facts rest hrest (addVars (payloadRawVars bi).dedup T)
 
-/-! ## Enumeration against the table -/
+/-! ## Joint enumeration against the table
 
-/-- `tryConstraint` against the table: derive a checked forced `(x, c)` from one constraint. -/
-def tryConstraintT {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (T : DomainTable p cs bs) (e : Expression p) : Option (String × ZMod p) :=
-  match T.doms e.vars.dedup with
-  | none => none
-  | some doms =>
-    if (doms.map (fun yd => yd.2.length)).prod ≤ maxEnumSize then
-      match pickForced doms e with
-      | some (x, c) =>
-          if decide (x ∈ doms.map Prod.fst) && checkForced doms e x c then some (x, c)
-          else none
-      | none => none
-    else none
+A single constraint often does not force anything even though the *conjunction* of the
+constraints over the same small variable set does (a one-hot selector: booleanity constraints
+plus the sum and weighted-sum residues force every flag, but no single one of them has a
+unique solution). For a target's variable set `xs`, we therefore enumerate the domain box
+once and filter by **all** constraints and bus obligations whose variables lie inside `xs`,
+then collect *every* variable on which the survivors agree. -/
 
-theorem tryConstraintT_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (T : DomainTable p cs bs) (e : Expression p) (x : String) (c : ZMod p)
-    (h : tryConstraintT T e = some (x, c)) (he : e ∈ cs.algebraicConstraints)
+/-- Does the assignment satisfy all covered constraints and survive all covered obligations? -/
+def survivesAllM (bs : BusSemantics p) (es : List (Expression p))
+    (bis : List (BusInteraction (Expression p))) (a : List (String × ZMod p)) : Bool :=
+  es.all (fun e => decide (e.eval (envOf a) = 0)) &&
+    bis.all (fun bi => interactionSurvives bs bi a)
+
+/-- The checked certificate: every surviving assignment gives `x = c`. -/
+def checkForcedM (bs : BusSemantics p) (doms : List (String × List (ZMod p)))
+    (es : List (Expression p)) (bis : List (BusInteraction (Expression p)))
+    (x : String) (c : ZMod p) : Bool :=
+  (assignments doms).all
+    (fun a => !survivesAllM bs es bis a || decide (envOf a x = c))
+
+/-- Candidate search (proof-free; `checkForcedM` re-verifies): all variables on which the
+    surviving assignments agree, with the agreed value. -/
+def pickForcedM (bs : BusSemantics p) (doms : List (String × List (ZMod p)))
+    (es : List (Expression p)) (bis : List (BusInteraction (Expression p))) :
+    List (String × ZMod p) :=
+  match (assignments doms).filter (survivesAllM bs es bis) with
+  | [] => (doms.map Prod.fst).map (fun x => (x, 0))
+  | a₀ :: survivors =>
+    (doms.map Prod.fst).filterMap (fun x =>
+      if survivors.all (fun a => decide (envOf a x = envOf a₀ x)) then some (x, envOf a₀ x)
+      else none)
+
+/-- The constraints of the system whose variables all lie in `xs`. -/
+def coveredCs (cs : ConstraintSystem p) (xs : List String) : List (Expression p) :=
+  cs.algebraicConstraints.filter (fun c => c.vars.all (fun v => xs.contains v))
+
+/-- The interactions of the system whose variables all lie in `xs`. -/
+def coveredBis (cs : ConstraintSystem p) (xs : List String) :
+    List (BusInteraction (Expression p)) :=
+  cs.busInteractions.filter (fun bi => bi.vars.all (fun v => xs.contains v))
+
+theorem checkForcedM_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
+    (T : DomainTable p cs bs) (xs : List String) (doms : List (String × List (ZMod p)))
+    (hdoms : T.doms xs = some doms) (x : String) (c : ZMod p)
+    (hx : x ∈ doms.map Prod.fst)
+    (hchk : checkForcedM bs doms (coveredCs cs xs) (coveredBis cs xs) x c = true)
     (env : String → ZMod p) (hsat : cs.satisfies bs env) : env x = c := by
-  unfold tryConstraintT at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i doms hbd
-    split_ifs at h with hsize
-    · split at h
-      · rename_i x' c' hpf
-        split_ifs at h with hcheck
-        · simp only [Option.some.injEq, Prod.mk.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          rw [Bool.and_eq_true] at hcheck
-          obtain ⟨hxmem, hforced⟩ := hcheck
-          have hx := of_decide_eq_true hxmem
-          have hmem : doms.map (fun yd => (yd.1, env yd.1)) ∈ assignments doms :=
-            mem_assignments doms env (T.doms_sound _ doms hbd env hsat)
-          have hcover : ∀ y ∈ e.vars, y ∈ doms.map Prod.fst := by
-            rw [T.doms_fst _ doms hbd]
-            intro y hy
-            exact List.mem_dedup.2 hy
-          have heval : e.eval (envOf (doms.map (fun yd => (yd.1, env yd.1)))) = e.eval env :=
-            Expression.eval_congr e _ _ (fun y hy => envOf_map doms env y (hcover y hy))
-          have hcert := List.all_eq_true.mp hforced _ hmem
-          have he0 : e.eval (envOf (doms.map (fun yd => (yd.1, env yd.1)))) = 0 := by
-            rw [heval]; exact hsat.1 e he
-          rcases (Bool.or_eq_true _ _).mp hcert with hbad | hgood
-          · rw [Bool.not_eq_true'] at hbad
-            exact absurd he0 (of_decide_eq_false hbad)
-          · have hxc := of_decide_eq_true hgood
-            rw [envOf_map doms env _ hx] at hxc
-            exact hxc
-      · exact absurd h (by simp)
+  have hkeys : doms.map Prod.fst = xs := T.doms_fst xs doms hdoms
+  -- the restriction of `env` to the domains is an enumerated assignment
+  have hmem : doms.map (fun yd => (yd.1, env yd.1)) ∈ assignments doms :=
+    mem_assignments doms env (T.doms_sound xs doms hdoms env hsat)
+  set a₀ := doms.map (fun yd => (yd.1, env yd.1)) with ha₀
+  -- it survives every covered constraint and obligation
+  have hsurv : survivesAllM bs (coveredCs cs xs) (coveredBis cs xs) a₀ = true := by
+    unfold survivesAllM
+    rw [Bool.and_eq_true]
+    constructor
+    · rw [List.all_eq_true]
+      intro e hemem
+      rw [coveredCs, List.mem_filter] at hemem
+      obtain ⟨hein, hall⟩ := hemem
+      have hevars : ∀ v ∈ e.vars, v ∈ doms.map Prod.fst := by
+        rw [hkeys]
+        intro v hv
+        exact List.contains_iff_mem.mp (List.all_eq_true.mp hall v hv)
+      have : e.eval (envOf a₀) = e.eval env :=
+        Expression.eval_congr e _ _ (fun y hy => envOf_map doms env y (hevars y hy))
+      rw [decide_eq_true_iff, this]
+      exact hsat.1 e hein
+    · rw [List.all_eq_true]
+      intro bi hbimem
+      rw [coveredBis, List.mem_filter] at hbimem
+      obtain ⟨hbiin, hbiall⟩ := hbimem
+      have hbivars : ∀ v ∈ bi.vars, v ∈ doms.map Prod.fst := by
+        rw [hkeys]
+        intro v hv
+        exact List.contains_iff_mem.mp (List.all_eq_true.mp hbiall v hv)
+      have heval : bi.eval (envOf a₀) = bi.eval env :=
+        BusInteraction.eval_congr bi _ _ (fun y hy => envOf_map doms env y (hbivars y hy))
+      unfold interactionSurvives
+      rw [heval]
+      by_cases hm : (bi.eval env).multiplicity = 0
+      · simp [hm]
+      · simp [hm, hsat.2.1 bi hbiin hm]
+  -- consume the certificate at the restriction
+  have hcert := List.all_eq_true.mp hchk a₀ hmem
+  rcases (Bool.or_eq_true _ _).mp hcert with hbad | hgood
+  · rw [Bool.not_eq_true'] at hbad
+    rw [hsurv] at hbad
+    exact absurd hbad (by simp)
+  · have hxc := of_decide_eq_true hgood
+    rw [envOf_map doms env _ hx] at hxc
+    exact hxc
 
-/-- `tryInteraction` against the table: a checked forced `(x, c)` from one bus obligation. -/
-def tryInteractionT {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (T : DomainTable p cs bs) (bi : BusInteraction (Expression p)) :
-    Option (String × ZMod p) :=
-  match T.doms bi.vars.dedup with
-  | none => none
+/-- Work cap for one joint enumeration: box size × number of covered targets. -/
+def maxEnumWork : Nat := 524288
+
+/-- All checked forced constants over the variable set `xs` (the vars of one target
+    constraint or interaction): enumerate the domain box once against everything the set
+    covers, and re-check each agreed variable. Skips *uninformative* targets — no covered
+    constraint and no covered interaction with a compound payload slot (a box constrained
+    only by the raw range checks that produced the domains can never force anything). -/
+def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable p cs bs)
+    (xs : List String) : List ((x : String) × { c : ZMod p //
+      ∀ env, cs.satisfies bs env → env x = c }) :=
+  match hdoms : T.doms xs with
+  | none => []
   | some doms =>
-    if (doms.map (fun yd => yd.2.length)).prod ≤ maxEnumSize then
-      match pickForcedBi bs doms bi with
-      | some (x, c) =>
-          if decide (x ∈ doms.map Prod.fst) && checkForcedBi bs doms bi x c then some (x, c)
-          else none
-      | none => none
-    else none
-
-theorem tryInteractionT_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (T : DomainTable p cs bs) (bi : BusInteraction (Expression p)) (x : String) (c : ZMod p)
-    (h : tryInteractionT T bi = some (x, c)) (hbi : bi ∈ cs.busInteractions)
-    (env : String → ZMod p) (hsat : cs.satisfies bs env) : env x = c := by
-  unfold tryInteractionT at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i doms hbd
-    split_ifs at h with hsize
-    · split at h
-      · rename_i x' c' hpf
-        split_ifs at h with hcheck
-        · simp only [Option.some.injEq, Prod.mk.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          rw [Bool.and_eq_true] at hcheck
-          obtain ⟨hxmem, hforced⟩ := hcheck
-          have hx := of_decide_eq_true hxmem
-          have hmem : doms.map (fun yd => (yd.1, env yd.1)) ∈ assignments doms :=
-            mem_assignments doms env (T.doms_sound _ doms hbd env hsat)
-          have hcover : ∀ y ∈ bi.vars, y ∈ doms.map Prod.fst := by
-            rw [T.doms_fst _ doms hbd]
-            intro y hy
-            exact List.mem_dedup.2 hy
-          have heval : bi.eval (envOf (doms.map (fun yd => (yd.1, env yd.1)))) = bi.eval env :=
-            BusInteraction.eval_congr bi _ _ (fun y hy => envOf_map doms env y (hcover y hy))
-          have hsurv : interactionSurvives bs bi (doms.map (fun yd => (yd.1, env yd.1)))
-              = true := by
-            unfold interactionSurvives
-            rw [heval]
-            by_cases hm : (bi.eval env).multiplicity = 0
-            · simp [hm]
-            · simp [hm, hsat.2.1 bi hbi hm]
-          have hcert := List.all_eq_true.mp hforced _ hmem
-          rcases (Bool.or_eq_true _ _).mp hcert with hbad | hgood
-          · rw [Bool.not_eq_true'] at hbad
-            rw [hsurv] at hbad
-            exact absurd hbad (by simp)
-          · have hxc := of_decide_eq_true hgood
-            rw [envOf_map doms env _ hx] at hxc
-            exact hxc
-      · exact absurd h (by simp)
+    let boxSize := (doms.map (fun yd => yd.2.length)).prod
+    if boxSize ≤ maxEnumSize then
+      let es := coveredCs cs xs
+      let bis := coveredBis cs xs
+      let informative := !es.isEmpty ||
+        bis.any (fun bi => bi.payload.any (fun e => !(e.isVar || e.constValue?.isSome)))
+      if informative && boxSize * (es.length + bis.length) ≤ maxEnumWork then
+        (pickForcedM bs doms es bis).filterMap (fun xc =>
+          if hx : xc.1 ∈ doms.map Prod.fst then
+            if hchk : checkForcedM bs doms es bis xc.1 xc.2 = true then
+              some ⟨xc.1, xc.2, fun env hsat =>
+                checkForcedM_sound T xs doms hdoms xc.1 xc.2 hx hchk env hsat⟩
+            else none
+          else none)
+      else []
+    else []
 
 /-! ## Collecting all forced values -/
 
-/-- Collect forced constants from all constraints into a `Solved` map. -/
-def collectForcedC {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (T : DomainTable p cs bs) :
-    (pending : List (Expression p)) → (∀ c ∈ pending, c ∈ cs.algebraicConstraints) →
-    Solved p cs bs → Solved p cs bs
-  | [], _, σ => σ
-  | e :: rest, hmem, σ =>
-    let hrest := fun c' h => hmem c' (List.mem_cons_of_mem _ h)
-    match htry : tryConstraintT T e with
-    | some (x, v) =>
-        collectForcedC T rest hrest (σ.insertAll [(x, .const v)]
-          (by
-            intro env hsat yt hyt
-            obtain rfl : yt = (x, Expression.const v) := by simpa using hyt
-            exact tryConstraintT_sound T e x v htry (hmem e (List.mem_cons_self ..)) env hsat))
-    | none => collectForcedC T rest hrest σ
+/-- Canonical key of a variable set, for target deduplication. -/
+def varSetKey (xs : List String) : String :=
+  String.intercalate "\x00" (xs.mergeSort (· ≤ ·))
 
-/-- Collect forced constants from all bus obligations into a `Solved` map. -/
-def collectForcedI {cs : ConstraintSystem p} {bs : BusSemantics p}
+/-- Collect forced constants from joint enumerations of the given targets' variable sets,
+    skipping variable sets already enumerated. -/
+def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p}
     (T : DomainTable p cs bs) :
-    (pending : List (BusInteraction (Expression p))) →
-    (∀ bi ∈ pending, bi ∈ cs.busInteractions) →
-    Solved p cs bs → Solved p cs bs
+    List (List String) → Std.HashSet String → Solved p cs bs → Solved p cs bs
   | [], _, σ => σ
-  | bi :: rest, hmem, σ =>
-    let hrest := fun bi' h => hmem bi' (List.mem_cons_of_mem _ h)
-    match htry : tryInteractionT T bi with
-    | some (x, v) =>
-        collectForcedI T rest hrest (σ.insertAll [(x, .const v)]
+  | xs :: rest, seen, σ =>
+    let key := varSetKey xs
+    if seen.contains key then collectForced T rest seen σ
+    else
+      let found := forcedOver T xs
+      collectForced T rest (seen.insert key)
+        (σ.insertAll (found.map (fun f => (f.1, .const f.2.val)))
           (by
             intro env hsat yt hyt
-            obtain rfl : yt = (x, Expression.const v) := by simpa using hyt
-            exact tryInteractionT_sound T bi x v htry (hmem bi (List.mem_cons_self ..))
-              env hsat))
-    | none => collectForcedI T rest hrest σ
+            obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hyt
+            exact f.2.property env hsat))
 
 /-! ## The pass -/
 
@@ -320,8 +324,9 @@ def domainBatchPass : VerifiedPassW p := fun cs bs facts =>
     let T : DomainTable p cs bs :=
       addBusDoms facts cs.busInteractions (fun _ h => h)
         (addConstraintDoms cs.algebraicConstraints (fun _ h => h) DomainTable.empty)
-    let σ := collectForcedI T cs.busInteractions (fun _ h => h)
-      (collectForcedC T cs.algebraicConstraints (fun _ h => h) Solved.empty)
+    let targets := cs.algebraicConstraints.map (fun e => e.vars.dedup) ++
+      cs.busInteractions.map (fun bi => bi.vars.dedup)
+    let σ := collectForced T targets ∅ Solved.empty
     if σ.map.isEmpty then ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩
     else ⟨cs.substF σ.fn,
       cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)⟩
