@@ -186,8 +186,10 @@ theorem findDomainAlg_sound [Fact p.Prime] (all : List (Expression p)) (x : Stri
 
 /-! ## Deriving a finite domain from a bus obligation and a proven fact -/
 
-/-- Cap on fact-derived domain sizes (a `2^17` range bound is real but not enumerable). -/
-def maxDomainBound : Nat := 4096
+/-- Cap on fact-derived domain sizes (a `2^17` range bound is real but not enumerable).
+    `2^16` is included so that base-`2^16` digit decompositions (e.g. `to_pc_limbs`) can be
+    pinned by probing the rewritten range lookup once the other digit is affine-eliminated. -/
+def maxDomainBound : Nat := 65536
 
 /-- Is this expression literally the variable `x`? -/
 def isVarOf (x : String) : Expression p → Bool
