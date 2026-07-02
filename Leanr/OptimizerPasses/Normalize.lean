@@ -37,18 +37,26 @@ theorem addCoeff_eval (v : String) (c : ZMod p) (ts : List (String × ZMod p))
       · next h => subst h; simp only [List.map_cons, List.sum_cons]; ring
       · simp only [List.map_cons, List.sum_cons, ih]; ring
 
-/-- Merge a term list, combining coefficients of equal variables. -/
+/-- Merge a term list, combining coefficients of equal variables. `foldl` (with `addCoeff`
+    appending unseen variables at the tail) preserves first-occurrence order, making the merge
+    *idempotent* — a `foldr` here would reverse the term order on every application, so
+    normalization would oscillate with period 2 instead of reaching a fixpoint. -/
 def mergeTerms (ts : List (String × ZMod p)) : List (String × ZMod p) :=
-  ts.foldr (fun t acc => addCoeff t.1 t.2 acc) []
+  ts.foldl (fun acc t => addCoeff t.1 t.2 acc) []
+
+theorem foldl_addCoeff_eval (env : String → ZMod p) (ts acc : List (String × ZMod p)) :
+    ((ts.foldl (fun acc t => addCoeff t.1 t.2 acc) acc).map (fun t => t.2 * env t.1)).sum
+    = (acc.map (fun t => t.2 * env t.1)).sum + (ts.map (fun t => t.2 * env t.1)).sum := by
+  induction ts generalizing acc with
+  | nil => simp
+  | cons t rest ih =>
+      simp only [List.foldl_cons, List.map_cons, List.sum_cons, ih, addCoeff_eval]
+      ring
 
 theorem mergeTerms_eval (ts : List (String × ZMod p)) (env : String → ZMod p) :
     ((mergeTerms ts).map (fun t => t.2 * env t.1)).sum
     = (ts.map (fun t => t.2 * env t.1)).sum := by
-  induction ts with
-  | nil => rfl
-  | cons t rest ih =>
-      simp only [mergeTerms, List.foldr_cons] at *
-      rw [addCoeff_eval, ih, List.map_cons, List.sum_cons]
+  simp [mergeTerms, foldl_addCoeff_eval]
 
 theorem dropZero_eval (ts : List (String × ZMod p)) (env : String → ZMod p) :
     ((ts.filter (fun t => t.2 ≠ 0)).map (fun t => t.2 * env t.1)).sum

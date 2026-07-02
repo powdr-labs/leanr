@@ -212,3 +212,23 @@ the execution-bridge/memory payloads, `c__2_0` is eliminated through the rs2 dec
 `[c__0_0, c__1_0, 0, 0]`, and the carry chain reads directly over `a/b/c` limbs. **Impact:
 variables unchanged (19, effectiveness 36/19 ≈ 1.89); rendered circuit 3041 → 2470 bytes (−19%),
 now structurally what a hand optimizer would write.**
+
+### 12. Idempotent normalization + deterministic tie-breaking (`Normalize.lean`, `Affine.lean`)
+Found by an adversarial completeness panel and reproduced independently: `mergeTerms` used
+`foldr` while `addCoeff` appends unseen variables at the tail, so every `normalize` *reversed*
+each affine form's term order. The pipeline never reached a structural fixpoint — it was a
+period-2 oscillator (variables stable from cycle ~9, term order flipping forever), so the stored
+snapshot silently depended on the *parity* of the iterate cap (24 passed, 25 failed, 26 passed —
+a trap for cap changes and for the auto-merge vision), and the flipping order leaked into
+`bestAffinePivot`'s first-on-tie `argmin`: the structurally identical read/write timestamp
+constraints broke their cost-4 ties to *different* pivot kinds, planting `131072⁻¹`-rescaled
+constants into a bus-3 payload. Fixes: (a) `mergeTerms` now folds *left* (first-occurrence order,
+idempotent; eval-preservation re-proved by an accumulator-generalized induction — same
+`addCoeff_eval` core); (b) `solvableFrom` lists all `±1` pivots before general unit pivots, so on
+a cost tie the non-rescaling pivot wins deterministically. Verified: one extra full cycle on the
+output is now a strict no-op (previously false), the whole optimizer is idempotent, and the
+reads/writes halves come out symmetric — all four bus-3 range checks are plain variables again
+and the inverse-constant artifacts are gone. **Impact: variables unchanged (19, effectiveness
+36/19 ≈ 1.89); output is now a true, cap-independent fixpoint and the circuit is cleaner
+(2470 → 2519 bytes: the two memory receive rows now carry the full timestamp decomposition
+symmetrically instead of one asymmetric range-check row).**

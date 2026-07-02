@@ -249,45 +249,60 @@ into five bus payloads). Instead we enumerate *all* solvable pivots of all const
 the one minimizing an expression-duplication cost. Soundness is per-pivot (each candidate comes
 with the same entailment as before), so the choice heuristic itself carries no proof burden. -/
 
-/-- All solvable pivots of one constraint: for each variable, prefer a `±1` solution, else a
-    unit-coefficient solution. -/
-def pivotsOf (c : Expression p) : List (String × Expression p) :=
+/-- All `±1`-coefficient pivots of one constraint. -/
+def pm1PivotsOf (c : Expression p) : List (String × Expression p) :=
+  match linearize c with
+  | none => []
+  | some l => (l.terms.map Prod.fst).filterMap l.trySolve
+
+theorem pm1PivotsOf_sound (c : Expression p) (x : String) (t : Expression p)
+    (h : (x, t) ∈ pm1PivotsOf c) (env : String → ZMod p) (hc : c.eval env = 0) :
+    env x = t.eval env := by
+  unfold pm1PivotsOf at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i l hlin
+    have hl : l.eval env = 0 := by rw [← linearize_eval c l hlin env]; exact hc
+    obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
+    exact l.trySolve_sound v x t hv env hl
+
+/-- Unit-coefficient pivots of one constraint, for variables with no `±1` solution. -/
+def unitPivotsOf (c : Expression p) : List (String × Expression p) :=
   match linearize c with
   | none => []
   | some l =>
     (l.terms.map Prod.fst).filterMap (fun v =>
       match l.trySolve v with
-      | some r => some r
+      | some _ => none
       | none => l.trySolveUnit v)
 
-theorem pivotsOf_sound (c : Expression p) (x : String) (t : Expression p)
-    (h : (x, t) ∈ pivotsOf c) (env : String → ZMod p) (hc : c.eval env = 0) :
+theorem unitPivotsOf_sound (c : Expression p) (x : String) (t : Expression p)
+    (h : (x, t) ∈ unitPivotsOf c) (env : String → ZMod p) (hc : c.eval env = 0) :
     env x = t.eval env := by
-  unfold pivotsOf at h
+  unfold unitPivotsOf at h
   split at h
   · exact absurd h (by simp)
   · rename_i l hlin
     have hl : l.eval env = 0 := by rw [← linearize_eval c l hlin env]; exact hc
     obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
     cases htr : l.trySolve v with
-    | some r =>
-        rw [htr] at hv
-        simp only [Option.some.injEq] at hv
-        subst hv
-        exact l.trySolve_sound v x t htr env hl
+    | some r => rw [htr] at hv; exact absurd hv (by simp)
     | none =>
         rw [htr] at hv
         exact l.trySolveUnit_sound v x t hv env hl
 
-/-- All solvable pivots across a constraint list. -/
+/-- All solvable pivots across a constraint list, `±1` pivots first: `List.argmin` keeps the
+    *first* minimum, so on a cost tie a `±1` pivot (which substitutes without rescaling the
+    remaining coefficients into inverse constants) beats a general unit pivot. -/
 def solvableFrom (all : List (Expression p)) : List (String × Expression p) :=
-  all.flatMap pivotsOf
+  all.flatMap pm1PivotsOf ++ all.flatMap unitPivotsOf
 
 theorem solvableFrom_sound (all : List (Expression p)) (x : String) (t : Expression p)
     (h : (x, t) ∈ solvableFrom all) (env : String → ZMod p)
     (hall : ∀ c ∈ all, c.eval env = 0) : env x = t.eval env := by
-  obtain ⟨c, hc, hp⟩ := List.mem_flatMap.1 h
-  exact pivotsOf_sound c x t hp env (hall c hc)
+  rcases List.mem_append.1 h with h' | h' <;> obtain ⟨c, hc, hp⟩ := List.mem_flatMap.1 h'
+  · exact pm1PivotsOf_sound c x t hp env (hall c hc)
+  · exact unitPivotsOf_sound c x t hp env (hall c hc)
 
 /-- The duplication cost of substituting `x := t`: every *other* occurrence of `x` is replaced
     by a copy of `t`. A variable occurring only in its defining constraint costs `0`. -/
