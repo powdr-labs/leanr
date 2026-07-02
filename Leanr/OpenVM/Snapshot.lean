@@ -27,11 +27,6 @@ namespace Leanr.OpenVM.Snapshot
 
 open Leanr.OpenVM Leanr.Spec.Dsl
 
-/-- The BabyBear field modulus, `2^31 - 2^27 + 1`. -/
-def babyBear : Nat := 2013265921
-
-instance : NeZero babyBear := ⟨by norm_num [babyBear]⟩
-
 /-- The optimizer under test: instantiated with the proven OpenVM bus facts
     (`Leanr/OpenVM/Facts.lean`); correct by `optimizerWith_correct`. -/
 def openVmOptimizer (cs : ConstraintSystem babyBear) (_bs : BusSemantics babyBear) :

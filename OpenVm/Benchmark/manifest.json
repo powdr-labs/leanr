@@ -1,0 +1,602 @@
+{
+  "version": 1,
+  "source": {
+    "note": "interim mini set: powdr local small-guest run from candidates/ (default bus map); NOT the openvm-eth set",
+    "sort_key": "width_before",
+    "top": 20,
+    "candidates_available": 63,
+    "date": "2026-07-02T17:10:37+00:00"
+  },
+  "entries": [
+    {
+      "rank": 1,
+      "start_pcs": [
+        2101396
+      ],
+      "files": {
+        "unopt": "apc_001_pc2101396.json.gz",
+        "powdr_opt": "apc_001_pc2101396.powdr_opt.json.gz"
+      },
+      "cost": 150424800,
+      "execution_frequency": 2400,
+      "width_before": 62677,
+      "cost_before": 62677.0,
+      "cost_after": 5494.0,
+      "value": 137239200,
+      "stats": {
+        "before": {
+          "main_columns": 27521,
+          "constraints": 21857,
+          "bus_interactions": 13262
+        },
+        "after": {
+          "main_columns": 2022,
+          "constraints": 187,
+          "bus_interactions": 1734
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 2,
+      "start_pcs": [
+        2105036
+      ],
+      "files": {
+        "unopt": "apc_002_pc2105036.json.gz",
+        "powdr_opt": "apc_002_pc2105036.powdr_opt.json.gz"
+      },
+      "cost": 3001600,
+      "execution_frequency": 2800,
+      "width_before": 1072,
+      "cost_before": 1072.0,
+      "cost_after": 316.0,
+      "value": 2116800,
+      "stats": {
+        "before": {
+          "main_columns": 468,
+          "constraints": 291,
+          "bus_interactions": 209
+        },
+        "after": {
+          "main_columns": 132,
+          "constraints": 45,
+          "bus_interactions": 89
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 3,
+      "start_pcs": [
+        2099976
+      ],
+      "files": {
+        "unopt": "apc_003_pc2099976.json.gz",
+        "powdr_opt": "apc_003_pc2099976.powdr_opt.json.gz"
+      },
+      "cost": 1910400,
+      "execution_frequency": 3200,
+      "width_before": 597,
+      "cost_before": 597.0,
+      "cost_after": 195.0,
+      "value": 1286400,
+      "stats": {
+        "before": {
+          "main_columns": 257,
+          "constraints": 152,
+          "bus_interactions": 122
+        },
+        "after": {
+          "main_columns": 83,
+          "constraints": 55,
+          "bus_interactions": 44
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 4,
+      "start_pcs": [
+        2101000
+      ],
+      "files": {
+        "unopt": "apc_004_pc2101000.json.gz",
+        "powdr_opt": "apc_004_pc2101000.powdr_opt.json.gz"
+      },
+      "cost": 915000,
+      "execution_frequency": 100,
+      "width_before": 9150,
+      "cost_before": 9150.0,
+      "cost_after": 2302.0,
+      "value": 684800,
+      "stats": {
+        "before": {
+          "main_columns": 4026,
+          "constraints": 2453,
+          "bus_interactions": 1682
+        },
+        "after": {
+          "main_columns": 930,
+          "constraints": 197,
+          "bus_interactions": 684
+        }
+      },
+      "labels": [
+        "tiny_keccak::keccakf::keccakf::h8c951642e31c4bf2"
+      ]
+    },
+    {
+      "rank": 5,
+      "start_pcs": [
+        2104104
+      ],
+      "files": {
+        "unopt": "apc_005_pc2104104.json.gz",
+        "powdr_opt": "apc_005_pc2104104.powdr_opt.json.gz"
+      },
+      "cost": 908000,
+      "execution_frequency": 100,
+      "width_before": 9080,
+      "cost_before": 9080.0,
+      "cost_after": 2309.0,
+      "value": 677100,
+      "stats": {
+        "before": {
+          "main_columns": 4000,
+          "constraints": 2431,
+          "bus_interactions": 1668
+        },
+        "after": {
+          "main_columns": 933,
+          "constraints": 200,
+          "bus_interactions": 686
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 6,
+      "start_pcs": [
+        2104696
+      ],
+      "files": {
+        "unopt": "apc_006_pc2104696.json.gz",
+        "powdr_opt": "apc_006_pc2104696.powdr_opt.json.gz"
+      },
+      "cost": 492000,
+      "execution_frequency": 500,
+      "width_before": 984,
+      "cost_before": 984.0,
+      "cost_after": 252.0,
+      "value": 366000,
+      "stats": {
+        "before": {
+          "main_columns": 432,
+          "constraints": 269,
+          "bus_interactions": 189
+        },
+        "after": {
+          "main_columns": 104,
+          "constraints": 41,
+          "bus_interactions": 71
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 7,
+      "start_pcs": [
+        2100340
+      ],
+      "files": {
+        "unopt": "apc_007_pc2100340.json.gz",
+        "powdr_opt": "apc_007_pc2100340.powdr_opt.json.gz"
+      },
+      "cost": 129100,
+      "execution_frequency": 100,
+      "width_before": 1291,
+      "cost_before": 1291.0,
+      "cost_after": 329.0,
+      "value": 96200,
+      "stats": {
+        "before": {
+          "main_columns": 551,
+          "constraints": 321,
+          "bus_interactions": 267
+        },
+        "after": {
+          "main_columns": 133,
+          "constraints": 22,
+          "bus_interactions": 96
+        }
+      },
+      "labels": [
+        "<tiny_keccak::keccak::Keccak as tiny_keccak::Hasher>::finalize::ha4d78a02ef12c717"
+      ]
+    },
+    {
+      "rank": 8,
+      "start_pcs": [
+        2099828
+      ],
+      "files": {
+        "unopt": "apc_008_pc2099828.json.gz",
+        "powdr_opt": "apc_008_pc2099828.powdr_opt.json.gz"
+      },
+      "cost": 124300,
+      "execution_frequency": 100,
+      "width_before": 1243,
+      "cost_before": 1243.0,
+      "cost_after": 391.0,
+      "value": 85200,
+      "stats": {
+        "before": {
+          "main_columns": 539,
+          "constraints": 324,
+          "bus_interactions": 244
+        },
+        "after": {
+          "main_columns": 159,
+          "constraints": 38,
+          "bus_interactions": 110
+        }
+      },
+      "labels": [
+        "<tiny_keccak::keccak::Keccak as tiny_keccak::Hasher>::update::h0383797b42a9f107"
+      ]
+    },
+    {
+      "rank": 9,
+      "start_pcs": [
+        2104636
+      ],
+      "files": {
+        "unopt": "apc_009_pc2104636.json.gz",
+        "powdr_opt": "apc_009_pc2104636.powdr_opt.json.gz"
+      },
+      "cost": 116000,
+      "execution_frequency": 100,
+      "width_before": 1160,
+      "cost_before": 1160.0,
+      "cost_after": 288.0,
+      "value": 87200,
+      "stats": {
+        "before": {
+          "main_columns": 504,
+          "constraints": 313,
+          "bus_interactions": 229
+        },
+        "after": {
+          "main_columns": 116,
+          "constraints": 37,
+          "bus_interactions": 83
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 10,
+      "start_pcs": [
+        2104744
+      ],
+      "files": {
+        "unopt": "apc_010_pc2104744.json.gz",
+        "powdr_opt": "apc_010_pc2104744.powdr_opt.json.gz"
+      },
+      "cost": 115200,
+      "execution_frequency": 300,
+      "width_before": 384,
+      "cost_before": 384.0,
+      "cost_after": 87.0,
+      "value": 89100,
+      "stats": {
+        "before": {
+          "main_columns": 172,
+          "constraints": 111,
+          "bus_interactions": 87
+        },
+        "after": {
+          "main_columns": 35,
+          "constraints": 10,
+          "bus_interactions": 23
+        }
+      },
+      "labels": [
+        "memcpy"
+      ]
+    },
+    {
+      "rank": 11,
+      "start_pcs": [
+        2105092
+      ],
+      "files": {
+        "unopt": "apc_011_pc2105092.json.gz",
+        "powdr_opt": "apc_011_pc2105092.powdr_opt.json.gz"
+      },
+      "cost": 109600,
+      "execution_frequency": 200,
+      "width_before": 548,
+      "cost_before": 548.0,
+      "cost_after": 162.0,
+      "value": 77200,
+      "stats": {
+        "before": {
+          "main_columns": 236,
+          "constraints": 144,
+          "bus_interactions": 108
+        },
+        "after": {
+          "main_columns": 66,
+          "constraints": 17,
+          "bus_interactions": 46
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 12,
+      "start_pcs": [
+        2104560
+      ],
+      "files": {
+        "unopt": "apc_012_pc2104560.json.gz",
+        "powdr_opt": "apc_012_pc2104560.powdr_opt.json.gz"
+      },
+      "cost": 108300,
+      "execution_frequency": 100,
+      "width_before": 1083,
+      "cost_before": 1083.0,
+      "cost_after": 188.0,
+      "value": 89500,
+      "stats": {
+        "before": {
+          "main_columns": 451,
+          "constraints": 264,
+          "bus_interactions": 236
+        },
+        "after": {
+          "main_columns": 80,
+          "constraints": 37,
+          "bus_interactions": 52
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 13,
+      "start_pcs": [
+        2100004
+      ],
+      "files": {
+        "unopt": "apc_013_pc2100004.json.gz",
+        "powdr_opt": "apc_013_pc2100004.powdr_opt.json.gz"
+      },
+      "cost": 107700,
+      "execution_frequency": 100,
+      "width_before": 1077,
+      "cost_before": 1077.0,
+      "cost_after": 353.0,
+      "value": 72400,
+      "stats": {
+        "before": {
+          "main_columns": 469,
+          "constraints": 278,
+          "bus_interactions": 209
+        },
+        "after": {
+          "main_columns": 145,
+          "constraints": 30,
+          "bus_interactions": 102
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 14,
+      "start_pcs": [
+        2105008
+      ],
+      "files": {
+        "unopt": "apc_014_pc2105008.json.gz",
+        "powdr_opt": "apc_014_pc2105008.powdr_opt.json.gz"
+      },
+      "cost": 95400,
+      "execution_frequency": 300,
+      "width_before": 318,
+      "cost_before": 318.0,
+      "cost_after": 83.0,
+      "value": 70500,
+      "stats": {
+        "before": {
+          "main_columns": 134,
+          "constraints": 77,
+          "bus_interactions": 71
+        },
+        "after": {
+          "main_columns": 31,
+          "constraints": 4,
+          "bus_interactions": 23
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 15,
+      "start_pcs": [
+        2100468
+      ],
+      "files": {
+        "unopt": "apc_015_pc2100468.json.gz",
+        "powdr_opt": "apc_015_pc2100468.powdr_opt.json.gz"
+      },
+      "cost": 87600,
+      "execution_frequency": 100,
+      "width_before": 876,
+      "cost_before": 876.0,
+      "cost_after": 251.0,
+      "value": 62500,
+      "stats": {
+        "before": {
+          "main_columns": 376,
+          "constraints": 235,
+          "bus_interactions": 181
+        },
+        "after": {
+          "main_columns": 107,
+          "constraints": 71,
+          "bus_interactions": 61
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 16,
+      "start_pcs": [
+        2100764
+      ],
+      "files": {
+        "unopt": "apc_016_pc2100764.json.gz",
+        "powdr_opt": "apc_016_pc2100764.powdr_opt.json.gz"
+      },
+      "cost": 80300,
+      "execution_frequency": 100,
+      "width_before": 803,
+      "cost_before": 803.0,
+      "cost_after": 276.0,
+      "value": 52700,
+      "stats": {
+        "before": {
+          "main_columns": 351,
+          "constraints": 206,
+          "bus_interactions": 155
+        },
+        "after": {
+          "main_columns": 112,
+          "constraints": 21,
+          "bus_interactions": 80
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 17,
+      "start_pcs": [
+        2099796
+      ],
+      "files": {
+        "unopt": "apc_017_pc2099796.json.gz",
+        "powdr_opt": "apc_017_pc2099796.powdr_opt.json.gz"
+      },
+      "cost": 70000,
+      "execution_frequency": 100,
+      "width_before": 700,
+      "cost_before": 700.0,
+      "cost_after": 198.0,
+      "value": 50200,
+      "stats": {
+        "before": {
+          "main_columns": 300,
+          "constraints": 175,
+          "bus_interactions": 144
+        },
+        "after": {
+          "main_columns": 78,
+          "constraints": 25,
+          "bus_interactions": 54
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 18,
+      "start_pcs": [
+        2099764
+      ],
+      "files": {
+        "unopt": "apc_018_pc2099764.json.gz",
+        "powdr_opt": "apc_018_pc2099764.powdr_opt.json.gz"
+      },
+      "cost": 65000,
+      "execution_frequency": 100,
+      "width_before": 650,
+      "cost_before": 650.0,
+      "cost_after": 152.0,
+      "value": 49800,
+      "stats": {
+        "before": {
+          "main_columns": 274,
+          "constraints": 152,
+          "bus_interactions": 142
+        },
+        "after": {
+          "main_columns": 60,
+          "constraints": 9,
+          "bus_interactions": 44
+        }
+      },
+      "labels": [
+        "tiny_keccak::keccak::Keccak::v256::h504e19f03a20a960"
+      ]
+    },
+    {
+      "rank": 19,
+      "start_pcs": [
+        2100512
+      ],
+      "files": {
+        "unopt": "apc_019_pc2100512.json.gz",
+        "powdr_opt": "apc_019_pc2100512.powdr_opt.json.gz"
+      },
+      "cost": 65000,
+      "execution_frequency": 100,
+      "width_before": 650,
+      "cost_before": 650.0,
+      "cost_after": 146.0,
+      "value": 50400,
+      "stats": {
+        "before": {
+          "main_columns": 274,
+          "constraints": 152,
+          "bus_interactions": 142
+        },
+        "after": {
+          "main_columns": 62,
+          "constraints": 35,
+          "bus_interactions": 34
+        }
+      },
+      "labels": []
+    },
+    {
+      "rank": 20,
+      "start_pcs": [
+        2100736
+      ],
+      "files": {
+        "unopt": "apc_020_pc2100736.json.gz",
+        "powdr_opt": "apc_020_pc2100736.powdr_opt.json.gz"
+      },
+      "cost": 55200,
+      "execution_frequency": 100,
+      "width_before": 552,
+      "cost_before": 552.0,
+      "cost_after": 146.0,
+      "value": 40600,
+      "stats": {
+        "before": {
+          "main_columns": 228,
+          "constraints": 124,
+          "bus_interactions": 128
+        },
+        "after": {
+          "main_columns": 62,
+          "constraints": 13,
+          "bus_interactions": 40
+        }
+      },
+      "labels": []
+    }
+  ]
+}
