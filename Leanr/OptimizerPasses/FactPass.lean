@@ -34,3 +34,22 @@ def VerifiedPassW.andThen (f g : VerifiedPassW p) : VerifiedPassW p :=
 def VerifiedPassW.iterate (f : VerifiedPassW p) : Nat → VerifiedPassW p
   | 0 => fun cs bs _ => ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩
   | n + 1 => (f.iterate n).andThen f
+
+deriving instance DecidableEq for Expression
+deriving instance DecidableEq for BusInteraction
+deriving instance DecidableEq for ConstraintSystem
+
+/-- Iterate a fact-aware pass at most `n` times, stopping as soon as a whole application is a
+    (structural) no-op — from then on every further application would be too, so the result is
+    the same as `iterate n`'s but without paying for the remaining cycles. Makes a generous
+    iteration budget free for inputs that converge early. -/
+def VerifiedPassW.iterateStable (f : VerifiedPassW p) : Nat → VerifiedPassW p
+  | 0 => fun cs bs _ => ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩
+  | n + 1 => fun cs bs facts =>
+      let r := f cs bs facts
+      if r.val = cs then r
+      else
+        let r2 := (f.iterateStable n) r.val bs facts
+        ⟨r2.val,
+         ConstraintSystem.equivalentTo_trans r2.property.1 r.property.1,
+         fun h => r2.property.2 (r.property.2 h)⟩
