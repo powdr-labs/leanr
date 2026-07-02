@@ -182,3 +182,19 @@ the iterate-to-fixpoint loop, any variable eliminable by linear reasoning is eli
 Worked: yes (proof via `linear_combination` from `eval_split` + the unit certificate).
 **Impact: snapshot unchanged (36/19 ≈ 1.89) — every solvable constraint here already had a `±1`
 pivot; this is a generality/completeness improvement for other circuits.**
+
+### 10. Satisfied-constant-lookup removal (`TautoBus.lean`)
+Idea: a *stateless* interaction whose evaluated message is the same under every assignment
+(multiplicity **and** payload all fold to constants — the multiplicity is part of the message
+`violatesConstraint` sees, so it must be constant too, a subtlety surfaced by the adversarial
+review) and whose constant message the bus table accepts (`violatesConstraint` probed once,
+generically, on that message) imposes no obligation and no side effect; dropping it is proven by a
+new core, `filterBusStateless_correct` (side effects stay *equal* — stateless interactions never
+enter `sideEffects`). This is the first pass that *calls into* the opaque bus semantics, and it is
+still fully generic in it. Field-free. Added at the end of the fixpoint cycle.
+Worked: yes. On the snapshot it removes the PC-lookup row `[0, 512, 8, 8, 1, 1, 0, 0, 0]`, whose
+tuple became fully constant back when the constant/affine passes pinned `pc`, `rd_ptr`, `rs1_ptr`,
+`rs2`, `rs2_as` (16 → 15 interactions). In general it removes any lookup that substitution turns
+into a satisfied table row (e.g. range checks on values that became in-range constants).
+**Impact: variables unchanged (19, effectiveness 36/19 ≈ 1.89); one interaction and its 9-tuple
+gone from the circuit.**
