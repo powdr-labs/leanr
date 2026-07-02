@@ -9,6 +9,7 @@ import Leanr.OptimizerPasses.Affine
 import Leanr.OptimizerPasses.Gauss
 import Leanr.OptimizerPasses.Normalize
 import Leanr.OptimizerPasses.DomainProp
+import Leanr.OptimizerPasses.DomainBatch
 import Leanr.OptimizerPasses.TautoBus
 import Leanr.OptimizerPasses.MonicScale
 import Leanr.OptimizerPasses.MemoryUnify
@@ -47,7 +48,7 @@ def cleanupCycle : VerifiedPassW p :=
   gaussElimPass.withFacts
     |>.andThen normalizePass.withFacts
     |>.andThen constantFoldPass.withFacts
-    |>.andThen domainPropPass
+    |>.andThen domainBatchPass
     |>.andThen normalizePass.withFacts
     |>.andThen constantFoldPass.withFacts
     |>.andThen trivialConstraintDropPass.withFacts
