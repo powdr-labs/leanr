@@ -166,52 +166,90 @@ exactly the kind of thing the audit surface is for.
 
 ### Minimal encoding
 
-One field in `BusSemantics` and one generic conjunct in `satisfies` (defined once, VM-agnostic).
-The key is given as a *list of payload positions*, so the payload layout is entirely the VM's
-business — address first, value first, key split across non-adjacent slots: all fine.
+One field in `BusSemantics` and three generic conjuncts in `satisfies` (defined once,
+VM-agnostic). The declaration names the payload roles by *position lists*, so the layout is
+entirely the VM's business — address first, value first, split across non-adjacent slots: all
+fine. (`addressFields` per your suggestion; the honest conjuncts below also need to know which
+slot is the timestamp, hence a small structure rather than a bare list.)
 
 ```lean
+/-- Shape of a last-write-wins memory bus. Payload slots not in `addressFields` and not
+    `tsField` are the value limbs. -/
+structure MemoryBusShape where
+  /-- Payload positions forming the access key (e.g. OpenVM's two-limb address:
+      address space and pointer). -/
+  addressFields : List Nat
+  /-- Payload position of the timestamp (a send carries its write time; a receive carries the
+      time of the write it observes). -/
+  tsField : Nat
+  /-- Audited upper bound on timestamp values on this bus (e.g. `2^29` for OpenVM). -/
+  tsBound : Nat
+
 structure BusSemantics (p : ℕ) where
   ...
-  /-- Declares a stateful bus to follow last-write-wins memory discipline.
-      `lastWriteKey busId = some keySlots` means: the payload entries at positions `keySlots`
-      form the access key (the "address"), and all *other* entries are the observed cell
-      content (value limbs, timestamps, ...). `none`: no such discipline (default; e.g. an
-      execution bridge). Audited assumption for `some`: the surrounding VM implements offline
-      memory checking (Blum et al.) on this bus and grants a fragment an exclusive timestamp
-      window, so within a fragment, consecutive same-key accesses observe each other. -/
-  lastWriteKey : (busId : Nat) → Option (List Nat)
+  /-- Declares a stateful bus to follow last-write-wins memory discipline (offline memory
+      checking, Blum et al.). `none`: no such discipline (default; e.g. an execution bridge). -/
+  memoryBus : (busId : Nat) → Option MemoryBusShape
 ```
 
 For OpenVM, whose memory payload is `[address_space, pointer, data_0, …, data_3, timestamp]`:
 
 ```lean
-lastWriteKey := fun busId => if busId = 1 then some [0, 1] else none
+memoryBus := fun busId =>
+  if busId = 1 then some { addressFields := [0, 1], tsField := 6, tsBound := 2^29 } else none
 ```
 
-A VM that sends `[data_0, …, data_3, addr]` would declare `some [4]`; one with the key split
-around the value, `some [0, 5]`. Nothing about position or contiguity is assumed.
+A VM sending `[data_0, …, data_3, addr, ts]` would declare
+`{ addressFields := [4], tsField := 5, … }`. Nothing about position or contiguity is assumed.
 
-New conjunct in `ConstraintSystem.satisfies` (the *only* semantic change), for
-`keys m := keySlots.map (fun (slot : Nat) => m.payload.get? slot)`:
+New conjuncts in `ConstraintSystem.satisfies`, quantifying over the *evaluated* interactions of
+the fragment (`active` = multiplicity ≠ 0; "send"/"receive" distinguished by multiplicity sign
+convention of the declaration; `address m` = the `addressFields` projection, `ts m` = the
+`tsField` entry, `value m` = the rest). **No list-order assumption anywhere:**
 
-> For any two interactions at list positions `i < j` on a bus with
-> `lastWriteKey busId = some keySlots`, writing `mᵢ = (busInteractions[i]).eval env` and
-> `mⱼ = (busInteractions[j]).eval env`: if `keys mᵢ = keys mⱼ` (same address), no interaction
-> strictly between `i` and `j` evaluates to that same key (no intervening access), and
-> `mᵢ.multiplicity ≠ 0` with `mⱼ.multiplicity = −mᵢ.multiplicity` (an active send/receive
-> pair), then `mᵢ.payload.get? slot = mⱼ.payload.get? slot` for every `slot ∉ keySlots`.
+> 1. **Timestamp uniqueness / matching** — for an active send `S` and an active receive `R`
+>    with `address R = address S` and `ts R = ts S`: `value R = value S`.
+>    *(Blum: a receive's tuple equals some send's tuple, and `(address, ts)` identifies a send
+>    uniquely across the system.)*
+> 2. **In-window consumption** — for active sends `S, S'` with `address S' = address S`,
+>    `(ts S).val < (ts S').val`, and no active send to that address with timestamp value
+>    strictly between: some active receive `R` in the fragment has the *identical tuple* as
+>    `S`. *(Window exclusivity: between two of the fragment's own accesses to an address, the
+>    context cannot access it, so the earlier send's consumer is in the fragment.)*
+> 3. **Timestamp range** — every active interaction `m` on the bus has `(ts m).val < tsBound`.
+>    *(The VM's global range-checking of timestamps; needed so `.val` comparisons in clause 2
+>    reflect field arithmetic without wraparound.)*
 
-With this, `writes_aux__prev_data = b` and `W = from_ts` become **entailments of `satisfies`**,
-so the *existing* substitution machinery (`subst_correct`) eliminates them — no change to
-`implies`/`equivalentTo`/`optimizerMaintainsCorrectness` at all, and the countermodel dies
-because garbage-witness assignments are no longer satisfying. The cancelled ±pair (now
-syntactically identical payloads) is dropped by a small pass using Layer 1's `neverViolates`.
+On the snapshot, these make the unification an **entailment**: clause 3 rules out timestamp
+wraparound, clause 2 applied to the two active sends `(b, T)` and `(a, T+2)` yields an active
+receive with tuple `(addr, b, T)`, Layer-1 bounds on the read-receive's decomposition limbs
+prove its timestamp differs from `T` (value arithmetic, no enumeration), so the write-receive
+is the match: `writes_aux__prev_data = b ∧ W = T`. The *existing* substitution machinery
+(`subst_correct`) then eliminates the witnesses — no change to
+`implies`/`equivalentTo`/`optimizerMaintainsCorrectness` at all — and the countermodel dies
+because garbage-witness assignments violate clause 2. The cancelled ±pair (now syntactically
+identical payloads) is dropped by a small pass using Layer 1's `neverViolates`.
 
-Audit surface added: the per-VM one-liner above plus the documented justification. Caveat to
-audit consciously: the conjunct uses **list order** as the fragment's access order (powdr emits
-memory interactions sorted; your hint relies on the same). A timestamp-ordered formulation is
-possible but much heavier, for no benefit on well-formed inputs.
+### What if the interactions are not ordered by time?
+
+Nothing breaks — this is why the conjuncts are formulated over evaluated timestamps rather
+than list positions. All three clauses are order-free, so they remain *true* of every real
+witness no matter how the fragment lists its interactions; a strange ordering can only make the
+optimizer's entailment search fail to fire, i.e. **cost effectiveness, never correctness**.
+
+This is deliberate. The first draft of this section paired send/receive by **list adjacency**
+("no same-key interaction between `i` and `j`"), which is simpler — but if a fragment ever
+listed accesses out of time order, that conjunct would assert a *false* matching: `satisfies`
+would exclude witnesses that the real memory argument accepts, and the "optimized" circuit
+would reject valid executions (a completeness break against reality, invisible inside the
+formal system because the strengthened `satisfies` is exactly what the proofs are relative
+to). An audited assumption that silently converts a data-ordering convention into a soundness
+requirement is a bad trade; the timestamp-based clauses put the assumption where the VM
+actually guarantees it. The price is a more involved derivation in the pass (value-arithmetic
+on bounded timestamps — machinery shared with Layer 1's digit-decomposition solving).
+
+Audit surface added: the per-VM `MemoryBusShape` declaration plus the three clauses'
+justifications above (Blum multiset argument, window exclusivity, global timestamp ranging).
 
 ### Rejected alternative: contextual equivalence
 
@@ -238,10 +276,11 @@ context's).
 
 1. **Layer 1** — OK to add the `facts` argument via `optimizerWith` and switch the snapshot
    test to `optimizerWith … openVmFacts` (one line)? No spec change, zero audit.
-2. **Layer 2** — OK to add `lastWriteKey` to `BusSemantics` and the adjacency conjunct to
-   `satisfies` (both in `Spec.lean`), plus
-   `lastWriteKey := fun busId => if busId = 1 then some [0, 1] else none` in the OpenVM
-   instance? This is the audited part.
+2. **Layer 2** — OK to add `memoryBus : (busId : Nat) → Option MemoryBusShape` to
+   `BusSemantics` and the three timestamp-based clauses to `satisfies` (both in `Spec.lean`),
+   plus the OpenVM declaration
+   `{ addressFields := [0, 1], tsField := 6, tsBound := 2^29 }` for bus 1? This is the audited
+   part.
 
 Layer 1 is implementable immediately and independently; Layer 2 builds on it (pair dropping and
 digit solving reuse Layer 1 facts) but touches the frozen spec, so it ships second and separately
