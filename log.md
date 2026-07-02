@@ -587,3 +587,28 @@ clause — verified against several candidate clause strengthenings (strict send
 distinctness, matched-but-one, dual receive-side consumption). The only fix found is an
 *order-dependent* audited clause (interactions in program order carry non-decreasing
 timestamps — what powdr assumes de facto); left as a spec question.
+
+### 28. Witness re-encoding (`Reencode.lean`) — Georg's hint, a new optimization class
+All previous passes eliminate variables whose values are *entailed*; this one compresses
+variables that are genuine witnesses but *inefficiently encoded*. If the constraints covered
+by a small variable group (2–8 variables, all constraints whose variables lie inside it)
+restrict the group to `m ≥ 2` joint values over its constraint-derived domains, the group is
+replaced by `⌈log₂ m⌉` fresh boolean variables: each original variable is substituted by an
+interpolation polynomial over the bits, the covered constraints are dropped (every bit
+pattern maps into the valid set — padding repeats the first survivor), and booleanity
+constraints are added. This handles exactly what powdr does not (per Georg): OpenVM's
+load/store `flags` (4 variables, 4 runtime shift encodings → 2 bits) and runtime one-hot
+selectors (width `w` → `⌈log₂ w⌉` bits).
+Correctness is a new transport core, `reencode_correct`: witnesses do not extend each other
+in either direction, so the proof transports satisfying assignments both ways under
+*expression-wise evaluation equality* (which carries constraints, bus obligations, side
+effects, and the memory discipline all at once). The instantiation's certificates are
+index-free and decidable: survivors enumerated over `groupDoms` (constraint roots), bit
+patterns over `{0,1}` boxes, plus completeness ("every survivor is hit by some pattern"),
+image-soundness ("every pattern's image satisfies the dropped constraints"), freshness (no
+bit occurs in the system), and bit-only interpolation ranges. Prime `p` only (booleanity
+needs an integral domain). `Expression.hasVar`/`varsIn` keep the per-cycle coverage scan
+allocation-free.
+Worked: yes. Case 3: 74 → 70 (the 8 load flags → 4 bits — **below powdr's 54-var output on
+that class**, powdr keeps all 8); case 5: 3786 → 3530 (−256: 512 flags → 256 bits, 54 s);
+case 1: 172 → 169 (shift markers). Snapshot unchanged (36/11).
