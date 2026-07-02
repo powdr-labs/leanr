@@ -241,11 +241,11 @@ theorem mem_range_cast [NeZero p] (v : ZMod p) (bound : Nat) (h : v.val < bound)
     v ∈ (List.range bound).map (Nat.cast : Nat → ZMod p) :=
   List.mem_map.2 ⟨v.val, List.mem_range.2 h, ZMod.natCast_rightInverse v⟩
 
-/-- A finite domain for `x` from one bus obligation: the interaction has constant nonzero
+/-- A value bound for `x` from one bus obligation: the interaction has constant nonzero
     multiplicity (so its obligation is active under every assignment) and carries `x` as a raw
     payload entry in a slot bounded by a proven fact. -/
-def interactionDomain (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) (x : String) : Option (List (ZMod p)) :=
+def interactionBound (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : String) : Option Nat :=
   match bi.multiplicity.constValue? with
   | none => none
   | some mval =>
@@ -253,13 +253,74 @@ def interactionDomain (bs : BusSemantics p) (facts : BusFacts p bs)
     else
       match varSlot x bi.payload with
       | none => none
-      | some slot =>
-        match facts.slotBound bi.busId (bi.payload.map Expression.constValue?) slot with
-        | none => none
-        | some bound =>
-          if bound ≤ maxDomainBound then
-            some ((List.range bound).map (Nat.cast : Nat → ZMod p))
-          else none
+      | some slot => facts.slotBound bi.busId (bi.payload.map Expression.constValue?) slot
+
+theorem interactionBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : String) (bound : Nat)
+    (h : interactionBound bs facts bi x = some bound) (env : String → ZMod p)
+    (hob : (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false) :
+    (env x).val < bound := by
+  unfold interactionBound at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i mval hm
+    split_ifs at h with hmz
+    split at h
+    · exact absurd h (by simp)
+    · rename_i slot hslot
+      -- the obligation is active: the multiplicity is the nonzero constant `mval`
+      have hmeval : (bi.eval env).multiplicity = mval :=
+        bi.multiplicity.constValue?_sound mval hm env
+      have hviol : bs.violatesConstraint (bi.eval env) = false := by
+        apply hob; rw [hmeval]; exact hmz
+      -- the slot of the evaluated payload holds `env x`
+      have hgete : bi.payload[slot]? = some (.var x) := varSlot_sound x bi.payload slot hslot
+      have hget : (bi.eval env).payload[slot]? = some (env x) := by
+        show (bi.payload.map (fun e => e.eval env))[slot]? = some (env x)
+        rw [List.getElem?_map, hgete]
+        rfl
+      -- apply the proven fact
+      exact facts.slotBound_sound (bi.eval env)
+        (bi.payload.map Expression.constValue?) slot bound (env x) h
+        (matches_evalPattern bi.payload env) hviol hget
+
+/-- The value bound of `x` derived from the first bus obligation that bounds it. -/
+def findVarBound (bs : BusSemantics p) (facts : BusFacts p bs) :
+    List (BusInteraction (Expression p)) → String → Option Nat
+  | [], _ => none
+  | bi :: rest, x =>
+    match interactionBound bs facts bi x with
+    | some bound => some bound
+    | none => findVarBound bs facts rest x
+
+theorem findVarBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bis : List (BusInteraction (Expression p))) (x : String) (bound : Nat)
+    (h : findVarBound bs facts bis x = some bound) (env : String → ZMod p)
+    (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) : (env x).val < bound := by
+  induction bis with
+  | nil => exact absurd h (by simp [findVarBound])
+  | cons bi rest ih =>
+    rw [findVarBound] at h
+    cases hr : interactionBound bs facts bi x with
+    | some bound' =>
+        rw [hr] at h
+        simp only [Option.some.injEq] at h
+        exact h ▸ interactionBound_sound bs facts bi x bound' hr env
+          (hbus bi (List.mem_cons_self ..))
+    | none =>
+        rw [hr] at h
+        exact ih h (fun bi' hbi' => hbus bi' (List.mem_cons_of_mem _ hbi'))
+
+/-- A finite domain for `x` from one bus obligation (capped bound, materialized as a list). -/
+def interactionDomain (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : String) : Option (List (ZMod p)) :=
+  match interactionBound bs facts bi x with
+  | none => none
+  | some bound =>
+    if bound ≤ maxDomainBound then
+      some ((List.range bound).map (Nat.cast : Nat → ZMod p))
+    else none
 
 theorem interactionDomain_sound [NeZero p] (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) (x : String) (d : List (ZMod p))
@@ -269,33 +330,12 @@ theorem interactionDomain_sound [NeZero p] (bs : BusSemantics p) (facts : BusFac
   unfold interactionDomain at h
   split at h
   · exact absurd h (by simp)
-  · rename_i mval hm
-    split_ifs at h with hmz
-    split at h
-    · exact absurd h (by simp)
-    · rename_i slot hslot
-      split at h
-      · exact absurd h (by simp)
-      · rename_i bound hB
-        split_ifs at h with hcap
-        simp only [Option.some.injEq] at h
-        subst h
-        -- the obligation is active: the multiplicity is the nonzero constant `mval`
-        have hmeval : (bi.eval env).multiplicity = mval :=
-          bi.multiplicity.constValue?_sound mval hm env
-        have hviol : bs.violatesConstraint (bi.eval env) = false := by
-          apply hob; rw [hmeval]; exact hmz
-        -- the slot of the evaluated payload holds `env x`
-        have hgete : bi.payload[slot]? = some (.var x) := varSlot_sound x bi.payload slot hslot
-        have hget : (bi.eval env).payload[slot]? = some (env x) := by
-          show (bi.payload.map (fun e => e.eval env))[slot]? = some (env x)
-          rw [List.getElem?_map, hgete]
-          rfl
-        -- apply the proven fact
-        have hval := facts.slotBound_sound (bi.eval env)
-          (bi.payload.map Expression.constValue?) slot bound (env x) hB
-          (matches_evalPattern bi.payload env) hviol hget
-        exact mem_range_cast (env x) bound hval
+  · rename_i bound hB
+    split_ifs at h with hcap
+    simp only [Option.some.injEq] at h
+    subst h
+    exact mem_range_cast (env x) bound
+      (interactionBound_sound bs facts bi x bound hB env hob)
 
 /-- The finite domain of `x` derived from the first bus obligation that bounds it. -/
 def findDomainBus (bs : BusSemantics p) (facts : BusFacts p bs) :

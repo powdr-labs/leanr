@@ -376,3 +376,26 @@ inactive messages are invisible to all three clauses (now gated to be the identi
 degenerate `ZMod 1`, where `1 = 0` breaks that argument); tautology removal now also requires
 the dropped bus to have no declared discipline. **Impact: none yet (17 variables, snapshot
 byte-identical) — this commit only makes the unification entailments derivable.**
+
+### 18. Layer 2b: memory send/receive unification (`MemoryUnify.lean`) — 17 → 11
+The consumer of the discipline (entry 17). On a declared last-write-wins bus with exactly two
+active constant-multiplicity sends to the same constant address and a *constant* timestamp gap
+(within `tsBound`, so `.val` arithmetic cannot wrap), the in-window-consumption clause entails
+that some in-fragment receive carries the earlier send's exact tuple. The pass identifies it by
+refuting every other candidate — non-`-1` constant multiplicity, or a timestamp differing from
+the send's by a certified never-zero affine form (constant plus fact-bounded negative terms:
+`-1 - rdec₀ - 2^17·rdec₁` can never be `0` because the bounded sum stays below `(-1).val`; the
+bounds come from Layer 1's range facts, the value reasoning from `ZMod.val_{add,mul}_of_lt`) —
+and **adds the entailed slot-wise equalities** `receive[i] = send[i]` as constraints (via the
+small new `addConstraints_correct`; re-adding is prevented by a normalize-triviality filter, so
+the pass is idempotent). The proven affine/domain machinery then does all the elimination:
+`writes_aux__prev_data__* := b__*`, and the timestamp equation collapses `wdec₀ + 2^17·wdec₁ = 1`
+— affine solves `wdec₀`, the probed-obligation enumeration pins `wdec₁ = 0` from its rewritten
+range lookup, and the write's range-check rows fold to accepted constants and are dropped.
+Iterate budget 24 → 32 for the longer cascade. Worked: yes, end to end. **Impact: 17 → 11
+variables, effectiveness 36/11 ≈ 3.27; interactions 14 → 12; the cancelled send/receive pair
+remains rendered with net multiplicity zero (dropping it is a possible follow-up needing a
+pair-drop discipline lemma; it carries no variables).** The remaining 11 (`a×4, b×4, from_ts,
+rdec₀, rdec₁`) are the floor predicted in `DESIGN-bus-knowledge.md`: all observable in side
+effects except the read-decomposition limbs, which encode genuine witness freedom (the read's
+previous access belongs to the context).
