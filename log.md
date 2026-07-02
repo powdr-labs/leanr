@@ -491,3 +491,30 @@ Worked: yes. apc_033: 588 → 436 vars (1.76× → 2.38×; all 104 shift markers
 case 1: 284 → 274, case 19: 950 → 934; runtimes back at or below the pre-change level
 (case 19: 3.6 s). Snapshot unchanged (36/11). **Impact: shift-heavy cases gain ~0.3–0.6×
 effectiveness; full-sweep aggregate re-measured next.**
+
+### 23. Full-benchmark measurement (top-100 openvm-eth set)
+Complete sweep at default settings (`leanr run`, 32 stable-iterated cycles), all 100 cases,
+~22 minutes total, slowest single case 159 s (apc_095, 7202 vars):
+
+- **leanr: 150323 → 88195 variables, aggregate effectiveness 1.704× (geometric mean of
+  per-case ratios 1.773×).** Session start was ≈1.15× on case 1 and structurally unable to
+  finish the 5000-var cases.
+- powdr on the same inputs: 150323 → 34766 (4.324× aggregate, 3.943× geomean).
+- Per-case highlights: case 1 511→274 (1.86×), case 2 134→57 (2.35×), apc_033 1036→436
+  (2.38×), largest case apc_034 9563→5230 (1.83×). No case regressed; the optimizer never
+  grew a circuit.
+
+The remaining leanr-vs-powdr gap is dominated by knowledge the frozen spec deliberately does
+not license (all analyzed before changing anything, see entries 14/15/21): (i) the execution
+bridge carries the `pc`/`timestamp` chaining between instructions, but has no declared
+discipline, and pinning `ts_{i+1} = ts_i + 3` is provably not equivalence-preserving under
+`sideEffects`-equality (explicit countermodel); this blocks *cross-instruction* memory
+chaining — the bulk of powdr's `b := earlier a` eliminations; (ii) the pc lookup is modeled
+as a never-violating bus, so program-table knowledge (load/store `flags`, `is_load`,
+non-pinned immediates) is underivable, while powdr reads the concrete program; (iii) powdr
+additionally performs optimistic eliminations (serialized `optimistic_constraints`) that are
+not equivalence-preserving in any static sense. Unlocking (i)/(ii) would need audited
+spec-level declarations in the style of entry 17 (e.g. declaring the execution bridge as an
+address-free `MemoryBusShape`, and structured table metadata for the pc lookup) — both are
+one-declaration extensions of existing, already-consumed machinery, deliberately left as
+spec decisions.
