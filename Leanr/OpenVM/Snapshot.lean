@@ -117,8 +117,6 @@ mult=2013265920, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, reads_aux__0__base_
 mult=1, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, 2013265920 + writes_aux__base__prev_timestamp_0 + writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + 131072 * writes_aux__base__timestamp_lt_aux__lower_decomp__1_0]
 mult=2013265920, args=[1, 8, writes_aux__prev_data__0_0, writes_aux__prev_data__1_0, writes_aux__prev_data__2_0, writes_aux__prev_data__3_0, writes_aux__base__prev_timestamp_0]
 mult=1, args=[1, 8, a__0_0, a__1_0, a__2_0, a__3_0, 1 + writes_aux__base__prev_timestamp_0 + writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + 131072 * writes_aux__base__timestamp_lt_aux__lower_decomp__1_0]
-// Bus 2:
-mult=1, args=[0, 512, 8, 8, 1, 1, 0, 0, 0]
 // Bus 3:
 mult=1, args=[2013265919 + writes_aux__base__prev_timestamp_0 + writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + 131072 * writes_aux__base__timestamp_lt_aux__lower_decomp__1_0 + 2013265920 * reads_aux__0__base__prev_timestamp_0 + 2013134849 * reads_aux__0__base__timestamp_lt_aux__lower_decomp__1_0, 17]
 mult=1, args=[reads_aux__0__base__timestamp_lt_aux__lower_decomp__1_0, 12]
