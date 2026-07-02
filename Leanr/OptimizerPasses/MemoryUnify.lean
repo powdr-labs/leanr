@@ -25,9 +25,6 @@ needed here — the discipline clauses and the bus facts carry all the strength.
 
 variable {p : ℕ}
 
-deriving instance DecidableEq for Expression
-deriving instance DecidableEq for BusInteraction
-
 /-! ## Adding entailed constraints -/
 
 /-- Adding constraints that every satisfying assignment already fulfills is `PassCorrect`. -/

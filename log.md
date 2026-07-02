@@ -442,3 +442,32 @@ ceiling was 314 — batch pinning cascades further because all forced values lan
 cycle). Cases 2/3 unchanged (memory-bound). Snapshot unaffected (36/11). Cycle time rose
 (5.0 s → 11.8 s on case 1: the enumeration now runs every cycle even when converged) — to be
 recovered by fixpoint early-exit. **Impact: case 1 effectiveness 1.58 → 1.80.**
+
+### 21. Generalized batch memory unification (`MemoryUnifyBatch.lean`) + fixpoint early-exit
+Entry 18's pass required *exactly two* active sends on the whole bus — never true on real
+blocks. `checkMemMatchG` generalizes the certificate: for a send pair `(S, S')` to the same
+constant address, **each** other interaction on the bus is individually excluded as an
+in-between send — by being `S`/`S'`, a constant multiplicity ≠ 1, a provably different
+constant address (`addrConstsNeq`, new), or a constant timestamp offset placing it outside
+the open window (`notBetweenTs`, new: `ts S = ts bi + e` with `tsBound + e.val ≤ p`, or
+`ts bi = ts S + d` with `gap ≤ d.val` — exact `ZMod.val` arithmetic via the discipline's
+range clause). Receive identification as before plus the different-address refutation. The
+search pairs each send with its closest later same-address send; all matches found in one
+invocation are certified and their equalities added at once. Chains resolve back-to-front,
+one pair per pipeline cycle. Also: `VerifiedPassW.iterateStable` stops the cleanup loop at a
+structural fixpoint, making generous iteration budgets free (case 3 now converges in 0.1 s),
+and the CLI gains `vars`/`render` diagnostic subcommands.
+Worked: yes. Case 2: 69 → 57 vars (2.35×; the three ALU instructions have rd = rs1, so the
+register-read send and the same-register write pair up within each instruction — the write's
+`prev_data` and timestamp decomposition all collapse); case 4: 468 → 240 (1.95×). Cases 1/3
+unchanged — diagnosis (via `leanr vars`): their remaining gap vs powdr is dominated by two
+*frozen-spec* walls, (i) cross-instruction timestamp linkage lives on the execution bridge,
+which has no declared discipline, and pinning `ts_{i+1} = ts_i + 3` is provably not
+equivalence-preserving (entry 14's countermodel: a satisfying assignment exists in which a
+later instruction's register write is consumed by an *earlier* receive), and (ii) the pc
+lookup is modeled as never-violating, so opcode/flag/immediate knowledge that powdr reads
+off the program table (load/store `flags`, `is_load`) is underivable. Both would need
+spec-level decisions (like entry 17's audited memory declaration, e.g. declaring the
+execution bridge as a `MemoryBusShape` with empty address — deliberately not done here).
+**Impact: case 2 effectiveness 1.94 → 2.35, case 4 baseline 1.95; snapshot unchanged
+(36/11).**

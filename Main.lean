@@ -1,6 +1,7 @@
 import Leanr.JsonParser
 import Leanr.Optimizer
 import Leanr.Utils.Size
+import Leanr.Utils.Dsl
 import Leanr.OpenVM.Facts
 
 /-!
@@ -99,6 +100,29 @@ def cmdRun (fileName : String) (iters : Nat) : IO Unit := do
   printEffectiveness (label := "leanr") (before := before) (after := after)
   IO.println s!"  ({iters} iters, {t1 - t0} ms)"
 
+/-- Like `cmdRun`, but also dump the distinct variables remaining after optimization (for
+    diagnosing which variable classes the optimizer misses). -/
+def cmdVars (fileName : String) (iters : Nat) : IO Unit := do
+  let (cs, busMap) ← parseFile fileName
+  let optimized ← IO.lazyPure (fun _ => optimizerWith (cs := cs)
+    (bs := openVmBusSemantics babyBear busMap.toFun)
+    (facts := openVmFacts babyBear busMap.toFun)
+    (iters := iters))
+  let occurrences := optimized.algebraicConstraints.flatMap Expression.vars ++
+    optimized.busInteractions.flatMap BusInteraction.vars
+  let distinct := (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList
+  for v in distinct.mergeSort (· ≤ ·) do
+    IO.println v
+
+/-- Render the optimized system (for diagnosing residual constraints/interactions). -/
+def cmdRender (fileName : String) (iters : Nat) : IO Unit := do
+  let (cs, busMap) ← parseFile fileName
+  let optimized ← IO.lazyPure (fun _ => optimizerWith (cs := cs)
+    (bs := openVmBusSemantics babyBear busMap.toFun)
+    (facts := openVmFacts babyBear busMap.toFun)
+    (iters := iters))
+  IO.println (Leanr.Spec.Dsl.render optimized)
+
 def cmdPowdr (unoptFile : String) (optFile : String) : IO Unit := do
   let (csBefore, _) ← parseFile unoptFile
   let (csAfter, _) ← parseFile optFile
@@ -145,6 +169,8 @@ def main (args : List String) : IO Unit := do
     let iters := itersOpt.getD 32
     match positional with
     | ["run", fileName] => cmdRun (fileName := fileName) (iters := iters)
+    | ["vars", fileName] => cmdVars (fileName := fileName) (iters := iters)
+    | ["render", fileName] => cmdRender (fileName := fileName) (iters := iters)
     | ["powdr", unoptFile, optFile] => cmdPowdr (unoptFile := unoptFile) (optFile := optFile)
     | ["compare", unoptFile, optFile] =>
       cmdCompare (unoptFile := unoptFile) (optFile := optFile) (iters := iters)
