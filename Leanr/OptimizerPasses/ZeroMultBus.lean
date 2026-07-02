@@ -12,7 +12,8 @@ spec-safe form of bus removal: cancelling opposite-sign pairs would discard real
 
 Its payoff appears in the cascade: once a selector is substituted to `0`, the interactions it gated
 have identically-`0` multiplicity, and dropping them removes the last occurrences of the auxiliary
-variables that lived only in their payloads. Field-free. -/
+variables that lived only in their payloads. Field-free (identity only in the degenerate `ZMod 1`,
+see the pass docstring). -/
 
 variable {p : ℕ}
 
@@ -20,10 +21,12 @@ variable {p : ℕ}
     `0`. Correct via `filterBus_correct`, discharging the multiplicity-is-zero obligation through
     `fold_eval` and `isConstZero_sound`. -/
 def zeroMultBusDropPass : VerifiedPass p := fun cs bs =>
-  ⟨cs.filterBus (fun bi => !bi.multiplicity.fold.isConstZero),
-   cs.filterBus_correct bs (fun bi => !bi.multiplicity.fold.isConstZero) (by
-     intro bi _ hkf env
-     have hz : bi.multiplicity.fold.isConstZero = true := by simpa using hkf
-     show bi.multiplicity.eval env = 0
-     rw [← bi.multiplicity.fold_eval env]
-     exact bi.multiplicity.fold.isConstZero_sound hz env)⟩
+  if hp1 : (1 : ZMod p) = 0 then ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩
+  else
+    ⟨cs.filterBus (fun bi => !bi.multiplicity.fold.isConstZero),
+     cs.filterBus_correct bs (fun bi => !bi.multiplicity.fold.isConstZero) hp1 (by
+       intro bi _ hkf env
+       have hz : bi.multiplicity.fold.isConstZero = true := by simpa using hkf
+       show bi.multiplicity.eval env = 0
+       rw [← bi.multiplicity.fold_eval env]
+       exact bi.multiplicity.fold.isConstZero_sound hz env)⟩

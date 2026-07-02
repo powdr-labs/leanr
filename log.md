@@ -358,3 +358,21 @@ constant `[1, 0, 0, 0]`, which the tautology pass drops, and the carry chain spe
 literal `b + 1 = a` form: `(b₀ + 1 − a₀) · (b₀ + 1 − a₀ − 256) = 0`. **Impact: 19 → 17
 variables, effectiveness 36/17 ≈ 2.12; interactions 15 → 14; the c-limbs, their two-value
 constraint, and the immediate lookup are all gone.**
+
+### 17. Layer 2a: last-write-wins memory discipline in the spec (audited; no snapshot change)
+Implements the audited half of `DESIGN-bus-knowledge.md`. `Spec.lean` gains `MemoryBusShape`
+(`addressFields`/`tsField`/`tsBound` — payload positions, so any layout works), the
+`BusSemantics.memoryBus` declaration field, and `ConstraintSystem.memoryDiscipline`: three
+**order-free** clauses over evaluated messages (matching by `(address, timestamp)`; in-window
+consumption of the earlier of two timestamp-adjacent sends; timestamp range), conjoined into
+`satisfies`. Order-freedom is deliberate: a fragment listing its accesses out of time order can
+only cost optimizations, never correctness (log entry 14's countermodel dies because garbage
+witnesses now violate in-window consumption, not because of any list convention). OpenVM
+declares bus 1 with `{ addressFields := [0,1], tsField := 6, tsBound := 2^29 }` — the audited
+assumption, justified by offline memory checking (Blum et al.) plus per-instruction exclusive
+timestamp windows. All satisfies-transfer proofs were extended: substitution and eval-preserving
+rewrites transport the discipline pointwise; zero-multiplicity bus removal preserves it because
+inactive messages are invisible to all three clauses (now gated to be the identity in the
+degenerate `ZMod 1`, where `1 = 0` breaks that argument); tautology removal now also requires
+the dropped bus to have no declared discipline. **Impact: none yet (17 variables, snapshot
+byte-identical) — this commit only makes the unification entailments derivable.**
