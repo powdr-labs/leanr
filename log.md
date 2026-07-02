@@ -234,27 +234,30 @@ circuit 2519 → 2402 bytes; whole-optimizer idempotence retained.**
 
 ## Summary
 
-Starting from the identity (effectiveness `1`, 36 variables), a pipeline of individually-proven
-passes — constant folding, occurrence-cost affine substitution with unit-coefficient pivots,
-finite-domain propagation (boolean/one-hot case analysis over prime fields), affine
-normalization, trivial-constraint removal, zero-multiplicity bus removal, and tautology-lookup
-removal, iterated to a true structural fixpoint, then canonicalized by monic scaling — reduces
-the ADD-immediate circuit to **19 variables, effectiveness 36/19 ≈ 1.89**, with 15 bus
-interactions and 5 monic algebraic constraints (2402 rendered bytes; e.g. the first carry
-constraint is literally `(b₀ + c₀ − a₀) · (b₀ + c₀ − a₀ − 256) = 0`). Every pass is proven
-`PassCorrect` with no `sorry`/`admit`/`axiom`/`native_decide` (the public theorems depend only on
-`propext`, `Classical.choice`, `Quot.sound`), and the optimizer remains modulus-agnostic: the one
-prime-field pass decides `p.Prime` at runtime and is the identity otherwise.
+Starting from the identity (effectiveness `1`, 36 variables), the optimizer now reduces the
+ADD-immediate circuit to **11 variables, effectiveness 36/11 ≈ 3.27**, with 12 bus interactions
+and 4 monic algebraic constraints (the `a = b + 1` carry chain) — every step proven
+`PassCorrect` with no `sorry`/`admit`/`axiom`/`native_decide`; the concrete correctness
+theorems depend only on `propext`, `Classical.choice`, `Quot.sound`.
 
-The remaining 19 variables are at the **generic floor**, confirmed both by hand analysis and by
-two adversarial idea panels (ideate → merge → refute): 15 appear in stateful bus payloads and are
-observable in the side effects; the range-decomposition limbs are required for satisfiability
-transfer; and the immediate limbs `c₀ = 1, c₁ = 0` — though true in every satisfying assignment —
-are pinned only by lookup-table facts whose generic derivation would require probing the opaque
-`violatesConstraint` across the whole field (~2³¹ evaluations inside a decidable certificate that
-runs on every build). Going below 19 on this example therefore requires either VM-specific table
-axioms in the bus semantics (out of scope: the spec is frozen) or an interactive/offline
-certificate mechanism.
+Three knowledge tiers feed the pipeline (design: `DESIGN-bus-knowledge.md`):
+1. **Field-agnostic passes** (entries 1–13): constant folding, occurrence-cost affine
+   substitution with unit pivots, normalization (a true fixpoint), trivial/zero-multiplicity/
+   tautology dropping, monic canonicalization.
+2. **Proven `BusFacts`** (entry 16, zero audit surface): per-slot bounds and functional
+   dependences proven against the concrete semantics unlock fact-domain enumeration and
+   pointwise `violatesConstraint` probing — the `c` limbs.
+3. **The audited memory discipline** (entries 17–18, one declaration per VM): order-free
+   last-write-wins clauses in `satisfies` entail receive-equals-send equations, eliminating the
+   write-witness variables and their decomposition limbs.
+
+The remaining 11 variables (`a×4, b×4, from_ts, rdec₀, rdec₁`) are the floor under this
+knowledge: all are observable in stateful side effects except the read-decomposition limbs,
+which parameterize the read's previous access — genuinely the context's choice. Known
+quality-only follow-ups (no variable impact): dropping the now-net-zero cancelled send/receive
+pair (needs a pair-drop discipline lemma; the earliest-send side condition makes it provable),
+and the `slotFun` affine-interpolation pass (verified `NOT(x) = 0xff − x` rewriting) for
+circuits that use the XOR table.
 
 ### Hints from Georg
 
