@@ -124,13 +124,11 @@ mult=1, args=[4, 3 + from_state__timestamp_0]
 // Bus 1:
 mult=2013265920, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, 2013265920 + from_state__timestamp_0 + 2013265920 * reads_aux__0__base__timestamp_lt_aux__lower_decomp__0_0 + 2013134849 * reads_aux__0__base__timestamp_lt_aux__lower_decomp__1_0]
 mult=1, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, from_state__timestamp_0]
-mult=2013265920, args=[1, 8, writes_aux__prev_data__0_0, writes_aux__prev_data__1_0, writes_aux__prev_data__2_0, writes_aux__prev_data__3_0, 1 + from_state__timestamp_0 + 2013265920 * writes_aux__base__timestamp_lt_aux__lower_decomp__0_0 + 2013134849 * writes_aux__base__timestamp_lt_aux__lower_decomp__1_0]
+mult=2013265920, args=[1, 8, b__0_0, b__1_0, b__2_0, b__3_0, from_state__timestamp_0]
 mult=1, args=[1, 8, a__0_0, a__1_0, a__2_0, a__3_0, 2 + from_state__timestamp_0]
 // Bus 3:
 mult=1, args=[reads_aux__0__base__timestamp_lt_aux__lower_decomp__0_0, 17]
 mult=1, args=[reads_aux__0__base__timestamp_lt_aux__lower_decomp__1_0, 12]
-mult=1, args=[writes_aux__base__timestamp_lt_aux__lower_decomp__0_0, 17]
-mult=1, args=[writes_aux__base__timestamp_lt_aux__lower_decomp__1_0, 12]
 // Bus 6:
 mult=1, args=[a__0_0, a__0_0, 0, 1]
 mult=1, args=[a__1_0, a__1_0, 0, 1]
