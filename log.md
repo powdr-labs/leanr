@@ -742,3 +742,19 @@ the `post` elements can't be active sends — so the anchor is the maximum with 
 its symbolic pc. Open design points for the discussion: whether to require all bus mults
 constant (simplest) or handle symbolic multiplicities, and whether the anchor rule lives in
 `checkExecChain` (replacing the payload-refutation clause, more general) or as an added path.
+
+### 35. ExecChain consumes the monotonicity clause — cross-instruction chaining unblocked
+`ExecChain` now anchors via clause 5 instead of payload-refutation. For each send `S`, it
+uses the **next payload-different send `W` after `S` in list order** as a witness: the
+monotonicity clause gives `tsVal S ≤ tsVal W` (list order = time order), and `payloadNeq W S`
++ the uniqueness clause make it strict, so `S` is not the timestamp maximum and the in-window
+clause hands it an in-fragment consumer (identified as `Rt`). This needs no fact about the
+block's terminal send, so a computed-jump terminal no longer blocks the chain — every send
+except the last constant-pc one (whose only later send is the symbolic terminal) chains.
+`checkExecChain` takes the split `L = pre ++ S :: post` (checked by `decide`) with `W ∈ post`;
+`tsMax_of_split` was replaced by the direct `pairwise_append`/`pairwise_cons` extraction.
+Worked: yes. apc_012 (was blocked, 21 surviving `from_state__timestamp`): **852 → 290 vars,
+now only 2 timestamps survive** (`ts_0` and the post-terminal `ts_20`); the register/heap
+data and decomposition limbs riding on the timestamps collapse with them. Cases 1/2 unchanged
+(already handled / single-instruction). Snapshot byte-identical (36/11), `SnapshotCorrect`
+re-proven, both correctness theorems still 3-axiom, all outputs within the degree bound.
