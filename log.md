@@ -783,3 +783,16 @@ Worked: yes, no regressions. apc_019 153→129 (1.79→2.12×), apc_003 138→12
 apc_015 205→169 (1.83→2.22×), apc_008 265→193 (2.03→2.79×); others unchanged. Snapshot
 byte-identical (36/11), `SnapshotCorrect` re-proven, both correctness theorems still
 `{propext, Classical.choice, Quot.sound}`-only, all outputs within the degree bound.
+
+**Aggregate (tracked keccak top-20 set, 19 cases excl. the 27521-var apc_001 megacase which
+doesn't converge in reasonable wall-clock at `--iters 32` in either version):** aggregate
+effectiveness (Σvars_before / Σvars_after) **3.48× → 3.61×**, geomean **2.95× → 3.07×**. Gains
+concentrated in the register-heavy blocks that end in a computed jump (apc_008 2.03→2.79×,
+apc_015 1.83→2.22×, apc_019 1.79→2.12×, apc_003 1.86→2.04×); every other case byte-identical.
+The dominant *remaining* residual on these is the timestamp-difference **high limb**
+(`…_lt_aux__lower_decomp__1`): it has no algebraic constraint (only a range-check bus slot + a
+memory-ts arg), so Gauss can't touch it, and the pivot heuristics that would keep the
+timestamp slot to let the limb fold also (unavoidably) block the beneficial `from_state`
+collapse — the two are coupled through the same constraints (tried, reverted). powdr eliminates
+these by solving the less-than gadget for the limb instead of the timestamp; matching that
+without regressing timestamp collapse is the next lever.
