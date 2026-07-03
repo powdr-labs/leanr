@@ -670,3 +670,48 @@ Worked: better than before the bound existed — the whole-subexpression interpo
 also *smaller*: case 3: 108 → 64 (was 70 pre-degree; powdr: 54 and keeps all 8 flags where
 we keep 4 bits), case 1: 511 → 167 (3.06×), case 5: 5406 → 3338 (was 3530). All outputs
 verified within `{identities := 3, busInteractions := 2}`.
+
+### 32. Full sweep at degree-bound state; JALR/order-freedom is the dominant remaining gap
+Full 100-case sweep at the degree-aware commit: **leanr 150323 → 59241 vars = 2.537×
+aggregate (2.667 geomean)**, all outputs within `{identities := 3, busInteractions := 2}`;
+powdr 4.324×. (Session start was 1.15× on case 1 with the 5000-var cases unreachable.)
+
+Root-caused the remaining gap by class-diffing the largest laggards (apc_012/031/033/041)
+against powdr. It is **one lever**: `from_state__timestamp` survives ~once per instruction
+(apc_012: 21 vs powdr's 1). Every other large residual class — `rsN_data`, `read_data`,
+`prev_data`, and all the `_timestamp_lt_aux__lower_decomp` / `_prev_timestamp` limbs — is
+*downstream* of it: register/heap chaining across instructions needs a **constant** timestamp
+gap between the two accesses, which requires the execution-bridge timestamps chained to
+`ts_0 + const` first. Diagnosis of why exec-chaining doesn't fire: the block's terminal
+instruction is a control-flow op (jump/branch) whose send targets a **symbolic** pc
+(`2·to_pc_limbs_0 + 65536·to_pc_limbs_1`). `ExecChain`'s anchored-maximum certificate needs
+one send whose payload differs from every receive; the symbolic-target send cannot be proven
+`≠` the in-block receive pcs, so there is **no anchor**, and the entire chain fails — even
+though the other 20 links are clean straight-line pc-adjacent sends. Since essentially every
+real basic block ends in a control-flow instruction, this blocks timestamp chaining on the
+majority of cases.
+
+This is **not** fixable under the frozen spec: `MemoryBusShape.disciplineOn` is deliberately
+*order-free* (entry 17: "a fragment listing its accesses out of time order can only cost
+optimizations, never correctness"), so nothing lets the pass treat the terminal send as the
+timestamp maximum. powdr collapses these timestamps because it assumes **program-order
+timestamp monotonicity** (interactions listed in execution order, timestamps non-decreasing)
+— a de-facto property of the APC generator, but an *additional audited assumption* that would
+reverse Georg's explicit order-freedom choice. **This is a spec-level decision for Georg**
+(see the report): granting it (e.g. a `MemoryBusShape` flag "sends are listed in
+non-decreasing timestamp order", making the last active send the maximum) would let
+`ExecChain`/`ChainUnify` collapse the timestamps and cascade into register/heap/limb
+chaining — projected to close most of the 2.54×→4.32× gap. Deliberately not implemented
+unilaterally.
+
+### 33. Digit-uniqueness equality pass (`DigitEq.lean`) — proven, general, not wired
+Built the bounded-decomposition-matching pass hypothesized to unlock heap-address chaining:
+a linear constraint whose normalized terms pair as `Σᵢ magᵢ·(xᵢ − yᵢ) = 0` with all
+variables fact-bounded and the magnitudes dominating the lower partial sums entails `xᵢ = yᵢ`
+pairwise (the top-digit argument, carried out over ℕ with a `ZMod.val` bridge; fully proven,
+`digitCheck_sound`). Sound and VM-general. Measured impact on the sampled OpenVM cases
+(12/33/41): **none** — the two accesses' pointer-limb decompositions are not linked by such a
+constraint in these circuits (the heap-chaining blocker is the timestamp/JALR issue above,
+not decomposition matching). Kept in the tree (imported by `Leanr.lean`, so `lake build`
+verifies it) but **not** in the pipeline, since it fires on no benchmark case and would only
+add per-cycle cost. Available if a VM emits the matching constraint shape.

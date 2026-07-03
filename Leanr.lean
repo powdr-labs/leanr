@@ -11,6 +11,7 @@ import Leanr.OptimizerPasses.TrivialConstraint
 import Leanr.OptimizerPasses.ZeroMultBus
 import Leanr.OptimizerPasses.Affine
 import Leanr.OptimizerPasses.Normalize
+import Leanr.OptimizerPasses.DigitEq
 import Leanr.Optimizer
 import Leanr.OpenVM.Semantics
 import Leanr.JsonParser
