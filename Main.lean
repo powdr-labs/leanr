@@ -98,6 +98,10 @@ def cmdRun (fileName : String) (iters : Nat) : IO Unit := do
   printStats (label := "before") (stats := before)
   printStats (label := "leanr ") (stats := after)
   printEffectiveness (label := "leanr") (before := before) (after := after)
+  let bound := (openVmBusSemantics babyBear busMap.toFun).degreeBound
+  IO.println s!"  degree bound (identities {bound.identities}, bus {bound.busInteractions}): \
+    input {if cs.withinDegreeB bound then "ok" else "EXCEEDED"}, \
+    output {if optimized.withinDegreeB bound then "ok" else "EXCEEDED"}"
   IO.println s!"  ({iters} iters, {t1 - t0} ms)"
 
 /-- Like `cmdRun`, but also dump the distinct variables remaining after optimization (for

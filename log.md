@@ -632,3 +632,22 @@ pass as a mop-up for links below a truncated ambiguity (removing it regressed ca
 169 → 223), with its receive search pre-filtered by the memoized refutation.
 Worked: yes. Case 7: **timeout (>30 min) → 5464 → 2171 vars (2.52×) in 4.4 min**; case 1
 unchanged at 169 (9.9 s), case 2 at 42, case 5 at 1765 (50 s). Snapshot unchanged (36/11).
+
+### 30. Spec extension (Georg-requested): degree bounds
+`Spec.lean` gains `DegreeBound` (`identities`, `busInteractions`), `Expression.degree`
+(const 0 / var 1 / add max / mul sum), `ConstraintSystem.withinDegree` (+ decidable twin and
+equivalence lemma), and the new top-level property `optimizerRespectsDegree`: an optimizer
+never pushes a within-bound circuit past the zkVM's bound. `BusSemantics` carries the bound;
+OpenVM sets powdr's `DEFAULT_DEGREE_BOUND` = `{identities := 3, busInteractions := 2}`.
+Enforcement is compositional with zero per-pass proof burden: `VerifiedPassW.guardDegree`
+wraps every pipeline pass (checked output, fall back to the unchanged input), `RespectsDeg`
+propagates through `andThen`/`iterate`/`iterateStable`, and `optimizer_respectsDegree` /
+`optimizerWith_respectsDegree` are projections. `reencodeStep` additionally guards per
+group, so one violating group doesn't discard the others. The CLI prints an input/output
+degree verdict. Measured: all benchmark inputs are within the bound, all outputs remain so;
+the only optimization the guard actually bites is entry 28's re-encoding (interpolation
+polynomials have degree = bit count, and composing them into degree-2 payload slots or
+degree-3 constraints overshoots): case 3 loses its 4-bit flags win (70 → 74), case 1 3 vars
+(169 → 172), case 5 its −256. Recovering those legally needs interpolation at the *maximal
+wholly-in-group subexpression* level (a function of k bits is multilinear of degree ≤ k) —
+next entry.
