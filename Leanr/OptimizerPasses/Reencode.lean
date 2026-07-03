@@ -436,11 +436,23 @@ def indicatorExpr (aβ : List (String × ZMod p)) : Expression p :=
     .mul acc (if bv.2 = 1 then .var bv.1
               else .add (.const 1) (.mul (.const (-1)) (.var bv.1)))) (.const 1)
 
-/-- The interpolation of a whole subexpression over the bit patterns. -/
+/-- The interpolation of a whole subexpression over the bit patterns. When the subexpression
+    takes the **same value on every pattern** (e.g. a register index that is `52` regardless of
+    the opcode flags being re-encoded), we emit that bare constant instead of the one-hot
+    polynomial `Σ indicator·c`. That keeps such an address literally constant — so downstream
+    memory unification's `addrConstsEq` still recognizes it and the register access keeps
+    chaining — and lowers the degree. Only the `varsIn`/agreement check in `groupRewriteCand`
+    consumes `interpOf`, and a constant passes both (no vars; equals the shared value on every
+    pattern), so this is transparent to the correctness proof. -/
 def interpOf (σfn : String → Option (Expression p))
     (patts : List (List (String × ZMod p))) (e : Expression p) : Expression p :=
-  patts.foldl (fun acc aβ =>
-    .add acc (.mul (indicatorExpr aβ) (.const ((e.substF σfn).eval (envOf aβ))))) (.const 0)
+  match patts with
+  | [] => .const 0
+  | aβ₀ :: _ =>
+    let v₀ := (e.substF σfn).eval (envOf aβ₀)
+    if patts.all (fun aβ => decide ((e.substF σfn).eval (envOf aβ) = v₀)) then .const v₀
+    else patts.foldl (fun acc aβ =>
+      .add acc (.mul (indicatorExpr aβ) (.const ((e.substF σfn).eval (envOf aβ))))) (.const 0)
 
 /-- Interpolation candidate with the checked fallback to plain substitution. -/
 def groupRewriteCand (bits : List String) (σfn : String → Option (Expression p))

@@ -796,3 +796,30 @@ timestamp slot to let the limb fold also (unavoidably) block the beneficial `fro
 collapse — the two are coupled through the same constraints (tried, reverted). powdr eliminates
 these by solving the less-than gadget for the limb instead of the timestamp; matching that
 without regressing timestamp collapse is the next lever.
+
+### 37. Re-encode emits a constant when the interpolated value is pattern-independent
+Root-caused the residual register/data gap (leanr keeps per-instruction copies of `a_`/`b_`/
+`rs1_data`/`read_data` that powdr forwards across instructions). The blocker was **self-
+inflicted**: the re-encoding pass (`Reencode.interpOf`) replaces a maximal in-group
+subexpression by its one-hot interpolation `Σ indicator(β)·value(β)` over the flag bit
+patterns. When that subexpression is a **register index that doesn't depend on the flags**
+(e.g. `52` for every opcode), the interpolation is `Σ indicator·52` — semantically `52`, but
+syntactically a degree-2 expression in the fresh `rnc` bits. `MemoryUnify`'s `addrConstsEq`
+then no longer sees a constant address, so those register accesses stop matching each other
+(and differ syntactically across instructions, each with its own `rnc` group) — the whole
+register chain fails to form.
+
+Fix: `interpOf` now checks whether the subexpression takes the **same value on every bit
+pattern** and, if so, emits that bare constant instead of the one-hot polynomial. This keeps
+constant addresses literally constant (chaining resumes) and lowers degree. It's transparent
+to the correctness proof: `groupRewriteCand` only consumes `interpOf` through its
+`varsIn bits` + agrees-on-every-pattern check, and a constant passes both (no variables;
+equals the shared value everywhere) — so `groupRewriteCand_agree` is unchanged and
+`reencode_correct` still holds.
+Worked: large, no regressions. **aggregate 3.61× → 3.76×, geomean 3.07× → 3.28×** on the
+tracked 19-case set. apc_003 126→84 (3.06×, vs powdr 3.10× — essentially matched),
+apc_015 169→115 (3.27×), apc_019 129→93, apc_008 193→175; all others byte-identical. Snapshot
+still 36/11 (`SnapshotCorrect` re-proven), both correctness theorems still
+`{propext, Classical.choice, Quot.sound}`-only, all outputs within the degree bound.
+
+Cumulative this session: **3.48× → 3.76× aggregate, 2.95× → 3.28× geomean** (entries 36–37).
