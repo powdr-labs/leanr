@@ -651,3 +651,22 @@ degree-3 constraints overshoots): case 3 loses its 4-bit flags win (70 → 74), 
 (169 → 172), case 5 its −256. Recovering those legally needs interpolation at the *maximal
 wholly-in-group subexpression* level (a function of k bits is multilinear of degree ≤ k) —
 next entry.
+
+### 31. Degree-aware subexpression interpolation (`groupRewrite`)
+Recovers entry 28's wins under the new degree bound, and more. Instead of substituting the
+interpolation polynomials variable-by-variable (whose degree composes with the surrounding
+expression), the re-encoding now replaces every **maximal wholly-in-group subexpression** by
+its own interpolation over the bit patterns — any function of `k` bits is multilinear of
+degree ≤ `k`, so a degree-2 flag polynomial inside a degree-2 payload slot becomes a
+degree-2 bit expression instead of a degree-4 composition. The rewrite is *self-checking*:
+the folded candidate is accepted only if its variables lie in the bits and it agrees with
+the plain substitution on **every** bit pattern (a decidable exhaustive check inside the
+definition, consumed by `groupRewriteCand_agree` by case-splitting the definition — no
+external certificate); otherwise it falls back to plain substitution and the step-level
+degree guard decides. The transport core was generalized from `substF` to an arbitrary
+expression rewrite (`reencode_correct` now takes `rw` with the same two agreement
+hypotheses), which `groupRewrite_agree`/`groupRewrite_bi_agree` instantiate.
+Worked: better than before the bound existed — the whole-subexpression interpolations are
+also *smaller*: case 3: 108 → 64 (was 70 pre-degree; powdr: 54 and keeps all 8 flags where
+we keep 4 bits), case 1: 511 → 167 (3.06×), case 5: 5406 → 3338 (was 3530). All outputs
+verified within `{identities := 3, busInteractions := 2}`.
