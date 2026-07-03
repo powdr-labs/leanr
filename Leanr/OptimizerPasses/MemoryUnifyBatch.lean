@@ -103,12 +103,11 @@ def sendExcluded (shape : MemoryBusShape) (S S' : BusInteraction (Expression p))
     addrConstsNeq shape S bi || notBetweenTs shape S k bi
 
 /-- Receive refutation, extended by the different-address certificate. -/
-def notMatchG (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (shape : MemoryBusShape)
+def notMatchG (B : Std.HashMap String Nat) (shape : MemoryBusShape)
     (S bi : BusInteraction (Expression p)) : Bool :=
   (match multConst bi with
    | some m => decide (m ≠ -1)
-   | none => false) || tsRefuted bs facts bis shape S bi || addrConstsNeq shape S bi
+   | none => false) || tsRefuted B shape S bi || addrConstsNeq shape S bi
 
 /-! ## The generalized checked match -/
 
@@ -116,7 +115,8 @@ def notMatchG (bs : BusSemantics p) (facts : BusFacts p bs)
     constant-multiplicity sends to the same constant address with a constant in-range
     timestamp gap; every interaction on the bus is excluded as an in-between send; every
     interaction except `Rt` is provably not the matching receive. -/
-def checkMemMatchG (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+def checkMemMatchG (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (B : Std.HashMap String Nat)
     (busId : Nat) (shape : MemoryBusShape) (S S' Rt : BusInteraction (Expression p)) : Bool :=
   let L := cs.busInteractions.filter (fun bi => bi.busId = busId)
   decide ((1 : ZMod p) ≠ 0) &&
@@ -130,12 +130,16 @@ def checkMemMatchG (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusF
      decide (0 < k.val) && decide (shape.tsBound + k.val ≤ p) &&
        L.all (sendExcluded shape S S' k)
    | none => false) &&
-  L.all (fun bi => decide (bi = Rt) || notMatchG bs facts cs.busInteractions shape S bi)
+  L.all (fun bi => decide (bi = Rt) || notMatchG B shape S bi)
 
 theorem checkMemMatchG_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (busId : Nat) (shape : MemoryBusShape)
+    (B : Std.HashMap String Nat)
+    (hB : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) →
+      ∀ x b, B[x]? = some b → (env x).val < b)
+    (busId : Nat) (shape : MemoryBusShape)
     (S S' Rt : BusInteraction (Expression p)) (hdecl : bs.memoryBus busId = some shape)
-    (hchk : checkMemMatchG cs bs facts busId shape S S' Rt = true)
+    (hchk : checkMemMatchG cs bs B busId shape S S' Rt = true)
     (env : String → ZMod p) (hsat : cs.satisfies bs env) :
     ∀ c ∈ memEqConstraints shape S Rt, c.eval env = 0 := by
   -- unpack the certificate
@@ -272,7 +276,7 @@ theorem checkMemMatchG_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
         · exact absurd hcase (by simp)
       · -- payload equality forces timestamp equality, contradicting the refutation
         have := payloadSlot_eval_eq bi.payload S.payload env hpay shape.tsField
-        exact tsRefuted_sound bs facts cs.busInteractions shape S bi hp href env hbus this
+        exact tsRefuted_sound B shape S bi hp href env (hB env hbus) this
       · -- payload equality forces address equality, contradicting the refutation
         have haddreq : shape.address (S.eval env) = shape.address (bi.eval env) := by
           unfold MemoryBusShape.address
@@ -308,7 +312,8 @@ def bestSuccessor (shape : MemoryBusShape) (sends : List (BusInteraction (Expres
 
 /-- All checked memory matches: for each declared bus, each active constant send with a
     successor to the same address, and the first receive passing the full certificate. -/
-def findMemMatchesG (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs) :
+def findMemMatchesG (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (B : Std.HashMap String Nat) :
     List (Nat × BusInteraction (Expression p) × BusInteraction (Expression p)
       × BusInteraction (Expression p)) :=
   ((cs.busInteractions.map (fun bi => bi.busId)).dedup).flatMap (fun busId =>
@@ -320,27 +325,34 @@ def findMemMatchesG (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
       let receives := L.filter (fun bi => multConst bi = some (-1))
       sends.filterMap (fun S =>
         (bestSuccessor shape sends S).bind (fun S' =>
-          receives.findSome? (fun Rt =>
-            if checkMemMatchG cs bs facts busId shape S S' Rt then some (busId, S, S', Rt)
-            else none))))
+          -- cheap pre-filter: only unrefuted receives are candidates (usually exactly one)
+          match receives.filter (fun r => !notMatchG B shape S r) with
+          | [Rt] =>
+            if checkMemMatchG cs bs B busId shape S S' Rt then some (busId, S, S', Rt)
+            else none
+          | _ => none)))
 
 /-- Re-check every found match and collect the entailed equality constraints, with proof. -/
-def collectMemEqs (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs) :
+def collectMemEqs (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (B : Std.HashMap String Nat)
+    (hB : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) →
+      ∀ x b, B[x]? = some b → (env x).val < b) :
     List (Nat × BusInteraction (Expression p) × BusInteraction (Expression p)
       × BusInteraction (Expression p)) →
     { out : List (Expression p) //
         ∀ env, cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0 }
   | [] => ⟨[], fun _ _ _ hc => absurd hc (by simp)⟩
   | (busId, S, S', Rt) :: rest =>
-    let ⟨acc, hacc⟩ := collectMemEqs cs bs facts rest
+    let ⟨acc, hacc⟩ := collectMemEqs cs bs B hB rest
     match hdecl : bs.memoryBus busId with
     | none => ⟨acc, hacc⟩
     | some shape =>
-      if hchk : checkMemMatchG cs bs facts busId shape S S' Rt = true then
+      if hchk : checkMemMatchG cs bs B busId shape S S' Rt = true then
         ⟨memEqConstraints shape S Rt ++ acc, by
           intro env hsat c hc
           rcases List.mem_append.1 hc with h | h
-          · exact checkMemMatchG_sound cs bs facts busId shape S S' Rt hdecl hchk env hsat c h
+          · exact checkMemMatchG_sound cs bs B hB busId shape S S' Rt hdecl hchk env hsat c h
           · exact hacc env hsat c h⟩
       else ⟨acc, hacc⟩
 
@@ -348,7 +360,8 @@ def collectMemEqs (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
     every checked match (skipping equations already present or trivially zero, so the pass is
     idempotent). The affine/domain passes then eliminate the receives' witness variables. -/
 def memoryUnifyBatchPass : VerifiedPassW p := fun cs bs facts =>
-  let ⟨eqs, heqs⟩ := collectMemEqs cs bs facts (findMemMatchesG cs bs facts)
+  let Bm : BoundsMap p cs bs := BoundsMap.build facts
+  let ⟨eqs, heqs⟩ := collectMemEqs cs bs Bm.map Bm.sound (findMemMatchesG cs bs Bm.map)
   let new := eqs.filter
     (fun c => !c.normalize.fold.isConstZero && !cs.algebraicConstraints.contains c)
   if new.isEmpty then ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩

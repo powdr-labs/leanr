@@ -612,3 +612,23 @@ allocation-free.
 Worked: yes. Case 3: 74 → 70 (the 8 load flags → 4 bits — **below powdr's 54-var output on
 that class**, powdr keeps all 8); case 5: 3786 → 3530 (−256: 512 flags → 256 bits, 54 s);
 case 1: 172 → 169 (shift markers). Snapshot unchanged (36/11).
+
+### 29. Whole-chain unification + memoized bounds (`ChainUnify.lean`, `BoundsMap`)
+Two fixes for the unrolled-loop cases (case 7: 140 accesses to one register — entry 27's
+pair-per-cycle resolution needed one full pipeline cycle per link and timed out).
+(a) **`BoundsMap`**: the refutation certificates derived variable bounds via `findVarBound`,
+a full interaction scan *per query*; the chain passes issue millions of queries per cycle.
+The bounds are now precomputed once per pass invocation into a proof-carrying hash map, and
+`boundedSumMax`/`linNeverZero`/`tsRefuted`/`exprNeverZeroBounded` take the map plus a
+lookup-soundness hypothesis (threaded from `BoundsMap.sound`). (b) **`ChainUnify.lean`**:
+certifies an *entire* same-address chain in one invocation. Sends are processed top-down
+(sorted by constant timestamp offsets); each link's receive is identified by refuting all
+others — receives below by the never-zero timestamp difference as before, and receives
+already claimed *above* via the accumulated payload equality plus the constant in-range gap
+between their send and the current one (equal payloads would force equal timestamp values —
+the descending induction carries the claims as an accumulator, `checkChainRev_sound`). Link
+adjacency reuses `sendExcluded` unchanged. The pair pass stays in the cycle after the chain
+pass as a mop-up for links below a truncated ambiguity (removing it regressed case 1
+169 → 223), with its receive search pre-filtered by the memoized refutation.
+Worked: yes. Case 7: **timeout (>30 min) → 5464 → 2171 vars (2.52×) in 4.4 min**; case 1
+unchanged at 169 (9.9 s), case 2 at 42, case 5 at 1765 (50 s). Snapshot unchanged (36/11).
