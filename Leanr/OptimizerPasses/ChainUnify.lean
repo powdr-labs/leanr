@@ -117,7 +117,7 @@ theorem checkChainRev_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
     ∀ SR ∈ chainPairs sendsDesc recvsDesc,
       (SR.2.eval env).payload = (SR.1.eval env).payload := by
   obtain ⟨hcon, hob, hd⟩ := hsat
-  obtain ⟨c1, c2, c3, c4, c5⟩ := hd busId shape hdecl
+  obtain ⟨c1, c2, c3, c4, c5, cmono⟩ := hd busId shape hdecl
   have hsat' : cs.satisfies bs env := ⟨hcon, hob, hd⟩
   have hbus : ∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false := fun bi hbi => hob bi hbi
