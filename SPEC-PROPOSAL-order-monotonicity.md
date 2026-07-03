@@ -1,8 +1,13 @@
 # Proposal: program-order timestamp monotonicity (the dominant remaining lever)
 
-Status: **proposal, nothing implemented.** It would *reverse a deliberate design choice*
-(the memory discipline is order-free by your entry-17 decision), so it is squarely a
-spec-level decision for you. I've measured its impact instead of guessing.
+Status: **spec clause ADDED (commit `115e40a`), pending your review; no pass consumes it
+yet.** You approved adding the assumption; it is now clause 5 of `MemoryBusShape.disciplineOn`
+(`msgs.Pairwise` on active-message timestamps), proven behavior-neutral — snapshot
+byte-identical, both correctness theorems still 3-axiom. It *reverses a deliberate design
+choice* (the discipline was order-free by your entry-17 decision), which is why it needed
+your sign-off. The `ExecChain` consumption (anchor = last active send) is the next step and is
+deliberately left for after your review — see log entry 34 for the proof route and the two
+open design points. The rest of this doc is the original motivation/impact analysis.
 
 ## The result it would unblock
 
