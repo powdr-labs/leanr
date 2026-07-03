@@ -701,7 +701,11 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p
   | none => ⟨cs, cs.equivalentTo_refl bsem, _root_.id⟩
   | some (bits, hm) =>
     if hchk : checkReencode cs xs bits hm = true then
-      ⟨reencodeOut cs xs bits hm, checkReencode_sound cs bsem xs bits hm hchk⟩
+      -- degree guard: interpolation polynomials have degree `bits.length`; skip the group
+      -- if any substitution site would exceed the zkVM's bound
+      if (reencodeOut cs xs bits hm).withinDegreeB bsem.degreeBound then
+        ⟨reencodeOut cs xs bits hm, checkReencode_sound cs bsem xs bits hm hchk⟩
+      else ⟨cs, cs.equivalentTo_refl bsem, _root_.id⟩
     else ⟨cs, cs.equivalentTo_refl bsem, _root_.id⟩
 
 /-- Process the candidate groups sequentially (correctness composes by transitivity). -/

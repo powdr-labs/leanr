@@ -49,25 +49,38 @@ the only edit needed here; the correctness proof follows automatically from the 
     scale every constraint's affine factors to monic form (zero-set preserving) and re-fold.
     Extend it by composing passes with `.andThen`. -/
 def cleanupCycle : VerifiedPassW p :=
-  gaussElimPass.withFacts
-    |>.andThen normalizePass.withFacts
-    |>.andThen constantFoldPass.withFacts
-    |>.andThen domainBatchPass
-    |>.andThen normalizePass.withFacts
-    |>.andThen constantFoldPass.withFacts
-    |>.andThen trivialConstraintDropPass.withFacts
-    |>.andThen zeroMultBusDropPass.withFacts
-    |>.andThen tautoBusDropPass.withFacts
-    |>.andThen execChainPass
-    |>.andThen chainUnifyPass
-    |>.andThen memoryUnifyBatchPass
-    |>.andThen reencodePass.withFacts
+  gaussElimPass.withFacts.guardDegree
+    |>.andThen normalizePass.withFacts.guardDegree
+    |>.andThen constantFoldPass.withFacts.guardDegree
+    |>.andThen domainBatchPass.guardDegree
+    |>.andThen normalizePass.withFacts.guardDegree
+    |>.andThen constantFoldPass.withFacts.guardDegree
+    |>.andThen trivialConstraintDropPass.withFacts.guardDegree
+    |>.andThen zeroMultBusDropPass.withFacts.guardDegree
+    |>.andThen tautoBusDropPass.withFacts.guardDegree
+    |>.andThen execChainPass.guardDegree
+    |>.andThen chainUnifyPass.guardDegree
+    |>.andThen memoryUnifyBatchPass.guardDegree
+    |>.andThen reencodePass.withFacts.guardDegree
+
+theorem cleanupCycle_respectsDeg : RespectsDeg (cleanupCycle (p := p)) := by
+  repeat' apply VerifiedPassW.andThen_respectsDeg
+  all_goals exact VerifiedPassW.guardDegree_respectsDeg _
 
 def pipelineIters (iters : Nat) : VerifiedPassW p :=
-  constantFoldPass.withFacts
+  constantFoldPass.withFacts.guardDegree
     |>.andThen (cleanupCycle.iterateStable iters)
-    |>.andThen monicScalePass.withFacts
-    |>.andThen constantFoldPass.withFacts
+    |>.andThen monicScalePass.withFacts.guardDegree
+    |>.andThen constantFoldPass.withFacts.guardDegree
+
+theorem pipelineIters_respectsDeg (iters : Nat) :
+    RespectsDeg (pipelineIters (p := p) iters) := by
+  unfold pipelineIters
+  repeat' apply VerifiedPassW.andThen_respectsDeg
+  · exact VerifiedPassW.guardDegree_respectsDeg _
+  · exact VerifiedPassW.iterateStable_respectsDeg cleanupCycle_respectsDeg iters
+  · exact VerifiedPassW.guardDegree_respectsDeg _
+  · exact VerifiedPassW.guardDegree_respectsDeg _
 
 /-- `pipelineIters` with the default cleanup-cycle count. -/
 def pipeline : VerifiedPassW p := pipelineIters 32
@@ -97,3 +110,15 @@ def optimizer (cs : ConstraintSystem p) (busSemantics : BusSemantics p) : Constr
 theorem optimizer_maintainsCorrectness :
     optimizerMaintainsCorrectness (p := p) optimizer :=
   fun cs busSemantics => (pipeline cs busSemantics (BusFacts.trivial busSemantics)).property
+
+/-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree
+    bound (every pass is degree-guarded). -/
+theorem optimizerWith_respectsDegree (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (iters : Nat := 32)
+    (h : cs.withinDegree bs.degreeBound) :
+    (optimizerWith cs bs facts iters).withinDegree bs.degreeBound :=
+  pipelineIters_respectsDeg iters cs bs facts h
+
+/-- The optimizer respects the zkVM's degree bound. -/
+theorem optimizer_respectsDegree : optimizerRespectsDegree (p := p) optimizer :=
+  fun cs bs h => pipelineIters_respectsDeg 32 cs bs (BusFacts.trivial bs) h
