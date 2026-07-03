@@ -14,6 +14,7 @@ import Leanr.OptimizerPasses.TautoBus
 import Leanr.OptimizerPasses.MonicScale
 import Leanr.OptimizerPasses.MemoryUnify
 import Leanr.OptimizerPasses.MemoryUnifyBatch
+import Leanr.OptimizerPasses.ChainUnify
 import Leanr.OptimizerPasses.ExecChain
 import Leanr.OptimizerPasses.Reencode
 
@@ -58,6 +59,7 @@ def cleanupCycle : VerifiedPassW p :=
     |>.andThen zeroMultBusDropPass.withFacts
     |>.andThen tautoBusDropPass.withFacts
     |>.andThen execChainPass
+    |>.andThen chainUnifyPass
     |>.andThen memoryUnifyBatchPass
     |>.andThen reencodePass.withFacts
 

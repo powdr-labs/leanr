@@ -109,6 +109,82 @@ theorem payloadSlot_eval_eq (P Q : List (Expression p)) (env : String → ZMod p
   simp only [List.getElem?_map] at hi
   cases hP : P[i]? <;> cases hQ : Q[i]? <;> rw [hP, hQ] at hi <;> simp_all
 
+/-! ## A proof-carrying bounds map (memoized `findVarBound`)
+
+The refutation certificates below need value bounds for witness variables. Deriving them via
+`findVarBound` scans every bus interaction *per query*; the chain passes issue millions of
+queries per cycle, so the bounds are precomputed once per pass invocation into a hash map
+bundled with its soundness. -/
+
+/-- Fact-derived value bounds for variables, each sound under the bus obligations. -/
+structure BoundsMap (p : ℕ) (cs : ConstraintSystem p) (bs : BusSemantics p) where
+  map : Std.HashMap String Nat
+  sound : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) →
+    ∀ x b, map[x]? = some b → (env x).val < b
+
+namespace BoundsMap
+
+variable {cs : ConstraintSystem p} {bs : BusSemantics p}
+
+def empty : BoundsMap p cs bs where
+  map := ∅
+  sound := by
+    intro _ _ x b h
+    rw [Std.HashMap.getElem?_empty] at h
+    exact absurd h (by simp)
+
+/-- Insert a sound bound, keeping the smaller of two bounds for a variable. -/
+def insertEntry (T : BoundsMap p cs bs) (x : String) (b : Nat)
+    (h : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) → (env x).val < b) : BoundsMap p cs bs :=
+  let keep : Bool := match T.map[x]? with
+    | some b0 => decide (b < b0)
+    | none => true
+  if keep then
+    { map := T.map.insert x b,
+      sound := by
+        intro env hbus y c hyc
+        rw [Std.HashMap.getElem?_insert] at hyc
+        by_cases hxy : (x == y) = true
+        · rw [if_pos hxy] at hyc
+          have hxy' : x = y := by simpa using hxy
+          have hbc : b = c := by simpa using hyc
+          subst hxy'; subst hbc
+          exact h env hbus
+        · rw [if_neg hxy] at hyc
+          exact T.sound env hbus y c hyc }
+  else T
+
+/-- The raw-variable payload entries of an interaction. -/
+private def rawVarsOf (bi : BusInteraction (Expression p)) : List String :=
+  bi.payload.filterMap (fun e => match e with | .var x => some x | _ => none)
+
+/-- Collect bounds from all interactions' fact-bounded raw payload slots. -/
+def addAll (facts : BusFacts p bs) :
+    (pending : List (BusInteraction (Expression p))) →
+    (∀ bi ∈ pending, bi ∈ cs.busInteractions) → BoundsMap p cs bs → BoundsMap p cs bs
+  | [], _, T => T
+  | bi :: rest, hmem, T =>
+    let hbi := hmem bi (List.mem_cons_self ..)
+    let hrest := fun bi' h => hmem bi' (List.mem_cons_of_mem _ h)
+    let rec addVars (xs : List String) (T : BoundsMap p cs bs) : BoundsMap p cs bs :=
+      match xs with
+      | [] => T
+      | x :: xs =>
+        match hr : interactionBound bs facts bi x with
+        | some b =>
+            addVars xs (T.insertEntry x b
+              (fun env hbus => interactionBound_sound bs facts bi x b hr env (hbus bi hbi)))
+        | none => addVars xs T
+    addAll facts rest hrest (addVars (rawVarsOf bi) T)
+
+/-- Build the bounds map for a system (one pass over the interactions). -/
+def build (facts : BusFacts p bs) : BoundsMap p cs bs :=
+  addAll facts cs.busInteractions (fun _ h => h) empty
+
+end BoundsMap
+
 /-! ## The bounded-negative-terms refutation
 
 Certifies that an affine form `c + Σ aᵢ·vᵢ` is never zero: each coefficient is treated as
@@ -116,21 +192,19 @@ Certifies that an affine form `c + Σ aᵢ·vᵢ` is never zero: each coefficien
 `Σ posᵢ·vᵢ` stays strictly below `c.val` — so the sum can never equal `c`. -/
 
 /-- Maximal value of `Σ (-aᵢ)·vᵢ` over the bounds, all-or-nothing. -/
-def boundedSumMax (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) :
+def boundedSumMax (B : Std.HashMap String Nat) :
     List (String × ZMod p) → Option Nat
   | [] => some 0
   | (v, a) :: rest =>
-    match findVarBound bs facts bis v, boundedSumMax bs facts bis rest with
+    match B[v]?, boundedSumMax B rest with
     | some bound, some m =>
         if 1 ≤ bound then some ((-a).val * (bound - 1) + m) else none
     | _, _ => none
 
-theorem boundedSum_val (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (terms : List (String × ZMod p)) (M : Nat)
-    (hM : boundedSumMax bs facts bis terms = some M) (hMp : M < p) (env : String → ZMod p)
-    (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
-      bs.violatesConstraint (bi.eval env) = false) :
+theorem boundedSum_val (B : Std.HashMap String Nat)
+    (terms : List (String × ZMod p)) (M : Nat)
+    (hM : boundedSumMax B terms = some M) (hMp : M < p) (env : String → ZMod p)
+    (hB : ∀ v bound, B[v]? = some bound → (env v).val < bound) :
     ∃ s : ZMod p, (terms.map (fun t => t.2 * env t.1)).sum = -s ∧ s.val ≤ M := by
   induction terms generalizing M with
   | nil =>
@@ -140,12 +214,12 @@ theorem boundedSum_val (bs : BusSemantics p) (facts : BusFacts p bs)
     obtain ⟨v, a⟩ := t
     rw [boundedSumMax] at hM
     split at hM
-    case _ bound m hB hm =>
+    case _ bound m hBd hm =>
         split_ifs at hM with hb1
         simp only [Option.some.injEq] at hM
         subst hM
         obtain ⟨s', hsum', hs'le⟩ := ih m hm (by omega)
-        have hv : (env v).val < bound := findVarBound_sound bs facts bis v bound hB env hbus
+        have hv : (env v).val < bound := hB v bound hBd
         have hhead : ((-a) * env v).val = (-a).val * (env v).val :=
           ZMod.val_mul_of_lt (by
             calc (-a).val * (env v).val ≤ (-a).val * (bound - 1) :=
@@ -167,17 +241,15 @@ theorem boundedSum_val (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-- The refutation core: a normalized affine form whose bounded-negative sum stays below the
     constant can never evaluate to zero. -/
-theorem linNeverZero (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (l : LinExpr p) (M : Nat)
-    (hp : 0 < p) (hM : boundedSumMax bs facts bis l.terms = some M)
+theorem linNeverZero (B : Std.HashMap String Nat) (l : LinExpr p) (M : Nat)
+    (hp : 0 < p) (hM : boundedSumMax B l.terms = some M)
     (hlt : M < l.const.val) (env : String → ZMod p)
-    (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
-      bs.violatesConstraint (bi.eval env) = false) :
+    (hB : ∀ v bound, B[v]? = some bound → (env v).val < bound) :
     l.eval env ≠ 0 := by
   intro h0
   haveI : NeZero p := ⟨hp.ne'⟩
   have hMp : M < p := lt_trans hlt (ZMod.val_lt l.const)
-  obtain ⟨s, hsum, hsle⟩ := boundedSum_val bs facts bis l.terms M hM hMp env hbus
+  obtain ⟨s, hsum, hsle⟩ := boundedSum_val B l.terms M hM hMp env hB
   have hs : s = l.const := by
     rw [LinExpr.eval, hsum] at h0
     linear_combination -h0
@@ -185,22 +257,19 @@ theorem linNeverZero (bs : BusSemantics p) (facts : BusFacts p bs)
   omega
 
 /-- Refute (decidably) that a receive's timestamp can equal the send's. -/
-def tsRefuted (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (shape : MemoryBusShape)
+def tsRefuted (B : Std.HashMap String Nat) (shape : MemoryBusShape)
     (S r : BusInteraction (Expression p)) : Bool :=
   match linearize (eqExpr (tsExprOf shape r) (tsExprOf shape S)) with
   | none => false
   | some l =>
-    match boundedSumMax bs facts bis l.norm.terms with
+    match boundedSumMax B l.norm.terms with
     | some M => decide (M < l.norm.const.val)
     | none => false
 
-theorem tsRefuted_sound (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (shape : MemoryBusShape)
+theorem tsRefuted_sound (B : Std.HashMap String Nat) (shape : MemoryBusShape)
     (S r : BusInteraction (Expression p)) (hp : 0 < p)
-    (h : tsRefuted bs facts bis shape S r = true) (env : String → ZMod p)
-    (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
-      bs.violatesConstraint (bi.eval env) = false) :
+    (h : tsRefuted B shape S r = true) (env : String → ZMod p)
+    (hB : ∀ v bound, B[v]? = some bound → (env v).val < bound) :
     (tsExprOf shape r).eval env ≠ (tsExprOf shape S).eval env := by
   intro heq
   unfold tsRefuted at h
@@ -212,7 +281,7 @@ theorem tsRefuted_sound (bs : BusSemantics p) (facts : BusFacts p bs)
       have hzero : l.norm.eval env = 0 := by
         rw [l.norm_eval, ← linearize_eval _ l hl, eqExpr_eval, heq]
         ring
-      exact linNeverZero bs facts bis l.norm M hp hM (of_decide_eq_true h) env hbus hzero
+      exact linNeverZero B l.norm M hp hM (of_decide_eq_true h) env hB hzero
     · exact absurd h (by simp)
 
 /-! ## The checked match -/
@@ -270,18 +339,18 @@ def notSend (bi : BusInteraction (Expression p)) : Bool :=
 
 /-- Is `bi` certainly not the matching receive: constant multiplicity ≠ -1, or its timestamp
     provably differs from the send's? -/
-def notMatch (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (shape : MemoryBusShape)
+def notMatch (B : Std.HashMap String Nat) (shape : MemoryBusShape)
     (S bi : BusInteraction (Expression p)) : Bool :=
   (match multConst bi with
    | some m => decide (m ≠ -1)
-   | none => false) || tsRefuted bs facts bis shape S bi
+   | none => false) || tsRefuted B shape S bi
 
 /-- All checked side conditions for a memory match `(S, S', Rt)` on `busId`:
     `S`/`S'` the only two active sends (constant multiplicities), same constant address,
     constant timestamp gap within range; every other interaction is provably not the matching
     receive, so `Rt` is. -/
-def checkMemMatch (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+def checkMemMatch (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (B : Std.HashMap String Nat)
     (busId : Nat) (shape : MemoryBusShape) (S S' Rt : BusInteraction (Expression p)) : Bool :=
   let L := cs.busInteractions.filter (fun bi => bi.busId = busId)
   decide ((1 : ZMod p) ≠ 0) && decide ((2 : ZMod p) ≠ 0) &&
@@ -292,7 +361,7 @@ def checkMemMatch (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
   addrConstsEq shape S S' &&
   sendGapOk shape S S' &&
   L.all (fun bi => decide (bi = S) || decide (bi = S') || notSend bi) &&
-  L.all (fun bi => decide (bi = Rt) || notMatch bs facts cs.busInteractions shape S bi)
+  L.all (fun bi => decide (bi = Rt) || notMatch B shape S bi)
 
 /-- The entailed conclusions: slot-wise equality of the receive's and the send's payloads,
     excluding the (constant, already-equal) address slots. -/
@@ -302,9 +371,13 @@ def memEqConstraints (shape : MemoryBusShape) (S Rt : BusInteraction (Expression
     (fun i => eqExpr ((Rt.payload[i]?).getD (.const 0)) ((S.payload[i]?).getD (.const 0)))
 
 theorem checkMemMatch_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (busId : Nat) (shape : MemoryBusShape)
+    (B : Std.HashMap String Nat)
+    (hB : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) →
+      ∀ x b, B[x]? = some b → (env x).val < b)
+    (busId : Nat) (shape : MemoryBusShape)
     (S S' Rt : BusInteraction (Expression p)) (hdecl : bs.memoryBus busId = some shape)
-    (hchk : checkMemMatch cs bs facts busId shape S S' Rt = true)
+    (hchk : checkMemMatch cs bs B busId shape S S' Rt = true)
     (env : String → ZMod p) (hsat : cs.satisfies bs env) :
     ∀ c ∈ memEqConstraints shape S Rt, c.eval env = 0 := by
   -- unpack the certificate
@@ -408,7 +481,7 @@ theorem checkMemMatch_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
           rw [← hbieq] at this
           exact this
         have := payloadSlot_eval_eq bi.payload S.payload env hpay shape.tsField
-        exact tsRefuted_sound bs facts cs.busInteractions shape S bi hp href env hbus this
+        exact tsRefuted_sound B shape S bi hp href env (hB env hbus) this
   -- the payload equality, slot by slot, gives the conclusions
   have hpay : Rt.payload.map (fun e => e.eval env) = S.payload.map (fun e => e.eval env) := by
     have h' := hRcvPay
@@ -424,7 +497,8 @@ theorem checkMemMatch_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
 
 /-- Proof-free candidate search: a declared bus with exactly two constant-multiplicity sends
     and some receive that `checkMemMatch` accepts. -/
-def findMemMatch (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs) :
+def findMemMatch (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (B : Std.HashMap String Nat) :
     Option (Nat × BusInteraction (Expression p) × BusInteraction (Expression p)
       × BusInteraction (Expression p)) :=
   ((cs.busInteractions.map (fun bi => bi.busId)).dedup).findSome? (fun busId =>
@@ -433,10 +507,10 @@ def findMemMatch (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFac
     | some shape =>
       let L := cs.busInteractions.filter (fun bi => bi.busId = busId)
       match L.filter (fun bi => multConst bi = some 1) with
-      | [A, B] =>
+      | [A, A'] =>
         (L.filter (fun bi => multConst bi = some (-1))).findSome? (fun Rt =>
-          if checkMemMatch cs bs facts busId shape A B Rt then some (busId, A, B, Rt)
-          else if checkMemMatch cs bs facts busId shape B A Rt then some (busId, B, A, Rt)
+          if checkMemMatch cs bs B busId shape A A' Rt then some (busId, A, A', Rt)
+          else if checkMemMatch cs bs B busId shape A' A Rt then some (busId, A', A, Rt)
           else none)
       | _ => none)
 
@@ -444,17 +518,18 @@ def findMemMatch (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFac
     match (skipping equations already present or trivially zero, so the pass is idempotent).
     The affine/domain passes then eliminate the receive's witness variables. -/
 def memoryUnifyPass : VerifiedPassW p := fun cs bs facts =>
-  match findMemMatch cs bs facts with
+  let Bm : BoundsMap p cs bs := BoundsMap.build facts
+  match findMemMatch cs bs Bm.map with
   | none => ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩
   | some (busId, S, S', Rt) =>
     match hdecl : bs.memoryBus busId with
     | none => ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩
     | some shape =>
-      if hchk : checkMemMatch cs bs facts busId shape S S' Rt = true then
+      if hchk : checkMemMatch cs bs Bm.map busId shape S S' Rt = true then
         let new := (memEqConstraints shape S Rt).filter
           (fun c => !c.normalize.fold.isConstZero && !cs.algebraicConstraints.contains c)
         ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new },
          cs.addConstraints_correct bs new (fun env hsat c hc =>
-           checkMemMatch_sound cs bs facts busId shape S S' Rt hdecl hchk env hsat
+           checkMemMatch_sound cs bs Bm.map Bm.sound busId shape S S' Rt hdecl hchk env hsat
              c (List.mem_of_mem_filter hc))⟩
       else ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩
