@@ -159,6 +159,9 @@ def openVmBusSemantics (p : ℕ) (busMap : Nat → Option OpenVmBusType := defau
     -- by one of the fragment's own receives.
     | some .executionBridge => some { addressFields := [], tsField := 1, tsBound := 2 ^ 29 }
     | _ => none
+  -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`): algebraic constraints
+  -- up to degree 3, bus interaction fields up to degree 2.
+  degreeBound := { identities := 3, busInteractions := 2 }
 
 /-- The BabyBear field modulus, `2^31 - 2^27 + 1` — the field all powdr OpenVM exports use. -/
 def babyBear : Nat := 2013265921
