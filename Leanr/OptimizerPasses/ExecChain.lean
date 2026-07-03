@@ -57,20 +57,17 @@ theorem exprNeverZeroConst_sound (e : Expression p) (h : exprNeverZeroConst e = 
   · exact absurd h (by simp)
 
 /-- The bounded-negative-terms certificate (the `tsRefuted` core, for any expression). -/
-def exprNeverZeroBounded (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (e : Expression p) : Bool :=
+def exprNeverZeroBounded (B : Std.HashMap String Nat) (e : Expression p) : Bool :=
   match linearize e with
   | none => false
   | some l =>
-    match boundedSumMax bs facts bis l.norm.terms with
+    match boundedSumMax B l.norm.terms with
     | some M => decide (M < l.norm.const.val)
     | none => false
 
-theorem exprNeverZeroBounded_sound (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (e : Expression p) (hp : 0 < p)
-    (h : exprNeverZeroBounded bs facts bis e = true) (env : String → ZMod p)
-    (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
-      bs.violatesConstraint (bi.eval env) = false) : e.eval env ≠ 0 := by
+theorem exprNeverZeroBounded_sound (B : Std.HashMap String Nat) (e : Expression p)
+    (hp : 0 < p) (h : exprNeverZeroBounded B e = true) (env : String → ZMod p)
+    (hB : ∀ v bound, B[v]? = some bound → (env v).val < bound) : e.eval env ≠ 0 := by
   intro h0
   unfold exprNeverZeroBounded at h
   split at h
@@ -80,7 +77,7 @@ theorem exprNeverZeroBounded_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     · rename_i M hM
       have hzero : l.norm.eval env = 0 := by
         rw [l.norm_eval, ← linearize_eval _ l hl]; exact h0
-      exact linNeverZero bs facts bis l.norm M hp hM (of_decide_eq_true h) env hbus hzero
+      exact linNeverZero B l.norm M hp hM (of_decide_eq_true h) env hB hzero
     · exact absurd h (by simp)
 
 /-- Enumeration certificate: all points of the (capped) domain box give a nonzero value. -/
@@ -119,18 +116,23 @@ def slotExprOf (bi : BusInteraction (Expression p)) (i : Nat) : Expression p :=
 
 /-- Certify that the evaluated payloads of `A` and `B` always differ: different lengths, or
     some slot whose difference is provably never zero. -/
-def payloadNeq {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
+def payloadNeq {cs : ConstraintSystem p} {bs : BusSemantics p}
+    (Bnd : Std.HashMap String Nat)
     (T : DomainTable p cs bs) (A B : BusInteraction (Expression p)) : Bool :=
   decide (A.payload.length ≠ B.payload.length) ||
   (List.range A.payload.length).any (fun i =>
     let d := eqExpr (slotExprOf A i) (slotExprOf B i)
-    exprNeverZeroConst d || exprNeverZeroBounded bs facts cs.busInteractions d ||
+    exprNeverZeroConst d || exprNeverZeroBounded Bnd d ||
       exprNeverZeroEnum T d)
 
 theorem payloadNeq_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (facts : BusFacts p bs) (T : DomainTable p cs bs)
+    (Bnd : Std.HashMap String Nat)
+    (hBnd : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) →
+      ∀ x b, Bnd[x]? = some b → (env x).val < b)
+    (T : DomainTable p cs bs)
     (A B : BusInteraction (Expression p)) (hp : 0 < p)
-    (h : payloadNeq facts T A B = true) (env : String → ZMod p)
+    (h : payloadNeq Bnd T A B = true) (env : String → ZMod p)
     (hsat : cs.satisfies bs env) :
     (A.eval env).payload ≠ (B.eval env).payload := by
   intro heq
@@ -154,7 +156,7 @@ theorem payloadNeq_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
     rcases (Bool.or_eq_true _ _).mp hi with hi' | henum
     · rcases (Bool.or_eq_true _ _).mp hi' with hconst | hbounded
       · exact exprNeverZeroConst_sound _ hconst env hd
-      · exact exprNeverZeroBounded_sound bs facts cs.busInteractions _ hp hbounded env hbus hd
+      · exact exprNeverZeroBounded_sound Bnd _ hp hbounded env (hBnd env hbus) hd
     · exact exprNeverZeroEnum_sound T _ henum env hsat hd
 
 /-! ## The anchored-maximum certificate -/
@@ -171,7 +173,8 @@ def notRecv (bi : BusInteraction (Expression p)) : Bool :=
     anchor's (no consumer ⇒ anchor is the timestamp maximum ⇒ `S` is strictly below it and
     is consumed in-fragment); every possible receive except `Rt` provably differs from `S`
     (so `Rt` is the consumer). -/
-def checkExecChain (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+def checkExecChain (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (Bnd : Std.HashMap String Nat)
     (T : DomainTable p cs bs) (busId : Nat) (shape : MemoryBusShape)
     (anchor S Rt : BusInteraction (Expression p)) : Bool :=
   let L := cs.busInteractions.filter (fun bi => bi.busId = busId)
@@ -180,15 +183,19 @@ def checkExecChain (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusF
   decide (anchor ∈ L) && decide (S ∈ L) && decide (Rt ∈ L) &&
   decide (multConst anchor = some 1) && decide (multConst S = some 1) &&
   decide (multConst Rt = some (-1)) &&
-  payloadNeq facts T anchor S &&
-  L.all (fun bi => notRecv bi || payloadNeq facts T anchor bi) &&
-  L.all (fun bi => decide (bi = Rt) || notRecv bi || payloadNeq facts T S bi)
+  payloadNeq Bnd T anchor S &&
+  L.all (fun bi => notRecv bi || payloadNeq Bnd T anchor bi) &&
+  L.all (fun bi => decide (bi = Rt) || notRecv bi || payloadNeq Bnd T S bi)
 
 theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (T : DomainTable p cs bs) (busId : Nat)
+    (Bnd : Std.HashMap String Nat)
+    (hBnd : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) →
+      ∀ x b, Bnd[x]? = some b → (env x).val < b)
+    (T : DomainTable p cs bs) (busId : Nat)
     (shape : MemoryBusShape) (anchor S Rt : BusInteraction (Expression p))
     (hdecl : bs.memoryBus busId = some shape) (hp : 0 < p)
-    (hchk : checkExecChain cs bs facts T busId shape anchor S Rt = true)
+    (hchk : checkExecChain cs bs Bnd T busId shape anchor S Rt = true)
     (env : String → ZMod p) (hsat : cs.satisfies bs env) :
     ∀ c ∈ memEqConstraints shape S Rt, c.eval env = 0 := by
   unfold checkExecChain at hchk
@@ -229,7 +236,7 @@ theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
         rw [hme] at hRmult
         exact absurd hRmult (of_decide_eq_true hnr)
       · exact absurd hnr (by simp)
-    · exact payloadNeq_sound facts T anchor bi hp hneq env hsat' hRpay.symm
+    · exact payloadNeq_sound Bnd hBnd T anchor bi hp hneq env hsat' hRpay.symm
   -- Step 2: the anchor is the timestamp maximum among active sends
   have hmax : ∀ m ∈ msgs, m.multiplicity = 1 →
       shape.tsVal m ≤ shape.tsVal (anchor.eval env) := by
@@ -255,7 +262,7 @@ theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
   -- Step 3: S's timestamp differs from the anchor's (uniqueness clause + payload difference)
   have hSA : shape.tsVal (S.eval env) ≠ shape.tsVal (anchor.eval env) := by
     intro heqts
-    exact payloadNeq_sound facts T anchor S hp hAS env hsat'
+    exact payloadNeq_sound Bnd hBnd T anchor S hp hAS env hsat'
       (c4 (anchor.eval env) (hmem anchor hAmem) (S.eval env) (hmem S hSmem)
         hAev hSev (haddr _ _) heqts.symm)
   -- Step 4: S is strictly below the anchor, hence consumed in-fragment
@@ -295,7 +302,7 @@ theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
           rw [hme] at hRmult
           exact absurd hRmult (of_decide_eq_true hnr)
         · exact absurd hnr (by simp)
-    · exact absurd (hbieq ▸ hRpay) (payloadNeq_sound facts T S bi hp hneq env hsat').symm
+    · exact absurd (hbieq ▸ hRpay) (payloadNeq_sound Bnd hBnd T S bi hp hneq env hsat').symm
   -- Step 6: slot-wise equalities
   have hpay : Rt.payload.map (fun e => e.eval env) = S.payload.map (fun e => e.eval env) := by
     have h' := hRpay
@@ -312,7 +319,8 @@ theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
 /-- All checked execution-chain links: for each empty-address declared bus, find an anchor
     send (payload-refuted against every possible receive), then for each other send the
     unique unrefuted receive. -/
-def findExecChains (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+def findExecChains (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (Bnd : Std.HashMap String Nat)
     (T : DomainTable p cs bs) :
     List (Nat × BusInteraction (Expression p) × BusInteraction (Expression p)
       × BusInteraction (Expression p)) :=
@@ -325,22 +333,26 @@ def findExecChains (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusF
         let sends := L.filter (fun bi => multConst bi = some 1)
         let receives := L.filter (fun bi => multConst bi = some (-1))
         match sends.filter (fun a =>
-          L.all (fun bi => notRecv bi || payloadNeq facts T a bi)) with
+          L.all (fun bi => notRecv bi || payloadNeq Bnd T a bi)) with
         | [] => []
         | a :: _ =>
           sends.filterMap (fun S =>
             if S = a then none
             else
-              match receives.filter (fun r => !payloadNeq facts T S r) with
+              match receives.filter (fun r => !payloadNeq Bnd T S r) with
               | [Rt] =>
-                if checkExecChain cs bs facts T busId shape a S Rt then
+                if checkExecChain cs bs Bnd T busId shape a S Rt then
                   some (busId, a, S, Rt)
                 else none
               | _ => none)
       else [])
 
 /-- Re-check every found link and collect the entailed equality constraints, with proof. -/
-def collectExecEqs (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+def collectExecEqs (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (Bnd : Std.HashMap String Nat)
+    (hBnd : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) →
+      ∀ x b, Bnd[x]? = some b → (env x).val < b)
     (T : DomainTable p cs bs) (hp : 0 < p) :
     List (Nat × BusInteraction (Expression p) × BusInteraction (Expression p)
       × BusInteraction (Expression p)) →
@@ -348,15 +360,15 @@ def collectExecEqs (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusF
         ∀ env, cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0 }
   | [] => ⟨[], fun _ _ _ hc => absurd hc (by simp)⟩
   | (busId, anchor, S, Rt) :: rest =>
-    let ⟨acc, hacc⟩ := collectExecEqs cs bs facts T hp rest
+    let ⟨acc, hacc⟩ := collectExecEqs cs bs Bnd hBnd T hp rest
     match hdecl : bs.memoryBus busId with
     | none => ⟨acc, hacc⟩
     | some shape =>
-      if hchk : checkExecChain cs bs facts T busId shape anchor S Rt = true then
+      if hchk : checkExecChain cs bs Bnd T busId shape anchor S Rt = true then
         ⟨memEqConstraints shape S Rt ++ acc, by
           intro env hsat c hc
           rcases List.mem_append.1 hc with h | h
-          · exact checkExecChain_sound cs bs facts T busId shape anchor S Rt hdecl hp
+          · exact checkExecChain_sound cs bs Bnd hBnd T busId shape anchor S Rt hdecl hp
               hchk env hsat c h
           · exact hacc env hsat c h⟩
       else ⟨acc, hacc⟩
@@ -374,7 +386,9 @@ def execChainPass : VerifiedPassW p := fun cs bs facts =>
         addBusDoms facts cs.busInteractions (fun _ h => h)
           (addConstraintDoms cs.algebraicConstraints (fun _ h => h) DomainTable.empty)
       else DomainTable.empty
-    let ⟨eqs, heqs⟩ := collectExecEqs cs bs facts T hp (findExecChains cs bs facts T)
+    let Bm : BoundsMap p cs bs := BoundsMap.build facts
+    let ⟨eqs, heqs⟩ := collectExecEqs cs bs Bm.map Bm.sound T hp
+      (findExecChains cs bs Bm.map T)
     let new := eqs.filter
       (fun c => !c.normalize.fold.isConstZero && !cs.algebraicConstraints.contains c)
     if new.isEmpty then ⟨cs, cs.equivalentTo_refl bs, _root_.id⟩
