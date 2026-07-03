@@ -167,24 +167,29 @@ def notRecv (bi : BusInteraction (Expression p)) : Bool :=
   | some m => decide (m ≠ -1)
   | none => false
 
-/-- All checked side conditions for an execution-chain link `(anchor, S, Rt)` on `busId`
-    (an empty-address declared bus): `anchor` and `S` constant-multiplicity sends whose
-    payloads provably differ; every possible receive's payload provably differs from the
-    anchor's (no consumer ⇒ anchor is the timestamp maximum ⇒ `S` is strictly below it and
-    is consumed in-fragment); every possible receive except `Rt` provably differs from `S`
-    (so `Rt` is the consumer). -/
+/-- All checked side conditions for an execution-chain link on `busId` (an empty-address
+    declared bus). `S` is the send we chain; `W` is a **witness send appearing later in the
+    interaction list** (`L` splits as `pre ++ S :: post` with `W ∈ post`) whose payload
+    provably differs from `S`'s. By the discipline's monotonicity clause `S` is listed before
+    `W`, so `tsVal S ≤ tsVal W`; the payload difference plus the timestamp-uniqueness clause
+    make it strict, so `S` is not the timestamp maximum and (in-window consumption) is
+    consumed in-fragment. Every possible receive except `Rt` provably differs from `S`, so
+    `Rt` is that consumer. This avoids needing any fact about the block's terminal
+    (possibly symbolic-target) send. -/
 def checkExecChain (cs : ConstraintSystem p) (bs : BusSemantics p)
     (Bnd : Std.HashMap String Nat)
     (T : DomainTable p cs bs) (busId : Nat) (shape : MemoryBusShape)
-    (anchor S Rt : BusInteraction (Expression p)) : Bool :=
+    (pre post : List (BusInteraction (Expression p)))
+    (S W Rt : BusInteraction (Expression p)) : Bool :=
   let L := cs.busInteractions.filter (fun bi => bi.busId = busId)
   decide ((1 : ZMod p) ≠ 0) &&
   decide (shape.addressFields = []) &&
-  decide (anchor ∈ L) && decide (S ∈ L) && decide (Rt ∈ L) &&
-  decide (multConst anchor = some 1) && decide (multConst S = some 1) &&
+  decide (L = pre ++ S :: post) &&
+  decide (W ∈ post) &&
+  decide (Rt ∈ L) &&
+  decide (multConst S = some 1) && decide (multConst W = some 1) &&
   decide (multConst Rt = some (-1)) &&
-  payloadNeq Bnd T anchor S &&
-  L.all (fun bi => notRecv bi || payloadNeq Bnd T anchor bi) &&
+  payloadNeq Bnd T W S &&
   L.all (fun bi => decide (bi = Rt) || notRecv bi || payloadNeq Bnd T S bi)
 
 theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
@@ -193,25 +198,31 @@ theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
       bs.violatesConstraint (bi.eval env) = false) →
       ∀ x b, Bnd[x]? = some b → (env x).val < b)
     (T : DomainTable p cs bs) (busId : Nat)
-    (shape : MemoryBusShape) (anchor S Rt : BusInteraction (Expression p))
+    (shape : MemoryBusShape) (pre post : List (BusInteraction (Expression p)))
+    (S W Rt : BusInteraction (Expression p))
     (hdecl : bs.memoryBus busId = some shape) (hp : 0 < p)
-    (hchk : checkExecChain cs bs Bnd T busId shape anchor S Rt = true)
+    (hchk : checkExecChain cs bs Bnd T busId shape pre post S W Rt = true)
     (env : String → ZMod p) (hsat : cs.satisfies bs env) :
     ∀ c ∈ memEqConstraints shape S Rt, c.eval env = 0 := by
   unfold checkExecChain at hchk
   simp only [Bool.and_eq_true] at hchk
-  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨h1ne, hfields⟩, hAmem⟩, hSmem⟩, hRtmem⟩, hAm⟩, hSm⟩, hRtm⟩,
-    hAS⟩, hanchor⟩, hmatch⟩ := hchk
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨h1ne, hfields⟩, hsplit⟩, hWpost⟩, hRtmem⟩, hSm⟩, hWm⟩, hRtm⟩,
+    hWS⟩, hmatch⟩ := hchk
   have h1ne := of_decide_eq_true h1ne
   have hfields : shape.addressFields = [] := of_decide_eq_true hfields
-  have hAmem := of_decide_eq_true hAmem
-  have hSmem := of_decide_eq_true hSmem
+  have hsplit : cs.busInteractions.filter (fun bi => bi.busId = busId)
+      = pre ++ S :: post := of_decide_eq_true hsplit
+  have hWpost : W ∈ post := of_decide_eq_true hWpost
   have hRtmem := of_decide_eq_true hRtmem
-  have hAm := of_decide_eq_true hAm
   have hSm := of_decide_eq_true hSm
+  have hWm := of_decide_eq_true hWm
   have hRtm := of_decide_eq_true hRtm
   set L := cs.busInteractions.filter (fun bi => bi.busId = busId) with hL
   set msgs := L.map (fun bi => bi.eval env) with hmsgs
+  -- `S` and `W` are in `L`, from the split
+  have hSmem : S ∈ L := by rw [hsplit]; exact List.mem_append_right _ (List.mem_cons_self ..)
+  have hWmem : W ∈ L := by
+    rw [hsplit]; exact List.mem_append_right _ (List.mem_cons_of_mem _ hWpost)
   obtain ⟨hc, hb, hd⟩ := hsat
   obtain ⟨c1, c2, c3, c4, c5, cmono⟩ := hd busId shape hdecl
   have hsat' : cs.satisfies bs env := ⟨hc, hb, hd⟩
@@ -221,61 +232,35 @@ theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
     simp [MemoryBusShape.address, hfields]
   have hmem : ∀ bi ∈ L, bi.eval env ∈ msgs := fun bi hbi => List.mem_map.2 ⟨bi, hbi, rfl⟩
   -- evaluated multiplicities
-  have hAev : (anchor.eval env).multiplicity = 1 :=
-    anchor.multiplicity.constValue?_sound 1 hAm env
   have hSev : (S.eval env).multiplicity = 1 := S.multiplicity.constValue?_sound 1 hSm env
-  -- Step 1: the anchor has no in-fragment consumer
-  have hnocons : ¬ ∃ R ∈ msgs, R.multiplicity = -1 ∧ R.payload = (anchor.eval env).payload := by
-    rintro ⟨R, hRmem, hRmult, hRpay⟩
-    obtain ⟨bi, hbi, rfl⟩ := List.mem_map.1 hRmem
-    rcases (Bool.or_eq_true _ _).mp (List.all_eq_true.mp hanchor bi hbi) with hnr | hneq
-    · unfold notRecv at hnr
-      split at hnr
-      · rename_i m hm
-        have hme : (bi.eval env).multiplicity = m := bi.multiplicity.constValue?_sound m hm env
-        rw [hme] at hRmult
-        exact absurd hRmult (of_decide_eq_true hnr)
-      · exact absurd hnr (by simp)
-    · exact payloadNeq_sound Bnd hBnd T anchor bi hp hneq env hsat' hRpay.symm
-  -- Step 2: the anchor is the timestamp maximum among active sends
-  have hmax : ∀ m ∈ msgs, m.multiplicity = 1 →
-      shape.tsVal m ≤ shape.tsVal (anchor.eval env) := by
-    intro m hm hmmult
-    by_contra hgt
-    rw [Nat.not_le] at hgt
-    -- the set of active-send timestamps strictly above the anchor is nonempty; take its min
-    set TS : Set ℕ := {t | ∃ m' ∈ msgs, m'.multiplicity = 1 ∧ shape.tsVal m' = t ∧
-      shape.tsVal (anchor.eval env) < t} with hTS
-    have hne : TS.Nonempty := ⟨shape.tsVal m, m, hm, hmmult, rfl, hgt⟩
-    obtain ⟨m', hm'mem, hm'mult, hm'ts, hm'gt⟩ := Nat.sInf_mem hne
-    have hnobetween : ∀ m'' ∈ msgs, m''.multiplicity = 1 →
-        shape.address m'' = shape.address (anchor.eval env) →
-        ¬(shape.tsVal (anchor.eval env) < shape.tsVal m'' ∧
-          shape.tsVal m'' < shape.tsVal m') := by
-      rintro m'' hm''mem hm''mult _ ⟨hlo, hhi⟩
-      have : shape.tsVal m'' ∈ TS := ⟨m'', hm''mem, hm''mult, rfl, hlo⟩
-      have := Nat.sInf_le this
-      omega
-    obtain ⟨R, hR, hRmult, hRpay⟩ := c2 (anchor.eval env) (hmem anchor hAmem) m' hm'mem
-      hAev hm'mult (haddr _ _) (by omega) hnobetween
-    exact hnocons ⟨R, hR, hRmult, hRpay⟩
-  -- Step 3: S's timestamp differs from the anchor's (uniqueness clause + payload difference)
-  have hSA : shape.tsVal (S.eval env) ≠ shape.tsVal (anchor.eval env) := by
-    intro heqts
-    exact payloadNeq_sound Bnd hBnd T anchor S hp hAS env hsat'
-      (c4 (anchor.eval env) (hmem anchor hAmem) (S.eval env) (hmem S hSmem)
-        hAev hSev (haddr _ _) heqts.symm)
-  -- Step 4: S is strictly below the anchor, hence consumed in-fragment
-  have hSlt : shape.tsVal (S.eval env) < shape.tsVal (anchor.eval env) := by
-    have := hmax (S.eval env) (hmem S hSmem) hSev
-    omega
+  have hWev : (W.eval env).multiplicity = 1 := W.multiplicity.constValue?_sound 1 hWm env
+  -- `S` is listed before `W`, so by monotonicity `tsVal S ≤ tsVal W`
+  have hWms : (W.eval env) ∈ post.map (fun bi => bi.eval env) :=
+    List.mem_map.2 ⟨W, hWpost, rfl⟩
+  have hsplitms : msgs = pre.map (fun bi => bi.eval env) ++
+      (S.eval env) :: post.map (fun bi => bi.eval env) := by
+    rw [hmsgs, hsplit, List.map_append, List.map_cons]
+  have hle : shape.tsVal (S.eval env) ≤ shape.tsVal (W.eval env) := by
+    have cmono' : msgs.Pairwise (fun a b => a.multiplicity ≠ 0 → b.multiplicity ≠ 0 →
+      shape.tsVal a ≤ shape.tsVal b) := cmono
+    rw [hsplitms] at cmono'
+    have hpc := (List.pairwise_cons.1 (List.pairwise_append.1 cmono').2.1).1
+    exact hpc (W.eval env) hWms (by rw [hSev]; exact h1ne) (by rw [hWev]; exact h1ne)
+  -- payload difference + uniqueness make it strict
+  have hne : shape.tsVal (S.eval env) ≠ shape.tsVal (W.eval env) := by
+    intro heq
+    exact payloadNeq_sound Bnd hBnd T W S hp hWS env hsat'
+      (c4 (W.eval env) (hmem W hWmem) (S.eval env) (hmem S hSmem)
+        hWev hSev (haddr _ _) heq.symm)
+  have hSlt : shape.tsVal (S.eval env) < shape.tsVal (W.eval env) := lt_of_le_of_ne hle hne
+  -- so `S` is consumed in-fragment (take the least active send strictly above it)
   obtain ⟨R, hRmem, hRmult, hRpay⟩ : ∃ R ∈ msgs, R.multiplicity = -1 ∧
       R.payload = (S.eval env).payload := by
     set TS : Set ℕ := {t | ∃ m' ∈ msgs, m'.multiplicity = 1 ∧ shape.tsVal m' = t ∧
       shape.tsVal (S.eval env) < t} with hTS
-    have hne : TS.Nonempty :=
-      ⟨shape.tsVal (anchor.eval env), anchor.eval env, hmem anchor hAmem, hAev, rfl, hSlt⟩
-    obtain ⟨m', hm'mem, hm'mult, hm'ts, hm'gt⟩ := Nat.sInf_mem hne
+    have hne' : TS.Nonempty :=
+      ⟨shape.tsVal (W.eval env), W.eval env, hmem W hWmem, hWev, rfl, hSlt⟩
+    obtain ⟨m', hm'mem, hm'mult, hm'ts, hm'gt⟩ := Nat.sInf_mem hne'
     have hnobetween : ∀ m'' ∈ msgs, m''.multiplicity = 1 →
         shape.address m'' = shape.address (S.eval env) →
         ¬(shape.tsVal (S.eval env) < shape.tsVal m'' ∧
@@ -322,7 +307,8 @@ theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
 def findExecChains (cs : ConstraintSystem p) (bs : BusSemantics p)
     (Bnd : Std.HashMap String Nat)
     (T : DomainTable p cs bs) :
-    List (Nat × BusInteraction (Expression p) × BusInteraction (Expression p)
+    List (Nat × List (BusInteraction (Expression p)) × List (BusInteraction (Expression p))
+      × BusInteraction (Expression p) × BusInteraction (Expression p)
       × BusInteraction (Expression p)) :=
   ((cs.busInteractions.map (fun bi => bi.busId)).dedup).flatMap (fun busId =>
     match bs.memoryBus busId with
@@ -330,19 +316,21 @@ def findExecChains (cs : ConstraintSystem p) (bs : BusSemantics p)
     | some shape =>
       if shape.addressFields.isEmpty then
         let L := cs.busInteractions.filter (fun bi => bi.busId = busId)
-        let sends := L.filter (fun bi => multConst bi = some 1)
         let receives := L.filter (fun bi => multConst bi = some (-1))
-        match sends.filter (fun a =>
-          L.all (fun bi => notRecv bi || payloadNeq Bnd T a bi)) with
-        | [] => []
-        | a :: _ =>
-          sends.filterMap (fun S =>
-            if S = a then none
-            else
+        -- chain each send `S` using the next payload-different send after it as the witness
+        L.filterMap (fun S =>
+          if multConst S ≠ some 1 then none
+          else
+            let pre := L.takeWhile (fun bi => bi ≠ S)
+            let post := (L.dropWhile (fun bi => bi ≠ S)).tail
+            match (post.filter (fun bi =>
+                multConst bi = some 1 && payloadNeq Bnd T bi S)).head? with
+            | none => none
+            | some W =>
               match receives.filter (fun r => !payloadNeq Bnd T S r) with
               | [Rt] =>
-                if checkExecChain cs bs Bnd T busId shape a S Rt then
-                  some (busId, a, S, Rt)
+                if checkExecChain cs bs Bnd T busId shape pre post S W Rt then
+                  some (busId, pre, post, S, W, Rt)
                 else none
               | _ => none)
       else [])
@@ -354,21 +342,22 @@ def collectExecEqs (cs : ConstraintSystem p) (bs : BusSemantics p)
       bs.violatesConstraint (bi.eval env) = false) →
       ∀ x b, Bnd[x]? = some b → (env x).val < b)
     (T : DomainTable p cs bs) (hp : 0 < p) :
-    List (Nat × BusInteraction (Expression p) × BusInteraction (Expression p)
+    List (Nat × List (BusInteraction (Expression p)) × List (BusInteraction (Expression p))
+      × BusInteraction (Expression p) × BusInteraction (Expression p)
       × BusInteraction (Expression p)) →
     { out : List (Expression p) //
         ∀ env, cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0 }
   | [] => ⟨[], fun _ _ _ hc => absurd hc (by simp)⟩
-  | (busId, anchor, S, Rt) :: rest =>
+  | (busId, pre, post, S, W, Rt) :: rest =>
     let ⟨acc, hacc⟩ := collectExecEqs cs bs Bnd hBnd T hp rest
     match hdecl : bs.memoryBus busId with
     | none => ⟨acc, hacc⟩
     | some shape =>
-      if hchk : checkExecChain cs bs Bnd T busId shape anchor S Rt = true then
+      if hchk : checkExecChain cs bs Bnd T busId shape pre post S W Rt = true then
         ⟨memEqConstraints shape S Rt ++ acc, by
           intro env hsat c hc
           rcases List.mem_append.1 hc with h | h
-          · exact checkExecChain_sound cs bs Bnd hBnd T busId shape anchor S Rt hdecl hp
+          · exact checkExecChain_sound cs bs Bnd hBnd T busId shape pre post S W Rt hdecl hp
               hchk env hsat c h
           · exact hacc env hsat c h⟩
       else ⟨acc, hacc⟩
