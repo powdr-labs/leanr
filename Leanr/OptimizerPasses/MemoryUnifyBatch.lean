@@ -114,10 +114,20 @@ def notMatchG (B : Std.HashMap String Nat) (shape : MemoryBusShape)
 /-- All checked side conditions for a memory match `(S, S', Rt)` on `busId`: `S`/`S'` active
     constant-multiplicity sends to the same constant address with a constant in-range
     timestamp gap; every interaction on the bus is excluded as an in-between send; every
-    interaction except `Rt` is provably not the matching receive. -/
+    interaction except `Rt` is provably not the matching receive.
+
+    `preS'`/`postS'` split the (filtered) bus list as `L = preS' ++ S' :: postS'`. Any receive
+    listed in `postS'` is refuted as `S`'s consumer by the discipline's **monotonicity clause**:
+    a message after `S'` in list order has timestamp `≥ tsVal S' > tsVal S`, but `S`'s consumer
+    has `S`'s timestamp — so it cannot lie after `S'`. This is what lets the match survive an
+    otherwise-ambiguous later access on a *separate, un-chained* timestamp (e.g. a terminal
+    computed jump re-reading the same register): it is list-after `S'`, hence excluded, rather
+    than blocking the pair with an unrefutable timestamp difference. -/
 def checkMemMatchG (cs : ConstraintSystem p) (bs : BusSemantics p)
     (B : Std.HashMap String Nat)
-    (busId : Nat) (shape : MemoryBusShape) (S S' Rt : BusInteraction (Expression p)) : Bool :=
+    (busId : Nat) (shape : MemoryBusShape)
+    (preS' postS' : List (BusInteraction (Expression p)))
+    (S S' Rt : BusInteraction (Expression p)) : Bool :=
   let L := cs.busInteractions.filter (fun bi => bi.busId = busId)
   decide ((1 : ZMod p) ≠ 0) &&
   decide (1 ≤ shape.tsBound) &&
@@ -125,12 +135,13 @@ def checkMemMatchG (cs : ConstraintSystem p) (bs : BusSemantics p)
   decide (multConst S = some 1) && decide (multConst S' = some 1) &&
   decide (multConst Rt = some (-1)) &&
   addrConstsEq shape S S' &&
+  decide (L = preS' ++ S' :: postS') &&
   (match constDiff (tsExprOf shape S) (tsExprOf shape S') with
    | some k =>
      decide (0 < k.val) && decide (shape.tsBound + k.val ≤ p) &&
        L.all (sendExcluded shape S S' k)
    | none => false) &&
-  L.all (fun bi => decide (bi = Rt) || notMatchG B shape S bi)
+  L.all (fun bi => decide (bi = Rt) || notMatchG B shape S bi || decide (bi ∈ postS'))
 
 theorem checkMemMatchG_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
     (B : Std.HashMap String Nat)
@@ -138,15 +149,16 @@ theorem checkMemMatchG_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
       bs.violatesConstraint (bi.eval env) = false) →
       ∀ x b, B[x]? = some b → (env x).val < b)
     (busId : Nat) (shape : MemoryBusShape)
+    (preS' postS' : List (BusInteraction (Expression p)))
     (S S' Rt : BusInteraction (Expression p)) (hdecl : bs.memoryBus busId = some shape)
-    (hchk : checkMemMatchG cs bs B busId shape S S' Rt = true)
+    (hchk : checkMemMatchG cs bs B busId shape preS' postS' S S' Rt = true)
     (env : String → ZMod p) (hsat : cs.satisfies bs env) :
     ∀ c ∈ memEqConstraints shape S Rt, c.eval env = 0 := by
   -- unpack the certificate
   unfold checkMemMatchG at hchk
   simp only [Bool.and_eq_true] at hchk
-  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨h1ne, htsb⟩, hSmem⟩, hS'mem⟩, hRtmem⟩, hSm⟩, hS'm⟩, hRtm⟩,
-    haddrc⟩, hgapblock⟩, hmatch⟩ := hchk
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨h1ne, htsb⟩, hSmem⟩, hS'mem⟩, hRtmem⟩, hSm⟩, hS'm⟩, hRtm⟩,
+    haddrc⟩, hsplitd⟩, hgapblock⟩, hmatch⟩ := hchk
   have h1ne := of_decide_eq_true h1ne
   have htsb := of_decide_eq_true htsb
   have hSmem := of_decide_eq_true hSmem
@@ -155,6 +167,8 @@ theorem checkMemMatchG_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
   have hSm := of_decide_eq_true hSm
   have hS'm := of_decide_eq_true hS'm
   have hRtm := of_decide_eq_true hRtm
+  have hsplit : cs.busInteractions.filter (fun bi => bi.busId = busId)
+      = preS' ++ S' :: postS' := of_decide_eq_true hsplitd
   -- the timestamp gap and the send-exclusion certificate
   obtain ⟨k, hk, hkpos, hkrange, hsends⟩ :
       ∃ k, constDiff (tsExprOf shape S) (tsExprOf shape S') = some k ∧
@@ -255,37 +269,58 @@ theorem checkMemMatchG_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
   obtain ⟨bi, hbi, hbieq⟩ := List.mem_map.1 hRcvMem
   have hbiRt : bi = Rt := by
     have hcase := List.all_eq_true.mp hmatch bi hbi
-    rcases (Bool.or_eq_true _ _).mp hcase with hcase | hcase
-    · exact of_decide_eq_true hcase
-    · exfalso
-      unfold notMatchG at hcase
-      rw [Bool.or_eq_true, Bool.or_eq_true] at hcase
-      have hpay : bi.payload.map (fun e => e.eval env)
-          = S.payload.map (fun e => e.eval env) := by
-        have := hRcvPay
-        rw [← hbieq] at this
-        exact this
-      rcases hcase with (hcase | href) | haddrne
-      · split at hcase
-        · rename_i m hm
-          have hmne : m ≠ -1 := of_decide_eq_true hcase
-          have hme : (bi.eval env).multiplicity = m := bi.multiplicity.constValue?_sound m hm env
-          apply hmne
-          rw [← hme, hbieq]
-          exact hRcvMult
-        · exact absurd hcase (by simp)
-      · -- payload equality forces timestamp equality, contradicting the refutation
-        have := payloadSlot_eval_eq bi.payload S.payload env hpay shape.tsField
-        exact tsRefuted_sound B shape S bi hp href env (hB env hbus) this
-      · -- payload equality forces address equality, contradicting the refutation
-        have haddreq : shape.address (S.eval env) = shape.address (bi.eval env) := by
-          unfold MemoryBusShape.address
-          apply List.map_congr_left
-          intro slot _
-          show (S.payload.map (fun e : Expression p => e.eval env))[slot]?
-            = (bi.payload.map (fun e : Expression p => e.eval env))[slot]?
-          rw [hpay]
-        exact addrConstsNeq_sound shape S bi haddrne env haddreq
+    rcases (Bool.or_eq_true _ _).mp hcase with h12 | hpost
+    swap
+    · -- `bi` is listed after `S'`: monotonicity puts its timestamp `≥ tsVal S' > tsVal S`,
+      -- but the consumer carries `S`'s timestamp — contradiction.
+      exfalso
+      have hbipost : bi ∈ postS' := of_decide_eq_true hpost
+      have hpw : ((cs.busInteractions.filter (fun b => b.busId = busId)).map
+          (fun b => b.eval env)).Pairwise (fun a b => a.multiplicity ≠ 0 →
+            b.multiplicity ≠ 0 → shape.tsVal a ≤ shape.tsVal b) := cmono
+      rw [hsplit, List.map_append, List.map_cons] at hpw
+      have hrel := (List.pairwise_cons.1 (List.pairwise_append.1 hpw).2.1).1
+      have hbimem : (bi.eval env) ∈ postS'.map (fun b => b.eval env) :=
+        List.mem_map.2 ⟨bi, hbipost, rfl⟩
+      have hbimult : (bi.eval env).multiplicity ≠ 0 := by
+        rw [hbieq, hRcvMult]; exact neg_ne_zero.mpr h1ne
+      have hle : shape.tsVal (S'.eval env) ≤ shape.tsVal (bi.eval env) :=
+        hrel (bi.eval env) hbimem (by rw [hS'ev]; exact h1ne) hbimult
+      have htseq : shape.tsVal (bi.eval env) = shape.tsVal (S.eval env) := by
+        rw [hbieq]; unfold MemoryBusShape.tsVal; rw [hRcvPay]
+      omega
+    · rcases (Bool.or_eq_true _ _).mp h12 with hcase | hcase
+      · exact of_decide_eq_true hcase
+      · exfalso
+        unfold notMatchG at hcase
+        rw [Bool.or_eq_true, Bool.or_eq_true] at hcase
+        have hpay : bi.payload.map (fun e => e.eval env)
+            = S.payload.map (fun e => e.eval env) := by
+          have := hRcvPay
+          rw [← hbieq] at this
+          exact this
+        rcases hcase with (hcase | href) | haddrne
+        · split at hcase
+          · rename_i m hm
+            have hmne : m ≠ -1 := of_decide_eq_true hcase
+            have hme : (bi.eval env).multiplicity = m :=
+              bi.multiplicity.constValue?_sound m hm env
+            apply hmne
+            rw [← hme, hbieq]
+            exact hRcvMult
+          · exact absurd hcase (by simp)
+        · -- payload equality forces timestamp equality, contradicting the refutation
+          have := payloadSlot_eval_eq bi.payload S.payload env hpay shape.tsField
+          exact tsRefuted_sound B shape S bi hp href env (hB env hbus) this
+        · -- payload equality forces address equality, contradicting the refutation
+          have haddreq : shape.address (S.eval env) = shape.address (bi.eval env) := by
+            unfold MemoryBusShape.address
+            apply List.map_congr_left
+            intro slot _
+            show (S.payload.map (fun e : Expression p => e.eval env))[slot]?
+              = (bi.payload.map (fun e : Expression p => e.eval env))[slot]?
+            rw [hpay]
+          exact addrConstsNeq_sound shape S bi haddrne env haddreq
   -- the payload equality, slot by slot, gives the conclusions
   have hpay : Rt.payload.map (fun e => e.eval env) = S.payload.map (fun e => e.eval env) := by
     have h' := hRcvPay
@@ -314,7 +349,8 @@ def bestSuccessor (shape : MemoryBusShape) (sends : List (BusInteraction (Expres
     successor to the same address, and the first receive passing the full certificate. -/
 def findMemMatchesG (cs : ConstraintSystem p) (bs : BusSemantics p)
     (B : Std.HashMap String Nat) :
-    List (Nat × BusInteraction (Expression p) × BusInteraction (Expression p)
+    List (Nat × List (BusInteraction (Expression p)) × List (BusInteraction (Expression p))
+      × BusInteraction (Expression p) × BusInteraction (Expression p)
       × BusInteraction (Expression p)) :=
   ((cs.busInteractions.map (fun bi => bi.busId)).dedup).flatMap (fun busId =>
     match bs.memoryBus busId with
@@ -325,10 +361,14 @@ def findMemMatchesG (cs : ConstraintSystem p) (bs : BusSemantics p)
       let receives := L.filter (fun bi => multConst bi = some (-1))
       sends.filterMap (fun S =>
         (bestSuccessor shape sends S).bind (fun S' =>
-          -- cheap pre-filter: only unrefuted receives are candidates (usually exactly one)
-          match receives.filter (fun r => !notMatchG B shape S r) with
+          let preS' := L.takeWhile (fun bi => bi ≠ S')
+          let postS' := (L.dropWhile (fun bi => bi ≠ S')).tail
+          -- cheap pre-filter: only receives that are unrefuted *and* not listed after `S'`
+          -- (those the monotonicity route excludes) are candidates — usually exactly one.
+          match receives.filter (fun r => !notMatchG B shape S r && r ∉ postS') with
           | [Rt] =>
-            if checkMemMatchG cs bs B busId shape S S' Rt then some (busId, S, S', Rt)
+            if checkMemMatchG cs bs B busId shape preS' postS' S S' Rt then
+              some (busId, preS', postS', S, S', Rt)
             else none
           | _ => none)))
 
@@ -338,21 +378,23 @@ def collectMemEqs (cs : ConstraintSystem p) (bs : BusSemantics p)
     (hB : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) →
       ∀ x b, B[x]? = some b → (env x).val < b) :
-    List (Nat × BusInteraction (Expression p) × BusInteraction (Expression p)
+    List (Nat × List (BusInteraction (Expression p)) × List (BusInteraction (Expression p))
+      × BusInteraction (Expression p) × BusInteraction (Expression p)
       × BusInteraction (Expression p)) →
     { out : List (Expression p) //
         ∀ env, cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0 }
   | [] => ⟨[], fun _ _ _ hc => absurd hc (by simp)⟩
-  | (busId, S, S', Rt) :: rest =>
+  | (busId, preS', postS', S, S', Rt) :: rest =>
     let ⟨acc, hacc⟩ := collectMemEqs cs bs B hB rest
     match hdecl : bs.memoryBus busId with
     | none => ⟨acc, hacc⟩
     | some shape =>
-      if hchk : checkMemMatchG cs bs B busId shape S S' Rt = true then
+      if hchk : checkMemMatchG cs bs B busId shape preS' postS' S S' Rt = true then
         ⟨memEqConstraints shape S Rt ++ acc, by
           intro env hsat c hc
           rcases List.mem_append.1 hc with h | h
-          · exact checkMemMatchG_sound cs bs B hB busId shape S S' Rt hdecl hchk env hsat c h
+          · exact checkMemMatchG_sound cs bs B hB busId shape preS' postS' S S' Rt hdecl hchk
+              env hsat c h
           · exact hacc env hsat c h⟩
       else ⟨acc, hacc⟩
 

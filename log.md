@@ -758,3 +758,28 @@ now only 2 timestamps survive** (`ts_0` and the post-terminal `ts_20`); the regi
 data and decomposition limbs riding on the timestamps collapse with them. Cases 1/2 unchanged
 (already handled / single-instruction). Snapshot byte-identical (36/11), `SnapshotCorrect`
 re-proven, both correctness theorems still 3-axiom, all outputs within the degree bound.
+
+### 36. Memory pair-unification consumes the monotonicity clause (after-successor exclusion)
+`memoryUnifyBatchPass` identifies a send `S`'s consumer receive by refuting every other
+interaction, previously only via multiplicity / constant-timestamp-difference / address
+(`notMatchG`). On a block that ends in a **computed jump** (JALR), the terminal instruction
+re-reads a register at a timestamp on a *separate, un-chained* `from_state` (the exec chain
+can't link it — its send targets a symbolic pc). That later read has a timestamp with no
+constant difference from `S`, so it could not be refuted, leaving *two* candidate receives for
+the same send → the pair match was abandoned and the whole register/data chain stalled (this
+is why apc_003/015/019 lagged: the `rs1_data`/`read_data`/`prev_data`/`lower_decomp` limbs of
+every register never collapsed).
+
+Fix: consume the discipline's **program-order monotonicity clause** (clause 5, added in entry
+34, until now unused by the unify passes). `checkMemMatchG` now takes the split
+`L = preS' ++ S' :: postS'` around the successor send `S'`; any receive listed in `postS'` is
+refuted because monotonicity gives it `tsVal ≥ tsVal S' > tsVal S`, whereas the consumer
+carries `S`'s timestamp — so it cannot lie after `S'`. Proof: `List.pairwise_append`/
+`pairwise_cons` on the evaluated split (mirroring `ExecChain`'s extraction) plus
+`tsVal (bi.eval) = tsVal (S.eval)` from the consumer's payload equality; `omega` closes it.
+Search-side threads the split and pre-filters candidates by `r ∉ postS'`. Only *adds* a
+refutation route, so it never drops a previously-found match.
+Worked: yes, no regressions. apc_019 153→129 (1.79→2.12×), apc_003 138→126 (1.86→2.04×),
+apc_015 205→169 (1.83→2.22×), apc_008 265→193 (2.03→2.79×); others unchanged. Snapshot
+byte-identical (36/11), `SnapshotCorrect` re-proven, both correctness theorems still
+`{propext, Classical.choice, Quot.sound}`-only, all outputs within the degree bound.
