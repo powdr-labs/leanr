@@ -49,7 +49,8 @@ private def neverViolatesImpl (busMap : Nat → Option OpenVmBusType) (busId : N
   match busMap busId with
   | some .executionBridge => true
   | some .memory => true
-  | some .pcLookup => true
+  -- Note: pcLookup is *not* listed here. Its `violates` now rejects payloads whose
+  -- length is not 9, so it can violate and is not unconditionally sound.
   | _ => false
 
 /-- A payload matching a 4-entry pattern is a 4-entry list. -/
@@ -184,7 +185,6 @@ def openVmFacts (p : ℕ) [NeZero p]
     unfold neverViolatesImpl at h
     unfold violates
     split at h
-    · rename_i hbus; rw [hbus]
     · rename_i hbus; rw [hbus]
     · rename_i hbus; rw [hbus]
     · exact absurd h (by simp)
