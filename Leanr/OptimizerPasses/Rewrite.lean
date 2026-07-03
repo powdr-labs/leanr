@@ -165,6 +165,28 @@ def ConstraintSystem.filterBus (cs : ConstraintSystem p) (keep : BusInteraction 
     ConstraintSystem p :=
   { cs with busInteractions := cs.busInteractions.filter keep }
 
+/-- `Pairwise` survives *un-filtering* when every dropped element relates (both ways) to
+    everything: pairs of survivors are covered by the filtered `Pairwise`, and any pair
+    touching a dropped element is covered by the vacuity hypothesis. Used to transfer the
+    monotonicity clause of the memory discipline back across a zero-multiplicity drop. -/
+theorem List.pairwise_of_filter_pairwise {α : Type _} {R : α → α → Prop} {keep : α → Bool} :
+    ∀ {l : List α}, (l.filter keep).Pairwise R →
+    (∀ a ∈ l, keep a = false → (∀ b, R a b) ∧ (∀ b, R b a)) → l.Pairwise R
+  | [], _, _ => List.Pairwise.nil
+  | x :: xs, hpw, hvac => by
+    have hvacxs : ∀ a ∈ xs, keep a = false → (∀ b, R a b) ∧ (∀ b, R b a) :=
+      fun a ha => hvac a (List.mem_cons_of_mem _ ha)
+    by_cases hx : keep x = true
+    · rw [List.filter_cons_of_pos hx, List.pairwise_cons] at hpw
+      refine List.pairwise_cons.2 ⟨?_, List.pairwise_of_filter_pairwise hpw.2 hvacxs⟩
+      intro b hb
+      by_cases hb' : keep b = true
+      · exact hpw.1 b (List.mem_filter.2 ⟨hb, hb'⟩)
+      · exact (hvac b (List.mem_cons_of_mem _ hb) (by simpa using hb')).2 x
+    · rw [List.filter_cons_of_neg (by simpa using hx)] at hpw
+      refine List.pairwise_cons.2 ⟨?_, List.pairwise_of_filter_pairwise hpw hvacxs⟩
+      exact fun b _ => (hvac x (List.mem_cons_self ..) (by simpa using hx)).1 b
+
 /-- Dropping only identically-zero-multiplicity interactions preserves the memory discipline.
     Needs `(1 : ZMod p) ≠ 0` (i.e. `p ≠ 1`) so that sends (`1`) and receives (`-1`) are
     genuinely active and therefore never dropped: the discipline's clauses then see exactly the
@@ -190,7 +212,7 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
     rw [hmsgs busId] at hd
     -- notation for the two message lists
     set base := cs.busInteractions.filter (fun bi => bi.busId = busId) with hbase
-    obtain ⟨c1, c2, c3, c4, c5⟩ := hd
+    obtain ⟨c1, c2, c3, c4, c5, c6⟩ := hd
     -- an active message of the full list is a message of the filtered list
     have hact : ∀ m ∈ base.map (fun bi => bi.eval a), m.multiplicity ≠ 0 →
         m ∈ (base.filter keep).map (fun bi => bi.eval a) := by
@@ -205,7 +227,7 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
       intro m hm
       obtain ⟨bi, hbi, rfl⟩ := List.mem_map.1 hm
       exact List.mem_map.2 ⟨bi, List.mem_of_mem_filter hbi, rfl⟩
-    refine ⟨?_, ?_, ?_, ?_, ?_⟩
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
     · intro S hS R hR hSm hRm haddr hts
       exact c1 S (hact S hS (hSm ▸ hp1)) R (hact R hR (hRm ▸ hneg)) hSm hRm haddr hts
     · intro S hS S' hS' hSm hS'm haddr hlt hbetween
@@ -219,11 +241,19 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
       exact c4 S (hact S hS (hSm ▸ hp1)) S' (hact S' hS' (hS'm ▸ hp1)) hSm hS'm haddr hts
     · intro R hR R' hR' hRm hR'm haddr hts
       exact c5 R (hact R hR (hRm ▸ hneg)) R' (hact R' hR' (hR'm ▸ hneg)) hRm hR'm haddr hts
+    · -- monotonicity: transfer from the filtered list back to the full list (dropped
+      -- messages have multiplicity 0, so every pair touching one is vacuously ordered)
+      rw [List.pairwise_map] at c6 ⊢
+      refine List.pairwise_of_filter_pairwise c6 ?_
+      intro bi hbi hkf
+      have hz : (bi.eval a).multiplicity = 0 :=
+        h0 bi (List.mem_of_mem_filter hbi) (by simpa using hkf) a
+      exact ⟨fun _ h1 => absurd hz h1, fun _ _ h2 => absurd hz h2⟩
   · intro h busId shape hdecl
     have hd := h busId shape hdecl
     rw [hmsgs busId]
     set base := cs.busInteractions.filter (fun bi => bi.busId = busId) with hbase
-    obtain ⟨c1, c2, c3, c4, c5⟩ := hd
+    obtain ⟨c1, c2, c3, c4, c5, c6⟩ := hd
     have hact : ∀ m ∈ base.map (fun bi => bi.eval a), m.multiplicity ≠ 0 →
         m ∈ (base.filter keep).map (fun bi => bi.eval a) := by
       intro m hm hmne
@@ -237,7 +267,7 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
       intro m hm
       obtain ⟨bi, hbi, rfl⟩ := List.mem_map.1 hm
       exact List.mem_map.2 ⟨bi, List.mem_of_mem_filter hbi, rfl⟩
-    refine ⟨?_, ?_, ?_, ?_, ?_⟩
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
     · intro S hS R hR hSm hRm haddr hts
       exact c1 S (hsub S hS) R (hsub R hR) hSm hRm haddr hts
     · intro S hS S' hS' hSm hS'm haddr hlt hbetween
@@ -251,6 +281,9 @@ theorem ConstraintSystem.memoryDiscipline_filterBus_zero (cs : ConstraintSystem 
       exact c4 S (hsub S hS) S' (hsub S' hS') hSm hS'm haddr hts
     · intro R hR R' hR' hRm hR'm haddr hts
       exact c5 R (hsub R hR) R' (hsub R' hR') hRm hR'm haddr hts
+    · -- monotonicity: the filtered list is a sublist, and `Pairwise` restricts to sublists
+      rw [List.pairwise_map] at c6 ⊢
+      exact List.Pairwise.sublist (l₁ := base.filter keep) List.filter_sublist c6
 
 /-- Net multiplicity is unchanged by dropping (via `keep = false`) bus interactions whose evaluated
     multiplicity is `0`: such an interaction contributes `0` to every message's net multiplicity, so

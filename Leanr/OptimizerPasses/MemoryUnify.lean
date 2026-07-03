@@ -407,7 +407,7 @@ theorem checkMemMatch_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
   have hp : 0 < p := by omega
   -- the discipline for this bus
   obtain ⟨hc, hb, hd⟩ := hsat
-  obtain ⟨c1, c2, c3, c4, c5⟩ := hd busId shape hdecl
+  obtain ⟨c1, c2, c3, c4, c5, cmono⟩ := hd busId shape hdecl
   have hbus : ∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false := fun bi hbi => hb bi hbi
   -- evaluated multiplicities

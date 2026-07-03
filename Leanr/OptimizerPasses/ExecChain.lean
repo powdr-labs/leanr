@@ -213,7 +213,7 @@ theorem checkExecChain_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
   set L := cs.busInteractions.filter (fun bi => bi.busId = busId) with hL
   set msgs := L.map (fun bi => bi.eval env) with hmsgs
   obtain ⟨hc, hb, hd⟩ := hsat
-  obtain ⟨c1, c2, c3, c4, c5⟩ := hd busId shape hdecl
+  obtain ⟨c1, c2, c3, c4, c5, cmono⟩ := hd busId shape hdecl
   have hsat' : cs.satisfies bs env := ⟨hc, hb, hd⟩
   -- every message has the same (empty) address
   have haddr : ∀ m m' : BusInteraction (ZMod p), shape.address m = shape.address m' := by

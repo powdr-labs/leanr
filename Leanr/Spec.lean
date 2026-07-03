@@ -160,7 +160,17 @@ def MemoryBusShape.tsVal (shape : MemoryBusShape) (m : BusInteraction (ZMod p)) 
        address with the same timestamp value carry the same payload (`(address, timestamp)`
        identifies at most one send and at most one receive across the system — the same
        global-uniqueness assumption clause 1 relies on, stated send-to-send and
-       receive-to-receive). -/
+       receive-to-receive);
+    5. **program-order timestamp monotonicity** — active messages are listed in
+       non-decreasing timestamp order: for any two active messages with the earlier one first
+       in the interaction list, the earlier one's timestamp is `≤` the later one's
+       (`List.Pairwise`). **Audited assumption** (with Georg's sign-off): the APC generator
+       emits a fragment's bus interactions in execution order and the VM's timestamps advance
+       monotonically along that execution, so list order is time order within the fragment's
+       exclusive timestamp window. Unlike clauses 1–4, this makes list order load-bearing for
+       the *soundness* of the optimizations it enables (e.g. it identifies the last active
+       send as the timestamp maximum, the anchor an execution-bridge chain needs when a
+       block ends in a computed jump). -/
 def MemoryBusShape.disciplineOn (shape : MemoryBusShape)
     (msgs : List (BusInteraction (ZMod p))) : Prop :=
   (∀ S ∈ msgs, ∀ R ∈ msgs, S.multiplicity = 1 → R.multiplicity = -1 →
@@ -177,7 +187,9 @@ def MemoryBusShape.disciplineOn (shape : MemoryBusShape)
     S.payload = S'.payload) ∧
   (∀ R ∈ msgs, ∀ R' ∈ msgs, R.multiplicity = -1 → R'.multiplicity = -1 →
     shape.address R = shape.address R' → shape.tsVal R = shape.tsVal R' →
-    R.payload = R'.payload)
+    R.payload = R'.payload) ∧
+  (msgs.Pairwise (fun a b => a.multiplicity ≠ 0 → b.multiplicity ≠ 0 →
+    shape.tsVal a ≤ shape.tsVal b))
 
 /-- The memory discipline of a constraint system: every declared memory bus's discipline holds
     for the system's evaluated interactions on that bus. -/
