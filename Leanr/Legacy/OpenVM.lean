@@ -1,6 +1,9 @@
-import Leanr.RangeConstraint
-import Leanr.BusInteraction
+import Leanr.Legacy.RangeConstraint
+import Leanr.Legacy.BusInteraction
 import Lean.Data.Json
+
+namespace Legacy
+
 
 namespace OpenVM
 
@@ -186,3 +189,5 @@ def openVMBusInteractionHandler (busMap : BusMap) : BusInteractionHandler babyBe
   }
 
 end OpenVM
+
+end Legacy

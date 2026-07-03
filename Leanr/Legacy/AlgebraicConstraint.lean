@@ -1,5 +1,8 @@
-import Leanr.AffineExpression
-import Leanr.Expression
+import Leanr.Legacy.AffineExpression
+import Leanr.Legacy.Expression
+
+namespace Legacy
+
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
@@ -89,3 +92,5 @@ def AlgebraicConstraint.solve? {p : ℕ}
       else
         some { var := x, value := -c⁻¹ * e.offset }
     | _ => none -- more than one variable
+
+end Legacy

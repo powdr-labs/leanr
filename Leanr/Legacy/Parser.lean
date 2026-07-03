@@ -1,6 +1,9 @@
 import Init.Data.ToString
 
-import Leanr.Expression
+import Leanr.Legacy.Expression
+
+namespace Legacy
+
 
 declare_syntax_cat expr
 
@@ -30,3 +33,5 @@ macro_rules
 /-- info: (((2 * x) + (3 * y)) + 0) -/
 #guard_msgs in
 #eval ((expr { 2 * x + 3 * y + 4 }) : Expression 4)
+
+end Legacy

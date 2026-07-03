@@ -1,5 +1,8 @@
-import Leanr.Solver
-import Leanr.AlgebraicConstraint.Proofs
+import Leanr.Legacy.Solver
+import Leanr.Legacy.AlgebraicConstraint.Proofs
+
+namespace Legacy
+
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
@@ -220,3 +223,5 @@ theorem solve_sound (state : SolverState p) (handler : BusInteractionHandler p)
   · exact h_round
   termination_by state.system.constraints.size
   decreasing_by omega
+
+end Legacy

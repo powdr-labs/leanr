@@ -1,4 +1,7 @@
-import Leanr.Expression
+import Leanr.Legacy.Expression
+
+namespace Legacy
+
 
 theorem simplifying_add_eval {p : ℕ} (e1 e2 : Expression p) (env : String → ZMod p) :
     (Expression.simplifying_add e1 e2).eval env = e1.eval env + e2.eval env := by
@@ -96,3 +99,5 @@ theorem Expression.substitute_eval {p : ℕ} (e : Expression p)
   | mul e1 e2 ih1 ih2 =>
     unfold substitute
     rw [simplifying_mul_eval, ih1, ih2]; rfl
+
+end Legacy

@@ -1,7 +1,9 @@
 import Leanr
-import Leanr.StringParser
+import Leanr.Legacy.StringParser
 import Leanr.JsonParser
-import Leanr.Solver
+import Leanr.Legacy.Solver
+
+open Legacy
 
 def main (args: List String) : IO Unit := do
   let p := 0x1dffff

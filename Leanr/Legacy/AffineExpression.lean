@@ -4,7 +4,10 @@ import Std.Data.TreeMap.Lemmas
 import Std
 import Mathlib
 
-import Leanr.Expression
+import Leanr.Legacy.Expression
+
+namespace Legacy
+
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
@@ -110,3 +113,5 @@ def AffineExpression.solvedRangeConstraint
       e.affine.foldl (fun (acc : RangeConstraint p) k (v : ZMod p) =>
         if k == x then acc else acc + (↑v) * env k) init
     some (rest_rc.multiple inv_neg_coeff)
+
+end Legacy

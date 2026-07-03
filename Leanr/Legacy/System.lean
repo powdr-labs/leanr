@@ -1,5 +1,8 @@
-import Leanr.AlgebraicConstraint
-import Leanr.BusInteraction
+import Leanr.Legacy.AlgebraicConstraint
+import Leanr.Legacy.BusInteraction
+
+namespace Legacy
+
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
 
@@ -24,3 +27,5 @@ def System.fromConstraints {p : ℕ}
 /-- A system's constraints are all satisfied by `env`. -/
 def System.satisfies (s : System p) (env : String → ZMod p) : Prop :=
   ∀ c ∈ s.constraints.toList, AlgebraicConstraint.eval c env = 0
+
+end Legacy
