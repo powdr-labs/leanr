@@ -715,3 +715,30 @@ constraint in these circuits (the heap-chaining blocker is the timestamp/JALR is
 not decomposition matching). Kept in the tree (imported by `Leanr.lean`, so `lake build`
 verifies it) but **not** in the pipeline, since it fires on no benchmark case and would only
 add per-cycle cost. Available if a VM emits the matching constraint shape.
+
+### 34. Program-order timestamp monotonicity — spec clause added (Georg-approved)
+Added clause 5 to `MemoryBusShape.disciplineOn`: active messages on a declared bus are listed
+in non-decreasing timestamp order (`msgs.Pairwise (fun a b => a.mult ≠ 0 → b.mult ≠ 0 →
+tsVal a ≤ tsVal b)`). This is the audited assumption from `SPEC-PROPOSAL-order-monotonicity.md`
+— powdr's de-facto ordering, and (per the concrete `EXEC` walk-through with Georg) exactly
+what rules out the phantom out-of-time-order countermodel that currently forces leanr to keep
+`t2` when a block ends in a computed jump. It **reverses** the entry-17 order-freedom choice
+for the optimizations it enables, hence Georg's explicit sign-off.
+Threading: the substitution / `mapExpr` discipline-transfer lemmas rewrite the whole evaluated
+message list, so the new clause transfers for free; zero-multiplicity bus removal needed a new
+`List.pairwise_of_filter_pairwise` (dropped messages have multiplicity 0, so any pair touching
+one is vacuously ordered — both un-filter and re-filter directions). The four unify passes
+destructure the clause as `cmono` but don't yet consume it. **No behavior change: snapshot
+byte-identical (36/11), `SnapshotCorrect` re-proven, both `optimizer_maintainsCorrectness` and
+`optimizer_respectsDegree` still `{propext, Classical.choice, Quot.sound}`-only.**
+
+Consumption (next, pending Georg's spec review + a design discussion): `ExecChain` should pick
+the **last active send in list order** as its anchor (the timestamp maximum, by clause 5) in
+place of the current payload-refutation anchor — this is what unblocks the symbolic-jump case.
+The proof route is clean: split the bus list `L = pre ++ anchor :: post` with `post` all
+provably-not-active-sends (`notSend`), then `List.pairwise_append` on the monotonicity clause
+gives `tsVal (S.eval) ≤ tsVal (anchor.eval)` for every active send `S` before the anchor, and
+the `post` elements can't be active sends — so the anchor is the maximum with no proof about
+its symbolic pc. Open design points for the discussion: whether to require all bus mults
+constant (simplest) or handle symbolic multiplicities, and whether the anchor rule lives in
+`checkExecChain` (replacing the payload-refutation clause, more general) or as an added path.
