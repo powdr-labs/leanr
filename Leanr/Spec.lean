@@ -53,6 +53,7 @@ structure DegreeBound where
   busInteractions : Nat
 
 /-- The bus semantics of the zkVM. -/
+-- TODO: Rename to VmSemantics
 structure BusSemantics (p : ℕ) where
   /-- Whether the bus of the given ID changes the state of the VM.
       Stateless bus interactions are typically lookups. -/
