@@ -22,6 +22,13 @@ def Expression.eval (e : Expression p) (env : String → ZMod p) : ZMod p :=
   | .add e1 e2 => e1.eval env + e2.eval env
   | .mul e1 e2 => e1.eval env * e2.eval env
 
+/-- The multiplicative degree of an expression. -/
+def Expression.degree : Expression p → Nat
+  | .const _ => 0
+  | .var _ => 1
+  | .add e1 e2 => max e1.degree e2.degree
+  | .mul e1 e2 => e1.degree + e2.degree
+
 --------- Bus Interactions ---------
 
 /-- A bus interaction. Typically, α is
@@ -40,7 +47,13 @@ def BusInteraction.eval (bi : BusInteraction (Expression p)) (env : String → Z
     multiplicity := bi.multiplicity.eval env,
     payload := bi.payload.map (fun e => e.eval env) }
 
+/-- Per-zkVM bound on the multiplicative degree of a circuit's expressions. -/
+structure DegreeBound where
+  identities : Nat
+  busInteractions : Nat
+
 /-- The bus semantics of the zkVM. -/
+-- TODO: Rename to VmSemantics
 structure BusSemantics (p : ℕ) where
   /-- Whether the bus of the given ID changes the state of the VM.
       Stateless bus interactions are typically lookups. -/
@@ -53,6 +66,8 @@ structure BusSemantics (p : ℕ) where
       For example, a memory bus might have the invariant that all sent values must be in
       a certain range. -/
   breaksInvariant (busInteractionMessage : BusInteraction (ZMod p)) : Bool
+  /-- The zkVM's degree bound. -/
+  degreeBound : DegreeBound
 
 /-- A concrete bus interaction message: which bus, and the tuple sent. -/
 abbrev BusMessage (p : ℕ) := Nat × List (ZMod p)
@@ -118,14 +133,29 @@ def ConstraintSystem.equivalentTo (self other : ConstraintSystem p) (busSemantic
     Prop :=
   self.implies other busSemantics ∧ other.implies self busSemantics
 
+/-- Whether a constraint system stays within a degree bound. -/
+def ConstraintSystem.withinDegree (s : ConstraintSystem p) (b : DegreeBound) : Prop :=
+  (∀ c ∈ s.algebraicConstraints, c.degree ≤ b.identities) ∧
+  (∀ bi ∈ s.busInteractions, bi.multiplicity.degree ≤ b.busInteractions ∧
+    ∀ e ∈ bi.payload, e.degree ≤ b.busInteractions)
+
+/-- Whether an optimizer respects the zkVM's degree bound. -/
+def optimizerRespectsDegreeBound
+    (optimizer : ConstraintSystem p → BusSemantics p → ConstraintSystem p) : Prop :=
+  ∀ (constraintSystem : ConstraintSystem p) (busSemantics : BusSemantics p),
+    constraintSystem.withinDegree busSemantics.degreeBound →
+    (optimizer constraintSystem busSemantics).withinDegree busSemantics.degreeBound
+
 /-- Whether an optimizer maintains correctness. This means that, for all constraint systems
     and bus semantics:
     1. The optimized constraint system is equivalent to the original, i.e. it has a satisfying
        witness iff the original does **and** the side effects are the same.
-    2. Assuming the original constraint system guarantees invariants, so does the optimized one. -/
+    2. Assuming the original constraint system guarantees invariants, so does the optimized one.
+    3. The optimizer respects the zkVM's degree bound. -/
 def optimizerMaintainsCorrectness (optimizer : ConstraintSystem p → BusSemantics p → ConstraintSystem p) :
     Prop :=
-  ∀ constraintSystem busSemantics,
+  (∀ constraintSystem busSemantics,
     ((optimizer constraintSystem busSemantics).equivalentTo constraintSystem busSemantics) ∧
     (constraintSystem.guaranteesInvariants busSemantics →
-      (optimizer constraintSystem busSemantics).guaranteesInvariants busSemantics)
+      (optimizer constraintSystem busSemantics).guaranteesInvariants busSemantics))
+  ∧ optimizerRespectsDegreeBound optimizer

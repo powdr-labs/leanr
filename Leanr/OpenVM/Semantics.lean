@@ -131,5 +131,7 @@ def openVmBusSemantics (p : ℕ) : BusSemantics p where
     | none => false
   violatesConstraint := violates
   breaksInvariant := breaksInvariant
+  -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`).
+  degreeBound := { identities := 3, busInteractions := 2 }
 
 end Leanr.OpenVM
