@@ -28,8 +28,10 @@ theorem ConstraintSystem.equivalentTo_refl (cs : ConstraintSystem p) (busSemanti
     cs.equivalentTo cs busSemantics :=
   ⟨cs.implies_refl busSemantics, cs.implies_refl busSemantics⟩
 
-/-- The identity optimizer maintains correctness. -/
+/-- The identity optimizer maintains correctness: it returns the system unchanged, so it is
+    equivalent to the input, preserves invariants, and (leaving every expression as-is) never
+    changes any degree — hence trivially respects the degree bound. -/
 theorem optimizer_maintainsCorrectness :
     optimizerMaintainsCorrectness (p := p) identityOptimizer :=
-  fun cs busSemantics =>
-    ⟨cs.equivalentTo_refl busSemantics, id⟩
+  ⟨fun cs busSemantics => ⟨cs.equivalentTo_refl busSemantics, id⟩,
+   fun _ _ h => h⟩
