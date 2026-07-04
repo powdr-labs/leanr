@@ -67,7 +67,7 @@ structure MemoryBusShape where
 /-- Per-zkVM bound on the multiplicative degree of a circuit's expressions: the proving
     backend fixes how large the degree of algebraic constraints (`identities`) and of bus
     interaction fields — multiplicities and payload entries — may become. An optimizer must
-    never exceed it (`optimizerRespectsDegree`). -/
+    never exceed it (`optimizerRespectsDegreeBound`). -/
 structure DegreeBound where
   identities : Nat
   busInteractions : Nat
@@ -262,7 +262,7 @@ theorem ConstraintSystem.withinDegreeB_iff (s : ConstraintSystem p) (b : DegreeB
 
 /-- Whether an optimizer respects the zkVM's degree bound: it never pushes a circuit that is
     within the bound past it. -/
-def optimizerRespectsDegree
+def optimizerRespectsDegreeBound
     (optimizer : ConstraintSystem p → BusSemantics p → ConstraintSystem p) : Prop :=
   ∀ (constraintSystem : ConstraintSystem p) (busSemantics : BusSemantics p),
     constraintSystem.withinDegree busSemantics.degreeBound →

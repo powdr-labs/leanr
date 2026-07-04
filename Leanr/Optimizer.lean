@@ -106,11 +106,6 @@ theorem optimizerWith_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
 def optimizer (cs : ConstraintSystem p) (busSemantics : BusSemantics p) : ConstraintSystem p :=
   optimizerWith cs busSemantics (BusFacts.trivial busSemantics)
 
-/-- The optimizer maintains correctness. This is just the proof carried by `pipeline`. -/
-theorem optimizer_maintainsCorrectness :
-    optimizerMaintainsCorrectness (p := p) optimizer :=
-  fun cs busSemantics => (pipeline cs busSemantics (BusFacts.trivial busSemantics)).property
-
 /-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree
     bound (every pass is degree-guarded). -/
 theorem optimizerWith_respectsDegree (cs : ConstraintSystem p) (bs : BusSemantics p)
@@ -120,5 +115,12 @@ theorem optimizerWith_respectsDegree (cs : ConstraintSystem p) (bs : BusSemantic
   pipelineIters_respectsDeg iters cs bs facts h
 
 /-- The optimizer respects the zkVM's degree bound. -/
-theorem optimizer_respectsDegree : optimizerRespectsDegree (p := p) optimizer :=
+theorem optimizer_respectsDegreeBound : optimizerRespectsDegreeBound (p := p) optimizer :=
   fun cs bs h => pipelineIters_respectsDeg 32 cs bs (BusFacts.trivial bs) h
+
+/-- The optimizer maintains correctness: its output is equivalent to the input and preserves
+    invariants (both carried by `pipeline`), and it respects the degree bound. -/
+theorem optimizer_maintainsCorrectness :
+    optimizerMaintainsCorrectness (p := p) optimizer :=
+  ⟨fun cs busSemantics => (pipeline cs busSemantics (BusFacts.trivial busSemantics)).property,
+   optimizer_respectsDegreeBound⟩

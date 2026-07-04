@@ -56,7 +56,7 @@ def VerifiedPassW.iterateStable (f : VerifiedPassW p) : Nat → VerifiedPassW p
 
 /-! ## Degree guarding
 
-`optimizerRespectsDegree` is enforced compositionally with **zero** per-pass proof burden:
+`optimizerRespectsDegreeBound` is enforced compositionally with **zero** per-pass proof burden:
 every pass is wrapped in a checked guard that falls back to its (unchanged) input if the
 output would exceed the semantics' degree bound. `RespectsDeg` then propagates through
 composition and iteration. -/
