@@ -22,6 +22,15 @@ def Expression.eval (e : Expression p) (env : String → ZMod p) : ZMod p :=
   | .add e1 e2 => e1.eval env + e2.eval env
   | .mul e1 e2 => e1.eval env * e2.eval env
 
+/-- The multiplicative degree of an expression (an upper bound on the total degree of the
+    polynomial it denotes): constants are degree `0`, variables `1`, addition takes the
+    maximum, multiplication the sum. -/
+def Expression.degree : Expression p → Nat
+  | .const _ => 0
+  | .var _ => 1
+  | .add e1 e2 => max e1.degree e2.degree
+  | .mul e1 e2 => e1.degree + e2.degree
+
 --------- Bus Interactions ---------
 
 /-- A bus interaction. Typically, α is
@@ -40,6 +49,14 @@ def BusInteraction.eval (bi : BusInteraction (Expression p)) (env : String → Z
     multiplicity := bi.multiplicity.eval env,
     payload := bi.payload.map (fun e => e.eval env) }
 
+/-- Per-zkVM bound on the multiplicative degree of a circuit's expressions: the proving
+    backend fixes how large the degree of algebraic constraints (`identities`) and of bus
+    interaction fields — multiplicities and payload entries — may become. An optimizer must
+    never exceed it (`optimizerRespectsDegree`). -/
+structure DegreeBound where
+  identities : Nat
+  busInteractions : Nat
+
 /-- The bus semantics of the zkVM. -/
 structure BusSemantics (p : ℕ) where
   /-- Whether the bus of the given ID changes the state of the VM.
@@ -53,6 +70,8 @@ structure BusSemantics (p : ℕ) where
       For example, a memory bus might have the invariant that all sent values must be in
       a certain range. -/
   breaksInvariant (busInteractionMessage : BusInteraction (ZMod p)) : Bool
+  /-- The zkVM's degree bound (see `DegreeBound`): what the proving backend supports. -/
+  degreeBound : DegreeBound
 
 /-- A concrete bus interaction message: which bus, and the tuple sent. -/
 abbrev BusMessage (p : ℕ) := Nat × List (ZMod p)
@@ -117,6 +136,22 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
 def ConstraintSystem.equivalentTo (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
     Prop :=
   self.implies other busSemantics ∧ other.implies self busSemantics
+
+/-- Whether a constraint system stays within a degree bound: every algebraic constraint has
+    degree at most `b.identities`, and every bus interaction field — the multiplicity and
+    each payload entry — has degree at most `b.busInteractions`. -/
+def ConstraintSystem.withinDegree (s : ConstraintSystem p) (b : DegreeBound) : Prop :=
+  (∀ c ∈ s.algebraicConstraints, c.degree ≤ b.identities) ∧
+  (∀ bi ∈ s.busInteractions, bi.multiplicity.degree ≤ b.busInteractions ∧
+    ∀ e ∈ bi.payload, e.degree ≤ b.busInteractions)
+
+/-- Whether an optimizer respects the zkVM's degree bound: it never pushes a circuit that is
+    within the bound past it. -/
+def optimizerRespectsDegree
+    (optimizer : ConstraintSystem p → BusSemantics p → ConstraintSystem p) : Prop :=
+  ∀ (constraintSystem : ConstraintSystem p) (busSemantics : BusSemantics p),
+    constraintSystem.withinDegree busSemantics.degreeBound →
+    (optimizer constraintSystem busSemantics).withinDegree busSemantics.degreeBound
 
 /-- Whether an optimizer maintains correctness. This means that, for all constraint systems
     and bus semantics:
