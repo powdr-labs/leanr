@@ -1,4 +1,5 @@
 import Leanr.Spec
+import Leanr.MemoryBus
 
 set_option autoImplicit false
 
@@ -37,6 +38,14 @@ def defaultBusMap : Nat → Option OpenVmBusType
   | 7 => some (.tupleRangeChecker 256 2048)
   | _ => none
 
+/-- A concrete bus map as parsed from a powdr export's `bus_map.bus_ids` field:
+    an association list bus id ↦ bus type. -/
+abbrev BusMap := List (Nat × OpenVmBusType)
+
+/-- View a parsed `BusMap` as the lookup function the semantics consume. -/
+def BusMap.toFun (busMap : BusMap) : Nat → Option OpenVmBusType :=
+  fun busId => busMap.lookup busId
+
 /-- Stateful buses are the execution bridge and memory; the rest are stateless lookups. -/
 def OpenVmBusType.isStateful : OpenVmBusType → Bool
   | .executionBridge => true
@@ -50,8 +59,8 @@ def OpenVmBusType.isStateful : OpenVmBusType → Bool
 private def isByte (x : ZMod p) : Bool := decide (x.val < 256)
 
 /-- Whether a message conflicts with the lookup table of the bus it is sent on. -/
-def violates (msg : BusInteraction (ZMod p)) : Bool :=
-  match defaultBusMap msg.busId, msg.payload with
+def violates (busMap : Nat → Option OpenVmBusType) (msg : BusInteraction (ZMod p)) : Bool :=
+  match busMap msg.busId, msg.payload with
   -- ISSUE:
   -- The PC lookup is a bit special: We would have to know the program to
   -- check whether the PC lookup is valid. So this semantics is **wrong**,
@@ -99,9 +108,9 @@ def violates (msg : BusInteraction (ZMod p)) : Bool :=
   | none, _ => true
 
 /-- Whether a message breaks an invariant on which soundness depends. -/
-def breaksInvariant (msg : BusInteraction (ZMod p)) : Bool :=
+def breaksInvariant (busMap : Nat → Option OpenVmBusType) (msg : BusInteraction (ZMod p)) : Bool :=
   -- Note that this function is not called for multiplicity = 0
-  match defaultBusMap msg.busId with
+  match busMap msg.busId with
   -- Lookups are only ever sent (multiplicity 1).
   | some .pcLookup | some .variableRangeChecker | some .bitwiseLookup
   | some (.tupleRangeChecker _ _) =>
@@ -123,15 +132,41 @@ def breaksInvariant (msg : BusInteraction (ZMod p)) : Bool :=
   -- Circuits should not send messages to an unknown bus.
   | none => true
 
-/-- The OpenVM bus semantics, using the hard-coded default bus map. -/
-def openVmBusSemantics (p : ℕ) : BusSemantics p where
+/-- The last-write-wins shape per bus (`Leanr/MemoryBus.lean`): the memory bus keys on OpenVM's
+    two-limb address (payload slots `[0, 1]` = address space + pointer); the execution bridge is a
+    linear-consumption bus — a single global `(pc, timestamp)` cell, hence empty address. All other
+    payload slots (data, timestamp) are the value the discipline carries through a matched pair. -/
+def memShapeOf (busMap : Nat → Option OpenVmBusType) (busId : Nat) : Option MemoryBusShape :=
+  match busMap busId with
+  | some .memory => some { addressFields := [0, 1] }
+  | some .executionBridge => some { addressFields := [] }
+  | _ => none
+
+/-- The OpenVM bus semantics for a given bus map (default: the hard-coded default bus map).
+
+    The `admissible` predicate declares memory and the execution bridge to follow the last-write-wins
+    consecutive-match discipline (`admissibleBus`): each write's value/timestamp is read back by the
+    next same-address access. This is the **audited assumption**, justified by OpenVM's
+    offline-memory-checking argument, its per-instruction exclusive timestamp windows, and its
+    program-ordered bus emission. -/
+def openVmBusSemantics (p : ℕ) (busMap : Nat → Option OpenVmBusType := defaultBusMap) :
+    BusSemantics p where
   isStateful busId :=
-    match defaultBusMap busId with
+    match busMap busId with
     | some t => t.isStateful
     | none => false
-  violatesConstraint := violates
-  breaksInvariant := breaksInvariant
-  -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`).
+  violatesConstraint := violates busMap
+  breaksInvariant := breaksInvariant busMap
+  admissible msgs :=
+    ∀ (busId : Nat) (shape : MemoryBusShape), memShapeOf busMap busId = some shape →
+      admissibleBus shape (msgs.filter (fun m => m.busId = busId))
+  -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`): algebraic constraints
+  -- up to degree 3, bus interaction fields up to degree 2.
   degreeBound := { identities := 3, busInteractions := 2 }
+
+/-- The BabyBear field modulus, `2^31 - 2^27 + 1` — the field all powdr OpenVM exports use. -/
+def babyBear : Nat := 2013265921
+
+instance : NeZero babyBear := ⟨by decide⟩
 
 end Leanr.OpenVM
