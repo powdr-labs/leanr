@@ -66,13 +66,11 @@ structure BusSemantics (p : ℕ) where
       For example, a memory bus might have the invariant that all sent values must be in
       a certain range. -/
   breaksInvariant (busInteractionMessage : BusInteraction (ZMod p)) : Bool
-  /-- Audited, VM-supplied predicate on the evaluated messages of the *stateful* buses: holds
-      exactly for the message lists that correspond to a real VM trace (offline memory checking /
-      program-ordered execution). The optimizer must preserve completeness only for assignments
-      whose stateful messages are `admissible` — never for every satisfying assignment (see
-      `ConstraintSystem.admissible`, `impliesAdmissible`, `refines`). Concrete memory/exec
-      discipline lives in the integration (`Leanr/MemoryBus.lean`, `Leanr/OpenVM/`), not here. -/
-  admissible : List (BusInteraction (ZMod p)) → Prop
+  /-- A property on *stateful* bus messages with nonzero multiplicity. Completeness is only
+      required for assignments whose stateful messages are `admissible`.
+      One useful way to use this is to describe the semantics of memory buses, see
+      ``Leanr/MemoryBus.lean``. -/
+  admissible (statefulBusMessages: List (BusInteraction (ZMod p))): Prop
   /-- The zkVM's degree bound. -/
   degreeBound : DegreeBound
 
@@ -145,7 +143,7 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
     assignments, and the produced witness is itself admissible. This is the *completeness*
     direction of an optimization: the optimizer must reproduce every real trace, but may drop
     spurious (non-trace) satisfying assignments. Delivering an admissible witness is what makes
-    `refines` composable (see `impliesAdmissible_trans`). -/
+    `refines` transitive. -/
 def ConstraintSystem.impliesAdmissible (self other : ConstraintSystem p)
     (busSemantics : BusSemantics p) : Prop :=
   ∀ env, self.admissible busSemantics env → self.satisfies busSemantics env →
@@ -153,8 +151,8 @@ def ConstraintSystem.impliesAdmissible (self other : ConstraintSystem p)
       self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
 
 /-- Whether `self` is a valid **optimization** of `other` under a given bus semantics:
-    * **sound** — `self.implies other`: every satisfying assignment of `self` is one of `other`
-      (unconditional; this is what keeps the proof system honest);
+    * **sound** — `self.implies other`: A satisfying assignment of `self` implies that there exists
+      a satisfying assignment of `other` with the same side effects.;
     * **complete for admissible executions** — `other.impliesAdmissible self`: every *admissible*
       (real-trace) satisfying assignment of `other` is reproduced by `self`. -/
 def ConstraintSystem.refines (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
