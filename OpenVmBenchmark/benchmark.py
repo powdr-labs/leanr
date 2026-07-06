@@ -278,6 +278,8 @@ HTML_TEMPLATE = r"""<!doctype html>
   .pophd { font-weight:600; margin-bottom:5px; position:sticky; top:0; background:var(--bg); }
   .pop .v { font:var(--mono); white-space:nowrap; }
   .pnone { color:var(--dim); font:var(--mono); }
+  .hl-rem { background:#ffd7d5; color:#cf222e; border-radius:3px; }
+  .hl-add { background:#ceffd6; color:#1a7f37; border-radius:3px; }
 </style></head>
 <body>
   <aside id="side">
@@ -317,6 +319,30 @@ function varDiffHTML(orig, opt) {
     '<span class="rem">−' + removed.length + '</span> / <span class="add">+' + added.length + '</span> vars' +
     '<span class="pop">' + col(removed, "rem", "removed") + col(added, "add", "added") + '</span></span>';
 }
+// Escape a render and wrap any variable token that is in `set` with a highlight span.
+function highlightRender(text, set, cls) {
+  if (!set.size) return esc(text);
+  let out = "", last = 0, m;
+  const re = /[A-Za-z_][A-Za-z0-9_@]*/g;
+  while ((m = re.exec(text)) !== null) {
+    out += esc(text.slice(last, m.index)) +
+      (set.has(m[0]) ? '<span class="' + cls + '">' + esc(m[0]) + '</span>' : esc(m[0]));
+    last = re.lastIndex;
+  }
+  return out + esc(text.slice(last));
+}
+// Variables this optimizer removed that the other optimizer kept.
+function exclRemovedHTML(orig, opt, other, thisName, otherName) {
+  const P = new Set(opt.vars_list), Q = new Set(other.vars_list);
+  const excl = orig.vars_list.filter(function(v) { return !P.has(v) && Q.has(v); });
+  const items = excl.length
+    ? excl.map(function(v) { return '<div class="v rem">' + esc(v) + '</div>'; }).join("")
+    : '<div class="pnone">none</div>';
+  return '<span class="vardiff" onclick="event.stopPropagation()">' +
+    '<span class="rem">' + excl.length + '</span> removed not by ' + otherName +
+    '<span class="pop"><div class="popcol"><div class="pophd rem">' + thisName +
+    ' removed, ' + otherName + ' kept (' + excl.length + ')</div>' + items + '</div></span></span>';
+}
 
 document.getElementById("summary").innerHTML =
   '<div><span class="el">leanr</span> ' + SUM.leanr_agg.toFixed(2) + '× agg · ' + SUM.leanr_geo.toFixed(2) + '× geo</div>' +
@@ -343,7 +369,7 @@ function makePanel(kind, cls, label, statsHTML, body) {
   h.innerHTML = '<span class="caret"></span><span class="plabel">' + label + '</span>' +
     (statsHTML ? '<span class="pstats">' + statsHTML + '</span>' : "");
   h.onclick = function() { collapsed[kind] = !collapsed[kind]; wrap.classList.toggle("collapsed"); };
-  const pre = document.createElement("pre"); pre.textContent = body;
+  const pre = document.createElement("pre"); pre.innerHTML = body;
   wrap.appendChild(h); wrap.appendChild(pre);
   return wrap;
 }
@@ -353,14 +379,20 @@ function render() {
   document.getElementById("tab-leanr").classList.toggle("active", tab === "leanr");
   document.getElementById("tab-powdr").classList.toggle("active", tab === "powdr");
   const c = DATA[cur], opt = tab === "leanr" ? c.leanr : c.powdr;
+  const other = tab === "leanr" ? c.powdr : c.leanr, otherName = tab === "leanr" ? "powdr" : "leanr";
+  const optSet = new Set(opt.vars_list), origSet = new Set(c.original.vars_list);
+  const removedSet = new Set(c.original.vars_list.filter(function(v) { return !optSet.has(v); }));
+  const addedSet = new Set(opt.vars_list.filter(function(v) { return !origSet.has(v); }));
   document.getElementById("caption").innerHTML = "block <b>#" + c.rank + "</b> · pc" + c.pc;
   const content = document.getElementById("content");
   content.innerHTML = "";
-  content.appendChild(makePanel("asm", "asm", "assembly", "", c.asm || "(no assembly available)"));
-  content.appendChild(makePanel("orig", "circuit p-orig", "original", statLine(c.original), c.original.render));
+  content.appendChild(makePanel("asm", "asm", "assembly", "", esc(c.asm || "(no assembly available)")));
+  content.appendChild(makePanel("orig", "circuit p-orig", "original", statLine(c.original),
+    highlightRender(c.original.render, removedSet, "hl-rem")));
   content.appendChild(makePanel("opt", "circuit " + (tab === "leanr" ? "p-leanr" : "p-powdr"), tab,
-    statLine(opt) + "  ·  " + effOf(c.original, opt).toFixed(2) + "× fewer vars  ·  " + varDiffHTML(c.original, opt),
-    opt.render));
+    statLine(opt) + "  ·  " + effOf(c.original, opt).toFixed(2) + "× fewer vars  ·  " +
+      varDiffHTML(c.original, opt) + "  ·  " + exclRemovedHTML(c.original, opt, other, tab, otherName),
+    highlightRender(opt.render, addedSet, "hl-add")));
 }
 
 document.getElementById("tab-leanr").onclick = function() { tab = "leanr"; render(); };
