@@ -47,10 +47,7 @@ def BusInteraction.eval (bi : BusInteraction (Expression p)) (env : String → Z
     multiplicity := bi.multiplicity.eval env,
     payload := bi.payload.map (fun e => e.eval env) }
 
-/-- Per-zkVM bound on the multiplicative degree of a circuit's expressions: the proving
-    backend fixes how large the degree of algebraic constraints (`identities`) and of bus
-    interaction fields — multiplicities and payload entries — may become. An optimizer must
-    never exceed it (`optimizerRespectsDegreeBound`). -/
+/-- Per-zkVM bound on the multiplicative degree of a circuit's expressions. -/
 structure DegreeBound where
   identities : Nat
   busInteractions : Nat
@@ -76,7 +73,7 @@ structure BusSemantics (p : ℕ) where
       `ConstraintSystem.admissible`, `impliesAdmissible`, `refines`). Concrete memory/exec
       discipline lives in the integration (`Leanr/MemoryBus.lean`, `Leanr/OpenVM/`), not here. -/
   admissible : List (BusInteraction (ZMod p)) → Prop
-  /-- The zkVM's degree bound (see `DegreeBound`): what the proving backend supports. -/
+  /-- The zkVM's degree bound. -/
   degreeBound : DegreeBound
 
 /-- A concrete bus interaction message: which bus, and the tuple sent. -/
@@ -111,27 +108,14 @@ def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
       let m := bi.eval env
       ((m.busId, m.payload), m.multiplicity))
 
-/-- The **admissible** (real-trace) assignments of a constraint system: those whose evaluated
-    messages on the *stateful* buses form a real VM trace, per the VM's `BusSemantics.admissible`
-    predicate. Pre-filtered to active (nonzero-multiplicity) stateful messages, so it is
-    insensitive to inactive and stateless interactions — which is what lets it transfer through
-    every pass generically (substitution/rewrites preserve the evaluated messages; zero-mult and
-    tautology removal drop only messages this filter already excludes).
-
-    This is an **audited assumption** about the surrounding VM. It is deliberately *not* part of
-    `satisfies`: the optimizer must preserve completeness only for admissible assignments, never
-    for every satisfying assignment (see `impliesAdmissible`/`refines`). Whether a real trace is
-    additionally *forced* to be the unique satisfying assignment — as it is for memory, by offline
-    memory checking — is out of scope; we only assume real traces are admissible. -/
+/-- Whether a given assignment is admissible under the bus semantics. -/
 def ConstraintSystem.admissible (s : ConstraintSystem p) (busSemantics : BusSemantics p)
     (env : String → ZMod p) : Prop :=
   busSemantics.admissible ((s.busInteractions.map (fun bi => bi.eval env)).filter
     (fun m => decide (m.multiplicity ≠ 0) && busSemantics.isStateful m.busId))
 
-/-- Whether a constraint system is satisfied under a given environment and bus semantics.
-    Minimal by design (algebraic constraints + bus-message obligations only); the memory
-    discipline lives separately in `isIntended` and gates the completeness direction of
-    `refines`, not satisfaction. -/
+/-- Whether a constraint system is satisfied under a given environment and bus semantics,
+    i.e., whether it satisfies all algebraic constraints and does not violate any bus constraints. -/
 def ConstraintSystem.satisfies (s : ConstraintSystem p) (busSemantics : BusSemantics p)
     (env : String → ZMod p) : Prop :=
   (∀ c ∈ s.algebraicConstraints, c.eval env = 0) ∧
@@ -172,10 +156,7 @@ def ConstraintSystem.impliesAdmissible (self other : ConstraintSystem p)
     * **sound** — `self.implies other`: every satisfying assignment of `self` is one of `other`
       (unconditional; this is what keeps the proof system honest);
     * **complete for admissible executions** — `other.impliesAdmissible self`: every *admissible*
-      (real-trace) satisfying assignment of `other` is reproduced by `self`.
-
-    Replaces the old symmetric `equivalentTo`; it is deliberately **not** symmetric — an
-    optimizer may drop non-trace witnesses, so `refines` does not entail its converse. -/
+      (real-trace) satisfying assignment of `other` is reproduced by `self`. -/
 def ConstraintSystem.refines (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
     Prop :=
   self.implies other busSemantics ∧ other.impliesAdmissible self busSemantics
@@ -186,8 +167,7 @@ def ConstraintSystem.withinDegree (s : ConstraintSystem p) (b : DegreeBound) : P
   (∀ bi ∈ s.busInteractions, bi.multiplicity.degree ≤ b.busInteractions ∧
     ∀ e ∈ bi.payload, e.degree ≤ b.busInteractions)
 
-/-- Whether an optimizer respects the zkVM's degree bound: it never pushes a circuit that is
-    within the bound past it. -/
+/-- Whether an optimizer respects the zkVM's degree bound. -/
 def optimizerRespectsDegreeBound
     (optimizer : ConstraintSystem p → BusSemantics p → ConstraintSystem p) : Prop :=
   ∀ (constraintSystem : ConstraintSystem p) (busSemantics : BusSemantics p),
