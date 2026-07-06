@@ -10,6 +10,14 @@ Leanr is designed to have a small auditing surface. To audit Leanr, it should be
 3. [`Leanr/MemoryBus.lean`](./Leanr/MemoryBus.lean): Utility used in the OpenVM semantics above (and likely useful for other VMs as well).
 4. The `optimizer_maintainsCorrectness` theorem in [`Leanr/Optimizer.lean`](./Leanr/Optimizer.lean): Audit the statement and check that the proof is correct by running `lake build`.
 
+### Assumptions (OpenVM)
+
+The theorem is proven against the spec and the OpenVM semantics above. For the guarantee to carry over to a real OpenVM circuit, the auditor must verify that the following assumptions hold on the *input* circuits:
+
+- **Memory and execution-bridge interactions are listed in chronological order.** The `admissible` predicate pairs each send with the next same-address receive *in list order* (see [`Leanr/MemoryBus.lean`](./Leanr/MemoryBus.lean)), so the exporter must emit these interactions in time order. If this was not the case, completeness might be violated.
+- **The input guarantees invariants and respects the degree bound.** The optimizer *preserves* `guaranteesInvariants` and `withinDegree`, but only assuming the input has them (e.g. that written memory limbs are byte-range-checked). Confirm this for the circuits you feed it.
+- **PC lookups are pinned.** [`Semantics.lean`](./Leanr/OpenVM/Semantics.lean) checks only the arity of a PC lookup, not the program table. We assume that constraints like `opcode = 0x5b` have already been added to the input circuit, pinning the lookup table values.
+
 ## Usage
 
 The `leanr` executable runs the optimizer on powdr `SymbolicMachine` exports (`ApcWithBusMap` JSON, plain or gzipped) and reports effectiveness — distinct variables before / after:
