@@ -135,13 +135,15 @@ def breaksInvariant (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
   -- Circuits should not send messages to an unknown bus.
   | none => true
 
-/-- The last-write-wins shape per bus (`Leanr/MemoryBus.lean`): the memory bus keys on OpenVM's
-    two-limb address (payload slots `[0, 1]` = address space + pointer); the execution bridge is a
-    linear-consumption bus — a single global `(pc, timestamp)` cell, hence empty address. All other
-    payload slots (data, timestamp) are the value the discipline carries through a matched pair. -/
+/-- Maps a bus ID to its memory bus shape, if applicable. -/
 def memShapeOf (busMap : BusMap) (busId : Nat) : Option MemoryBusShape :=
   match busMap busId with
+  -- The *actual* memory bus, with address (address space, pointer) in payload slots 0 and 1.
   | some .memory => some { addressFields := [0, 1] }
+  -- The execution bridge can also be viewed as a memory bus with a single global cell (address `[]`).
+  -- Note that in this bus, the memory discipline (for any consecutive send/receive pair, the values
+  -- must match) is *not* enforced by the bus itself. By adding the execution bridge here, make
+  -- completeness partial: We assume that the prover will always *chose* to prove consecutive cycles.
   | some .executionBridge => some { addressFields := [] }
   | _ => none
 
