@@ -9,3 +9,22 @@ Leanr is designed to have a small auditing surface. To audit Leanr, it should be
 2. [`Leanr/OpenVM/Semantics.lean`](./Leanr/OpenVM/Semantics.lean): The OpenVM-specific semantics. These are needed for our OpenVM-specific optimizations. If you are instead interested in a different VM, you can skip this file, but must provide semantics for your VM in order to use Leanr.
 3. [`Leanr/MemoryBus.lean`](./Leanr/MemoryBus.lean): Utility used in the OpenVM semantics above (and likely useful for other VMs as well).
 4. The `optimizer_maintainsCorrectness` theorem in [`Leanr/Optimizer.lean`](./Leanr/Optimizer.lean): Audit the statement and check that the proof is correct by running `lake build`.
+
+## Usage
+
+The `leanr` executable runs the optimizer on powdr `SymbolicMachine` exports (`ApcWithBusMap` JSON, plain or gzipped) and reports effectiveness — distinct variables before / after (see [`Leanr/Utils/Size.lean`](./Leanr/Utils/Size.lean)):
+
+```bash
+lake build
+
+# Optimize one case and report effectiveness
+lake exe leanr run [--iters N] Leanr/OpenVM/Benchmark/apc_001_pc3647036.json.gz
+
+# powdr's own effectiveness, from its serialized optimizer output
+lake exe leanr powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
+
+# Both, side by side
+lake exe leanr compare [--iters N] <unopt>.json.gz <unopt>.powdr_opt.json.gz
+```
+
+`--iters` bounds the optimizer's cleanup cycles (default 32); large machines need more to converge. The top-100 openvm-eth benchmark set lives in `Leanr/OpenVM/Benchmark/` — `apc_<rank>_pc<pc>.json.gz` inputs paired with `.powdr_opt.json.gz` powdr outputs; iterate over it with a shell loop.

@@ -1,32 +1,52 @@
 import Lean.Data.Json
-import Leanr.Legacy.Solver
-import Leanr.Legacy.Expression
+import Leanr.Spec
+import Leanr.OpenVM.Semantics
 
--- `JsonParser` is intentionally kept out of the `Legacy` namespace: the JSON
--- parsing logic is expected to stay useful. It still targets the legacy
--- `System`/`Expression` types via `open Legacy` for now.
-open Legacy
+/-!
+# JSON parser for powdr `SymbolicMachine` exports
 
-variable {p : ℕ} [Fact (Nat.Prime p)]
+Parses the `ApcWithBusMap` JSON that powdr's APC export writes (see
+`autoprecompiles/src/export.rs` in powdr): the `machine` key holds constraints (expression
+trees, asserted zero) and bus interactions (`{id, mult, args}`), the `bus_map.bus_ids` key
+maps bus ids to bus types. Adapted from the `main`-branch parser to target the `Spec.lean`
+types (`ConstraintSystem`, `Nat` bus ids) and the structured `OpenVmBusType`.
 
-private def parseBusType (j : Lean.Json) : Except String BusType :=
+Parsing needs no primality: everything lands in `ZMod p` verbatim.
+-/
+
+set_option autoImplicit false
+
+open Leanr.OpenVM (OpenVmBusType BusMapList)
+
+variable {p : ℕ}
+
+private def parseBusType (j : Lean.Json) : Except String OpenVmBusType :=
   match j with
   | Lean.Json.str "ExecutionBridge" => .ok .executionBridge
   | Lean.Json.str "Memory" => .ok .memory
   | Lean.Json.str "PcLookup" => .ok .pcLookup
-  | Lean.Json.str s => .ok (.other s)
   | Lean.Json.obj obj =>
     match obj.toList.head? with
-    | some ("Other", Lean.Json.str name) => .ok (.other name)
+    | some ("Other", Lean.Json.str "VariableRangeChecker") => .ok .variableRangeChecker
+    | some ("Other", Lean.Json.str "BitwiseLookup") => .ok .bitwiseLookup
     | some ("Other", Lean.Json.obj inner) =>
       match inner.toList.head? with
-      | some (name, val) => .ok (.other s!"{name}:{val}")
+      | some ("TupleRangeChecker", Lean.Json.arr sizes) =>
+        if h : sizes.size = 2 then do
+          let s1 ← sizes[0].getNat?
+          let s2 ← sizes[1].getNat?
+          .ok (.tupleRangeChecker s1 s2)
+        else .error s!"TupleRangeChecker expects 2 sizes, got {sizes.size}"
+      | some (name, _) => .error s!"unknown bus type: Other.{name}"
       | none => .error "empty Other object in bus_map"
-    | some (k, _) => .ok (.other k)
+    -- An unknown bus type would be modeled as a no-op bus (never stateful, never
+    -- violating), silently licensing unsound drops — so fail loudly instead.
+    | some ("Other", Lean.Json.str name) => .error s!"unknown bus type: Other.{name}"
+    | some (k, _) => .error s!"unknown bus type: {k}"
     | none => .error "empty object in bus_map"
   | _ => .error s!"unexpected bus type: {j}"
 
-private def parseBusMap (j : Lean.Json) : Except String BusMap := do
+private def parseBusMap (j : Lean.Json) : Except String BusMapList := do
   let obj ← j.getObjVal? "bus_ids"
   let entries ← match obj with
     | Lean.Json.obj kvs => pure kvs.toList
@@ -42,6 +62,7 @@ private def parseBusMap (j : Lean.Json) : Except String BusMap := do
 partial def parseJsonExpr (j : Lean.Json) : Except String (Expression p) :=
   match j with
   | Lean.Json.num n =>
+    -- All constants in powdr exports are integers (exponent 0).
     let z := n.mantissa * (10 ^ n.exponent)
     .ok (.const (z : ZMod p))
   | Lean.Json.str s => .ok (.var s)
@@ -80,9 +101,10 @@ partial def parseJsonExpr (j : Lean.Json) : Except String (Expression p) :=
 private def parseConstraint (j : Lean.Json) : Except String (Expression p) :=
   parseJsonExpr j
 
-private def parseBusInteraction (j : Lean.Json) : Except String (BusInteraction (Expression p)) := do
+private def parseBusInteraction (j : Lean.Json) :
+    Except String (BusInteraction (Expression p)) := do
   let id ← j.getObjVal? "id"
-  let busId ← parseJsonExpr (p := p) id
+  let busId ← id.getNat?
   let mult ← j.getObjVal? "mult"
   let multiplicity ← parseJsonExpr mult
   let argsJson ← j.getObjVal? "args"
@@ -93,11 +115,12 @@ private def parseBusInteraction (j : Lean.Json) : Except String (BusInteraction 
   pure {
     busId := busId,
     multiplicity := multiplicity,
-    payload := payload.toArray
+    payload := payload
   }
 
-/-- Parse a JSON string into a `System` and `BusMap`, starting at the `machine` key. -/
-def parseJsonSystem (jsonStr : String) : Except String (System p × BusMap) := do
+/-- Parse a JSON string into a `ConstraintSystem` and `BusMap`, starting at the `machine`
+    key. Constraints are assert-zero expressions. -/
+def parseJsonSystem (jsonStr : String) : Except String (ConstraintSystem p × BusMapList) := do
   let json ← Lean.Json.parse jsonStr
   let machine ← json.getObjVal? "machine"
 
@@ -106,9 +129,8 @@ def parseJsonSystem (jsonStr : String) : Except String (System p × BusMap) := d
   let constraintArr ← match constraintsJson with
     | Lean.Json.arr a => pure a
     | _ => .error "constraints is not an array"
-  let constraints : List (AlgebraicConstraint p) ←
-    constraintArr.toList.mapM fun c =>
-      (parseConstraint (p := p) c).map AlgebraicConstraint.assertZero
+  let constraints : List (Expression p) ←
+    constraintArr.toList.mapM fun c => parseConstraint (p := p) c
 
   -- Parse bus interactions
   let busJson ← machine.getObjVal? "bus_interactions"
@@ -122,16 +144,11 @@ def parseJsonSystem (jsonStr : String) : Except String (System p × BusMap) := d
   let busMapJson ← json.getObjVal? "bus_map"
   let busMap ← parseBusMap busMapJson
 
-  let system : System p := {
-    constraints := constraints.toArray,
-    bus_interactions := busInteractions.toArray,
-    assignments := #[]
+  let system : ConstraintSystem p := {
+    algebraicConstraints := constraints,
+    busInteractions := busInteractions
   }
   pure (system, busMap)
-
--- BabyBear prime
-instance instFactPrimeBabyBear : Fact (Nat.Prime 2013265921) where
-  out := by native_decide
 
 /-- info: Parsed 9168 constraints, 3117 bus interactions, 6 bus types -/
 #guard_msgs in
@@ -139,6 +156,6 @@ instance instFactPrimeBabyBear : Fact (Nat.Prime 2013265921) where
   let contents ← IO.FS.readFile "apc_reth_op_bug.json"
   match parseJsonSystem (p := 2013265921) contents with
   | .ok (system, busMap) =>
-    IO.println s!"Parsed {system.constraints.size} constraints, {system.bus_interactions.size} bus interactions, {busMap.length} bus types"
+    IO.println s!"Parsed {system.algebraicConstraints.length} constraints, {system.busInteractions.length} bus interactions, {busMap.length} bus types"
   | .error e =>
     IO.println s!"Error: {e}"
