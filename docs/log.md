@@ -955,6 +955,10 @@ attributable to powdr passes we don't have (`autoprecompiles/src/optimizer.rs`):
    statically sound**. powdr's headline number includes some of these; we deliberately don't (this
    is the honest-vs-optimistic gap, a spec decision, out of scope).
 
+> *Note (added later): the claim that these benchmark exports include `optimistic_constraints` is
+> unverified and, per Georg, incorrect — they are produced without the optimistic pass. The
+> leanr-vs-powdr var gap is accounted for by the sound items (1)–(3) above.*
+
 **What closing the remaining sound gap would take:** a degree-aware inlining pass (subst-like, but
 inlining any below-degree-bound column, not just pinned vars) + a dead-column sweep (a `filterBus`/
 constraint-filter over provably-unused witnesses). Both are sound and mechanical; together they'd
