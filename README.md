@@ -27,4 +27,10 @@ lake exe leanr powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
 lake exe leanr compare [--iters N] <unopt>.json.gz <unopt>.powdr_opt.json.gz
 ```
 
-`--iters` bounds the optimizer's cleanup cycles (default 32); large machines need more to converge. The top-100 openvm-eth benchmark set lives in `Leanr/OpenVM/Benchmark/` — `apc_<rank>_pc<pc>.json.gz` inputs paired with `.powdr_opt.json.gz` powdr outputs; iterate over it with a shell loop.
+`--iters` caps the optimizer's cleanup-cycle loop (default 32). The loop runs the cleanup cycle to a fixpoint and stops as soon as a cycle changes nothing, so `--iters` is only an upper bound, not a fixed count — in practice even the largest benchmark case (≈9.5k variables) converges well within 32 cycles, so raising it does not change the result. The top-100 openvm-eth benchmark set lives in [`Leanr/OpenVM/Benchmark/`](./Leanr/OpenVM/Benchmark/) (see its README). To sweep the whole set in parallel and report aggregate leanr-vs-powdr effectiveness:
+
+```bash
+Leanr/OpenVM/Benchmark/benchmark.py                # all cases (--iters 32, --jobs = cores)
+Leanr/OpenVM/Benchmark/benchmark.py --n 20         # top 20 by cost rank
+Leanr/OpenVM/Benchmark/benchmark.py --n 10 --report report.html   # + interactive HTML report
+```

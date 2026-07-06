@@ -143,10 +143,40 @@ def cmdCompare (unoptFile : String) (optFile : String) (iters : Nat) : IO Unit :
   printStats (label := "powdr ") (stats := statsOf csAfter)
   printEffectiveness (label := "powdr") (before := statsOf csBefore) (after := statsOf csAfter)
 
+/-- Escape a string for embedding inside a JSON string literal. -/
+def jsonEscape (s : String) : String :=
+  let s := s.replace "\\" "\\\\"
+  let s := s.replace "\"" "\\\""
+  let s := s.replace "\n" "\\n"
+  let s := s.replace "\r" "\\r"
+  s.replace "\t" "\\t"
+
+/-- One circuit as a JSON object: size stats plus the DSL render. -/
+def circuitJson (cs : ConstraintSystem babyBear) : String :=
+  let st := statsOf cs
+  "{\"vars\":" ++ toString st.vars ++
+    ",\"constraints\":" ++ toString st.constraints ++
+    ",\"bus\":" ++ toString st.busInteractions ++
+    ",\"render\":\"" ++ jsonEscape (Leanr.Spec.Dsl.render cs) ++ "\"}"
+
+/-- `report <unopt> <opt>`: emit one JSON object with the original, powdr-optimized and
+    leanr-optimized circuits (each: vars/constraints/bus + DSL render). Consumed by the
+    benchmark HTML report (`Leanr/OpenVM/Benchmark/benchmark.py --report`). -/
+def cmdReport (unoptFile optFile : String) (iters : Nat) : IO Unit := do
+  let (cs, busMap) ← parseFile unoptFile
+  let (csPowdr, _) ← parseFile optFile
+  let optimized := optimizerWith (cs := cs)
+    (bs := openVmBusSemantics babyBear busMap.toBusMap)
+    (facts := openVmFacts babyBear busMap.toBusMap) (iters := iters)
+  IO.println ("{\"original\":" ++ circuitJson cs ++
+    ",\"powdr\":" ++ circuitJson csPowdr ++
+    ",\"leanr\":" ++ circuitJson optimized ++ "}")
+
 def usage : String :=
   "usage: leanr run [--iters N] <file.json[.gz]>\n" ++
   "       leanr powdr <unopt.json[.gz]> <opt.json[.gz]>\n" ++
-  "       leanr compare [--iters N] <unopt.json[.gz]> <opt.json[.gz]>\n\n" ++
+  "       leanr compare [--iters N] <unopt.json[.gz]> <opt.json[.gz]>\n" ++
+  "       leanr report  [--iters N] <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n\n" ++
   "Files are powdr SymbolicMachine exports (ApcWithBusMap), e.g. OpenVm/Benchmark/*.json.gz.\n" ++
   "--iters bounds the optimizer's cleanup cycles (default 32)."
 
@@ -176,6 +206,8 @@ def main (args : List String) : IO Unit := do
     | ["vars", fileName] => cmdVars (fileName := fileName) (iters := iters)
     | ["render", fileName] => cmdRender (fileName := fileName) (iters := iters)
     | ["powdr", unoptFile, optFile] => cmdPowdr (unoptFile := unoptFile) (optFile := optFile)
+    | ["report", unoptFile, optFile] =>
+      cmdReport (unoptFile := unoptFile) (optFile := optFile) (iters := iters)
     | ["compare", unoptFile, optFile] =>
       cmdCompare (unoptFile := unoptFile) (optFile := optFile) (iters := iters)
     | _ =>

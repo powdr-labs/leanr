@@ -21,8 +21,11 @@ lake exe leanr run Leanr/OpenVM/Benchmark/apc_001_pc3647036.json.gz
 ```
 
 It reports vars/constraints/bus-interactions before/after and effectiveness (vars before / after).
-Optimization is slow; sampling a few of the 100 cases per iteration is fine. Final evaluation is on
-all of them. Ignore the `*.powdr_opt.*` files.
+Optimization is slow; sampling a few of the 100 cases per iteration is fine. Ignore the
+`*.powdr_opt.*` files. For the full picture, `Leanr/OpenVM/Benchmark/benchmark.py` runs `leanr
+compare` over all 100 cases in parallel (or `--n N` for the top N by cost; `--report out.html` for a
+click-through comparison of the original / powdr / leanr circuits) and reports aggregate/geomean
+effectiveness against powdr — this is the final evaluation.
 
 ## Rules
 
