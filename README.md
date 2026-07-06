@@ -12,12 +12,11 @@ Leanr is designed to have a small auditing surface. To audit Leanr, it should be
 
 ### Assumptions (OpenVM)
 
-The theorem is proven against the spec and the OpenVM semantics above. For the guarantee to carry over to a real OpenVM circuit, the auditor must also accept these assumptions about the *input* circuits — none are checked at runtime:
+The theorem is proven against the spec and the OpenVM semantics above. For the guarantee to carry over to a real OpenVM circuit, the auditor must verify that the following assumptions hold on the *input* circuits:
 
-- **Memory and execution-bridge interactions are listed in timestamp order.** The `admissible` predicate pairs each send with the next same-address receive *in list order* (see [`Leanr/MemoryBus.lean`](./Leanr/MemoryBus.lean)), so the exporter must emit these interactions in time order. This only affects completeness: a wrong order can make the optimizer keep a variable it could have removed, never make the output unsound.
+- **Memory and execution-bridge interactions are listed in chronological order.** The `admissible` predicate pairs each send with the next same-address receive *in list order* (see [`Leanr/MemoryBus.lean`](./Leanr/MemoryBus.lean)), so the exporter must emit these interactions in time order. If this was not the case, completeness might be violated.
 - **The input guarantees invariants and respects the degree bound.** The optimizer *preserves* `guaranteesInvariants` and `withinDegree`, but only assuming the input has them (e.g. that written memory limbs are byte-range-checked). Confirm this for the circuits you feed it.
-- **PC lookups are pinned.** [`Semantics.lean`](./Leanr/OpenVM/Semantics.lean) checks only the arity of a PC lookup, not the program table. This is sound because the input pins every PC-lookup field to a constant and the optimizer never introduces new ones.
-- **Refinement is per constraint system.** Correctness is proven for one chip; substituting it into the full VM relies on the usual bus-balance argument (stateless tables accept any valid entry; stateful buses' net effect is preserved), which is outside this development.
+- **PC lookups are pinned.** [`Semantics.lean`](./Leanr/OpenVM/Semantics.lean) checks only the arity of a PC lookup, not the program table. We assume that constraints like `opcode = 0x5b` have already been added to the input circuit, pinning the lookup table values.
 
 ## Usage
 
