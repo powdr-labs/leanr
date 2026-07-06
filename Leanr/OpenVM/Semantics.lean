@@ -28,8 +28,19 @@ inductive OpenVmBusType where
   | tupleRangeChecker (size1 size2 : Nat)
   deriving Repr, DecidableEq
 
+/-- A mapping from bus IDs to bus type. -/
+abbrev BusMap := Nat → Option OpenVmBusType
+
+/-- A concrete bus map as parsed from a powdr export's `bus_map.bus_ids` field:
+    an association list bus id ↦ bus type. -/
+abbrev BusMapList := List (Nat × OpenVmBusType)
+
+/-- Convert a `BusMapList` to a `BusMap` lookup function. -/
+def BusMapList.toBusMap (busMap : BusMapList) : BusMap :=
+  fun busId => busMap.lookup busId
+
 /-- The hard-coded default OpenVM bus map, mirroring powdr's `default_openvm_bus_map` -/
-def defaultBusMap : Nat → Option OpenVmBusType
+def defaultBusMap : BusMap
   | 0 => some .executionBridge
   | 1 => some .memory
   | 2 => some .pcLookup
@@ -37,14 +48,6 @@ def defaultBusMap : Nat → Option OpenVmBusType
   | 6 => some .bitwiseLookup
   | 7 => some (.tupleRangeChecker 256 2048)
   | _ => none
-
-/-- A concrete bus map as parsed from a powdr export's `bus_map.bus_ids` field:
-    an association list bus id ↦ bus type. -/
-abbrev BusMap := List (Nat × OpenVmBusType)
-
-/-- View a parsed `BusMap` as the lookup function the semantics consume. -/
-def BusMap.toFun (busMap : BusMap) : Nat → Option OpenVmBusType :=
-  fun busId => busMap.lookup busId
 
 /-- Stateful buses are the execution bridge and memory; the rest are stateless lookups. -/
 def OpenVmBusType.isStateful : OpenVmBusType → Bool
@@ -59,7 +62,7 @@ def OpenVmBusType.isStateful : OpenVmBusType → Bool
 private def isByte (x : ZMod p) : Bool := decide (x.val < 256)
 
 /-- Whether a message conflicts with the lookup table of the bus it is sent on. -/
-def violates (busMap : Nat → Option OpenVmBusType) (msg : BusInteraction (ZMod p)) : Bool :=
+def violates (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
   match busMap msg.busId, msg.payload with
   -- ISSUE:
   -- The PC lookup is a bit special: We would have to know the program to
@@ -108,7 +111,7 @@ def violates (busMap : Nat → Option OpenVmBusType) (msg : BusInteraction (ZMod
   | none, _ => true
 
 /-- Whether a message breaks an invariant on which soundness depends. -/
-def breaksInvariant (busMap : Nat → Option OpenVmBusType) (msg : BusInteraction (ZMod p)) : Bool :=
+def breaksInvariant (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
   -- Note that this function is not called for multiplicity = 0
   match busMap msg.busId with
   -- Lookups are only ever sent (multiplicity 1).
@@ -136,7 +139,7 @@ def breaksInvariant (busMap : Nat → Option OpenVmBusType) (msg : BusInteractio
     two-limb address (payload slots `[0, 1]` = address space + pointer); the execution bridge is a
     linear-consumption bus — a single global `(pc, timestamp)` cell, hence empty address. All other
     payload slots (data, timestamp) are the value the discipline carries through a matched pair. -/
-def memShapeOf (busMap : Nat → Option OpenVmBusType) (busId : Nat) : Option MemoryBusShape :=
+def memShapeOf (busMap : BusMap) (busId : Nat) : Option MemoryBusShape :=
   match busMap busId with
   | some .memory => some { addressFields := [0, 1] }
   | some .executionBridge => some { addressFields := [] }
@@ -149,7 +152,7 @@ def memShapeOf (busMap : Nat → Option OpenVmBusType) (busId : Nat) : Option Me
     next same-address access. This is the **audited assumption**, justified by OpenVM's
     offline-memory-checking argument, its per-instruction exclusive timestamp windows, and its
     program-ordered bus emission. -/
-def openVmBusSemantics (p : ℕ) (busMap : Nat → Option OpenVmBusType := defaultBusMap) :
+def openVmBusSemantics (p : ℕ) (busMap : BusMap := defaultBusMap) :
     BusSemantics p where
   isStateful busId :=
     match busMap busId with
