@@ -30,23 +30,56 @@ instance {n : ℕ} : OfNat (Expression p) n := ⟨Expression.const (OfNat.ofNat 
 /-- A variable, referenced by name. -/
 def V (x : String) : Expression p := .var x
 
-/-! ## Rendering -/
+/-! ## Rendering
 
-private def parenIf : Bool → String → String
-  | true, s => s!"({s})"
-  | false, s => s
+The renderer simplifies the *display* of an expression (it never rewrites the expression itself):
+constant folding of numeric factors, dropping `+ 0` / `* 1` / `* 0`, and showing constants in the
+upper half of `[0, p)` as negatives — so `x + (p-1) * y` prints as `x - y` and `(p-1) * 2` as `-2`.
+Parentheses are emitted only around sum factors of a product, where precedence requires them. -/
 
-/-- Render an expression, parenthesizing only where precedence requires it
-    (`*` binds tighter than `+`). `ctx` is the precedence of the surrounding context:
-    `0` top-level, `1` inside `+`, `2`/`3` inside `*`. -/
-def renderExprPrec (ctx : Nat) : Expression p → String
-  | .const n => toString n.val
-  | .var x => x
-  | .add a b => parenIf (decide (1 < ctx)) s!"{renderExprPrec 1 a} + {renderExprPrec 2 b}"
-  | .mul a b => parenIf (decide (2 < ctx)) s!"{renderExprPrec 2 a} * {renderExprPrec 3 b}"
+/-- Split a field constant into a sign and magnitude: constants in the upper half of `[0, p)`
+    are shown as negatives (e.g. `p - 1` renders as `-1`, `p - 2` as `-2`). -/
+private def signMag (n : ZMod p) : Bool × ℕ :=
+  if 0 < p ∧ p < 2 * n.val then (true, p - n.val) else (false, n.val)
 
-/-- Render an expression with minimal parenthesization. -/
-def renderExpr (e : Expression p) : String := renderExprPrec 0 e
+mutual
+  /-- Fold a product tree into a single field coefficient and the list of already-rendered
+      non-constant factors. Numeric factors are multiplied together (so `(p-1) * 2` collapses to
+      the coefficient `-2`); an additive factor is rendered and parenthesized. -/
+  private partial def prodFold : Expression p → ZMod p × List String
+    | .mul a b => let (ca, fa) := prodFold a; let (cb, fb) := prodFold b; (ca * cb, fa ++ fb)
+    | .const n => (n, [])
+    | .var x => (1, [x])
+    | e =>                                                 -- an additive factor
+      match collectSummands e with
+      | [(neg, body)] => (if neg then -1 else 1, [body])   -- single term: splice in, no parens
+      | ss => (1, [s!"({joinSummands ss})"])
+
+  /-- Flatten an addition tree into summands, dropping zero terms and pulling each term's sign out
+      so it can be joined with `+`/`-`. Returns `(isNegative, body)` per surviving summand. -/
+  private partial def collectSummands : Expression p → List (Bool × String)
+    | .add a b => collectSummands a ++ collectSummands b
+    | e =>
+      let (c, facs) := prodFold e
+      let (neg, mag) := signMag c
+      if mag == 0 then []                                 -- `… * 0` or the constant `0`: drop it
+      else match facs with
+        | [] => [(neg, toString mag)]                     -- a pure constant
+        | _ =>
+          let body := String.intercalate " * " facs
+          [(neg, if mag == 1 then body else s!"{mag} * {body}")]  -- drop the coefficient `1`
+
+  /-- Join summands with `+`/`-`, using a leading `-` for a negative first term. -/
+  private partial def joinSummands : List (Bool × String) → String
+    | [] => "0"
+    | (s0, b0) :: rest =>
+      let head := if s0 then "-" ++ b0 else b0
+      rest.foldl (fun acc (s, b) => acc ++ (if s then " - " else " + ") ++ b) head
+
+  /-- Render an expression with the simplifications described above. -/
+  partial def renderExpr : Expression p → String
+    | e => joinSummands (collectSummands e)
+end
 
 /-- Render a list of bus interactions, emitting a `// Bus N:` header whenever the bus id
     changes (the list is assumed to be grouped by bus, as powdr renders it). -/
