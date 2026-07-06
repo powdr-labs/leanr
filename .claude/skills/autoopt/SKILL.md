@@ -13,8 +13,9 @@ must pass.
 
 ## Context
 
-This is a recurring loop — read `log.md` and recent commits first to see what has already been
-tried. Run a case with, e.g.:
+This is a recurring loop — skim the current architecture in `docs/design/architecture.md`, the
+recent `docs/log.md` entries (`tail -100 docs/log.md`; earlier ones describe superseded designs),
+and recent commits to see what has already been tried. Run a case with, e.g.:
 
 ```
 lake exe leanr run OpenVmBenchmark/data/apc_001_pc0x4ecc54.json.gz
@@ -28,9 +29,10 @@ effectiveness against powdr — this is the final evaluation. Report the result 
 
 ## Rules
 
-- **Do not change the spec** — `Leanr/Spec.lean`, the bus semantics, or the snapshot test.
-- **No `sorry` / `admit` / `axiom` / `native_decide`.** Before every commit run
-  `grep -rn "sorry\|admit\|axiom\|native_decide" Leanr/`. If you cannot prove something, break it
+- **Do not change the audited surface** — `Leanr/Spec.lean`, `Leanr/OpenVM/Semantics.lean`, or
+  `Leanr/MemoryBus.lean`.
+- **No `sorry` / `admit` / `axiom` / `native_decide`** — enforced by CI
+  (`Scripts/check-proof-integrity.sh`, runnable locally). If you cannot prove something, break it
   down or pick a simpler idea.
 - **Every commit must `lake build`.**
 - **Do not overfit.** Aim for a general algorithm that also works on a different VM with different
@@ -40,7 +42,7 @@ effectiveness against powdr — this is the final evaluation. Report the result 
 
 Write a `VerifiedPass` in a new `Leanr/OptimizerPasses/` file, import it in `Leanr/Optimizer.lean`,
 and `.andThen … |>.guardDegree` it into `cleanupCycle`. See `CLAUDE.md` and
-`docs/design/bus-knowledge.md` for the architecture; correctness follows from the pass's own
+`docs/design/architecture.md` for the architecture; correctness follows from the pass's own
 `PassCorrect`.
 
 ## Log
