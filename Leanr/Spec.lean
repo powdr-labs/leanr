@@ -66,6 +66,11 @@ structure BusSemantics (p : ℕ) where
       For example, a memory bus might have the invariant that all sent values must be in
       a certain range. -/
   breaksInvariant (busInteractionMessage : BusInteraction (ZMod p)) : Bool
+  /-- A property on *stateful* bus messages with nonzero multiplicity. Completeness is only
+      required for assignments whose stateful messages are `admissible`.
+      One useful way to use this is to describe the semantics of memory buses, see
+      ``Leanr/MemoryBus.lean``. -/
+  admissible (statefulBusMessages: List (BusInteraction (ZMod p))): Prop
   /-- The zkVM's degree bound. -/
   degreeBound : DegreeBound
 
@@ -101,7 +106,14 @@ def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
       let m := bi.eval env
       ((m.busId, m.payload), m.multiplicity))
 
-/-- Whether a constraint system is satisfied under a given environment and bus semantics. -/
+/-- Whether a given assignment is admissible under the bus semantics. -/
+def ConstraintSystem.admissible (s : ConstraintSystem p) (busSemantics : BusSemantics p)
+    (env : String → ZMod p) : Prop :=
+  busSemantics.admissible ((s.busInteractions.map (fun bi => bi.eval env)).filter
+    (fun m => decide (m.multiplicity ≠ 0) && busSemantics.isStateful m.busId))
+
+/-- Whether a constraint system is satisfied under a given environment and bus semantics,
+    i.e., whether it satisfies all algebraic constraints and does not violate any bus constraints. -/
 def ConstraintSystem.satisfies (s : ConstraintSystem p) (busSemantics : BusSemantics p)
     (env : String → ZMod p) : Prop :=
   (∀ c ∈ s.algebraicConstraints, c.eval env = 0) ∧
@@ -127,11 +139,25 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
     ∃ env', other.satisfies busSemantics env' ∧
       self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
 
-/-- Whether two constraint systems are equivalent under a given bus semantics.
-    Two constraint systems are equivalent if each implies the other. -/
-def ConstraintSystem.equivalentTo (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
+/-- Like `implies`, but the obligation is only required for `self`'s **admissible** (real-trace)
+    assignments, and the produced witness is itself admissible. This is the *completeness*
+    direction of an optimization: the optimizer must reproduce every real trace, but may drop
+    spurious (non-trace) satisfying assignments. Delivering an admissible witness is what makes
+    `refines` transitive. -/
+def ConstraintSystem.impliesAdmissible (self other : ConstraintSystem p)
+    (busSemantics : BusSemantics p) : Prop :=
+  ∀ env, self.admissible busSemantics env → self.satisfies busSemantics env →
+    ∃ env', other.satisfies busSemantics env' ∧ other.admissible busSemantics env' ∧
+      self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
+
+/-- Whether `self` is a valid **optimization** of `other` under a given bus semantics:
+    * **sound** — `self.implies other`: A satisfying assignment of `self` implies that there exists
+      a satisfying assignment of `other` with the same side effects.;
+    * **complete for admissible executions** — `other.impliesAdmissible self`: every *admissible*
+      (real-trace) satisfying assignment of `other` is reproduced by `self`. -/
+def ConstraintSystem.refines (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
     Prop :=
-  self.implies other busSemantics ∧ other.implies self busSemantics
+  self.implies other busSemantics ∧ other.impliesAdmissible self busSemantics
 
 /-- Whether a constraint system stays within a degree bound. -/
 def ConstraintSystem.withinDegree (s : ConstraintSystem p) (b : DegreeBound) : Prop :=
@@ -148,14 +174,15 @@ def optimizerRespectsDegreeBound
 
 /-- Whether an optimizer maintains correctness. This means that, for all constraint systems
     and bus semantics:
-    1. The optimized constraint system is equivalent to the original, i.e. it has a satisfying
-       witness iff the original does **and** the side effects are the same.
+    1. The optimized constraint system `refines` the original: it is sound (every satisfying
+       witness of the output is one of the input, with the same side effects) and complete for
+       the input's intended (real-trace) executions.
     2. Assuming the original constraint system guarantees invariants, so does the optimized one.
     3. The optimizer respects the zkVM's degree bound. -/
 def optimizerMaintainsCorrectness (optimizer : ConstraintSystem p → BusSemantics p → ConstraintSystem p) :
     Prop :=
   (∀ constraintSystem busSemantics,
-    ((optimizer constraintSystem busSemantics).equivalentTo constraintSystem busSemantics) ∧
+    ((optimizer constraintSystem busSemantics).refines constraintSystem busSemantics) ∧
     (constraintSystem.guaranteesInvariants busSemantics →
       (optimizer constraintSystem busSemantics).guaranteesInvariants busSemantics))
   ∧ optimizerRespectsDegreeBound optimizer

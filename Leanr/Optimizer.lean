@@ -23,15 +23,20 @@ theorem ConstraintSystem.implies_refl (cs : ConstraintSystem p) (busSemantics : 
     cs.implies cs busSemantics :=
   fun env hsat => ⟨env, hsat, BusState.equiv_refl _⟩
 
-/-- Any constraint system is equivalent to itself. -/
-theorem ConstraintSystem.equivalentTo_refl (cs : ConstraintSystem p) (busSemantics : BusSemantics p) :
-    cs.equivalentTo cs busSemantics :=
-  ⟨cs.implies_refl busSemantics, cs.implies_refl busSemantics⟩
+/-- Any constraint system admissibly-implies itself: the same admissible assignment works. -/
+theorem ConstraintSystem.impliesAdmissible_refl (cs : ConstraintSystem p)
+    (busSemantics : BusSemantics p) : cs.impliesAdmissible cs busSemantics :=
+  fun env hadm hsat => ⟨env, hsat, hadm, BusState.equiv_refl _⟩
 
-/-- The identity optimizer maintains correctness: it returns the system unchanged, so it is
-    equivalent to the input, preserves invariants, and (leaving every expression as-is) never
+/-- Any constraint system refines itself (sound + admissible-complete, both reflexively). -/
+theorem ConstraintSystem.refines_refl (cs : ConstraintSystem p) (busSemantics : BusSemantics p) :
+    cs.refines cs busSemantics :=
+  ⟨cs.implies_refl busSemantics, cs.impliesAdmissible_refl busSemantics⟩
+
+/-- The identity optimizer maintains correctness: it returns the system unchanged, so it
+    `refines` the input, preserves invariants, and (leaving every expression as-is) never
     changes any degree — hence trivially respects the degree bound. -/
 theorem optimizer_maintainsCorrectness :
     optimizerMaintainsCorrectness (p := p) identityOptimizer :=
-  ⟨fun cs busSemantics => ⟨cs.equivalentTo_refl busSemantics, id⟩,
+  ⟨fun cs busSemantics => ⟨cs.refines_refl busSemantics, id⟩,
    fun _ _ h => h⟩
