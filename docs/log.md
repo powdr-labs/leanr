@@ -1,42 +1,14 @@
 # Optimizer improvement log
 
-Append-only. Each entry: the idea, whether it worked, and its impact on the snapshot
-(`Leanr/OpenVM/Snapshot.lean`, single OpenVM ADD-immediate). **Effectiveness** = distinct
-variables in the input / distinct variables in the optimizer output (`≥ 1`; higher is better).
-The input has **36** distinct variables, so effectiveness `1` = 36 output variables.
+Append-only history of optimizer changes. Each entry records the idea, whether it worked, and its
+impact on effectiveness (distinct variables before / after; higher is better). **Earlier entries
+describe designs and files that have since been superseded** — for the current architecture see
+[`design/architecture.md`](design/architecture.md); for recent work read the last few entries
+(e.g. `tail -100 docs/log.md`).
 
-Invariants held for every commit: `lake build` succeeds, `optimizer_maintainsCorrectness` is
-proven (no `sorry`/`admit`/`axiom`/`native_decide`), and the frozen spec/bus-semantics/test input
-are untouched (only the recorded snapshot *string* is regenerated as the output changes).
-
----
-
-## Architecture
-
-The optimizer is a pipeline of **verified passes** (`Leanr/OptimizerPasses/Basic.lean`): each pass
-is a function `cs → bs → { out // PassCorrect cs out bs }`, i.e. it carries its own proof that the
-output is equivalent to the input and preserves invariants. Passes compose with `.andThen`
-(correctness by transitivity), so the whole `optimizer` is correct by construction and the public
-`optimizer_maintainsCorrectness` is just a projection.
-
-Reusable, proven equivalence machinery (the hard proofs live here once; passes are thin):
-
-- **`OptimizerPasses/Subst.lean`** — substitution `x := t`. If satisfying assignments force
-  `x = t`, substituting everywhere is equivalence-preserving (`ConstraintSystem.subst_correct`).
-  This is the workhorse for *variable elimination* (the only thing that moves the effectiveness
-  metric, which counts distinct variables). Purely equational — no field assumptions.
-- **`OptimizerPasses/Rewrite.lean`** — (a) `mapExpr`: any *eval-preserving* expression rewrite
-  (constant folding, algebraic simplification) is automatically correct (`mapExpr_correct`);
-  (b) `filterConstraints`: dropping *identically-zero* algebraic constraints is correct
-  (`filterConstraints_correct`).
-
-A pass = a decidable *detection* (find an `(x, t)` / a rewrite / a removable constraint) + supply
-the entailment hypothesis to the relevant core lemma. In the `none`/not-applicable case a pass
-falls back to the identity.
-
-`babyBear = 2013265921` is prime; `Nat.Prime babyBear` is provable by `norm_num` (no axiom / no
-`native_decide`), so field structure is available to passes that need it (e.g. dividing by a
-nonzero constant coefficient). Introduced only when a pass requires it.
+Every commit keeps `lake build` green and `optimizer_maintainsCorrectness` proven with no
+`sorry`/`admit`/`axiom`/`native_decide` (enforced by CI), leaving the audited spec and bus
+semantics untouched.
 
 ---
 
@@ -231,33 +203,6 @@ coefficients — the first one now renders literally as `(b₀ + c₀ − a₀) 
 the immediate-limb constraint as `(c₀ + 256·c₁ − 1) · (…) = 0` — exactly the form a hand-written
 circuit would use. **Impact: variables unchanged (19, effectiveness 36/19 ≈ 1.89); rendered
 circuit 2519 → 2402 bytes; whole-optimizer idempotence retained.**
-
-## Summary
-
-Starting from the identity (effectiveness `1`, 36 variables), the optimizer now reduces the
-ADD-immediate circuit to **11 variables, effectiveness 36/11 ≈ 3.27**, with 12 bus interactions
-and 4 monic algebraic constraints (the `a = b + 1` carry chain) — every step proven
-`PassCorrect` with no `sorry`/`admit`/`axiom`/`native_decide`; the concrete correctness
-theorems depend only on `propext`, `Classical.choice`, `Quot.sound`.
-
-Three knowledge tiers feed the pipeline (design: `DESIGN-bus-knowledge.md`):
-1. **Field-agnostic passes** (entries 1–13): constant folding, occurrence-cost affine
-   substitution with unit pivots, normalization (a true fixpoint), trivial/zero-multiplicity/
-   tautology dropping, monic canonicalization.
-2. **Proven `BusFacts`** (entry 16, zero audit surface): per-slot bounds and functional
-   dependences proven against the concrete semantics unlock fact-domain enumeration and
-   pointwise `violatesConstraint` probing — the `c` limbs.
-3. **The audited memory discipline** (entries 17–18, one declaration per VM): order-free
-   last-write-wins clauses in `satisfies` entail receive-equals-send equations, eliminating the
-   write-witness variables and their decomposition limbs.
-
-The remaining 11 variables (`a×4, b×4, from_ts, rdec₀, rdec₁`) are the floor under this
-knowledge: all are observable in stateful side effects except the read-decomposition limbs,
-which parameterize the read's previous access — genuinely the context's choice. Known
-quality-only follow-ups (no variable impact): dropping the now-net-zero cancelled send/receive
-pair (needs a pair-drop discipline lemma; the earliest-send side condition makes it provable),
-and the `slotFun` affine-interpolation pass (verified `NOT(x) = 0xff − x` rewriting) for
-circuits that use the XOR table.
 
 ### Hints from Georg
 

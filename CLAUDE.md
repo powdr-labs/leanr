@@ -27,8 +27,8 @@ input is reproduced by the output. The precise relation is `refines` in `Leanr/S
   top-level `optimizer_maintainsCorrectness`.
 - `Leanr/JsonParser.lean`, `Main.lean` — the powdr-export parser and the benchmark CLI (see
   `README.md`).
-- `docs/design/bus-knowledge.md` — design rationale for the bus-knowledge architecture (proven
-  `BusFacts` + the audited `admissible` predicate).
+- `docs/design/architecture.md` — how the optimizer is built: the spec, the verified-pass
+  framework, `BusFacts`, and the audited `admissible` predicate.
 
 ## Adding an optimization
 
