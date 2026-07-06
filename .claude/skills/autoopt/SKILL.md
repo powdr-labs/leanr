@@ -17,12 +17,15 @@ This is a recurring loop — read `log.md` and recent commits first to see what 
 tried. Run a case with, e.g.:
 
 ```
-lake exe leanr run Leanr/OpenVM/Benchmark/apc_001_pc3647036.json.gz
+lake exe leanr run OpenVmBenchmark/data/apc_001_pc0x4ecc54.json.gz
 ```
 
 It reports vars/constraints/bus-interactions before/after and effectiveness (vars before / after).
-Optimization is slow; sampling a few of the 100 cases per iteration is fine. Final evaluation is on
-all of them. Ignore the `*.powdr_opt.*` files.
+Optimization is slow; sampling a few of the 100 cases per iteration is fine. Ignore the
+`*.powdr_opt.*` files. For the full picture, `OpenVmBenchmark/benchmark.py` runs `leanr
+compare` over all 100 cases in parallel (or `--n N` for the top N by cost; `--report out.html` for a
+click-through comparison of the original / powdr / leanr circuits) and reports aggregate/geomean
+effectiveness against powdr — this is the final evaluation.
 
 ## Rules
 
