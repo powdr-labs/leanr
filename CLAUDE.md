@@ -3,7 +3,6 @@
 This repository is a Lean port of a circuit optimizer from
 [powdr autoprecompiles](https://github.com/powdr-labs/powdr) (cf.
 [`autoprecompiles/src/optimizer.rs`](https://github.com/powdr-labs/powdr/blob/main/autoprecompiles/src/optimizer.rs)).
-It is my (Georg's) first Lean project — question my ideas rather than agreeing by default.
 
 ## What a circuit is
 
@@ -26,15 +25,12 @@ The optimizer should be AI-maintainable:
 
 ## Layout
 
-- `Leanr/Spec.lean` — the **audited spec**: `refines`, `optimizerMaintainsCorrectness`, the degree
-  bound. This is the trust boundary; **do not change it when adding optimizations.**
+- `README.md` — A readme file for humans. Defines the auditing surface. Read it and any files mentioned there.
 - `Leanr/OptimizerPasses/Basic.lean`, `FactPass.lean` — the framework: a `VerifiedPass` bundles its
   own `PassCorrect` proof, so a pass cannot be written without discharging it.
 - `Leanr/OptimizerPasses/*.lean` — one file per optimization pass.
 - `Leanr/Optimizer.lean` — assembles the passes into `optimizer` (`cleanupCycle`), with the
   top-level `optimizer_maintainsCorrectness`.
-- `Leanr/MemoryBus.lean`, `Leanr/OpenVM/` — the concrete OpenVM `BusSemantics`/`BusFacts` instance
-  (including the audited `admissible` predicate) and the snapshot test.
 - `Leanr/JsonParser.lean`, `Main.lean` — the powdr-export parser and the benchmark CLI (see
   `README.md`).
 - `docs/design/bus-knowledge.md` — design rationale for the bus-knowledge architecture (proven
