@@ -9,6 +9,10 @@ import Leanr.Legacy.System
 import Leanr.Legacy.Solver
 import Leanr.Spec
 import Leanr.MemoryBus
+import Leanr.BusFacts
+import Leanr.OptimizerPasses.Basic
+import Leanr.OptimizerPasses.FactPass
+import Leanr.OptimizerPasses.Identity
 import Leanr.Optimizer
 import Leanr.Legacy.StringParser
 import Leanr.JsonParser
