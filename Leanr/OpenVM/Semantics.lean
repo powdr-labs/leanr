@@ -145,13 +145,7 @@ def memShapeOf (busMap : BusMap) (busId : Nat) : Option MemoryBusShape :=
   | some .executionBridge => some { addressFields := [] }
   | _ => none
 
-/-- The OpenVM bus semantics for a given bus map (default: the hard-coded default bus map).
-
-    The `admissible` predicate declares memory and the execution bridge to follow the last-write-wins
-    consecutive-match discipline (`admissibleBus`): each write's value/timestamp is read back by the
-    next same-address access. This is the **audited assumption**, justified by OpenVM's
-    offline-memory-checking argument, its per-instruction exclusive timestamp windows, and its
-    program-ordered bus emission. -/
+/-- The OpenVM bus semantics for a given bus map (default: the hard-coded default bus map). -/
 def openVmBusSemantics (p : ℕ) (busMap : BusMap := defaultBusMap) :
     BusSemantics p where
   isStateful busId :=
@@ -163,8 +157,7 @@ def openVmBusSemantics (p : ℕ) (busMap : BusMap := defaultBusMap) :
   admissible msgs :=
     ∀ (busId : Nat) (shape : MemoryBusShape), memShapeOf busMap busId = some shape →
       admissibleBus shape (msgs.filter (fun m => m.busId = busId))
-  -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`): algebraic constraints
-  -- up to degree 3, bus interaction fields up to degree 2.
+  -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`).
   degreeBound := { identities := 3, busInteractions := 2 }
 
 /-- The BabyBear field modulus, `2^31 - 2^27 + 1` — the field all powdr OpenVM exports use. -/
