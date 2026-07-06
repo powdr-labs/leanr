@@ -2,7 +2,7 @@
 
 Leanr is a verified constraint system optimizer, designed to be a drop-in replacement for the [`powdr_autoprecompiles::optimizer::optimize`](https://github.com/powdr-labs/powdr/blob/5395a66442c82abc3c095d758f170773c4b5857d/autoprecompiles/src/optimizer.rs#L31-L41) function. It comes with a proof of correctness, meaning that the optimizer is *proven to maintain a notion of circuit equivalence*.
 
-## Auditing
+## Auditing Correctness
 
 Leanr is designed to have a small auditing surface. To audit Leanr, it should be sufficient to review:
 1. [`Leanr/Spec.lean`](./Leanr/Spec.lean): Defining the notion of circuit equivalence and optimizer correctness.
@@ -12,7 +12,7 @@ Leanr is designed to have a small auditing surface. To audit Leanr, it should be
 
 ## Usage
 
-The `leanr` executable runs the optimizer on powdr `SymbolicMachine` exports (`ApcWithBusMap` JSON, plain or gzipped) and reports effectiveness — distinct variables before / after (see [`Leanr/Utils/Size.lean`](./Leanr/Utils/Size.lean)):
+The `leanr` executable runs the optimizer on powdr `SymbolicMachine` exports (`ApcWithBusMap` JSON, plain or gzipped) and reports effectiveness — distinct variables before / after:
 
 ```bash
 lake build
@@ -27,7 +27,13 @@ lake exe leanr powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
 lake exe leanr compare [--iters N] <unopt>.json.gz <unopt>.powdr_opt.json.gz
 ```
 
-`--iters` caps the optimizer's cleanup-cycle loop (default 32). The loop runs the cleanup cycle to a fixpoint and stops as soon as a cycle changes nothing, so `--iters` is only an upper bound, not a fixed count — in practice even the largest benchmark case (≈9.5k variables) converges well within 32 cycles, so raising it does not change the result. The top-100 openvm-eth benchmark set lives in [`OpenVmBenchmark/`](./OpenVmBenchmark/) (see its README). To sweep the whole set in parallel and report aggregate leanr-vs-powdr effectiveness:
+`--iters` caps the optimizer's cleanup-cycle loop (default 32). The loop runs the cleanup cycle to a fixpoint and stops as soon as a cycle changes nothing, so `--iters` is only an upper bound, not a fixed count — in practice even the largest benchmark case (≈9.5k variables) converges well within 32 cycles, so raising it does not change the result. The top-100 openvm-eth benchmark set lives in [`OpenVmBenchmark/`](./OpenVmBenchmark/) (see its README).
+
+## Benchmark
+
+As the main benchmark, we use the 100 costliest basic blocks in [openvm-eth](https://github.com/powdr-labs/openvm-eth), a guest program verifying Ethereum blocks. For details, see [`OpenVmBenchmark/README.md`](./OpenVmBenchmark/README.md).
+
+To sweep the whole set in parallel and report aggregate leanr-vs-powdr effectiveness:
 
 ```bash
 OpenVmBenchmark/benchmark.py                # all cases (--iters 32, --jobs = cores)

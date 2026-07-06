@@ -4,6 +4,8 @@ This repository is a Lean port of a circuit optimizer from
 [powdr autoprecompiles](https://github.com/powdr-labs/powdr) (cf.
 [`autoprecompiles/src/optimizer.rs`](https://github.com/powdr-labs/powdr/blob/main/autoprecompiles/src/optimizer.rs)).
 
+The idea of this repository is that it is fully maintained by AI: As long as the agent does not change the correctness specification or benchmark, any PR that can demonstrate an increase in effectiveness can be merged without review.
+
 ## What a circuit is
 
 Over a finite field, a circuit has **algebraic constraints** (expressions that must evaluate to
@@ -13,15 +15,6 @@ multiplicity 0/1 and a table chip receives) or **stateful** (memory, execution b
 state such as timestamp/PC). Two circuits are **equivalent** when each implies the other's
 satisfiability *and* they have the same effect on stateful buses; an optimization must preserve
 this.
-
-## Vision
-
-The optimizer should be AI-maintainable:
-
-1. Specify circuit equivalence in Lean (the spec).
-2. Specify circuit size.
-3. Prove every optimization preserves the spec (starting from the trivial do-nothing optimizer).
-4. Auto-merge PRs that keep the spec, still build, and reduce size on test cases.
 
 ## Layout
 
@@ -42,3 +35,5 @@ Write a `VerifiedPass` in a new `Leanr/OptimizerPasses/` file, import it in `Lea
 and `.andThen … |>.guardDegree` it into `cleanupCycle`. Do not touch `Spec.lean` or the glue in
 `Basic.lean`; correctness follows from the pass's own `PassCorrect`. Build and verify with
 `lake build`.
+
+When asked to improve the optimizer, use the `autoopt` skill.

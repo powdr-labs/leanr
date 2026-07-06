@@ -1,6 +1,6 @@
 # Design proposal: giving the optimizer sound access to bus knowledge
 
-Status: **implemented** (Layer 1: commit `9e711ce`; Layer 2: commits `805abe8`, `86008f7`; snapshot at 36/11 ≈ 3.27). Kept as the design rationale. Prompted by the two hints in `log.md` (entries 14–15):
+Status: **implemented** (Layer 1: commit `9e711ce`; Layer 2: commits `805abe8`, `86008f7`; snapshot at 36/11 ≈ 3.27). Kept as the design rationale. Prompted by the two hints in `docs/log.md` (entries 14–15):
 both remaining optimizations are blocked because the optimizer sees `BusSemantics` only as three
 opaque functions. This document proposes **two independent layers** that unblock them without
 giving up machine-checked correctness, honoring two constraints: nothing OpenVM-specific in the
