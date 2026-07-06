@@ -65,6 +65,13 @@ def distinctVarCount (cs : ConstraintSystem babyBear) : Nat :=
     cs.busInteractions.flatMap BusInteraction.vars
   (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).size
 
+/-- The distinct variable names of a constraint system, sorted. The report uses these to map
+    variables between the original and optimized circuits (removed / added). -/
+def distinctVars (cs : ConstraintSystem babyBear) : List String :=
+  let occurrences := cs.algebraicConstraints.flatMap Expression.vars ++
+    cs.busInteractions.flatMap BusInteraction.vars
+  (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList.mergeSort (· ≤ ·)
+
 def statsOf (cs : ConstraintSystem babyBear) : Stats :=
   { vars := distinctVarCount cs,
     constraints := cs.algebraicConstraints.length,
@@ -154,9 +161,11 @@ def jsonEscape (s : String) : String :=
 /-- One circuit as a JSON object: size stats plus the DSL render. -/
 def circuitJson (cs : ConstraintSystem babyBear) : String :=
   let st := statsOf cs
+  let vs := String.intercalate "," ((distinctVars cs).map (fun s => "\"" ++ jsonEscape s ++ "\""))
   "{\"vars\":" ++ toString st.vars ++
     ",\"constraints\":" ++ toString st.constraints ++
     ",\"bus\":" ++ toString st.busInteractions ++
+    ",\"vars_list\":[" ++ vs ++ "]" ++
     ",\"render\":\"" ++ jsonEscape (Leanr.Spec.Dsl.render cs) ++ "\"}"
 
 /-- `report <unopt> <opt>`: emit one JSON object with the original, powdr-optimized and

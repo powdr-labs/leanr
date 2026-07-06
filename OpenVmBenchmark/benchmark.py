@@ -5,8 +5,8 @@
 # ///
 """Benchmark the leanr optimizer against powdr over the openvm-eth set.
 
-For each apc_<rank>_pc<pc>.json.gz in this directory, run `leanr compare` (the
-same optimizer run as the autoopt loop; --iters 32 by default) and aggregate
+For each apc_<rank>_pc<pc>.json.gz under data/, run `leanr compare` (the same
+optimizer run as the autoopt loop; --iters 32 by default) and aggregate
 effectiveness -- distinct variables before / after -- for leanr vs powdr. Cases
 run in parallel with a progress bar.
 
@@ -41,7 +41,7 @@ except ModuleNotFoundError:  # allow plain `python3 benchmark.py` without uv
     def tqdm(iterable, **_kwargs):
         return iterable
 
-HERE = Path(__file__).resolve().parent       # the benchmark dir itself
+HERE = Path(__file__).resolve().parent       # OpenVmBenchmark
 REPO = Path(__file__).resolve().parents[1]    # OpenVmBenchmark -> repo root
 NAME_RE = re.compile(r"apc_(\d+)_pc(.+)\.json\.gz$")
 VARS_RE = {  # `leanr compare` lines: "  before: 62 vars, ...", "  leanr : 28 vars, ...", "  powdr : ..."
@@ -99,10 +99,16 @@ def load_asm(bench_dir):
     for e in cand.get("apcs", []):
         blocks = e["original_blocks"]
         lines = []
-        for b in blocks:
+        for i, b in enumerate(blocks):
             lbl = labels.get(str(b["start_pc"]), [])
-            lines.append(f"pc {b['start_pc']}" + (f"  <{', '.join(lbl)}>" if lbl else ""))
-            lines += ["    " + ins for ins in b["instructions"]]
+            tag = "  <" + ", ".join(lbl) + ">" if lbl else ""
+            if i == 0:
+                # the first block's start pc is already shown in the caption; don't repeat it
+                if tag:
+                    lines.append(tag.strip())
+            else:
+                lines += ["", f"pc {b['start_pc']}{tag}"]
+            lines += b["instructions"]
         asm_by_pcs["_".join(str(b["start_pc"]) for b in blocks)] = "\n".join(lines)
     return {e["files"]["unopt"]: asm_by_pcs.get("_".join(map(str, e["start_pcs"])), "")
             for e in man.get("entries", [])}
@@ -211,29 +217,29 @@ HTML_TEMPLATE = r"""<!doctype html>
     --mono:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
   * { box-sizing:border-box; }
-  body { margin:0; height:100vh; display:flex; flex-direction:column;
+  body { margin:0; height:100vh; display:flex; overflow:hidden;
          font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
          background:var(--bg); color:var(--fg); }
-  header { padding:16px 22px; border-bottom:1px solid var(--line); background:var(--bg2); }
-  header h1 { margin:0 0 6px; font-size:17px; font-weight:600; letter-spacing:-.01em; }
-  header h1 span { color:var(--dim); font-weight:400; font-size:14px; }
-  #summary { color:var(--dim); font-size:13px; }
-  #summary b { color:var(--fg); }
-  #wrap { flex:1; display:flex; min-height:0; }
 
-  #side { width:260px; flex:none; border-right:1px solid var(--line); overflow:auto; padding:8px; }
+  #side { width:270px; flex:none; border-right:1px solid var(--line); display:flex; flex-direction:column; }
+  #sidehead { flex:none; padding:14px 16px; border-bottom:1px solid var(--line); background:var(--bg2); }
+  #sidehead .title { font-weight:600; font-size:15px; letter-spacing:-.01em; }
+  #sidehead .meta { color:var(--dim); font-size:12px; margin:2px 0 8px; }
+  #summary { font-size:12px; line-height:1.7; }
+  #summary .el { color:var(--leanr); font-weight:600; } #summary .ep { color:var(--powdr); font-weight:600; }
+  #summary .dim { color:var(--dim); }
+  #cases { flex:1; overflow:auto; padding:8px; }
   .caseb { display:block; width:100%; text-align:left; background:none; border:1px solid transparent;
            border-radius:8px; color:var(--fg); padding:10px 12px; margin-bottom:4px; cursor:pointer; }
   .caseb:hover { background:var(--bg2); }
   .caseb.sel { background:var(--accent-bg); border-color:#b6e3ff; }
   .crow { display:flex; align-items:baseline; gap:8px; margin-bottom:3px; }
-  .crow .rank { font-weight:600; font-size:13px; }
-  .crow .pc { color:var(--dim); font-size:11px; }
+  .crow .rank { font-weight:600; font-size:13px; } .crow .pc { color:var(--dim); font-size:11px; }
   .ceff { font-size:12px; }
   .ceff .ep { color:var(--powdr); } .ceff .el { color:var(--leanr); } .ceff .win { font-weight:700; }
 
   #main { flex:1; display:flex; flex-direction:column; min-width:0; }
-  #bar { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  #bar { flex:none; display:flex; align-items:center; justify-content:space-between; gap:12px;
          padding:10px 16px; border-bottom:1px solid var(--line); }
   .caption { font-size:13px; color:var(--dim); } .caption b { color:var(--fg); }
   .tabs { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
@@ -245,24 +251,45 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   #content { flex:1; display:flex; flex-direction:column; min-height:0; padding:14px; gap:14px; }
   .panel { display:flex; flex-direction:column; min-height:0; background:var(--bg);
-           border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+           border:1px solid var(--line); border-radius:10px; }
   .panel.circuit { flex:1; }
   .panel.asm { flex:none; max-height:30vh; }
-  .phead { display:flex; align-items:baseline; gap:12px; padding:9px 14px;
-           border-bottom:1px solid var(--line); background:var(--bg2); }
+  .panel.collapsed { flex:none; }
+  .panel.collapsed pre { display:none; }
+  .phead { display:flex; align-items:baseline; gap:8px; padding:9px 14px; cursor:pointer; user-select:none;
+           border-bottom:1px solid var(--line); background:var(--bg2); border-radius:10px 10px 0 0; }
+  .panel.collapsed .phead { border-bottom:0; border-radius:10px; }
+  .caret { color:var(--dim); font-size:10px; width:9px; flex:none; }
+  .caret::before { content:"\25BE"; } .panel.collapsed .caret::before { content:"\25B8"; }
   .phead .plabel { font-weight:600; font-size:13px; }
   .p-orig .plabel { color:var(--dim); }
   .p-leanr .plabel { color:var(--leanr); } .p-powdr .plabel { color:var(--powdr); }
   .phead .pstats { color:var(--dim); font-size:12px; }
-  .panel pre { flex:1; margin:0; padding:12px 14px; overflow:auto; font:var(--mono); white-space:pre; tab-size:2; }
+  .panel pre { flex:1; margin:0; padding:12px 14px; overflow:auto; font:var(--mono); white-space:pre; tab-size:2;
+               border-radius:0 0 10px 10px; }
+
+  .vardiff { position:relative; cursor:default; text-decoration:underline dotted var(--dim); text-underline-offset:3px; }
+  .vardiff .rem { color:#cf222e; } .vardiff .add { color:var(--leanr); }
+  .vardiff .pop { display:none; position:fixed; z-index:20; gap:16px; text-decoration:none;
+                  background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px;
+                  box-shadow:0 6px 20px rgba(31,35,40,.15); }
+  .vardiff:hover .pop { display:flex; }
+  .popcol { max-height:min(50vh,360px); overflow:auto; min-width:150px; }
+  .pophd { font-weight:600; margin-bottom:5px; position:sticky; top:0; background:var(--bg); }
+  .pop .v { font:var(--mono); white-space:nowrap; }
+  .pnone { color:var(--dim); font:var(--mono); }
+  .hl-rem { background:#ffd7d5; color:#cf222e; border-radius:3px; }
+  .hl-add { background:#ceffd6; color:#1a7f37; border-radius:3px; }
 </style></head>
 <body>
-<header>
-  <h1>leanr benchmark report <span>· __N__ cases · --iters __ITERS__</span></h1>
-  <div id="summary"></div>
-</header>
-<div id="wrap">
-  <aside id="side"></aside>
+  <aside id="side">
+    <div id="sidehead">
+      <div class="title">leanr benchmark report</div>
+      <div class="meta">__N__ cases · --iters __ITERS__</div>
+      <div id="summary"></div>
+    </div>
+    <div id="cases"></div>
+  </aside>
   <main id="main">
     <div id="bar">
       <div class="caption" id="caption"></div>
@@ -270,20 +297,63 @@ HTML_TEMPLATE = r"""<!doctype html>
     </div>
     <div id="content"></div>
   </main>
-</div>
 <script>
 const DATA = __DATA__, SUM = __SUMMARY__;
 let cur = 0, tab = "leanr";
+const collapsed = { asm: false, orig: true, opt: false };
 
 function effOf(o, x) { return o.vars / x.vars; }
 function statLine(x) { return x.vars + " vars · " + x.constraints + " constraints · " + x.bus + " bus"; }
+function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function varDiffHTML(orig, opt) {
+  const O = new Set(orig.vars_list), P = new Set(opt.vars_list);
+  const removed = orig.vars_list.filter(function(v) { return !P.has(v); });
+  const added = opt.vars_list.filter(function(v) { return !O.has(v); });
+  function col(arr, cls, label) {
+    const items = arr.length
+      ? arr.map(function(v) { return '<div class="v ' + cls + '">' + esc(v) + '</div>'; }).join("")
+      : '<div class="pnone">none</div>';
+    return '<div class="popcol"><div class="pophd ' + cls + '">' + label + ' (' + arr.length + ')</div>' + items + '</div>';
+  }
+  return '<span class="vardiff" onclick="event.stopPropagation()">' +
+    '<span class="rem">−' + removed.length + '</span> / <span class="add">+' + added.length + '</span> vars' +
+    '<span class="pop">' + col(removed, "rem", "removed") + col(added, "add", "added") + '</span></span>';
+}
+// Escape a render and wrap any variable token that is in `set` with a highlight span.
+function highlightRender(text, set, cls) {
+  if (!set.size) return esc(text);
+  let out = "", last = 0, m;
+  const re = /[A-Za-z_][A-Za-z0-9_@]*/g;
+  while ((m = re.exec(text)) !== null) {
+    out += esc(text.slice(last, m.index)) +
+      (set.has(m[0]) ? '<span class="' + cls + '">' + esc(m[0]) + '</span>' : esc(m[0]));
+    last = re.lastIndex;
+  }
+  return out + esc(text.slice(last));
+}
+// How this optimizer's output differs from the other's: +added / -removed, relative to `other`.
+function diffToOtherHTML(opt, other, otherName) {
+  const O = new Set(other.vars_list), S = new Set(opt.vars_list);
+  const added = opt.vars_list.filter(function(v) { return !O.has(v); });    // in this opt, not the other
+  const removed = other.vars_list.filter(function(v) { return !S.has(v); }); // in the other, not this opt
+  function col(arr, cls, label) {
+    const items = arr.length
+      ? arr.map(function(v) { return '<div class="v ' + cls + '">' + esc(v) + '</div>'; }).join("")
+      : '<div class="pnone">none</div>';
+    return '<div class="popcol"><div class="pophd ' + cls + '">' + label + ' (' + arr.length + ')</div>' + items + '</div>';
+  }
+  return '<span class="vardiff" onclick="event.stopPropagation()">diff to ' + otherName + ': ' +
+    '<span class="add">+' + added.length + '</span> / <span class="rem">−' + removed.length + '</span> vars' +
+    '<span class="pop">' + col(added, "add", "added vs " + otherName) +
+    col(removed, "rem", "removed vs " + otherName) + '</span></span>';
+}
 
 document.getElementById("summary").innerHTML =
-  "leanr <b>" + SUM.leanr_agg.toFixed(3) + "×</b> agg / <b>" + SUM.leanr_geo.toFixed(3) + "×</b> geomean" +
-  " &nbsp;vs&nbsp; powdr <b>" + SUM.powdr_agg.toFixed(3) + "×</b> agg / <b>" + SUM.powdr_geo.toFixed(3) + "×</b> geomean" +
-  " &nbsp;·&nbsp; leanr wins " + SUM.wins + ", loses " + SUM.losses;
+  '<div><span class="el">leanr</span> ' + SUM.leanr_agg.toFixed(2) + '× agg · ' + SUM.leanr_geo.toFixed(2) + '× geo</div>' +
+  '<div><span class="ep">powdr</span> ' + SUM.powdr_agg.toFixed(2) + '× agg · ' + SUM.powdr_geo.toFixed(2) + '× geo</div>' +
+  '<div class="dim">leanr wins ' + SUM.wins + ' · loses ' + SUM.losses + '</div>';
 
-const side = document.getElementById("side");
+const casesEl = document.getElementById("cases");
 DATA.forEach(function(c, i) {
   const le = effOf(c.original, c.leanr), pe = effOf(c.original, c.powdr);
   const b = document.createElement("button");
@@ -293,25 +363,17 @@ DATA.forEach(function(c, i) {
     '<div class="ceff"><span class="ep' + (pe > le ? " win" : "") + '">powdr ' + pe.toFixed(2) + '×</span> · ' +
     '<span class="el' + (le > pe ? " win" : "") + '">leanr ' + le.toFixed(2) + '×</span></div>';
   b.onclick = function() { cur = i; render(); };
-  side.appendChild(b);
+  casesEl.appendChild(b);
 });
 
-function panel(label, cls, data, orig) {
-  const wrap = document.createElement("div"); wrap.className = "panel circuit " + cls;
+function makePanel(kind, cls, label, statsHTML, body) {
+  const wrap = document.createElement("div");
+  wrap.className = "panel " + cls + (collapsed[kind] ? " collapsed" : "");
   const h = document.createElement("div"); h.className = "phead";
-  let stats = statLine(data);
-  if (orig) stats += "  ·  " + effOf(orig, data).toFixed(2) + "× fewer vars";
-  h.innerHTML = '<span class="plabel">' + label + '</span><span class="pstats">' + stats + '</span>';
-  const pre = document.createElement("pre"); pre.textContent = data.render;
-  wrap.appendChild(h); wrap.appendChild(pre);
-  return wrap;
-}
-
-function asmPanel(asm) {
-  const wrap = document.createElement("div"); wrap.className = "panel asm";
-  const h = document.createElement("div"); h.className = "phead";
-  h.innerHTML = '<span class="plabel">assembly</span>';
-  const pre = document.createElement("pre"); pre.textContent = asm || "(no assembly available)";
+  h.innerHTML = '<span class="caret"></span><span class="plabel">' + label + '</span>' +
+    (statsHTML ? '<span class="pstats">' + statsHTML + '</span>' : "");
+  h.onclick = function() { collapsed[kind] = !collapsed[kind]; wrap.classList.toggle("collapsed"); };
+  const pre = document.createElement("pre"); pre.innerHTML = body;
   wrap.appendChild(h); wrap.appendChild(pre);
   return wrap;
 }
@@ -321,12 +383,20 @@ function render() {
   document.getElementById("tab-leanr").classList.toggle("active", tab === "leanr");
   document.getElementById("tab-powdr").classList.toggle("active", tab === "powdr");
   const c = DATA[cur], opt = tab === "leanr" ? c.leanr : c.powdr;
+  const other = tab === "leanr" ? c.powdr : c.leanr, otherName = tab === "leanr" ? "powdr" : "leanr";
+  const optSet = new Set(opt.vars_list), origSet = new Set(c.original.vars_list);
+  const removedSet = new Set(c.original.vars_list.filter(function(v) { return !optSet.has(v); }));
+  const addedSet = new Set(opt.vars_list.filter(function(v) { return !origSet.has(v); }));
   document.getElementById("caption").innerHTML = "block <b>#" + c.rank + "</b> · pc" + c.pc;
   const content = document.getElementById("content");
   content.innerHTML = "";
-  content.appendChild(asmPanel(c.asm));
-  content.appendChild(panel("original", "p-orig", c.original, null));
-  content.appendChild(panel(tab, tab === "leanr" ? "p-leanr" : "p-powdr", opt, c.original));
+  content.appendChild(makePanel("asm", "asm", "assembly", "", esc(c.asm || "(no assembly available)")));
+  content.appendChild(makePanel("orig", "circuit p-orig", "original", statLine(c.original),
+    highlightRender(c.original.render, removedSet, "hl-rem")));
+  content.appendChild(makePanel("opt", "circuit " + (tab === "leanr" ? "p-leanr" : "p-powdr"), tab,
+    statLine(opt) + "  ·  " + effOf(c.original, opt).toFixed(2) + "× fewer vars  ·  " +
+      varDiffHTML(c.original, opt) + "  ·  " + diffToOtherHTML(opt, other, otherName),
+    highlightRender(opt.render, addedSet, "hl-add")));
 }
 
 document.getElementById("tab-leanr").onclick = function() { tab = "leanr"; render(); };
@@ -336,6 +406,16 @@ document.addEventListener("keydown", function(e) {
   else if (e.key === "ArrowUp" && cur > 0) cur--;
   else return;
   e.preventDefault(); render();
+});
+// Position the (fixed) var-diff popover next to its badge, flipping up near the viewport bottom.
+document.addEventListener("mouseover", function(e) {
+  const vd = e.target.closest ? e.target.closest(".vardiff") : null;
+  if (!vd) return;
+  const pop = vd.querySelector(".pop"); if (!pop) return;
+  const r = vd.getBoundingClientRect();
+  pop.style.right = (window.innerWidth - r.right) + "px";
+  if (window.innerHeight - r.bottom > 240) { pop.style.top = (r.bottom - 2) + "px"; pop.style.bottom = "auto"; }
+  else { pop.style.bottom = (window.innerHeight - r.top - 2) + "px"; pop.style.top = "auto"; }
 });
 render();
 </script>
