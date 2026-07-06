@@ -12,9 +12,10 @@ Over a finite field, a circuit has **algebraic constraints** (expressions that m
 zero) and **bus interactions** (tuples sent to a global bus with a multiplicity; globally the bus
 must balance). Buses are either **stateless lookups** (range/table checks — a chip sends with
 multiplicity 0/1 and a table chip receives) or **stateful** (memory, execution bridge — they carry
-state such as timestamp/PC). Two circuits are **equivalent** when each implies the other's
-satisfiability *and* they have the same effect on stateful buses; an optimization must preserve
-this.
+state such as timestamp/PC). An optimization must **refine** the circuit: *sound* — every
+satisfying assignment of the output maps to one of the input with the same effect on stateful
+buses — and *complete for real traces* — every intended (real-trace) satisfying assignment of the
+input is reproduced by the output. The precise relation is `refines` in `Leanr/Spec.lean`.
 
 ## Layout
 
