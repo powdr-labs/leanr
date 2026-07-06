@@ -12,3 +12,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: leanprover/lean-action@v1
+      - name: Proof integrity (no sorry / new axioms)
+        run: ./Scripts/check-proof-integrity.sh
