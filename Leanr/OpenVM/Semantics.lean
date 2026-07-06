@@ -156,7 +156,7 @@ def openVmBusSemantics (p : ℕ) (busMap : BusMap := defaultBusMap) :
   breaksInvariant := breaksInvariant busMap
   admissible msgs :=
     ∀ (busId : Nat) (shape : MemoryBusShape), memShapeOf busMap busId = some shape →
-      admissibleBus shape (msgs.filter (fun m => m.busId = busId))
+      admissibleMemoryBus shape (msgs.filter (fun m => m.busId = busId))
   -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`).
   degreeBound := { identities := 3, busInteractions := 2 }
 
