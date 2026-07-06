@@ -35,8 +35,7 @@ effectiveness against powdr — this is the final evaluation. Report the result 
   (`Scripts/check-proof-integrity.sh`, runnable locally). If you cannot prove something, break it
   down or pick a simpler idea.
 - **Every commit must `lake build`.**
-- **Do not overfit.** Aim for a general algorithm that also works on a different VM with different
-  bus semantics — not a transformation tuned to one circuit.
+- **Do not overfit.** Aim for a general algorithm. Do not do optimizations that only benefit a single test case. Also, the optimization should not be specific to the OpenVM semantics.
 
 ## How to add a pass
 
