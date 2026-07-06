@@ -331,17 +331,21 @@ function highlightRender(text, set, cls) {
   }
   return out + esc(text.slice(last));
 }
-// Variables this optimizer removed that the other optimizer kept.
-function exclRemovedHTML(orig, opt, other, thisName, otherName) {
-  const P = new Set(opt.vars_list), Q = new Set(other.vars_list);
-  const excl = orig.vars_list.filter(function(v) { return !P.has(v) && Q.has(v); });
-  const items = excl.length
-    ? excl.map(function(v) { return '<div class="v rem">' + esc(v) + '</div>'; }).join("")
-    : '<div class="pnone">none</div>';
-  return '<span class="vardiff" onclick="event.stopPropagation()">' +
-    '<span class="rem">' + excl.length + '</span> removed not by ' + otherName +
-    '<span class="pop"><div class="popcol"><div class="pophd rem">' + thisName +
-    ' removed, ' + otherName + ' kept (' + excl.length + ')</div>' + items + '</div></span></span>';
+// How this optimizer's output differs from the other's: +added / -removed, relative to `other`.
+function diffToOtherHTML(opt, other, otherName) {
+  const O = new Set(other.vars_list), S = new Set(opt.vars_list);
+  const added = opt.vars_list.filter(function(v) { return !O.has(v); });    // in this opt, not the other
+  const removed = other.vars_list.filter(function(v) { return !S.has(v); }); // in the other, not this opt
+  function col(arr, cls, label) {
+    const items = arr.length
+      ? arr.map(function(v) { return '<div class="v ' + cls + '">' + esc(v) + '</div>'; }).join("")
+      : '<div class="pnone">none</div>';
+    return '<div class="popcol"><div class="pophd ' + cls + '">' + label + ' (' + arr.length + ')</div>' + items + '</div>';
+  }
+  return '<span class="vardiff" onclick="event.stopPropagation()">diff to ' + otherName + ': ' +
+    '<span class="add">+' + added.length + '</span> / <span class="rem">−' + removed.length + '</span> vars' +
+    '<span class="pop">' + col(added, "add", "added vs " + otherName) +
+    col(removed, "rem", "removed vs " + otherName) + '</span></span>';
 }
 
 document.getElementById("summary").innerHTML =
@@ -391,7 +395,7 @@ function render() {
     highlightRender(c.original.render, removedSet, "hl-rem")));
   content.appendChild(makePanel("opt", "circuit " + (tab === "leanr" ? "p-leanr" : "p-powdr"), tab,
     statLine(opt) + "  ·  " + effOf(c.original, opt).toFixed(2) + "× fewer vars  ·  " +
-      varDiffHTML(c.original, opt) + "  ·  " + exclRemovedHTML(c.original, opt, other, tab, otherName),
+      varDiffHTML(c.original, opt) + "  ·  " + diffToOtherHTML(opt, other, otherName),
     highlightRender(opt.render, addedSet, "hl-add")));
 }
 
