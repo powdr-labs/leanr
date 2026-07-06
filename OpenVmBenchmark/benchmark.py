@@ -111,8 +111,8 @@ def load_asm(bench_dir):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("dir", nargs="?", default=str(HERE),
-                    help="benchmark directory (default: this script's directory)")
+    ap.add_argument("dir", nargs="?", default=str(HERE / "data"),
+                    help="benchmark data directory (default: ./data next to this script)")
     ap.add_argument("--iters", type=int, default=32, help="optimizer cleanup-cycle cap (default: 32)")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4,
                     help="cases to run in parallel (default: number of cores)")

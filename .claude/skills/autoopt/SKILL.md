@@ -17,7 +17,7 @@ This is a recurring loop — read `log.md` and recent commits first to see what 
 tried. Run a case with, e.g.:
 
 ```
-lake exe leanr run OpenVmBenchmark/apc_001_pc0x4ecc54.json.gz
+lake exe leanr run OpenVmBenchmark/data/apc_001_pc0x4ecc54.json.gz
 ```
 
 It reports vars/constraints/bus-interactions before/after and effectiveness (vars before / after).

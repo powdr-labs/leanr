@@ -18,7 +18,7 @@ The `leanr` executable runs the optimizer on powdr `SymbolicMachine` exports (`A
 lake build
 
 # Optimize one case and report effectiveness
-lake exe leanr run [--iters N] OpenVmBenchmark/apc_001_pc0x4ecc54.json.gz
+lake exe leanr run [--iters N] OpenVmBenchmark/data/apc_001_pc0x4ecc54.json.gz
 
 # powdr's own effectiveness, from its serialized optimizer output
 lake exe leanr powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
