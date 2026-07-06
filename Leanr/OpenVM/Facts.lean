@@ -27,7 +27,7 @@ private def slotBoundImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat)
   | some .bitwiseLookup, [_, _, _, some op], 0 => if op.val ≤ 1 then some 256 else none
   | some .bitwiseLookup, [_, _, _, some op], 1 => if op.val ≤ 1 then some 256 else none
   | some .variableRangeChecker, [_, some bits], 0 =>
-      if bits.val ≤ 30 then some (2 ^ bits.val) else none
+      if bits.val ≤ 25 then some (2 ^ bits.val) else none
   | some (.tupleRangeChecker s1 _), [_, _], 0 => some s1
   | some (.tupleRangeChecker _ s2), [_, _], 1 => some s2
   | _, _, _ => none
@@ -137,7 +137,8 @@ def openVmFacts (p : ℕ) [NeZero p]
       subst hx hb
       unfold violates at hok'
       rw [hbus, hpay] at hok'
-      simpa using hok'
+      rw [Bool.not_eq_false', Bool.and_eq_true] at hok'
+      exact of_decide_eq_true hok'.2
     · -- tuple range checker, slot 0
       rename_i s1 s2 q0 q1 hbus
       simp only [Option.some.injEq] at hfact
