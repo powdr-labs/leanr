@@ -1,45 +1,183 @@
-import Leanr
-import Leanr.Legacy.StringParser
 import Leanr.JsonParser
-import Leanr.Legacy.Solver
+import Leanr.Optimizer
+import Leanr.Utils.Size
+import Leanr.Utils.Dsl
+import Leanr.OpenVM.Facts
 
-open Legacy
+/-!
+# The leanr CLI
 
-def main (args: List String) : IO Unit := do
-  let p := 0x1dffff
-  match args with
-  | [] =>
-    let stdin ← IO.getStdin
-    let input ← stdin.readToEnd
-    match parseSystem (p := p) input with
-    | .error err => IO.eprintln s!"Error: {err}"; IO.Process.exit 1
-    | .ok system =>
-      let result ← solve system (log := true)
-      IO.println s!"{result}"
-  | (fileName :: _) =>
-    if fileName.endsWith ".json.gz" then
-      let result ← IO.Process.output { cmd := "gunzip", args := #["-c", fileName] }
-      if result.exitCode ≠ 0 then
-        IO.eprintln s!"Error: gunzip failed: {result.stderr}"
-        IO.Process.exit 1
-      match parseJsonSystem (p := p) result.stdout with
-      | .error err => IO.eprintln s!"Error: {err}"; IO.Process.exit 1
-      | .ok (system, busMap) =>
-        IO.println s!"{busMap}"
-        let result ← solve system (log := true)
-        IO.println s!"{result}"
-    else if fileName.endsWith ".json" then
-      let input ← IO.FS.readFile fileName
-      match parseJsonSystem (p := p) input with
-      | .error err => IO.eprintln s!"Error: {err}"; IO.Process.exit 1
-      | .ok (system, busMap) =>
-        IO.println s!"{busMap}"
-        let result ← solve system (log := true)
-        IO.println s!"{result}"
-    else
-      let input ← IO.FS.readFile fileName
-      match parseSystem (p := p) input with
-      | .error err => IO.eprintln s!"Error: {err}"; IO.Process.exit 1
-      | .ok system =>
-        let result ← solve system (log := true)
-        IO.println s!"{result}"
+Benchmark harness for the optimizer on powdr `SymbolicMachine` exports
+(`OpenVm/Benchmark/*.json.gz`, or any file in the same format — see `Leanr/JsonParser.lean`):
+
+- `leanr run [--iters N] <file.json[.gz]>` — parse, run the leanr optimizer with the file's
+  own bus map, report sizes and effectiveness.
+- `leanr powdr <unopt.json[.gz]> <opt.json[.gz]>` — report powdr's effectiveness from its
+  serialized optimizer output (no leanr optimizer run).
+- `leanr compare [--iters N] <unopt.json[.gz]> <opt.json[.gz]>` — both, side by side.
+-/
+
+open Leanr.OpenVM
+
+/-- Read a benchmark file: `.json.gz` via `gunzip -c` (like the powdr test fixtures),
+    `.json` directly. -/
+def readInput (fileName : String) : IO String := do
+  if fileName.endsWith ".json.gz" then
+    let result ← IO.Process.output { cmd := "gunzip", args := #["-c", fileName] }
+    if result.exitCode ≠ 0 then
+      IO.eprintln s!"Error: gunzip failed: {result.stderr}"
+      IO.Process.exit 1
+    pure result.stdout
+  else if fileName.endsWith ".json" then
+    IO.FS.readFile fileName
+  else
+    IO.eprintln s!"Error: expected a .json or .json.gz file, got {fileName}"
+    IO.Process.exit 1
+
+/-- Parse a benchmark file into a constraint system over BabyBear plus its bus map.
+    Rejects systems with bus ids missing from the map: an unmapped bus would be modeled as a
+    no-op bus (stateless, never violating), silently licensing unsound optimizations. -/
+def parseFile (fileName : String) : IO (ConstraintSystem babyBear × BusMapList) := do
+  let contents ← readInput fileName
+  match parseJsonSystem (p := babyBear) contents with
+  | .error err =>
+    IO.eprintln s!"Error parsing {fileName}: {err}"
+    IO.Process.exit 1
+  | .ok (system, busMap) =>
+    let unmapped :=
+      ((system.busInteractions.map (·.busId)).eraseDups).filter
+        (fun busId => (busMap.toBusMap busId).isNone)
+    unless unmapped.isEmpty do
+      IO.eprintln s!"Error: {fileName} uses bus ids {unmapped} that are not in its bus_map"
+      IO.Process.exit 1
+    pure (system, busMap)
+
+/-- Size measures of a constraint system, as reported by the CLI. -/
+structure Stats where
+  vars : Nat
+  constraints : Nat
+  busInteractions : Nat
+
+/-- Same count as `ConstraintSystem.size` (distinct variables), but via a hash set —
+    `List.dedup` is quadratic and benchmark machines have ~10⁵ variable occurrences. -/
+def distinctVarCount (cs : ConstraintSystem babyBear) : Nat :=
+  let occurrences := cs.algebraicConstraints.flatMap Expression.vars ++
+    cs.busInteractions.flatMap BusInteraction.vars
+  (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).size
+
+def statsOf (cs : ConstraintSystem babyBear) : Stats :=
+  { vars := distinctVarCount cs,
+    constraints := cs.algebraicConstraints.length,
+    busInteractions := cs.busInteractions.length }
+
+def printStats (label : String) (stats : Stats) : IO Unit :=
+  IO.println s!"  {label}: {stats.vars} vars, {stats.constraints} constraints, \
+    {stats.busInteractions} bus interactions"
+
+/-- Effectiveness = vars before / vars after (the `Leanr/Utils/Size.lean` metric), as an exact
+    rational and a decimal approximation. -/
+def printEffectiveness (label : String) (before after : Stats) : IO Unit := do
+  let eff : ℚ := (before.vars : ℚ) / (after.vars : ℚ)
+  IO.println s!"{label} effectiveness (vars before / after): \
+    {eff} ≈ {before.vars.toFloat / after.vars.toFloat}"
+
+def cmdRun (fileName : String) (iters : Nat) : IO Unit := do
+  let (cs, busMap) ← parseFile fileName
+  IO.println s!"Parsed {cs.algebraicConstraints.length} constraints, \
+    {cs.busInteractions.length} bus interactions, {busMap.length} bus types"
+  let before := statsOf cs
+  let t0 ← IO.monoMsNow
+  -- IO.lazyPure sequences the pure optimizer run between the clock reads (the compiler is
+  -- free to float a plain `let` across IO actions, which breaks the measurement).
+  let optimized ← IO.lazyPure (fun _ => optimizerWith (cs := cs)
+    (bs := openVmBusSemantics babyBear busMap.toBusMap)
+    (facts := openVmFacts babyBear busMap.toBusMap)
+    (iters := iters))
+  let after ← IO.lazyPure (fun _ => statsOf optimized)
+  let t1 ← IO.monoMsNow
+  printStats (label := "before") (stats := before)
+  printStats (label := "leanr ") (stats := after)
+  printEffectiveness (label := "leanr") (before := before) (after := after)
+  let bound := (openVmBusSemantics babyBear busMap.toBusMap).degreeBound
+  IO.println s!"  degree bound (identities {bound.identities}, bus {bound.busInteractions}): \
+    input {if cs.withinDegreeB bound then "ok" else "EXCEEDED"}, \
+    output {if optimized.withinDegreeB bound then "ok" else "EXCEEDED"}"
+  IO.println s!"  ({iters} iters, {t1 - t0} ms)"
+
+/-- Like `cmdRun`, but also dump the distinct variables remaining after optimization (for
+    diagnosing which variable classes the optimizer misses). -/
+def cmdVars (fileName : String) (iters : Nat) : IO Unit := do
+  let (cs, busMap) ← parseFile fileName
+  let optimized ← IO.lazyPure (fun _ => optimizerWith (cs := cs)
+    (bs := openVmBusSemantics babyBear busMap.toBusMap)
+    (facts := openVmFacts babyBear busMap.toBusMap)
+    (iters := iters))
+  let occurrences := optimized.algebraicConstraints.flatMap Expression.vars ++
+    optimized.busInteractions.flatMap BusInteraction.vars
+  let distinct := (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList
+  for v in distinct.mergeSort (· ≤ ·) do
+    IO.println v
+
+/-- Render the optimized system (for diagnosing residual constraints/interactions). -/
+def cmdRender (fileName : String) (iters : Nat) : IO Unit := do
+  let (cs, busMap) ← parseFile fileName
+  let optimized ← IO.lazyPure (fun _ => optimizerWith (cs := cs)
+    (bs := openVmBusSemantics babyBear busMap.toBusMap)
+    (facts := openVmFacts babyBear busMap.toBusMap)
+    (iters := iters))
+  IO.println (Leanr.Spec.Dsl.render optimized)
+
+def cmdPowdr (unoptFile : String) (optFile : String) : IO Unit := do
+  let (csBefore, _) ← parseFile unoptFile
+  let (csAfter, _) ← parseFile optFile
+  let before := statsOf csBefore
+  let after := statsOf csAfter
+  printStats (label := "before") (stats := before)
+  printStats (label := "powdr ") (stats := after)
+  printEffectiveness (label := "powdr") (before := before) (after := after)
+
+def cmdCompare (unoptFile : String) (optFile : String) (iters : Nat) : IO Unit := do
+  cmdRun (fileName := unoptFile) (iters := iters)
+  let (csBefore, _) ← parseFile unoptFile
+  let (csAfter, _) ← parseFile optFile
+  printStats (label := "powdr ") (stats := statsOf csAfter)
+  printEffectiveness (label := "powdr") (before := statsOf csBefore) (after := statsOf csAfter)
+
+def usage : String :=
+  "usage: leanr run [--iters N] <file.json[.gz]>\n" ++
+  "       leanr powdr <unopt.json[.gz]> <opt.json[.gz]>\n" ++
+  "       leanr compare [--iters N] <unopt.json[.gz]> <opt.json[.gz]>\n\n" ++
+  "Files are powdr SymbolicMachine exports (ApcWithBusMap), e.g. OpenVm/Benchmark/*.json.gz.\n" ++
+  "--iters bounds the optimizer's cleanup cycles (default 32)."
+
+/-- Extract a `--iters N` flag (anywhere in the argument list). -/
+def splitIters : List String → Except String (Option Nat × List String)
+  | [] => .ok (none, [])
+  | "--iters" :: [] => .error "--iters expects a number"
+  | "--iters" :: n :: rest =>
+    match n.toNat? with
+    | some k => do
+      let (_, others) ← splitIters rest
+      .ok (some k, others)
+    | none => .error s!"--iters expects a number, got {n}"
+  | arg :: rest => do
+    let (k, others) ← splitIters rest
+    .ok (k, arg :: others)
+
+def main (args : List String) : IO Unit := do
+  match splitIters args with
+  | .error err =>
+    IO.eprintln s!"Error: {err}"
+    IO.Process.exit 1
+  | .ok (itersOpt, positional) =>
+    let iters := itersOpt.getD 32
+    match positional with
+    | ["run", fileName] => cmdRun (fileName := fileName) (iters := iters)
+    | ["vars", fileName] => cmdVars (fileName := fileName) (iters := iters)
+    | ["render", fileName] => cmdRender (fileName := fileName) (iters := iters)
+    | ["powdr", unoptFile, optFile] => cmdPowdr (unoptFile := unoptFile) (optFile := optFile)
+    | ["compare", unoptFile, optFile] =>
+      cmdCompare (unoptFile := unoptFile) (optFile := optFile) (iters := iters)
+    | _ =>
+      IO.eprintln usage
+      IO.Process.exit 1
