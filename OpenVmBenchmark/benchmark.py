@@ -251,21 +251,33 @@ HTML_TEMPLATE = r"""<!doctype html>
 
   #content { flex:1; display:flex; flex-direction:column; min-height:0; padding:14px; gap:14px; }
   .panel { display:flex; flex-direction:column; min-height:0; background:var(--bg);
-           border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+           border:1px solid var(--line); border-radius:10px; }
   .panel.circuit { flex:1; }
   .panel.asm { flex:none; max-height:30vh; }
   .panel.collapsed { flex:none; }
   .panel.collapsed pre { display:none; }
   .phead { display:flex; align-items:baseline; gap:8px; padding:9px 14px; cursor:pointer; user-select:none;
-           border-bottom:1px solid var(--line); background:var(--bg2); }
-  .panel.collapsed .phead { border-bottom:0; }
+           border-bottom:1px solid var(--line); background:var(--bg2); border-radius:10px 10px 0 0; }
+  .panel.collapsed .phead { border-bottom:0; border-radius:10px; }
   .caret { color:var(--dim); font-size:10px; width:9px; flex:none; }
   .caret::before { content:"\25BE"; } .panel.collapsed .caret::before { content:"\25B8"; }
   .phead .plabel { font-weight:600; font-size:13px; }
   .p-orig .plabel { color:var(--dim); }
   .p-leanr .plabel { color:var(--leanr); } .p-powdr .plabel { color:var(--powdr); }
   .phead .pstats { color:var(--dim); font-size:12px; }
-  .panel pre { flex:1; margin:0; padding:12px 14px; overflow:auto; font:var(--mono); white-space:pre; tab-size:2; }
+  .panel pre { flex:1; margin:0; padding:12px 14px; overflow:auto; font:var(--mono); white-space:pre; tab-size:2;
+               border-radius:0 0 10px 10px; }
+
+  .vardiff { position:relative; cursor:default; text-decoration:underline dotted var(--dim); text-underline-offset:3px; }
+  .vardiff .rem { color:#cf222e; } .vardiff .add { color:var(--leanr); }
+  .vardiff .pop { display:none; position:fixed; z-index:20; gap:16px; text-decoration:none;
+                  background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px;
+                  box-shadow:0 6px 20px rgba(31,35,40,.15); }
+  .vardiff:hover .pop { display:flex; }
+  .popcol { max-height:min(50vh,360px); overflow:auto; min-width:150px; }
+  .pophd { font-weight:600; margin-bottom:5px; position:sticky; top:0; background:var(--bg); }
+  .pop .v { font:var(--mono); white-space:nowrap; }
+  .pnone { color:var(--dim); font:var(--mono); }
 </style></head>
 <body>
   <aside id="side">
@@ -290,6 +302,21 @@ const collapsed = { asm: false, orig: true, opt: false };
 
 function effOf(o, x) { return o.vars / x.vars; }
 function statLine(x) { return x.vars + " vars · " + x.constraints + " constraints · " + x.bus + " bus"; }
+function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function varDiffHTML(orig, opt) {
+  const O = new Set(orig.vars_list), P = new Set(opt.vars_list);
+  const removed = orig.vars_list.filter(function(v) { return !P.has(v); });
+  const added = opt.vars_list.filter(function(v) { return !O.has(v); });
+  function col(arr, cls, label) {
+    const items = arr.length
+      ? arr.map(function(v) { return '<div class="v ' + cls + '">' + esc(v) + '</div>'; }).join("")
+      : '<div class="pnone">none</div>';
+    return '<div class="popcol"><div class="pophd ' + cls + '">' + label + ' (' + arr.length + ')</div>' + items + '</div>';
+  }
+  return '<span class="vardiff" onclick="event.stopPropagation()">' +
+    '<span class="rem">−' + removed.length + '</span> / <span class="add">+' + added.length + '</span> vars' +
+    '<span class="pop">' + col(removed, "rem", "removed") + col(added, "add", "added") + '</span></span>';
+}
 
 document.getElementById("summary").innerHTML =
   '<div><span class="el">leanr</span> ' + SUM.leanr_agg.toFixed(2) + '× agg · ' + SUM.leanr_geo.toFixed(2) + '× geo</div>' +
@@ -332,7 +359,8 @@ function render() {
   content.appendChild(makePanel("asm", "asm", "assembly", "", c.asm || "(no assembly available)"));
   content.appendChild(makePanel("orig", "circuit p-orig", "original", statLine(c.original), c.original.render));
   content.appendChild(makePanel("opt", "circuit " + (tab === "leanr" ? "p-leanr" : "p-powdr"), tab,
-    statLine(opt) + "  ·  " + effOf(c.original, opt).toFixed(2) + "× fewer vars", opt.render));
+    statLine(opt) + "  ·  " + effOf(c.original, opt).toFixed(2) + "× fewer vars  ·  " + varDiffHTML(c.original, opt),
+    opt.render));
 }
 
 document.getElementById("tab-leanr").onclick = function() { tab = "leanr"; render(); };
@@ -342,6 +370,16 @@ document.addEventListener("keydown", function(e) {
   else if (e.key === "ArrowUp" && cur > 0) cur--;
   else return;
   e.preventDefault(); render();
+});
+// Position the (fixed) var-diff popover next to its badge, flipping up near the viewport bottom.
+document.addEventListener("mouseover", function(e) {
+  const vd = e.target.closest ? e.target.closest(".vardiff") : null;
+  if (!vd) return;
+  const pop = vd.querySelector(".pop"); if (!pop) return;
+  const r = vd.getBoundingClientRect();
+  pop.style.right = (window.innerWidth - r.right) + "px";
+  if (window.innerHeight - r.bottom > 240) { pop.style.top = (r.bottom - 2) + "px"; pop.style.bottom = "auto"; }
+  else { pop.style.bottom = (window.innerHeight - r.top - 2) + "px"; pop.style.top = "auto"; }
 });
 render();
 </script>

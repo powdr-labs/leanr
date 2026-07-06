@@ -1,2 +1,5 @@
 .lake
 .vscode/
+
+# generated benchmark report
+report.html
