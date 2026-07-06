@@ -18,7 +18,7 @@ The `leanr` executable runs the optimizer on powdr `SymbolicMachine` exports (`A
 lake build
 
 # Optimize one case and report effectiveness
-lake exe leanr run [--iters N] Leanr/OpenVM/Benchmark/apc_001_pc3647036.json.gz
+lake exe leanr run [--iters N] OpenVmBenchmark/apc_001_pc0x4ecc54.json.gz
 
 # powdr's own effectiveness, from its serialized optimizer output
 lake exe leanr powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
@@ -27,10 +27,10 @@ lake exe leanr powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
 lake exe leanr compare [--iters N] <unopt>.json.gz <unopt>.powdr_opt.json.gz
 ```
 
-`--iters` caps the optimizer's cleanup-cycle loop (default 32). The loop runs the cleanup cycle to a fixpoint and stops as soon as a cycle changes nothing, so `--iters` is only an upper bound, not a fixed count — in practice even the largest benchmark case (≈9.5k variables) converges well within 32 cycles, so raising it does not change the result. The top-100 openvm-eth benchmark set lives in [`Leanr/OpenVM/Benchmark/`](./Leanr/OpenVM/Benchmark/) (see its README). To sweep the whole set in parallel and report aggregate leanr-vs-powdr effectiveness:
+`--iters` caps the optimizer's cleanup-cycle loop (default 32). The loop runs the cleanup cycle to a fixpoint and stops as soon as a cycle changes nothing, so `--iters` is only an upper bound, not a fixed count — in practice even the largest benchmark case (≈9.5k variables) converges well within 32 cycles, so raising it does not change the result. The top-100 openvm-eth benchmark set lives in [`OpenVmBenchmark/`](./OpenVmBenchmark/) (see its README). To sweep the whole set in parallel and report aggregate leanr-vs-powdr effectiveness:
 
 ```bash
-Leanr/OpenVM/Benchmark/benchmark.py                # all cases (--iters 32, --jobs = cores)
-Leanr/OpenVM/Benchmark/benchmark.py --n 20         # top 20 by cost rank
-Leanr/OpenVM/Benchmark/benchmark.py --n 10 --report report.html   # + interactive HTML report
+OpenVmBenchmark/benchmark.py                # all cases (--iters 32, --jobs = cores)
+OpenVmBenchmark/benchmark.py --n 20         # top 20 by cost rank
+OpenVmBenchmark/benchmark.py --n 10 --report report.html   # + interactive HTML report
 ```

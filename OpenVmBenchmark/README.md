@@ -12,10 +12,11 @@ Each block is exported as a pair:
 
 `<rank>` is the cost rank (`001` = costliest) and `<pc>` the block's start program counter(s). Cost
 = `width_before × execution_frequency` (the trace cells the block costs without an auto-precompile).
-`manifest.json` records the full ranking: per-entry cost, execution frequency, width, before/after
-stats, and provenance. This set was built from Ethereum mainnet
-[block 23992138](https://etherscan.io/block/23992138) (manifest `source` note: openvm-eth block
-23992138, cell PGO).
+`manifest.json` records the full ranking (per-entry cost, execution frequency, width, before/after
+stats, provenance), and `apc_candidates.json` is powdr's full candidate dump this set was drawn
+from — also the source of each block's assembly (shown in the `--report` HTML). This set was built
+from Ethereum mainnet [block 23992138](https://etherscan.io/block/23992138) (manifest `source`
+note: openvm-eth block 23992138, cell PGO).
 
 ## Running the benchmark
 
@@ -23,15 +24,15 @@ Optimize a single case and compare to powdr:
 
 ```bash
 lake exe leanr compare --iters 32 \
-  Leanr/OpenVM/Benchmark/apc_001_pc3647036.json.gz \
-  Leanr/OpenVM/Benchmark/apc_001_pc3647036.powdr_opt.json.gz
+  OpenVmBenchmark/apc_001_pc0x4ecc54.json.gz \
+  OpenVmBenchmark/apc_001_pc0x4ecc54.powdr_opt.json.gz
 ```
 
 Sweep the whole set in parallel (progress bar; run it directly and [uv](https://docs.astral.sh/uv/)
 installs `tqdm` automatically) and report aggregate leanr-vs-powdr effectiveness:
 
 ```bash
-Leanr/OpenVM/Benchmark/benchmark.py                # all cases (--iters 32, --jobs = cores)
-Leanr/OpenVM/Benchmark/benchmark.py --n 20         # top 20 by cost rank
-Leanr/OpenVM/Benchmark/benchmark.py --n 10 --report report.html   # + interactive HTML report
+OpenVmBenchmark/benchmark.py                # all cases (--iters 32, --jobs = cores)
+OpenVmBenchmark/benchmark.py --n 20         # top 20 by cost rank
+OpenVmBenchmark/benchmark.py --n 10 --report report.html   # + interactive HTML report
 ```

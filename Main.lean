@@ -8,7 +8,7 @@ import Leanr.OpenVM.Facts
 # The leanr CLI
 
 Benchmark harness for the optimizer on powdr `SymbolicMachine` exports
-(`OpenVm/Benchmark/*.json.gz`, or any file in the same format — see `Leanr/JsonParser.lean`):
+(`OpenVmBenchmark/*.json.gz`, or any file in the same format — see `Leanr/JsonParser.lean`):
 
 - `leanr run [--iters N] <file.json[.gz]>` — parse, run the leanr optimizer with the file's
   own bus map, report sizes and effectiveness.
@@ -161,7 +161,7 @@ def circuitJson (cs : ConstraintSystem babyBear) : String :=
 
 /-- `report <unopt> <opt>`: emit one JSON object with the original, powdr-optimized and
     leanr-optimized circuits (each: vars/constraints/bus + DSL render). Consumed by the
-    benchmark HTML report (`Leanr/OpenVM/Benchmark/benchmark.py --report`). -/
+    benchmark HTML report (`OpenVmBenchmark/benchmark.py --report`). -/
 def cmdReport (unoptFile optFile : String) (iters : Nat) : IO Unit := do
   let (cs, busMap) ← parseFile unoptFile
   let (csPowdr, _) ← parseFile optFile
@@ -177,7 +177,7 @@ def usage : String :=
   "       leanr powdr <unopt.json[.gz]> <opt.json[.gz]>\n" ++
   "       leanr compare [--iters N] <unopt.json[.gz]> <opt.json[.gz]>\n" ++
   "       leanr report  [--iters N] <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n\n" ++
-  "Files are powdr SymbolicMachine exports (ApcWithBusMap), e.g. OpenVm/Benchmark/*.json.gz.\n" ++
+  "Files are powdr SymbolicMachine exports (ApcWithBusMap), e.g. OpenVmBenchmark/*.json.gz.\n" ++
   "--iters bounds the optimizer's cleanup cycles (default 32)."
 
 /-- Extract a `--iters N` flag (anywhere in the argument list). -/
