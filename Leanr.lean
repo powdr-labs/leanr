@@ -14,5 +14,3 @@ import Leanr.OptimizerPasses.Normalize
 import Leanr.Optimizer
 import Leanr.OpenVM.Semantics
 import Leanr.JsonParser
-import Leanr.OpenVM.Snapshot
-import Leanr.OpenVM.SnapshotCorrect
