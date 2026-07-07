@@ -26,8 +26,10 @@ Side effects are the messages on **stateful** buses, compared up to **net multip
 message (`≈`) — so an identical-payload send/receive pair cancels. `admissible` is an abstract
 per-VM predicate (`BusSemantics.admissible`) over the active stateful messages; it is where the
 "this is a real trace" assumption lives (see [Bus knowledge](#bus-knowledge) and the README's
-assumptions). `optimizerMaintainsCorrectness` bundles `refines`, preservation of
-`guaranteesInvariants`, and staying within the VM's degree bound.
+assumptions). `optimizerMaintainsCorrectness bs opt` bundles `refines`, preservation of
+`guaranteesInvariants`, and staying within the VM's degree bound — for a *given* bus semantics
+`bs` (quantify over `bs` for the "correct for every semantics" reading; fixing it lets a
+semantics-specific optimizer be an instance).
 
 ## The framework (`Leanr/Implementation/OptimizerPasses/Basic.lean`, `FactPass.lean`)
 
@@ -72,9 +74,10 @@ zero-multiplicity / tautology drops, `busUnifyPass`, and re-encoding — each `g
 `pipelineIters` folds once, runs `cleanupCycle` to a fixpoint (`iterateStable`), then
 monic-scales and folds. `optimizerWithBusFacts` takes a proven `BusFacts` instance; `optimizer` is
 the trivial-facts instance (`BusFacts.trivial`). The audited `Leanr/Optimizer.lean` proves the
-master theorem `optimizerWithBusFacts_maintainsCorrectness` (correctness for *every* choice of
-facts) and derives its instances `optimizer_maintainsCorrectness` and the OpenVM `openVmOptimizer`
-(with `openVmOptimizer_maintainsCorrectness`).
+master theorem `optimizerWithBusFacts_maintainsCorrectness` (correctness for *every* bus
+semantics, choice of proven facts, and iteration count) and derives its instances
+`optimizer_maintainsCorrectness` and the OpenVM `openVmOptimizer` (with
+`openVmOptimizer_maintainsCorrectness`) as one-liners.
 
 ## Adding a pass
 
