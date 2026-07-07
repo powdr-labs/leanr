@@ -21,7 +21,16 @@ and recent commits to see what has already been tried. Run a case with, e.g.:
 lake exe leanr run OpenVmBenchmark/data/apc_001_pc0x4ecc54.json.gz
 ```
 
-It reports vars/constraints/bus-interactions before/after and effectiveness (vars before / after).
+It reports before/after counts and three effectiveness factors — **variables**, **bus
+interactions**, and **algebraic constraints** (each `before / after`; see `Leanr/Utils/Size.lean`).
+
+**Priority: variable effectiveness > bus-interaction effectiveness > algebraic-constraint
+effectiveness.** Optimize primarily for fewer distinct variables. When candidate passes are
+otherwise comparable — or when a pass leaves the variable count unchanged — prefer the one that
+removes more bus interactions, and then the one that removes more constraints. A pass that cuts
+bus interactions or constraints without regressing variables is still an improvement worth
+landing. Report all three factors in the log.
+
 Optimization is slow; sampling a few of the 100 cases per iteration is fine. You can use the `*.powdr_opt.*` files for inspiration of new ideas that are possible. For the full picture, `OpenVmBenchmark/benchmark.py` runs `leanr
 compare` over all 100 cases in parallel (or `--n N` for the top N by cost; `--report out.html` for a
 click-through comparison of the original / powdr / leanr circuits) and reports aggregate/geomean

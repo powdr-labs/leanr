@@ -20,7 +20,7 @@ The theorem is proven against the spec and the OpenVM semantics above. For the g
 
 ## Usage
 
-The `leanr` executable runs the optimizer on powdr `SymbolicMachine` exports (`ApcWithBusMap` JSON, plain or gzipped) and reports effectiveness — distinct variables before / after:
+The `leanr` executable runs the optimizer on powdr `SymbolicMachine` exports (`ApcWithBusMap` JSON, plain or gzipped) and reports effectiveness — the factor by which each of three size measures shrinks, `before / after`, in priority order: distinct variables, then bus interactions, then algebraic constraints:
 
 ```bash
 lake build

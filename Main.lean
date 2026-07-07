@@ -81,12 +81,26 @@ def printStats (label : String) (stats : Stats) : IO Unit :=
   IO.println s!"  {label}: {stats.vars} vars, {stats.constraints} constraints, \
     {stats.busInteractions} bus interactions"
 
-/-- Effectiveness = vars before / vars after (the `Leanr/Utils/Size.lean` metric), as an exact
-    rational and a decimal approximation. -/
+/-- One effectiveness ratio: the factor `before / after` by which a size measure shrank, printed
+    as an exact rational and a decimal. Handles `after = 0` explicitly (Lean's `x / 0 = 0` would
+    otherwise misread "all removed" as "no reduction"). -/
+def printRatio (label : String) (before after : Nat) : IO Unit :=
+  if after == 0 then
+    IO.println s!"    {label}: {before} → {after}  \
+      ({if before == 0 then "1× (unchanged)" else "∞× (all removed)"})"
+  else
+    let ratio : ℚ := (before : ℚ) / (after : ℚ)
+    IO.println s!"    {label}: {before} → {after}  ({ratio} ≈ {before.toFloat / after.toFloat}×)"
+
+/-- Effectiveness of an optimization: the factor by which each size measure shrinks
+    (`before / after`), for the three measures in priority order — variables first, then bus
+    interactions, then algebraic constraints (the `Leanr/Utils/Size.lean` metrics). -/
 def printEffectiveness (label : String) (before after : Stats) : IO Unit := do
-  let eff : ℚ := (before.vars : ℚ) / (after.vars : ℚ)
-  IO.println s!"{label} effectiveness (vars before / after): \
-    {eff} ≈ {before.vars.toFloat / after.vars.toFloat}"
+  IO.println s!"{label} effectiveness (before → after):"
+  printRatio (label := "variables       ") (before := before.vars) (after := after.vars)
+  printRatio (label := "bus interactions") (before := before.busInteractions)
+    (after := after.busInteractions)
+  printRatio (label := "constraints     ") (before := before.constraints) (after := after.constraints)
 
 def cmdRun (fileName : String) (iters : Nat) : IO Unit := do
   let (cs, busMap) ← parseFile fileName

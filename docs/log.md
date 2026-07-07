@@ -909,3 +909,20 @@ inlining any below-degree-bound column, not just pinned vars) + a dead-column sw
 constraint-filter over provably-unused witnesses). Both are sound and mechanical; together they'd
 plausibly close most of the ~4% var gap. (3) is incremental rule additions. (4)/(5) are either
 metric-neutral or out of scope. No spec changes needed for the sound items.
+
+### 42. Bus-interaction and algebraic-constraint effectiveness metrics (measurement only)
+Tooling, not a pass. Added two effectiveness measures alongside the existing variable one, so the
+CLI and benchmark now report the shrink factor (`count before / count after`) for **variables**,
+**bus interactions**, and **algebraic constraints** — for both leanr and powdr. Formalized as
+`busInteractionEffectiveness` / `constraintEffectiveness` (via a shared `effectivenessBy` over a
+size measure) in `Leanr/Utils/Size.lean`; surfaced in `leanr run`/`compare`, the
+`OpenVmBenchmark/benchmark.py` terminal summary (agg + geomean per measure), and the HTML report.
+The priority order **variables > bus interactions > constraints** is documented in `CLAUDE.md` and
+the `autoopt` skill.
+
+The new bus metric immediately makes entry 41's item (4) quantitative. On a 4-case sample: leanr
+bus effectiveness **1.43× agg** vs powdr **2.52×** — powdr's PC-lookup removal (and broader
+interaction cleanup) is a large, previously-invisible gap. leanr already leads on constraints
+(**8.63×** vs **7.47×**). This suggests a sound, variable-neutral win is available: dropping
+never-violating stateless lookups (e.g. pinned PC lookups) would raise bus effectiveness toward
+powdr without regressing variables. Added to `docs/ideas.md`.
