@@ -1,4 +1,4 @@
-import Leanr.OptimizerPasses.MemoryUnify
+import Leanr.Implementation.OptimizerPasses.MemoryUnify
 import Leanr.MemoryBus
 
 set_option autoImplicit false

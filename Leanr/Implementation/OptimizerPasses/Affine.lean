@@ -1,4 +1,4 @@
-import Leanr.OptimizerPasses.Subst
+import Leanr.Implementation.OptimizerPasses.Subst
 import Leanr.Utils.Size
 import Mathlib.Tactic.LinearCombination
 import Mathlib.Tactic.Ring

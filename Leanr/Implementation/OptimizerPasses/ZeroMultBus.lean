@@ -1,4 +1,4 @@
-import Leanr.OptimizerPasses.TrivialConstraint
+import Leanr.Implementation.OptimizerPasses.TrivialConstraint
 
 set_option autoImplicit false
 

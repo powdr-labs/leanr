@@ -1,12 +1,12 @@
-import Leanr.BusFacts
-import Leanr.OpenVM.Semantics
+import Leanr.Implementation.BusFacts
+import Leanr.OpenVmSemantics
 
 set_option autoImplicit false
 
 /-!
 # Proven bus facts for the OpenVM semantics
 
-The `BusFacts` instance for `openVmBusSemantics` (see `Leanr/BusFacts.lean` for the design):
+The `BusFacts` instance for `openVmBusSemantics` (see `Leanr/Implementation/BusFacts.lean` for the design):
 byte bounds for the bitwise-lookup operands, the bits-indexed bound of the variable range
 checker, the tuple-range-checker bounds, the XOR functional dependence, and the table-free
 buses. Every claim is proven here against the concrete `violates`, so none of this needs to be

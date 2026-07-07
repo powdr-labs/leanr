@@ -1,4 +1,4 @@
-import Leanr.OptimizerPasses.DomainBatch
+import Leanr.Implementation.OptimizerPasses.DomainBatch
 
 set_option autoImplicit false
 

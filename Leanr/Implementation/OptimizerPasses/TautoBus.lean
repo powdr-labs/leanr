@@ -1,4 +1,4 @@
-import Leanr.OptimizerPasses.ConstantFold
+import Leanr.Implementation.OptimizerPasses.ConstantFold
 
 set_option autoImplicit false
 

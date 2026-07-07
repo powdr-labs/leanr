@@ -1,5 +1,5 @@
-import Leanr.OptimizerPasses.Affine
-import Leanr.OptimizerPasses.Rewrite
+import Leanr.Implementation.OptimizerPasses.Affine
+import Leanr.Implementation.OptimizerPasses.Rewrite
 
 set_option autoImplicit false
 

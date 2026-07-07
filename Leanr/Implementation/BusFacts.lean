@@ -14,7 +14,7 @@ the fact-free behavior).
 
 A *pattern* is a payload template: `some c` entries must equal the evaluated message's entry,
 `none` entries are free. Passes build patterns from the constant entries of a concrete
-interaction, so facts can be conditional on e.g. an op-selector slot (see `Leanr/OpenVM/Facts.lean`).
+interaction, so facts can be conditional on e.g. an op-selector slot (see `Leanr/Implementation/OpenVmFacts.lean`).
 -/
 
 variable {p : ℕ}
@@ -67,7 +67,8 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
     memShape busId = some shape → bs.isStateful busId = true
   /-- The VM's abstract `admissible` predicate entails the concrete consecutive-match discipline
       (`admissibleMemoryBus`) on each declared bus's active messages. For a VM whose `admissible` *is*
-      that per-bus conjunction (see `Leanr/OpenVM/`) this is essentially definitional. -/
+      that per-bus conjunction (see `Leanr/Implementation/OpenVmFacts.lean`) this is essentially
+      definitional. -/
   admissible_sound :
     ∀ (msgs : List (BusInteraction (ZMod p))),
       bs.admissible (msgs.filter

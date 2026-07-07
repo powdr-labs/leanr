@@ -8,8 +8,9 @@ variable {p : ℕ}
 
 The reusable framework for building the circuit optimizer out of small, individually-proven
 optimization *passes*. Nothing here is specific to a particular optimization; concrete passes
-live in `Leanr/OptimizerPasses/`, and the pipeline that assembles them into the public
-`optimizer` lives in `Leanr/Optimizer.lean`.
+live in `Leanr/Implementation/OptimizerPasses/`, and the pipeline that assembles them into the
+`optimizer` lives in `Leanr/Implementation/Optimizer.lean` (with the audited correctness theorems
+in `Leanr/Optimizer.lean`).
 
 This module provides:
 
@@ -92,8 +93,9 @@ Passes compose with `VerifiedPass.andThen` (run one, then the next), which threa
 through `refines_trans` and the composition of invariant-preservation.
 
 **To add an optimization:** create a `VerifiedPass` for it in a new file under
-`Leanr/OptimizerPasses/`, then `.andThen` it into `pipeline` in `Leanr/Optimizer.lean`. Prove
-`PassCorrect` for your transformation; do not change `Spec.lean` or the glue above. -/
+`Leanr/Implementation/OptimizerPasses/`, then `.andThen` it into `pipeline` in
+`Leanr/Implementation/Optimizer.lean`. Prove `PassCorrect` for your transformation; do not change
+`Spec.lean` or the glue above. -/
 
 /-- The per-pass correctness obligation: `out` `refines` the input `cs` (sound, and complete for
     `cs`'s intended executions), and if `cs` guarantees the system's invariants then so does

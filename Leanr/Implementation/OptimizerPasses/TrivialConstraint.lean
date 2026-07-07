@@ -1,5 +1,5 @@
-import Leanr.OptimizerPasses.Rewrite
-import Leanr.OptimizerPasses.ConstantFold
+import Leanr.Implementation.OptimizerPasses.Rewrite
+import Leanr.Implementation.OptimizerPasses.ConstantFold
 
 set_option autoImplicit false
 

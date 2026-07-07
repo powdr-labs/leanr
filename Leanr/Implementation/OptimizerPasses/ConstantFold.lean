@@ -1,4 +1,4 @@
-import Leanr.OptimizerPasses.Rewrite
+import Leanr.Implementation.OptimizerPasses.Rewrite
 
 set_option autoImplicit false
 

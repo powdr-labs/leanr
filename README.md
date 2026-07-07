@@ -4,11 +4,16 @@ Leanr is a verified constraint system optimizer, designed to be a drop-in replac
 
 ## Auditing Correctness
 
-Leanr is designed to have a small auditing surface. To audit Leanr, it should be sufficient to review:
+Leanr is designed to have a small auditing surface. The audited files live directly under
+[`Leanr/`](./Leanr); everything under [`Leanr/Implementation/`](./Leanr/Implementation) (the
+optimization passes, the pipeline, the proven `BusFacts`, the JSON parser) and
+[`Leanr/Utils/`](./Leanr/Utils) (tooling) needs **no** audit — its correctness is guaranteed by
+the theorems below and, for `BusFacts`, by construction (a wrong fact would not compile). To audit
+Leanr, it should be sufficient to review:
 1. [`Leanr/Spec.lean`](./Leanr/Spec.lean): Defining the notion of circuit equivalence and optimizer correctness.
-2. [`Leanr/OpenVM/Semantics.lean`](./Leanr/OpenVM/Semantics.lean): The OpenVM-specific semantics. These are needed for our OpenVM-specific optimizations. If you are instead interested in a different VM, you can skip this file, but must provide semantics for your VM in order to use Leanr.
+2. [`Leanr/OpenVmSemantics.lean`](./Leanr/OpenVmSemantics.lean): The OpenVM-specific semantics. These are needed for our OpenVM-specific optimizations. If you are instead interested in a different VM, you can skip this file, but must provide semantics for your VM in order to use Leanr.
 3. [`Leanr/MemoryBus.lean`](./Leanr/MemoryBus.lean): Utility used in the OpenVM semantics above (and likely useful for other VMs as well).
-4. The `optimizer_maintainsCorrectness` theorem in [`Leanr/Optimizer.lean`](./Leanr/Optimizer.lean): Audit the statement and check that the proof is correct by running `lake build`.
+4. The correctness theorems in [`Leanr/Optimizer.lean`](./Leanr/Optimizer.lean): `optimizerWithBusFacts_maintainsCorrectness` — the master statement that the optimizer maintains correctness for *any* proven bus facts — together with its two instances, `optimizer_maintainsCorrectness` (the fact-free optimizer) and `openVmOptimizer_maintainsCorrectness` (the `openVmOptimizer` the CLI actually runs). Audit the statements and check that the proofs are correct by running `lake build`.
 
 ### Assumptions (OpenVM)
 
@@ -16,7 +21,7 @@ The theorem is proven against the spec and the OpenVM semantics above. For the g
 
 - **Memory and execution-bridge interactions are listed in chronological order.** The `admissible` predicate pairs each send with the next same-address receive *in list order* (see [`Leanr/MemoryBus.lean`](./Leanr/MemoryBus.lean)), so the exporter must emit these interactions in time order. If this was not the case, completeness might be violated.
 - **The input guarantees invariants and respects the degree bound.** The optimizer *preserves* `guaranteesInvariants` and `withinDegree`, but only assuming the input has them (e.g. that written memory limbs are byte-range-checked). Confirm this for the circuits you feed it.
-- **PC lookups are pinned.** [`Semantics.lean`](./Leanr/OpenVM/Semantics.lean) checks only the arity of a PC lookup, not the program table. We assume that constraints like `opcode = 0x5b` have already been added to the input circuit, pinning the lookup table values.
+- **PC lookups are pinned.** [`Leanr/OpenVmSemantics.lean`](./Leanr/OpenVmSemantics.lean) checks only the arity of a PC lookup, not the program table. We assume that constraints like `opcode = 0x5b` have already been added to the input circuit, pinning the lookup table values.
 
 ## Usage
 

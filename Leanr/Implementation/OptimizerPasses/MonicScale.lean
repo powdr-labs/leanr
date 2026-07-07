@@ -1,4 +1,4 @@
-import Leanr.OptimizerPasses.Normalize
+import Leanr.Implementation.OptimizerPasses.Normalize
 
 set_option autoImplicit false
 
