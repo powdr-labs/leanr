@@ -94,8 +94,14 @@ mutual
     | e => joinSummands (collectSummands e)
 end
 
-/-- Render a list of bus interactions, emitting a `// Bus N:` header whenever the bus id
-    changes (the list is assumed to be grouped by bus, as powdr renders it). -/
+/-- Group bus interactions by bus id for rendering, preserving the original interaction order
+    within each bus group. -/
+private def groupBusInteractions (bis : List (BusInteraction (Expression p))) :
+    List (BusInteraction (Expression p)) :=
+  let busIds := (bis.map (fun bi => bi.busId)).mergeSort (· ≤ ·) |>.eraseDups
+  busIds.flatMap fun busId => bis.filter (fun bi => bi.busId = busId)
+
+/-- Render a list of bus interactions, emitting one `// Bus N:` header per bus id. -/
 def renderBusInteractions (bis : List (BusInteraction (Expression p))) : String :=
   let step : (Option Nat × List String) → BusInteraction (Expression p) → (Option Nat × List String) :=
     fun (prev, acc) bi =>
@@ -103,7 +109,7 @@ def renderBusInteractions (bis : List (BusInteraction (Expression p))) : String 
       let args := String.intercalate ", " (bi.payload.map renderExpr)
       let line := s!"mult={renderExpr bi.multiplicity}, args=[{args}]"
       (some bi.busId, acc ++ header ++ [line])
-  String.intercalate "\n" (bis.foldl step (none, [])).2
+  String.intercalate "\n" ((groupBusInteractions bis).foldl step (none, [])).2
 
 /-- Render a whole constraint system in a canonical, powdr-like format. -/
 def render (cs : ConstraintSystem p) : String :=
@@ -113,5 +119,17 @@ def render (cs : ConstraintSystem p) : String :=
 /-- Convenience predicate for snapshot `#guard`s: does `cs` render to `expected`? -/
 def matchesSnapshot (cs : ConstraintSystem p) (expected : String) : Bool :=
   render cs == expected
+
+private def busGroupingSnapshot : ConstraintSystem 7 :=
+  { algebraicConstraints := [],
+    busInteractions := [
+      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_a@1"] },
+      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_a@2"] },
+      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_b@3"] },
+      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_b@4"] }
+    ] }
+
+#guard renderBusInteractions busGroupingSnapshot.busInteractions ==
+  "// Bus 1:\nmult=1, args=[one_a]\nmult=1, args=[one_b]\n// Bus 2:\nmult=1, args=[two_a]\nmult=1, args=[two_b]"
 
 end Leanr.Spec.Dsl
