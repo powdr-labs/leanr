@@ -13,6 +13,7 @@ import Leanr.Implementation.OptimizerPasses.TautoBus
 import Leanr.Implementation.OptimizerPasses.MonicScale
 import Leanr.Implementation.OptimizerPasses.MemoryUnify
 import Leanr.Implementation.OptimizerPasses.BusUnify
+import Leanr.Implementation.OptimizerPasses.DisconnectedComponent
 import Leanr.Implementation.OptimizerPasses.Reencode
 
 set_option autoImplicit false
@@ -59,6 +60,7 @@ def cleanupCycle : VerifiedPassW p :=
     |>.andThen zeroMultBusDropPass.withFacts.guardDegree
     |>.andThen tautoBusDropPass.withFacts.guardDegree
     |>.andThen busUnifyPass.guardDegree
+    |>.andThen disconnectedComponentPass.withFacts.guardDegree
     |>.andThen reencodePass.withFacts.guardDegree
 
 theorem cleanupCycle_respectsDeg : RespectsDeg (cleanupCycle (p := p)) := by

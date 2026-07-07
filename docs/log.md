@@ -926,3 +926,33 @@ interaction cleanup) is a large, previously-invisible gap. leanr already leads o
 (**8.63×** vs **7.47×**). This suggests a sound, variable-neutral win is available: dropping
 never-violating stateless lookups (e.g. pinned PC lookups) would raise bus effectiveness toward
 powdr without regressing variables. Added to `docs/ideas.md`.
+
+### 43. Disconnected-component removal (`disconnectedComponentPass`)
+New pass `Leanr/Implementation/OptimizerPasses/DisconnectedComponent.lean`: drop a *disconnected
+component* — a set of constraints and stateless interactions whose variables never reach a
+**stateful** bus interaction — **provided the subcircuit is satisfiable**. Soundness must
+reconstruct a full satisfying assignment of the input from one of the output, so it needs a witness
+for the dropped variables; the pass tries the concrete all-zero witness and drops a component only
+if that witness certifies it: every dropped constraint evaluates to `0` (`decide (c.eval 0 = 0)`)
+and every dropped (stateless) interaction is non-violating (`bs.violatesConstraint (bi.eval 0) =
+false`), both checked against the semantics *at run time* — the same branch-on-a-decidable-check
+trick `guardDegree` uses, so it stays VM-agnostic and needs no `BusFacts`.
+
+Correctness (`dropComponent_correct`, field-free, VM-agnostic): given the partition, a witness `w`,
+and the checkable facts that every removed item is witness-satisfied, stateless, and shares no
+variable with the kept part — soundness extends an output assignment by `w` on the removed variables
+(valid by `eval_congr` since those variables occur nowhere else); completeness (`env' = env`) and
+side-effect/`admissible` preservation follow because the removed interactions are stateless
+(`sideEffects_drop_eq`, `admissible_filterBus`). Removal is **per-component** (BFS `bfsClosure`; the
+co-occurrence closure of any witness-failing disconnected item is kept too, so one uncertifiable
+component never blocks the others); the induced partition is re-checked, so correctness never
+depends on the (`partial`) search.
+
+Correctness axioms unchanged (`{propext, Classical.choice, Quot.sound}`); snapshot intact. Measured
+on the pre-rename benchmark data (before the #48 variable-rename refactor this rebased onto): leanr
+**4.016× → 4.023× aggregate**, monotonic (the pass only removes variables, so no case regresses;
+~65 vars over several cases). Largest single case apc_100 (dead range-checked `bit_shift_carry`
+shift-limbs): 1027 → 1003 vars. The dominant *unremoved* pattern is the orphaned register read
+(data limbs in a bitwise byte-check `[K − Σ256ⁱ·limbᵢ, …]`): all-zero is not a satisfying witness
+there (the affine slot is a large constant, not a byte) — left for a smarter witness finder (see
+`docs/ideas.md`).
