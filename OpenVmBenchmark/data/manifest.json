@@ -1,11 +1,12 @@
 {
   "version": 1,
   "source": {
-    "note": "openvm-eth a20539c block 24171377, cell PGO",
+    "note": "openvm-eth e3df69e block 24171377, cell PGO",
     "sort_key": "width_before",
     "top": 100,
     "candidates_available": 11101,
-    "date": "2026-07-06T12:54:00+00:00"
+    "powdr_opt_stage": "after optimize(), before add_guards (is_valid guards stripped)",
+    "date": "2026-07-07T07:48:29+00:00"
   },
   "entries": [
     {
@@ -37,6 +38,10 @@
           "constraints": 16,
           "bus_interactions": 24
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 15,
+        "bus_interactions": 24
       },
       "labels": []
     },
@@ -70,6 +75,10 @@
           "bus_interactions": 30
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 31,
+        "bus_interactions": 30
+      },
       "labels": []
     },
     {
@@ -101,6 +110,10 @@
           "constraints": 45,
           "bus_interactions": 85
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 43,
+        "bus_interactions": 85
       },
       "labels": []
     },
@@ -134,6 +147,10 @@
           "bus_interactions": 82
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 53,
+        "bus_interactions": 82
+      },
       "labels": []
     },
     {
@@ -166,6 +183,10 @@
           "bus_interactions": 758
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 1673,
+        "bus_interactions": 758
+      },
       "labels": []
     },
     {
@@ -197,6 +218,10 @@
           "constraints": 523,
           "bus_interactions": 550
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 520,
+        "bus_interactions": 550
       },
       "labels": [
         "foldhash[2be9d754b9b2ee4d]::hash_bytes_long"
@@ -232,6 +257,10 @@
           "bus_interactions": 51
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 19,
+        "bus_interactions": 51
+      },
       "labels": []
     },
     {
@@ -263,6 +292,10 @@
           "constraints": 67,
           "bus_interactions": 57
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 64,
+        "bus_interactions": 57
       },
       "labels": []
     },
@@ -296,6 +329,10 @@
           "bus_interactions": 758
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 1673,
+        "bus_interactions": 758
+      },
       "labels": []
     },
     {
@@ -327,6 +364,10 @@
           "constraints": 332,
           "bus_interactions": 239
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 331,
+        "bus_interactions": 239
       },
       "labels": []
     },
@@ -360,6 +401,10 @@
           "bus_interactions": 34
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 5,
+        "bus_interactions": 34
+      },
       "labels": []
     },
     {
@@ -391,6 +436,10 @@
           "constraints": 449,
           "bus_interactions": 474
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 448,
+        "bus_interactions": 474
       },
       "labels": []
     },
@@ -424,6 +473,10 @@
           "bus_interactions": 135
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 148,
+        "bus_interactions": 135
+      },
       "labels": []
     },
     {
@@ -455,6 +508,10 @@
           "constraints": 172,
           "bus_interactions": 135
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 171,
+        "bus_interactions": 135
       },
       "labels": []
     },
@@ -488,6 +545,10 @@
           "bus_interactions": 758
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 1673,
+        "bus_interactions": 758
+      },
       "labels": []
     },
     {
@@ -520,6 +581,10 @@
           "bus_interactions": 67
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 39,
+        "bus_interactions": 67
+      },
       "labels": []
     },
     {
@@ -551,6 +616,10 @@
           "constraints": 36,
           "bus_interactions": 150
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 35,
+        "bus_interactions": 150
       },
       "labels": [
         "<openvm_mpt[8d83430ddee8b6d5]::trie::Mpt>::decode_trie_internal"
@@ -586,6 +655,10 @@
           "bus_interactions": 23
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 9,
+        "bus_interactions": 23
+      },
       "labels": [
         "memcpy"
       ]
@@ -620,6 +693,10 @@
           "bus_interactions": 416
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 511,
+        "bus_interactions": 416
+      },
       "labels": []
     },
     {
@@ -651,6 +728,10 @@
           "constraints": 502,
           "bus_interactions": 422
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 501,
+        "bus_interactions": 422
       },
       "labels": []
     },
@@ -684,6 +765,10 @@
           "bus_interactions": 85
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 43,
+        "bus_interactions": 85
+      },
       "labels": []
     },
     {
@@ -715,6 +800,10 @@
           "constraints": 187,
           "bus_interactions": 163
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 179,
+        "bus_interactions": 163
       },
       "labels": []
     },
@@ -748,6 +837,10 @@
           "bus_interactions": 120
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 65,
+        "bus_interactions": 120
+      },
       "labels": []
     },
     {
@@ -779,6 +872,10 @@
           "constraints": 34,
           "bus_interactions": 138
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 33,
+        "bus_interactions": 138
       },
       "labels": []
     },
@@ -812,6 +909,10 @@
           "bus_interactions": 114
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 51,
+        "bus_interactions": 114
+      },
       "labels": []
     },
     {
@@ -843,6 +944,10 @@
           "constraints": 69,
           "bus_interactions": 246
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 68,
+        "bus_interactions": 246
       },
       "labels": []
     },
@@ -876,6 +981,10 @@
           "bus_interactions": 197
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 252,
+        "bus_interactions": 197
+      },
       "labels": []
     },
     {
@@ -907,6 +1016,10 @@
           "constraints": 18,
           "bus_interactions": 20
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 17,
+        "bus_interactions": 20
       },
       "labels": []
     },
@@ -940,6 +1053,10 @@
           "bus_interactions": 100
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 45,
+        "bus_interactions": 100
+      },
       "labels": []
     },
     {
@@ -971,6 +1088,10 @@
           "constraints": 25,
           "bus_interactions": 37
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 24,
+        "bus_interactions": 37
       },
       "labels": []
     },
@@ -1004,6 +1125,10 @@
           "bus_interactions": 74
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 88,
+        "bus_interactions": 74
+      },
       "labels": []
     },
     {
@@ -1035,6 +1160,10 @@
           "constraints": 25,
           "bus_interactions": 36
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 23,
+        "bus_interactions": 36
       },
       "labels": []
     },
@@ -1068,6 +1197,10 @@
           "bus_interactions": 87
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 28,
+        "bus_interactions": 87
+      },
       "labels": []
     },
     {
@@ -1099,6 +1232,10 @@
           "constraints": 23,
           "bus_interactions": 80
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 22,
+        "bus_interactions": 80
       },
       "labels": []
     },
@@ -1132,6 +1269,10 @@
           "bus_interactions": 85
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 43,
+        "bus_interactions": 85
+      },
       "labels": []
     },
     {
@@ -1163,6 +1304,10 @@
           "constraints": 1674,
           "bus_interactions": 758
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 1673,
+        "bus_interactions": 758
       },
       "labels": []
     },
@@ -1196,6 +1341,10 @@
           "bus_interactions": 439
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 532,
+        "bus_interactions": 439
+      },
       "labels": []
     },
     {
@@ -1227,6 +1376,10 @@
           "constraints": 298,
           "bus_interactions": 285
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 297,
+        "bus_interactions": 285
       },
       "labels": []
     },
@@ -1260,6 +1413,10 @@
           "bus_interactions": 23
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 3,
+        "bus_interactions": 23
+      },
       "labels": []
     },
     {
@@ -1291,6 +1448,10 @@
           "constraints": 171,
           "bus_interactions": 143
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 163,
+        "bus_interactions": 143
       },
       "labels": []
     },
@@ -1324,6 +1485,10 @@
           "bus_interactions": 64
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 45,
+        "bus_interactions": 64
+      },
       "labels": []
     },
     {
@@ -1355,6 +1520,10 @@
           "constraints": 56,
           "bus_interactions": 244
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 55,
+        "bus_interactions": 244
       },
       "labels": []
     },
@@ -1388,6 +1557,10 @@
           "bus_interactions": 148
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 47,
+        "bus_interactions": 148
+      },
       "labels": []
     },
     {
@@ -1419,6 +1592,10 @@
           "constraints": 1674,
           "bus_interactions": 758
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 1673,
+        "bus_interactions": 758
       },
       "labels": []
     },
@@ -1452,6 +1629,10 @@
           "bus_interactions": 54
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 8,
+        "bus_interactions": 54
+      },
       "labels": []
     },
     {
@@ -1483,6 +1664,10 @@
           "constraints": 29,
           "bus_interactions": 34
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 27,
+        "bus_interactions": 34
       },
       "labels": []
     },
@@ -1516,6 +1701,10 @@
           "bus_interactions": 59
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 19,
+        "bus_interactions": 59
+      },
       "labels": []
     },
     {
@@ -1547,6 +1736,10 @@
           "constraints": 48,
           "bus_interactions": 148
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 47,
+        "bus_interactions": 148
       },
       "labels": []
     },
@@ -1580,6 +1773,10 @@
           "bus_interactions": 450
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 505,
+        "bus_interactions": 450
+      },
       "labels": []
     },
     {
@@ -1611,6 +1808,10 @@
           "constraints": 118,
           "bus_interactions": 143
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 113,
+        "bus_interactions": 143
       },
       "labels": []
     },
@@ -1644,6 +1845,10 @@
           "bus_interactions": 241
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 305,
+        "bus_interactions": 241
+      },
       "labels": []
     },
     {
@@ -1675,6 +1880,10 @@
           "constraints": 39,
           "bus_interactions": 44
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 37,
+        "bus_interactions": 44
       },
       "labels": []
     },
@@ -1708,6 +1917,10 @@
           "bus_interactions": 48
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 34,
+        "bus_interactions": 48
+      },
       "labels": []
     },
     {
@@ -1739,6 +1952,10 @@
           "constraints": 20,
           "bus_interactions": 74
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 19,
+        "bus_interactions": 74
       },
       "labels": [
         "native_xorin"
@@ -1774,6 +1991,10 @@
           "bus_interactions": 44
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 2,
+        "bus_interactions": 44
+      },
       "labels": []
     },
     {
@@ -1805,6 +2026,10 @@
           "constraints": 4,
           "bus_interactions": 15
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 3,
+        "bus_interactions": 15
       },
       "labels": []
     },
@@ -1838,6 +2063,10 @@
           "bus_interactions": 100
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 45,
+        "bus_interactions": 100
+      },
       "labels": []
     },
     {
@@ -1869,6 +2098,10 @@
           "constraints": 20,
           "bus_interactions": 68
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 19,
+        "bus_interactions": 68
       },
       "labels": []
     },
@@ -1902,6 +2135,10 @@
           "bus_interactions": 81
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 35,
+        "bus_interactions": 81
+      },
       "labels": []
     },
     {
@@ -1933,6 +2170,10 @@
           "constraints": 16,
           "bus_interactions": 54
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 15,
+        "bus_interactions": 54
       },
       "labels": []
     },
@@ -1966,6 +2207,10 @@
           "bus_interactions": 25
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 17,
+        "bus_interactions": 25
+      },
       "labels": []
     },
     {
@@ -1997,6 +2242,10 @@
           "constraints": 33,
           "bus_interactions": 48
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 31,
+        "bus_interactions": 48
       },
       "labels": []
     },
@@ -2030,6 +2279,10 @@
           "bus_interactions": 42
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 27,
+        "bus_interactions": 42
+      },
       "labels": []
     },
     {
@@ -2062,6 +2315,10 @@
           "bus_interactions": 51
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 35,
+        "bus_interactions": 51
+      },
       "labels": []
     },
     {
@@ -2093,6 +2350,10 @@
           "constraints": 43,
           "bus_interactions": 125
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 41,
+        "bus_interactions": 125
       },
       "labels": [
         "revm_interpreter[cf9d1a87750d7275]::instructions::control::jumpi::<revm_interpreter[cf9d1a87750d7275]::interpreter::EthInterpreter, revm_context[fff413d4aec7700e]::context::Context<revm_context[fff413d4aec7700e]::block::BlockEnv, revm_context[fff413d4aec7700e]::tx::TxEnv, revm_context[fff413d4aec7700e]::cfg::CfgEnv, &mut revm_database[c9951fdf1219ff81]::states::state::State<revm_database[c9951fdf1219ff81]::in_memory_db::CacheDB<&openvm_stateless_executor[30fd507a1bb984e4]::io::WitnessDb>>>>"
@@ -2128,6 +2389,10 @@
           "bus_interactions": 37
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 10,
+        "bus_interactions": 37
+      },
       "labels": []
     },
     {
@@ -2159,6 +2424,10 @@
           "constraints": 1674,
           "bus_interactions": 758
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 1673,
+        "bus_interactions": 758
       },
       "labels": []
     },
@@ -2192,6 +2461,10 @@
           "bus_interactions": 758
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 1673,
+        "bus_interactions": 758
+      },
       "labels": []
     },
     {
@@ -2223,6 +2496,10 @@
           "constraints": 4,
           "bus_interactions": 15
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 3,
+        "bus_interactions": 15
       },
       "labels": []
     },
@@ -2256,6 +2533,10 @@
           "bus_interactions": 110
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 61,
+        "bus_interactions": 110
+      },
       "labels": []
     },
     {
@@ -2287,6 +2568,10 @@
           "constraints": 54,
           "bus_interactions": 234
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 53,
+        "bus_interactions": 234
       },
       "labels": []
     },
@@ -2320,6 +2605,10 @@
           "bus_interactions": 20
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 8,
+        "bus_interactions": 20
+      },
       "labels": []
     },
     {
@@ -2351,6 +2640,10 @@
           "constraints": 80,
           "bus_interactions": 146
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 77,
+        "bus_interactions": 146
       },
       "labels": []
     },
@@ -2384,6 +2677,10 @@
           "bus_interactions": 154
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 29,
+        "bus_interactions": 154
+      },
       "labels": []
     },
     {
@@ -2415,6 +2712,10 @@
           "constraints": 55,
           "bus_interactions": 43
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 54,
+        "bus_interactions": 43
       },
       "labels": []
     },
@@ -2448,6 +2749,10 @@
           "bus_interactions": 56
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 2,
+        "bus_interactions": 56
+      },
       "labels": []
     },
     {
@@ -2479,6 +2784,10 @@
           "constraints": 40,
           "bus_interactions": 75
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 39,
+        "bus_interactions": 75
       },
       "labels": []
     },
@@ -2512,6 +2821,10 @@
           "bus_interactions": 75
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 39,
+        "bus_interactions": 75
+      },
       "labels": []
     },
     {
@@ -2543,6 +2856,10 @@
           "constraints": 12,
           "bus_interactions": 39
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 11,
+        "bus_interactions": 39
       },
       "labels": []
     },
@@ -2576,6 +2893,10 @@
           "bus_interactions": 106
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 85,
+        "bus_interactions": 106
+      },
       "labels": []
     },
     {
@@ -2607,6 +2928,10 @@
           "constraints": 39,
           "bus_interactions": 78
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 37,
+        "bus_interactions": 78
       },
       "labels": [
         "<alloc[97845e487319f7f9]::vec::Vec<u8> as bytes[48b6e4a2597dba4a]::buf::buf_mut::BufMut>::put_slice.4314"
@@ -2642,6 +2967,10 @@
           "bus_interactions": 44
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 16,
+        "bus_interactions": 44
+      },
       "labels": []
     },
     {
@@ -2673,6 +3002,10 @@
           "constraints": 26,
           "bus_interactions": 117
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 25,
+        "bus_interactions": 117
       },
       "labels": [
         "native_keccak256"
@@ -2708,6 +3041,10 @@
           "bus_interactions": 108
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 27,
+        "bus_interactions": 108
+      },
       "labels": []
     },
     {
@@ -2740,6 +3077,10 @@
           "bus_interactions": 370
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 128,
+        "bus_interactions": 370
+      },
       "labels": []
     },
     {
@@ -2771,6 +3112,10 @@
           "constraints": 39,
           "bus_interactions": 78
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 37,
+        "bus_interactions": 78
       },
       "labels": [
         "<alloc[97845e487319f7f9]::vec::Vec<u8> as bytes[48b6e4a2597dba4a]::buf::buf_mut::BufMut>::put_slice.3402"
@@ -2806,6 +3151,10 @@
           "bus_interactions": 148
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 47,
+        "bus_interactions": 148
+      },
       "labels": []
     },
     {
@@ -2837,6 +3186,10 @@
           "constraints": 17,
           "bus_interactions": 15
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 15,
+        "bus_interactions": 15
       },
       "labels": []
     },
@@ -2870,6 +3223,10 @@
           "bus_interactions": 262
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 317,
+        "bus_interactions": 262
+      },
       "labels": []
     },
     {
@@ -2901,6 +3258,10 @@
           "constraints": 1,
           "bus_interactions": 34
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 0,
+        "bus_interactions": 34
       },
       "labels": []
     },
@@ -2934,6 +3295,10 @@
           "bus_interactions": 34
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 21,
+        "bus_interactions": 34
+      },
       "labels": []
     },
     {
@@ -2965,6 +3330,10 @@
           "constraints": 4,
           "bus_interactions": 15
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 3,
+        "bus_interactions": 15
       },
       "labels": []
     },
@@ -2998,6 +3367,10 @@
           "bus_interactions": 15
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 3,
+        "bus_interactions": 15
+      },
       "labels": []
     },
     {
@@ -3029,6 +3402,10 @@
           "constraints": 9,
           "bus_interactions": 34
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 8,
+        "bus_interactions": 34
       },
       "labels": []
     },
@@ -3062,6 +3439,10 @@
           "bus_interactions": 64
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 45,
+        "bus_interactions": 64
+      },
       "labels": []
     },
     {
@@ -3093,6 +3474,10 @@
           "constraints": 142,
           "bus_interactions": 197
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 137,
+        "bus_interactions": 197
       },
       "labels": []
     },
@@ -3126,6 +3511,10 @@
           "bus_interactions": 55
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 51,
+        "bus_interactions": 55
+      },
       "labels": []
     },
     {
@@ -3157,6 +3546,10 @@
           "constraints": 16,
           "bus_interactions": 90
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 15,
+        "bus_interactions": 90
       },
       "labels": []
     },
@@ -3190,6 +3583,10 @@
           "bus_interactions": 145
         }
       },
+      "powdr_opt_stats": {
+        "constraints": 152,
+        "bus_interactions": 145
+      },
       "labels": []
     },
     {
@@ -3221,6 +3618,10 @@
           "constraints": 603,
           "bus_interactions": 553
         }
+      },
+      "powdr_opt_stats": {
+        "constraints": 583,
+        "bus_interactions": 553
       },
       "labels": []
     }
