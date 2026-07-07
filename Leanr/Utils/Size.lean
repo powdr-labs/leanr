@@ -33,18 +33,18 @@ variable {p : ℕ}
 /-! ## Collecting variables -/
 
 /-- All variable names occurring in an expression (with multiplicity / duplicates). -/
-def Expression.vars : Expression p → List String
+def Expression.vars : Expression p → List Variable
   | .const _ => []
   | .var x => [x]
   | .add a b => a.vars ++ b.vars
   | .mul a b => a.vars ++ b.vars
 
 /-- All variable names occurring in a bus interaction (multiplicity and payload). -/
-def BusInteraction.vars (bi : BusInteraction (Expression p)) : List String :=
+def BusInteraction.vars (bi : BusInteraction (Expression p)) : List Variable :=
   bi.multiplicity.vars ++ bi.payload.flatMap Expression.vars
 
 /-- The distinct variables of a constraint system, across constraints and bus interactions. -/
-def ConstraintSystem.variables (cs : ConstraintSystem p) : List String :=
+def ConstraintSystem.variables (cs : ConstraintSystem p) : List Variable :=
   (cs.algebraicConstraints.flatMap Expression.vars ++
     cs.busInteractions.flatMap BusInteraction.vars).dedup
 
@@ -63,7 +63,7 @@ def ConstraintSystem.busInteractionCount (cs : ConstraintSystem p) : Nat :=
 
 /-- Number of occurrences of `x` (with multiplicity) across the whole system. Used e.g. to pick
     substitution pivots that minimize expression duplication. -/
-def ConstraintSystem.occurrences (cs : ConstraintSystem p) (x : String) : Nat :=
+def ConstraintSystem.occurrences (cs : ConstraintSystem p) (x : Variable) : Nat :=
   (cs.algebraicConstraints.flatMap Expression.vars
     ++ cs.busInteractions.flatMap BusInteraction.vars).count x
 

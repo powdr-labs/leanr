@@ -7,15 +7,65 @@ variable {p : ℕ} [Fact p.Prime]
 
 --------- Expressions ---------
 
-/-- An arithmetic expression over variables (identified by `String`) and field constants. -/
+/-- A circuit variable: a display `name` plus an optional powdr witness-column ID. -/
+structure Variable where
+  name : String
+  powdrId? : Option Nat := none
+  deriving DecidableEq, Repr, Ord
+
+instance : BEq Variable := ⟨fun a b => decide (a = b)⟩
+instance : LE Variable := ⟨fun a b => a.name ≤ b.name ∧ a.powdrId? ≤ b.powdrId?⟩
+instance : Hashable Variable := ⟨fun a => mixHash (hash a.name) (hash a.powdrId?)⟩
+
+instance : Coe String Variable := ⟨fun name => { name }⟩
+
+/-- Parse powdr's legacy `<name>@<id>` variable notation into a structured variable. -/
+def Variable.ofPowdrName (raw : String) : Variable :=
+  match raw.splitOn "@" with
+  | [base, id] =>
+      match id.toNat? with
+      | some n => { name := base, powdrId? := some n }
+      | none => { name := raw }
+  | _ => { name := raw }
+
+instance : ToString Variable := ⟨fun x => x.name⟩
+
+instance : ReflBEq Variable where
+  rfl := by intro a; simp [BEq.beq]
+
+instance : LawfulBEq Variable where
+  eq_of_beq := by
+    intro a b h
+    simpa [BEq.beq] using h
+
+instance : PartialEquivBEq Variable where
+  symm := by
+    intro a b h
+    cases (LawfulBEq.eq_of_beq h)
+    simp [BEq.beq]
+  trans := by
+    intro a b c hab hbc
+    cases (LawfulBEq.eq_of_beq hab)
+    cases (LawfulBEq.eq_of_beq hbc)
+    simp [BEq.beq]
+
+instance : EquivBEq Variable where
+
+instance : LawfulHashable Variable where
+  hash_eq := by
+    intro a b h
+    cases (LawfulBEq.eq_of_beq h)
+    rfl
+
+/-- An arithmetic expression over structured variables and field constants. -/
 inductive Expression (p : ℕ) where
   | const (n : ZMod p)
-  | var (x : String)
+  | var (x : Variable)
   | add (e1 e2 : Expression p)
   | mul (e1 e2 : Expression p)
 
 /-- Evaluate an expression under an assignment `env` of variables to field elements. -/
-def Expression.eval (e : Expression p) (env : String → ZMod p) : ZMod p :=
+def Expression.eval (e : Expression p) (env : Variable → ZMod p) : ZMod p :=
   match e with
   | .const n => n
   | .var x => env x
@@ -41,7 +91,7 @@ structure BusInteraction (α : Type) where
 
 /-- Evaluate a bus interaction under an assignment `env`, turning a symbolic bus
     interaction into a bus interaction message. -/
-def BusInteraction.eval (bi : BusInteraction (Expression p)) (env : String → ZMod p) :
+def BusInteraction.eval (bi : BusInteraction (Expression p)) (env : Variable → ZMod p) :
     BusInteraction (ZMod p) :=
   { busId := bi.busId,
     multiplicity := bi.multiplicity.eval env,
@@ -100,7 +150,7 @@ structure ConstraintSystem (p : ℕ) where
 /-- The side effects of a constraint system under a given environment and bus semantics.
     The side effects are the tuples sent to the *stateful* buses.-/
 def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
-    (busSemantics : BusSemantics p) (env : String → ZMod p) : BusState p :=
+    (busSemantics : BusSemantics p) (env : Variable → ZMod p) : BusState p :=
   cs.busInteractions.filter (fun bi => busSemantics.isStateful bi.busId)
     |>.map (fun bi =>
       let m := bi.eval env
@@ -108,14 +158,14 @@ def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
 
 /-- Whether a given assignment is admissible under the bus semantics. -/
 def ConstraintSystem.admissible (s : ConstraintSystem p) (busSemantics : BusSemantics p)
-    (env : String → ZMod p) : Prop :=
+    (env : Variable → ZMod p) : Prop :=
   busSemantics.admissible ((s.busInteractions.map (fun bi => bi.eval env)).filter
     (fun m => decide (m.multiplicity ≠ 0) && busSemantics.isStateful m.busId))
 
 /-- Whether a constraint system is satisfied under a given environment and bus semantics,
     i.e., whether it satisfies all algebraic constraints and does not violate any bus constraints. -/
 def ConstraintSystem.satisfies (s : ConstraintSystem p) (busSemantics : BusSemantics p)
-    (env : String → ZMod p) : Prop :=
+    (env : Variable → ZMod p) : Prop :=
   (∀ c ∈ s.algebraicConstraints, c.eval env = 0) ∧
   (∀ bi ∈ s.busInteractions,
     let message := bi.eval env

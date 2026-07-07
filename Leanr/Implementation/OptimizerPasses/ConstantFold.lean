@@ -39,12 +39,12 @@ def Expression.foldMul (a b : Expression p) : Expression p :=
   | a, .const n => if n = 0 then .const 0 else if n = 1 then a else .mul a (.const n)
   | a, b => .mul a b
 
-theorem Expression.foldAdd_eval (a b : Expression p) (env : String → ZMod p) :
+theorem Expression.foldAdd_eval (a b : Expression p) (env : Variable → ZMod p) :
     (a.foldAdd b).eval env = a.eval env + b.eval env := by
   unfold Expression.foldAdd
   split <;> (try split_ifs) <;> simp_all [Expression.eval]
 
-theorem Expression.foldMul_eval (a b : Expression p) (env : String → ZMod p) :
+theorem Expression.foldMul_eval (a b : Expression p) (env : Variable → ZMod p) :
     (a.foldMul b).eval env = a.eval env * b.eval env := by
   unfold Expression.foldMul
   split <;> (try split_ifs) <;> simp_all [Expression.eval]
@@ -57,7 +57,7 @@ def Expression.fold : Expression p → Expression p
   | .add a b => a.fold.foldAdd b.fold
   | .mul a b => a.fold.foldMul b.fold
 
-theorem Expression.fold_eval (e : Expression p) (env : String → ZMod p) :
+theorem Expression.fold_eval (e : Expression p) (env : Variable → ZMod p) :
     e.fold.eval env = e.eval env := by
   induction e with
   | const n => rfl

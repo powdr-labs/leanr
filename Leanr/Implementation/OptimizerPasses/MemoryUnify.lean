@@ -63,7 +63,7 @@ theorem ConstraintSystem.addConstraints_correct (cs : ConstraintSystem p) (bs : 
 /-- `e₂ - e₁` as an expression. -/
 def eqExpr (e2 e1 : Expression p) : Expression p := .add e2 (.mul (.const (-1)) e1)
 
-theorem eqExpr_eval (e2 e1 : Expression p) (env : String → ZMod p) :
+theorem eqExpr_eval (e2 e1 : Expression p) (env : Variable → ZMod p) :
     (eqExpr e2 e1).eval env = e2.eval env - e1.eval env := by
   show e2.eval env + (-1) * e1.eval env = _
   ring
@@ -75,7 +75,7 @@ def constDiff (e1 e2 : Expression p) : Option (ZMod p) :=
   | some l => if l.norm.terms = [] then some l.norm.const else none
 
 theorem constDiff_sound (e1 e2 : Expression p) (k : ZMod p) (h : constDiff e1 e2 = some k)
-    (env : String → ZMod p) : e2.eval env = e1.eval env + k := by
+    (env : Variable → ZMod p) : e2.eval env = e1.eval env + k := by
   unfold constDiff at h
   split at h
   · exact absurd h (by simp)
@@ -92,7 +92,7 @@ theorem constDiff_sound (e1 e2 : Expression p) (k : ZMod p) (h : constDiff e1 e2
 
 /-- Both entries of equal evaluated payloads evaluate equally (with a default for
     out-of-range slots). -/
-theorem payloadSlot_eval_eq (P Q : List (Expression p)) (env : String → ZMod p)
+theorem payloadSlot_eval_eq (P Q : List (Expression p)) (env : Variable → ZMod p)
     (h : P.map (fun e => e.eval env) = Q.map (fun e => e.eval env)) (i : Nat) :
     ((P[i]?).getD (.const 0)).eval env = ((Q[i]?).getD (.const 0)).eval env := by
   have hi := congrArg (fun l => l[i]?) h
@@ -108,7 +108,7 @@ bundled with its soundness. -/
 
 /-- Fact-derived value bounds for variables, each sound under the bus obligations. -/
 structure BoundsMap (p : ℕ) (cs : ConstraintSystem p) (bs : BusSemantics p) where
-  map : Std.HashMap String Nat
+  map : Std.HashMap Variable Nat
   sound : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) →
     ∀ x b, map[x]? = some b → (env x).val < b
@@ -125,7 +125,7 @@ def empty : BoundsMap p cs bs where
     exact absurd h (by simp)
 
 /-- Insert a sound bound, keeping the smaller of two bounds for a variable. -/
-def insertEntry (T : BoundsMap p cs bs) (x : String) (b : Nat)
+def insertEntry (T : BoundsMap p cs bs) (x : Variable) (b : Nat)
     (h : ∀ env, (∀ bi ∈ cs.busInteractions, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) → (env x).val < b) : BoundsMap p cs bs :=
   let keep : Bool := match T.map[x]? with
@@ -147,7 +147,7 @@ def insertEntry (T : BoundsMap p cs bs) (x : String) (b : Nat)
   else T
 
 /-- The raw-variable payload entries of an interaction. -/
-private def rawVarsOf (bi : BusInteraction (Expression p)) : List String :=
+private def rawVarsOf (bi : BusInteraction (Expression p)) : List Variable :=
   bi.payload.filterMap (fun e => match e with | .var x => some x | _ => none)
 
 /-- Collect bounds from all interactions' fact-bounded raw payload slots. -/
@@ -158,7 +158,7 @@ def addAll (facts : BusFacts p bs) :
   | bi :: rest, hmem, T =>
     let hbi := hmem bi (List.mem_cons_self ..)
     let hrest := fun bi' h => hmem bi' (List.mem_cons_of_mem _ h)
-    let rec addVars (xs : List String) (T : BoundsMap p cs bs) : BoundsMap p cs bs :=
+    let rec addVars (xs : List Variable) (T : BoundsMap p cs bs) : BoundsMap p cs bs :=
       match xs with
       | [] => T
       | x :: xs =>
@@ -182,8 +182,8 @@ Certifies that an affine form `c + Σ aᵢ·vᵢ` is never zero: each coefficien
 `Σ posᵢ·vᵢ` stays strictly below `c.val` — so the sum can never equal `c`. -/
 
 /-- Maximal value of `Σ (-aᵢ)·vᵢ` over the bounds, all-or-nothing. -/
-def boundedSumMax (B : Std.HashMap String Nat) :
-    List (String × ZMod p) → Option Nat
+def boundedSumMax (B : Std.HashMap Variable Nat) :
+    List (Variable × ZMod p) → Option Nat
   | [] => some 0
   | (v, a) :: rest =>
     match B[v]?, boundedSumMax B rest with
@@ -191,9 +191,9 @@ def boundedSumMax (B : Std.HashMap String Nat) :
         if 1 ≤ bound then some ((-a).val * (bound - 1) + m) else none
     | _, _ => none
 
-theorem boundedSum_val (B : Std.HashMap String Nat)
-    (terms : List (String × ZMod p)) (M : Nat)
-    (hM : boundedSumMax B terms = some M) (hMp : M < p) (env : String → ZMod p)
+theorem boundedSum_val (B : Std.HashMap Variable Nat)
+    (terms : List (Variable × ZMod p)) (M : Nat)
+    (hM : boundedSumMax B terms = some M) (hMp : M < p) (env : Variable → ZMod p)
     (hB : ∀ v bound, B[v]? = some bound → (env v).val < bound) :
     ∃ s : ZMod p, (terms.map (fun t => t.2 * env t.1)).sum = -s ∧ s.val ≤ M := by
   induction terms generalizing M with
@@ -231,9 +231,9 @@ theorem boundedSum_val (B : Std.HashMap String Nat)
 
 /-- The refutation core: a normalized affine form whose bounded-negative sum stays below the
     constant can never evaluate to zero. -/
-theorem linNeverZero (B : Std.HashMap String Nat) (l : LinExpr p) (M : Nat)
+theorem linNeverZero (B : Std.HashMap Variable Nat) (l : LinExpr p) (M : Nat)
     (hp : 0 < p) (hM : boundedSumMax B l.terms = some M)
-    (hlt : M < l.const.val) (env : String → ZMod p)
+    (hlt : M < l.const.val) (env : Variable → ZMod p)
     (hB : ∀ v bound, B[v]? = some bound → (env v).val < bound) :
     l.eval env ≠ 0 := by
   intro h0
@@ -264,7 +264,7 @@ def addrConstsEq (shape : MemoryBusShape) (S S' : BusInteraction (Expression p))
     | _, _ => false)
 
 theorem addrConstsEq_sound (shape : MemoryBusShape) (S S' : BusInteraction (Expression p))
-    (h : addrConstsEq shape S S' = true) (env : String → ZMod p) :
+    (h : addrConstsEq shape S S' = true) (env : Variable → ZMod p) :
     shape.address (S.eval env) = shape.address (S'.eval env) := by
   unfold MemoryBusShape.address
   apply List.map_congr_left

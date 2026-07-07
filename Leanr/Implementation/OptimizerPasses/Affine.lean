@@ -30,22 +30,22 @@ variable {p : ℕ}
 /-- A linear (affine) form: a constant plus a list of `(variable, coefficient)` terms. -/
 structure LinExpr (p : ℕ) where
   const : ZMod p
-  terms : List (String × ZMod p)
+  terms : List (Variable × ZMod p)
 
 /-- Evaluate a linear form. -/
-def LinExpr.eval (l : LinExpr p) (env : String → ZMod p) : ZMod p :=
+def LinExpr.eval (l : LinExpr p) (env : Variable → ZMod p) : ZMod p :=
   l.const + (l.terms.map (fun t => t.2 * env t.1)).sum
 
 def LinExpr.add (a b : LinExpr p) : LinExpr p := ⟨a.const + b.const, a.terms ++ b.terms⟩
 def LinExpr.scale (k : ZMod p) (a : LinExpr p) : LinExpr p :=
   ⟨k * a.const, a.terms.map (fun t => (t.1, k * t.2))⟩
 
-theorem LinExpr.add_eval (a b : LinExpr p) (env : String → ZMod p) :
+theorem LinExpr.add_eval (a b : LinExpr p) (env : Variable → ZMod p) :
     (a.add b).eval env = a.eval env + b.eval env := by
   simp only [LinExpr.add, LinExpr.eval, List.map_append, List.sum_append]
   ring
 
-theorem LinExpr.scale_eval (k : ZMod p) (a : LinExpr p) (env : String → ZMod p) :
+theorem LinExpr.scale_eval (k : ZMod p) (a : LinExpr p) (env : Variable → ZMod p) :
     (a.scale k).eval env = k * a.eval env := by
   simp only [LinExpr.scale, LinExpr.eval, List.map_map, mul_add]
   congr 1
@@ -70,7 +70,7 @@ def linearize : Expression p → Option (LinExpr p)
       | _, _ => none
 
 theorem linearize_eval (e : Expression p) (l : LinExpr p) (h : linearize e = some l)
-    (env : String → ZMod p) : e.eval env = l.eval env := by
+    (env : Variable → ZMod p) : e.eval env = l.eval env := by
   induction e generalizing l with
   | const n => simp only [linearize, Option.some.injEq] at h; subst h; simp [LinExpr.eval, Expression.eval]
   | var x => simp only [linearize, Option.some.injEq] at h; subst h; simp [LinExpr.eval, Expression.eval]
@@ -110,8 +110,8 @@ theorem linearize_eval (e : Expression p) (l : LinExpr p) (h : linearize e = som
               exact absurd h (by simp)
 
 /-- Partition the evaluation of a term list by whether the variable is `x`. -/
-theorem eval_terms_split (x : String) (env : String → ZMod p)
-    (terms : List (String × ZMod p)) :
+theorem eval_terms_split (x : Variable) (env : Variable → ZMod p)
+    (terms : List (Variable × ZMod p)) :
     (terms.map (fun t => t.2 * env t.1)).sum
     = ((terms.filter (fun t => t.1 = x)).map Prod.snd).sum * env x
       + ((terms.filter (fun t => t.1 ≠ x)).map (fun t => t.2 * env t.1)).sum := by
@@ -129,14 +129,14 @@ theorem eval_terms_split (x : String) (env : String → ZMod p)
         ring
 
 /-- Total coefficient of `x` in a linear form. -/
-def LinExpr.coeff (l : LinExpr p) (x : String) : ZMod p :=
+def LinExpr.coeff (l : LinExpr p) (x : Variable) : ZMod p :=
   ((l.terms.filter (fun t => t.1 = x)).map Prod.snd).sum
 
 /-- The linear form with all `x` terms removed. -/
-def LinExpr.others (l : LinExpr p) (x : String) : LinExpr p :=
+def LinExpr.others (l : LinExpr p) (x : Variable) : LinExpr p :=
   ⟨l.const, l.terms.filter (fun t => t.1 ≠ x)⟩
 
-theorem LinExpr.eval_split (l : LinExpr p) (x : String) (env : String → ZMod p) :
+theorem LinExpr.eval_split (l : LinExpr p) (x : Variable) (env : Variable → ZMod p) :
     l.eval env = l.coeff x * env x + (l.others x).eval env := by
   simp only [LinExpr.eval, LinExpr.coeff, LinExpr.others, eval_terms_split x env l.terms]
   ring
@@ -145,7 +145,7 @@ theorem LinExpr.eval_split (l : LinExpr p) (x : String) (env : String → ZMod p
 def LinExpr.toExpr (l : LinExpr p) : Expression p :=
   l.terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) (.const l.const)
 
-theorem toExpr_foldl_eval (env : String → ZMod p) (terms : List (String × ZMod p)) :
+theorem toExpr_foldl_eval (env : Variable → ZMod p) (terms : List (Variable × ZMod p)) :
     ∀ init : Expression p,
       (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init).eval env
       = init.eval env + (terms.map (fun t => t.2 * env t.1)).sum := by
@@ -157,18 +157,18 @@ theorem toExpr_foldl_eval (env : String → ZMod p) (terms : List (String × ZMo
       simp only [Expression.eval]
       ring
 
-theorem LinExpr.toExpr_eval (l : LinExpr p) (env : String → ZMod p) :
+theorem LinExpr.toExpr_eval (l : LinExpr p) (env : Variable → ZMod p) :
     l.toExpr.eval env = l.eval env := by
   simp only [LinExpr.toExpr, LinExpr.eval, toExpr_foldl_eval, Expression.eval]
 
 /-- Try to solve the linear form `= 0` for variable `v`, when `v` has coefficient `±1`. -/
-def LinExpr.trySolve (l : LinExpr p) (v : String) : Option (String × Expression p) :=
+def LinExpr.trySolve (l : LinExpr p) (v : Variable) : Option (Variable × Expression p) :=
   if l.coeff v = 1 then some (v, ((l.others v).scale (-1)).toExpr)
   else if l.coeff v = -1 then some (v, (l.others v).toExpr)
   else none
 
-theorem LinExpr.trySolve_sound (l : LinExpr p) (v x : String) (t : Expression p)
-    (h : l.trySolve v = some (x, t)) (env : String → ZMod p) (hl : l.eval env = 0) :
+theorem LinExpr.trySolve_sound (l : LinExpr p) (v x : Variable) (t : Expression p)
+    (h : l.trySolve v = some (x, t)) (env : Variable → ZMod p) (hl : l.eval env = 0) :
     env x = t.eval env := by
   unfold LinExpr.trySolve at h
   split_ifs at h with h1 h2
@@ -190,13 +190,13 @@ theorem LinExpr.trySolve_sound (l : LinExpr p) (v x : String) (t : Expression p)
     inversion behaving well): over a prime field every nonzero coefficient qualifies, over
     `ZMod n` exactly the residues coprime to `n`. Generalizes `trySolve`; kept separate so the
     solver can *prefer* `±1` pivots, which substitute without rescaling the other coefficients. -/
-def LinExpr.trySolveUnit (l : LinExpr p) (v : String) : Option (String × Expression p) :=
+def LinExpr.trySolveUnit (l : LinExpr p) (v : Variable) : Option (Variable × Expression p) :=
   if l.coeff v * (l.coeff v)⁻¹ = 1 then
     some (v, ((l.others v).scale (-(l.coeff v)⁻¹)).toExpr)
   else none
 
-theorem LinExpr.trySolveUnit_sound (l : LinExpr p) (v x : String) (t : Expression p)
-    (h : l.trySolveUnit v = some (x, t)) (env : String → ZMod p) (hl : l.eval env = 0) :
+theorem LinExpr.trySolveUnit_sound (l : LinExpr p) (v x : Variable) (t : Expression p)
+    (h : l.trySolveUnit v = some (x, t)) (env : Variable → ZMod p) (hl : l.eval env = 0) :
     env x = t.eval env := by
   unfold LinExpr.trySolveUnit at h
   split_ifs at h with h1
@@ -209,7 +209,7 @@ theorem LinExpr.trySolveUnit_sound (l : LinExpr p) (v x : String) (t : Expressio
 
 /-- Solve the linear form for the first `±1`-coefficient variable; failing that, for the first
     variable whose coefficient is a unit. -/
-def solveAffineLin (l : LinExpr p) : Option (String × Expression p) :=
+def solveAffineLin (l : LinExpr p) : Option (Variable × Expression p) :=
   match (l.terms.map Prod.fst).find? (fun v => (l.trySolve v).isSome) with
   | some v => l.trySolve v
   | none =>
@@ -217,8 +217,8 @@ def solveAffineLin (l : LinExpr p) : Option (String × Expression p) :=
     | some v => l.trySolveUnit v
     | none => none
 
-theorem solveAffineLin_sound (l : LinExpr p) (x : String) (t : Expression p)
-    (h : solveAffineLin l = some (x, t)) (env : String → ZMod p) (hl : l.eval env = 0) :
+theorem solveAffineLin_sound (l : LinExpr p) (x : Variable) (t : Expression p)
+    (h : solveAffineLin l = some (x, t)) (env : Variable → ZMod p) (hl : l.eval env = 0) :
     env x = t.eval env := by
   unfold solveAffineLin at h
   split at h
@@ -230,11 +230,11 @@ theorem solveAffineLin_sound (l : LinExpr p) (x : String) (t : Expression p)
     · exact absurd h (by simp)
 
 /-- Solve a constraint expression for a unit-coefficient variable, if it is affine. -/
-def solveAffine (c : Expression p) : Option (String × Expression p) :=
+def solveAffine (c : Expression p) : Option (Variable × Expression p) :=
   (linearize c).bind solveAffineLin
 
-theorem solveAffine_sound (c : Expression p) (x : String) (t : Expression p)
-    (h : solveAffine c = some (x, t)) (env : String → ZMod p) (hc : c.eval env = 0) :
+theorem solveAffine_sound (c : Expression p) (x : Variable) (t : Expression p)
+    (h : solveAffine c = some (x, t)) (env : Variable → ZMod p) (hc : c.eval env = 0) :
     env x = t.eval env := by
   simp only [solveAffine, Option.bind_eq_some_iff] at h
   obtain ⟨l, hlin, hsl⟩ := h
@@ -250,13 +250,13 @@ the one minimizing an expression-duplication cost. Soundness is per-pivot (each 
 with the same entailment as before), so the choice heuristic itself carries no proof burden. -/
 
 /-- All `±1`-coefficient pivots of one constraint. -/
-def pm1PivotsOf (c : Expression p) : List (String × Expression p) :=
+def pm1PivotsOf (c : Expression p) : List (Variable × Expression p) :=
   match linearize c with
   | none => []
   | some l => (l.terms.map Prod.fst).filterMap l.trySolve
 
-theorem pm1PivotsOf_sound (c : Expression p) (x : String) (t : Expression p)
-    (h : (x, t) ∈ pm1PivotsOf c) (env : String → ZMod p) (hc : c.eval env = 0) :
+theorem pm1PivotsOf_sound (c : Expression p) (x : Variable) (t : Expression p)
+    (h : (x, t) ∈ pm1PivotsOf c) (env : Variable → ZMod p) (hc : c.eval env = 0) :
     env x = t.eval env := by
   unfold pm1PivotsOf at h
   split at h
@@ -267,7 +267,7 @@ theorem pm1PivotsOf_sound (c : Expression p) (x : String) (t : Expression p)
     exact l.trySolve_sound v x t hv env hl
 
 /-- Unit-coefficient pivots of one constraint, for variables with no `±1` solution. -/
-def unitPivotsOf (c : Expression p) : List (String × Expression p) :=
+def unitPivotsOf (c : Expression p) : List (Variable × Expression p) :=
   match linearize c with
   | none => []
   | some l =>
@@ -276,8 +276,8 @@ def unitPivotsOf (c : Expression p) : List (String × Expression p) :=
       | some _ => none
       | none => l.trySolveUnit v)
 
-theorem unitPivotsOf_sound (c : Expression p) (x : String) (t : Expression p)
-    (h : (x, t) ∈ unitPivotsOf c) (env : String → ZMod p) (hc : c.eval env = 0) :
+theorem unitPivotsOf_sound (c : Expression p) (x : Variable) (t : Expression p)
+    (h : (x, t) ∈ unitPivotsOf c) (env : Variable → ZMod p) (hc : c.eval env = 0) :
     env x = t.eval env := by
   unfold unitPivotsOf at h
   split at h
@@ -294,11 +294,11 @@ theorem unitPivotsOf_sound (c : Expression p) (x : String) (t : Expression p)
 /-- All solvable pivots across a constraint list, `±1` pivots first: `List.argmin` keeps the
     *first* minimum, so on a cost tie a `±1` pivot (which substitutes without rescaling the
     remaining coefficients into inverse constants) beats a general unit pivot. -/
-def solvableFrom (all : List (Expression p)) : List (String × Expression p) :=
+def solvableFrom (all : List (Expression p)) : List (Variable × Expression p) :=
   all.flatMap pm1PivotsOf ++ all.flatMap unitPivotsOf
 
-theorem solvableFrom_sound (all : List (Expression p)) (x : String) (t : Expression p)
-    (h : (x, t) ∈ solvableFrom all) (env : String → ZMod p)
+theorem solvableFrom_sound (all : List (Expression p)) (x : Variable) (t : Expression p)
+    (h : (x, t) ∈ solvableFrom all) (env : Variable → ZMod p)
     (hall : ∀ c ∈ all, c.eval env = 0) : env x = t.eval env := by
   rcases List.mem_append.1 h with h' | h' <;> obtain ⟨c, hc, hp⟩ := List.mem_flatMap.1 h'
   · exact pm1PivotsOf_sound c x t hp env (hall c hc)
@@ -306,11 +306,11 @@ theorem solvableFrom_sound (all : List (Expression p)) (x : String) (t : Express
 
 /-- The duplication cost of substituting `x := t`: every *other* occurrence of `x` is replaced
     by a copy of `t`. A variable occurring only in its defining constraint costs `0`. -/
-def pivotCost (cs : ConstraintSystem p) (x : String) (t : Expression p) : Nat :=
+def pivotCost (cs : ConstraintSystem p) (x : Variable) (t : Expression p) : Nat :=
   (cs.occurrences x - 1) * (1 + t.vars.length)
 
 /-- The cheapest solvable pivot of the whole system, if any. -/
-def bestAffinePivot (cs : ConstraintSystem p) : Option (String × Expression p) :=
+def bestAffinePivot (cs : ConstraintSystem p) : Option (Variable × Expression p) :=
   (solvableFrom cs.algebraicConstraints).argmin (fun xt => pivotCost cs xt.1 xt.2)
 
 /-- The affine-substitution pass: eliminate one variable pinned by a linear constraint (unit

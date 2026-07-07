@@ -39,7 +39,7 @@ variable {p : ℕ}
 
 /-! ## Evaluation depends only on an expression's variables -/
 
-theorem Expression.eval_congr (e : Expression p) (env1 env2 : String → ZMod p)
+theorem Expression.eval_congr (e : Expression p) (env1 env2 : Variable → ZMod p)
     (h : ∀ x ∈ e.vars, env1 x = env2 x) : e.eval env1 = e.eval env2 := by
   induction e with
   | const n => rfl
@@ -54,7 +54,7 @@ theorem Expression.eval_congr (e : Expression p) (env1 env2 : String → ZMod p)
           ihb (fun x hx => h x (by simp [Expression.vars, hx]))]
 
 theorem BusInteraction.eval_congr (bi : BusInteraction (Expression p))
-    (env1 env2 : String → ZMod p) (h : ∀ x ∈ bi.vars, env1 x = env2 x) :
+    (env1 env2 : Variable → ZMod p) (h : ∀ x ∈ bi.vars, env1 x = env2 x) :
     bi.eval env1 = bi.eval env2 := by
   have hmult : bi.multiplicity.eval env1 = bi.multiplicity.eval env2 :=
     bi.multiplicity.eval_congr env1 env2
@@ -74,16 +74,16 @@ theorem BusInteraction.eval_congr (bi : BusInteraction (Expression p))
     the unique root for a single term `a·x` with `a ≠ 0`, `none` otherwise ("cannot bound `x`").
     The root is computed with the ring's `Inv` and then *re-checked* (`a * r + c = 0`), so
     soundness never depends on inversion behaving well. -/
-def rootsOfTerms (x : String) (c : ZMod p) : List (String × ZMod p) → Option (List (ZMod p))
+def rootsOfTerms (x : Variable) (c : ZMod p) : List (Variable × ZMod p) → Option (List (ZMod p))
   | [] => if c = 0 then none else some []
   | [(y, a)] =>
       let r := -(a⁻¹ * c)
       if y = x ∧ a ≠ 0 ∧ a * r + c = 0 then some [r] else none
   | _ :: _ :: _ => none
 
-theorem rootsOfTerms_sound [Fact p.Prime] (x : String) (c : ZMod p)
-    (ts : List (String × ZMod p)) (roots : List (ZMod p))
-    (h : rootsOfTerms x c ts = some roots) (env : String → ZMod p)
+theorem rootsOfTerms_sound [Fact p.Prime] (x : Variable) (c : ZMod p)
+    (ts : List (Variable × ZMod p)) (roots : List (ZMod p))
+    (h : rootsOfTerms x c ts = some roots) (env : Variable → ZMod p)
     (hsum : c + (ts.map (fun t => t.2 * env t.1)).sum = 0) : env x ∈ roots := by
   rcases ts with _ | ⟨⟨y, a⟩, _ | ⟨t2, rest⟩⟩
   · -- no terms: a constant; `hsum` contradicts the nonzero guard
@@ -105,12 +105,12 @@ theorem rootsOfTerms_sound [Fact p.Prime] (x : String) (c : ZMod p)
   · exact absurd h (by simp [rootsOfTerms])
 
 /-- Roots of an expression that is affine in (at most) the single variable `x`. -/
-def affineRootsIn (x : String) (e : Expression p) : Option (List (ZMod p)) :=
+def affineRootsIn (x : Variable) (e : Expression p) : Option (List (ZMod p)) :=
   (linearize e).bind (fun l => rootsOfTerms x l.norm.const l.norm.terms)
 
-theorem affineRootsIn_sound [Fact p.Prime] (x : String) (e : Expression p)
+theorem affineRootsIn_sound [Fact p.Prime] (x : Variable) (e : Expression p)
     (roots : List (ZMod p)) (h : affineRootsIn x e = some roots)
-    (env : String → ZMod p) (he : e.eval env = 0) : env x ∈ roots := by
+    (env : Variable → ZMod p) (he : e.eval env = 0) : env x ∈ roots := by
   simp only [affineRootsIn, Option.bind_eq_some_iff] at h
   obtain ⟨l, hlin, hroot⟩ := h
   have heval : l.norm.const + (l.norm.terms.map (fun t => t.2 * env t.1)).sum = 0 := by
@@ -122,7 +122,7 @@ theorem affineRootsIn_sound [Fact p.Prime] (x : String) (e : Expression p)
 /-- Roots of a constraint viewed as a product of affine factors in the single variable `x`:
     if the constraint is zero, one factor is zero (integral domain), so `x` is one of the
     collected roots. `none` when a factor cannot be bounded. -/
-def rootsIn (x : String) : Expression p → Option (List (ZMod p))
+def rootsIn (x : Variable) : Expression p → Option (List (ZMod p))
   | .const n => affineRootsIn x (.const n)
   | .var y => affineRootsIn x (.var y)
   | .add a b => affineRootsIn x (.add a b)
@@ -134,8 +134,8 @@ def rootsIn (x : String) : Expression p → Option (List (ZMod p))
       | some ra, some rb => some (ra ++ rb)
       | _, _ => none
 
-theorem rootsIn_sound [Fact p.Prime] (x : String) (e : Expression p) (roots : List (ZMod p))
-    (h : rootsIn x e = some roots) (env : String → ZMod p) (he : e.eval env = 0) :
+theorem rootsIn_sound [Fact p.Prime] (x : Variable) (e : Expression p) (roots : List (ZMod p))
+    (h : rootsIn x e = some roots) (env : Variable → ZMod p) (he : e.eval env = 0) :
     env x ∈ roots := by
   induction e generalizing roots with
   | const n => exact affineRootsIn_sound x _ roots h env he
@@ -160,7 +160,7 @@ theorem rootsIn_sound [Fact p.Prime] (x : String) (e : Expression p) (roots : Li
       all_goals exact absurd h (by simp)
 
 /-- The finite domain of `x` derived from the first constraint that bounds it. -/
-def findDomainAlg (all : List (Expression p)) (x : String) : Option (List (ZMod p)) :=
+def findDomainAlg (all : List (Expression p)) (x : Variable) : Option (List (ZMod p)) :=
   match all with
   | [] => none
   | c :: rest =>
@@ -168,8 +168,8 @@ def findDomainAlg (all : List (Expression p)) (x : String) : Option (List (ZMod 
     | some d => some d
     | none => findDomainAlg rest x
 
-theorem findDomainAlg_sound [Fact p.Prime] (all : List (Expression p)) (x : String)
-    (d : List (ZMod p)) (h : findDomainAlg all x = some d) (env : String → ZMod p)
+theorem findDomainAlg_sound [Fact p.Prime] (all : List (Expression p)) (x : Variable)
+    (d : List (ZMod p)) (h : findDomainAlg all x = some d) (env : Variable → ZMod p)
     (hall : ∀ c ∈ all, c.eval env = 0) : env x ∈ d := by
   induction all with
   | nil => exact absurd h (by simp [findDomainAlg])
@@ -192,11 +192,11 @@ theorem findDomainAlg_sound [Fact p.Prime] (all : List (Expression p)) (x : Stri
 def maxDomainBound : Nat := 65536
 
 /-- Is this expression literally the variable `x`? -/
-def isVarOf (x : String) : Expression p → Bool
+def isVarOf (x : Variable) : Expression p → Bool
   | .var y => y = x
   | _ => false
 
-theorem isVarOf_sound (x : String) (e : Expression p) (h : isVarOf x e = true) :
+theorem isVarOf_sound (x : Variable) (e : Expression p) (h : isVarOf x e = true) :
     e = .var x := by
   cases e with
   | var y =>
@@ -207,11 +207,11 @@ theorem isVarOf_sound (x : String) (e : Expression p) (h : isVarOf x e = true) :
   | mul a b => exact absurd h (by simp [isVarOf])
 
 /-- The first payload slot that is literally the variable `x`. -/
-def varSlot (x : String) : List (Expression p) → Option Nat
+def varSlot (x : Variable) : List (Expression p) → Option Nat
   | [] => none
   | e :: rest => if isVarOf x e then some 0 else (varSlot x rest).map (· + 1)
 
-theorem varSlot_sound (x : String) (payload : List (Expression p)) (slot : Nat)
+theorem varSlot_sound (x : Variable) (payload : List (Expression p)) (slot : Nat)
     (h : varSlot x payload = some slot) : payload[slot]? = some (.var x) := by
   induction payload generalizing slot with
   | nil => exact absurd h (by simp [varSlot])
@@ -226,7 +226,7 @@ theorem varSlot_sound (x : String) (payload : List (Expression p)) (slot : Nat)
       simpa using ih s hs
 
 /-- The evaluated payload matches the pattern of its own constant entries. -/
-theorem matches_evalPattern (payload : List (Expression p)) (env : String → ZMod p) :
+theorem matches_evalPattern (payload : List (Expression p)) (env : Variable → ZMod p) :
     Matches (payload.map (fun e => e.eval env)) (payload.map Expression.constValue?) := by
   refine ⟨by simp, ?_⟩
   intro slot c hc
@@ -247,7 +247,7 @@ theorem mem_range_cast [NeZero p] (v : ZMod p) (bound : Nat) (h : v.val < bound)
     multiplicity (so its obligation is active under every assignment) and carries `x` as a raw
     payload entry in a slot bounded by a proven fact. -/
 def interactionBound (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) (x : String) : Option Nat :=
+    (bi : BusInteraction (Expression p)) (x : Variable) : Option Nat :=
   match bi.multiplicity.constValue? with
   | none => none
   | some mval =>
@@ -258,8 +258,8 @@ def interactionBound (bs : BusSemantics p) (facts : BusFacts p bs)
       | some slot => facts.slotBound bi.busId (bi.payload.map Expression.constValue?) slot
 
 theorem interactionBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) (x : String) (bound : Nat)
-    (h : interactionBound bs facts bi x = some bound) (env : String → ZMod p)
+    (bi : BusInteraction (Expression p)) (x : Variable) (bound : Nat)
+    (h : interactionBound bs facts bi x = some bound) (env : Variable → ZMod p)
     (hob : (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false) :
     (env x).val < bound := by
   unfold interactionBound at h
@@ -288,7 +288,7 @@ theorem interactionBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-- The value bound of `x` derived from the first bus obligation that bounds it. -/
 def findVarBound (bs : BusSemantics p) (facts : BusFacts p bs) :
-    List (BusInteraction (Expression p)) → String → Option Nat
+    List (BusInteraction (Expression p)) → Variable → Option Nat
   | [], _ => none
   | bi :: rest, x =>
     match interactionBound bs facts bi x with
@@ -296,8 +296,8 @@ def findVarBound (bs : BusSemantics p) (facts : BusFacts p bs) :
     | none => findVarBound bs facts rest x
 
 theorem findVarBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (x : String) (bound : Nat)
-    (h : findVarBound bs facts bis x = some bound) (env : String → ZMod p)
+    (bis : List (BusInteraction (Expression p))) (x : Variable) (bound : Nat)
+    (h : findVarBound bs facts bis x = some bound) (env : Variable → ZMod p)
     (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) : (env x).val < bound := by
   induction bis with
@@ -316,7 +316,7 @@ theorem findVarBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-- A finite domain for `x` from one bus obligation (capped bound, materialized as a list). -/
 def interactionDomain (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) (x : String) : Option (List (ZMod p)) :=
+    (bi : BusInteraction (Expression p)) (x : Variable) : Option (List (ZMod p)) :=
   match interactionBound bs facts bi x with
   | none => none
   | some bound =>
@@ -325,8 +325,8 @@ def interactionDomain (bs : BusSemantics p) (facts : BusFacts p bs)
     else none
 
 theorem interactionDomain_sound [NeZero p] (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) (x : String) (d : List (ZMod p))
-    (h : interactionDomain bs facts bi x = some d) (env : String → ZMod p)
+    (bi : BusInteraction (Expression p)) (x : Variable) (d : List (ZMod p))
+    (h : interactionDomain bs facts bi x = some d) (env : Variable → ZMod p)
     (hob : (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false) :
     env x ∈ d := by
   unfold interactionDomain at h
@@ -341,7 +341,7 @@ theorem interactionDomain_sound [NeZero p] (bs : BusSemantics p) (facts : BusFac
 
 /-- The finite domain of `x` derived from the first bus obligation that bounds it. -/
 def findDomainBus (bs : BusSemantics p) (facts : BusFacts p bs) :
-    List (BusInteraction (Expression p)) → String → Option (List (ZMod p))
+    List (BusInteraction (Expression p)) → Variable → Option (List (ZMod p))
   | [], _ => none
   | bi :: rest, x =>
     match interactionDomain bs facts bi x with
@@ -349,8 +349,8 @@ def findDomainBus (bs : BusSemantics p) (facts : BusFacts p bs) :
     | none => findDomainBus bs facts rest x
 
 theorem findDomainBus_sound [NeZero p] (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (x : String) (d : List (ZMod p))
-    (h : findDomainBus bs facts bis x = some d) (env : String → ZMod p)
+    (bis : List (BusInteraction (Expression p))) (x : Variable) (d : List (ZMod p))
+    (h : findDomainBus bs facts bis x = some d) (env : Variable → ZMod p)
     (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) : env x ∈ d := by
   induction bis with
@@ -369,15 +369,15 @@ theorem findDomainBus_sound [NeZero p] (bs : BusSemantics p) (facts : BusFacts p
 
 /-- The finite domain of `x`: from a constraint if possible, else from a bus obligation. -/
 def findDomain (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (x : String) : Option (List (ZMod p)) :=
+    (bis : List (BusInteraction (Expression p))) (x : Variable) : Option (List (ZMod p)) :=
   match findDomainAlg all x with
   | some d => some d
   | none => findDomainBus bs facts bis x
 
 theorem findDomain_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
     (bs : BusSemantics p) (facts : BusFacts p bs) (bis : List (BusInteraction (Expression p)))
-    (x : String) (d : List (ZMod p)) (h : findDomain all bs facts bis x = some d)
-    (env : String → ZMod p) (hall : ∀ c ∈ all, c.eval env = 0)
+    (x : Variable) (d : List (ZMod p)) (h : findDomain all bs facts bis x = some d)
+    (env : Variable → ZMod p) (hall : ∀ c ∈ all, c.eval env = 0)
     (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) : env x ∈ d := by
   unfold findDomain at h
@@ -393,7 +393,7 @@ theorem findDomain_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
 /-- Domains for a list of variables, all-or-nothing. -/
 def buildDoms (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (Expression p))) :
-    List String → Option (List (String × List (ZMod p)))
+    List Variable → Option (List (Variable × List (ZMod p)))
   | [] => some []
   | x :: xs =>
     match findDomain all bs facts bis x, buildDoms all bs facts bis xs with
@@ -401,8 +401,8 @@ def buildDoms (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFact
     | _, _ => none
 
 theorem buildDoms_fst (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) (xs : List String)
-    (doms : List (String × List (ZMod p))) (h : buildDoms all bs facts bis xs = some doms) :
+    (bis : List (BusInteraction (Expression p))) (xs : List Variable)
+    (doms : List (Variable × List (ZMod p))) (h : buildDoms all bs facts bis xs = some doms) :
     doms.map Prod.fst = xs := by
   induction xs generalizing doms with
   | nil => simp only [buildDoms, Option.some.injEq] at h; subst h; rfl
@@ -421,8 +421,8 @@ theorem buildDoms_fst (all : List (Expression p)) (bs : BusSemantics p) (facts :
 
 theorem buildDoms_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
     (bs : BusSemantics p) (facts : BusFacts p bs) (bis : List (BusInteraction (Expression p)))
-    (xs : List String) (doms : List (String × List (ZMod p)))
-    (h : buildDoms all bs facts bis xs = some doms) (env : String → ZMod p)
+    (xs : List Variable) (doms : List (Variable × List (ZMod p)))
+    (h : buildDoms all bs facts bis xs = some doms) (env : Variable → ZMod p)
     (hall : ∀ c ∈ all, c.eval env = 0)
     (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) :
@@ -448,17 +448,17 @@ theorem buildDoms_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
 /-! ## Exhaustive enumeration over domain products -/
 
 /-- All assignments in the cartesian product of the domains. -/
-def assignments : List (String × List (ZMod p)) → List (List (String × ZMod p))
+def assignments : List (Variable × List (ZMod p)) → List (List (Variable × ZMod p))
   | [] => [[]]
   | (x, d) :: rest => (assignments rest).flatMap (fun a => d.map (fun v => (x, v) :: a))
 
 /-- Read an assignment as an environment (`0` for unassigned variables). -/
-def envOf : List (String × ZMod p) → String → ZMod p
+def envOf : List (Variable × ZMod p) → Variable → ZMod p
   | [], _ => 0
   | (x, v) :: rest, y => if y = x then v else envOf rest y
 
 /-- The pointwise-in-domain restriction of `f` is one of the enumerated assignments. -/
-theorem mem_assignments (doms : List (String × List (ZMod p))) (f : String → ZMod p)
+theorem mem_assignments (doms : List (Variable × List (ZMod p))) (f : Variable → ZMod p)
     (h : ∀ yd ∈ doms, f yd.1 ∈ yd.2) :
     doms.map (fun yd => (yd.1, f yd.1)) ∈ assignments doms := by
   induction doms with
@@ -471,7 +471,7 @@ theorem mem_assignments (doms : List (String × List (ZMod p))) (f : String → 
     exact List.mem_map.2 ⟨f x, h (x, d) (List.mem_cons_self ..), rfl⟩
 
 /-- On its own variables, the restriction environment agrees with `f`. -/
-theorem envOf_map (doms : List (String × List (ZMod p))) (f : String → ZMod p) (y : String)
+theorem envOf_map (doms : List (Variable × List (ZMod p))) (f : Variable → ZMod p) (y : Variable)
     (hy : y ∈ doms.map Prod.fst) :
     envOf (doms.map (fun yd => (yd.1, f yd.1))) y = f y := by
   induction doms with
@@ -494,15 +494,15 @@ def maxEnumSize : Nat := 65536
 
 /-- The checked certificate: every enumerated assignment either falsifies the constraint or
     assigns `c` to `x`. -/
-def checkForced (doms : List (String × List (ZMod p))) (e : Expression p) (x : String)
+def checkForced (doms : List (Variable × List (ZMod p))) (e : Expression p) (x : Variable)
     (c : ZMod p) : Bool :=
   (assignments doms).all
     (fun a => !(decide (e.eval (envOf a) = 0)) || decide (envOf a x = c))
 
 /-- Candidate search (proof-free; `checkForced` re-verifies): the value of each variable in the
     first surviving assignment, if all survivors agree on it. -/
-def pickForced (doms : List (String × List (ZMod p))) (e : Expression p) :
-    Option (String × ZMod p) :=
+def pickForced (doms : List (Variable × List (ZMod p))) (e : Expression p) :
+    Option (Variable × ZMod p) :=
   match (assignments doms).filter (fun a => decide (e.eval (envOf a) = 0)) with
   | [] => (doms.map Prod.fst).head?.map (fun x => (x, 0))
   | a₀ :: survivors =>
@@ -514,7 +514,7 @@ def pickForced (doms : List (String × List (ZMod p))) (e : Expression p) :
     (found anywhere in the system), enumerate, and return a *checked* forced `(x, c)`. -/
 def tryConstraint (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (Expression p))) (e : Expression p) :
-    Option (String × ZMod p) :=
+    Option (Variable × ZMod p) :=
   match buildDoms all bs facts bis e.vars.dedup with
   | none => none
   | some doms =>
@@ -528,9 +528,9 @@ def tryConstraint (all : List (Expression p)) (bs : BusSemantics p) (facts : Bus
 
 theorem tryConstraint_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
     (bs : BusSemantics p) (facts : BusFacts p bs) (bis : List (BusInteraction (Expression p)))
-    (e : Expression p) (x : String) (c : ZMod p)
+    (e : Expression p) (x : Variable) (c : ZMod p)
     (h : tryConstraint all bs facts bis e = some (x, c)) (he : e ∈ all)
-    (env : String → ZMod p) (hall : ∀ c' ∈ all, c'.eval env = 0)
+    (env : Variable → ZMod p) (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) : env x = c := by
   unfold tryConstraint at h
@@ -572,18 +572,18 @@ theorem tryConstraint_sound [Fact p.Prime] [NeZero p] (all : List (Expression p)
 
 /-- Does the assignment survive the interaction's obligation (inactive, or accepted)? -/
 def interactionSurvives (bs : BusSemantics p) (bi : BusInteraction (Expression p))
-    (a : List (String × ZMod p)) : Bool :=
+    (a : List (Variable × ZMod p)) : Bool :=
   decide ((bi.eval (envOf a)).multiplicity = 0) || !bs.violatesConstraint (bi.eval (envOf a))
 
 /-- The checked certificate for an interaction target. -/
-def checkForcedBi (bs : BusSemantics p) (doms : List (String × List (ZMod p)))
-    (bi : BusInteraction (Expression p)) (x : String) (c : ZMod p) : Bool :=
+def checkForcedBi (bs : BusSemantics p) (doms : List (Variable × List (ZMod p)))
+    (bi : BusInteraction (Expression p)) (x : Variable) (c : ZMod p) : Bool :=
   (assignments doms).all
     (fun a => !interactionSurvives bs bi a || decide (envOf a x = c))
 
 /-- Candidate search for an interaction target (proof-free). -/
-def pickForcedBi (bs : BusSemantics p) (doms : List (String × List (ZMod p)))
-    (bi : BusInteraction (Expression p)) : Option (String × ZMod p) :=
+def pickForcedBi (bs : BusSemantics p) (doms : List (Variable × List (ZMod p)))
+    (bi : BusInteraction (Expression p)) : Option (Variable × ZMod p) :=
   match (assignments doms).filter (interactionSurvives bs bi) with
   | [] => (doms.map Prod.fst).head?.map (fun x => (x, 0))
   | a₀ :: survivors =>
@@ -595,7 +595,7 @@ def pickForcedBi (bs : BusSemantics p) (doms : List (String × List (ZMod p)))
     `violatesConstraint` pointwise on the domain product. -/
 def tryInteraction (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (Expression p))) (bi : BusInteraction (Expression p)) :
-    Option (String × ZMod p) :=
+    Option (Variable × ZMod p) :=
   match buildDoms all bs facts bis bi.vars.dedup with
   | none => none
   | some doms =>
@@ -609,9 +609,9 @@ def tryInteraction (all : List (Expression p)) (bs : BusSemantics p) (facts : Bu
 
 theorem tryInteraction_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
     (bs : BusSemantics p) (facts : BusFacts p bs) (bis : List (BusInteraction (Expression p)))
-    (bi : BusInteraction (Expression p)) (x : String) (c : ZMod p)
+    (bi : BusInteraction (Expression p)) (x : Variable) (c : ZMod p)
     (h : tryInteraction all bs facts bis bi = some (x, c)) (hbi : bi ∈ bis)
-    (env : String → ZMod p) (hall : ∀ c' ∈ all, c'.eval env = 0)
+    (env : Variable → ZMod p) (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi' ∈ bis, (bi'.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi'.eval env) = false) : env x = c := by
   unfold tryInteraction at h
@@ -657,7 +657,7 @@ theorem tryInteraction_sound [Fact p.Prime] [NeZero p] (all : List (Expression p
 /-- Scan the constraints for the first checked forced value. -/
 def findForcedC (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (Expression p))) :
-    List (Expression p) → Option (String × ZMod p)
+    List (Expression p) → Option (Variable × ZMod p)
   | [] => none
   | e :: rest =>
     match tryConstraint all bs facts bis e with
@@ -666,8 +666,8 @@ def findForcedC (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFa
 
 theorem findForcedC_sound [Fact p.Prime] [NeZero p] (all sub : List (Expression p))
     (bs : BusSemantics p) (facts : BusFacts p bs) (bis : List (BusInteraction (Expression p)))
-    (x : String) (c : ZMod p) (h : findForcedC all bs facts bis sub = some (x, c))
-    (hsub : ∀ e ∈ sub, e ∈ all) (env : String → ZMod p)
+    (x : Variable) (c : ZMod p) (h : findForcedC all bs facts bis sub = some (x, c))
+    (hsub : ∀ e ∈ sub, e ∈ all) (env : Variable → ZMod p)
     (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) : env x = c := by
@@ -689,7 +689,7 @@ theorem findForcedC_sound [Fact p.Prime] [NeZero p] (all sub : List (Expression 
 /-- Scan the interactions for the first checked forced value. -/
 def findForcedI (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (Expression p))) :
-    List (BusInteraction (Expression p)) → Option (String × ZMod p)
+    List (BusInteraction (Expression p)) → Option (Variable × ZMod p)
   | [] => none
   | bi :: rest =>
     match tryInteraction all bs facts bis bi with
@@ -698,9 +698,9 @@ def findForcedI (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFa
 
 theorem findForcedI_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
     (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis sub : List (BusInteraction (Expression p))) (x : String) (c : ZMod p)
+    (bis sub : List (BusInteraction (Expression p))) (x : Variable) (c : ZMod p)
     (h : findForcedI all bs facts bis sub = some (x, c)) (hsub : ∀ bi ∈ sub, bi ∈ bis)
-    (env : String → ZMod p) (hall : ∀ c' ∈ all, c'.eval env = 0)
+    (env : Variable → ZMod p) (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) : env x = c := by
   induction sub with
@@ -720,15 +720,15 @@ theorem findForcedI_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
 
 /-- Scan constraints, then interaction obligations, for a checked forced value. -/
 def findForced (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bis : List (BusInteraction (Expression p))) : Option (String × ZMod p) :=
+    (bis : List (BusInteraction (Expression p))) : Option (Variable × ZMod p) :=
   match findForcedC all bs facts bis all with
   | some r => some r
   | none => findForcedI all bs facts bis bis
 
 theorem findForced_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
     (bs : BusSemantics p) (facts : BusFacts p bs) (bis : List (BusInteraction (Expression p)))
-    (x : String) (c : ZMod p) (h : findForced all bs facts bis = some (x, c))
-    (env : String → ZMod p) (hall : ∀ c' ∈ all, c'.eval env = 0)
+    (x : Variable) (c : ZMod p) (h : findForced all bs facts bis = some (x, c))
+    (env : Variable → ZMod p) (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi ∈ bis, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) : env x = c := by
   unfold findForced at h

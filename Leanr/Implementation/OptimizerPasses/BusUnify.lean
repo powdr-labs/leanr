@@ -33,7 +33,7 @@ def addrConstsNeq (shape : MemoryBusShape) (S bi : BusInteraction (Expression p)
     | _, _ => false)
 
 theorem addrConstsNeq_sound (shape : MemoryBusShape) (S bi : BusInteraction (Expression p))
-    (h : addrConstsNeq shape S bi = true) (env : String → ZMod p) :
+    (h : addrConstsNeq shape S bi = true) (env : Variable → ZMod p) :
     shape.address (S.eval env) ≠ shape.address (bi.eval env) := by
   obtain ⟨slot, hslot, hcond⟩ := List.any_eq_true.1 h
   intro heq
@@ -73,7 +73,7 @@ theorem addrConstsNeq_sound (shape : MemoryBusShape) (S bi : BusInteraction (Exp
 /-- Filtering evaluated messages by bus id equals evaluating the bus-filtered interactions
     (evaluation preserves the bus id). -/
 theorem map_eval_filter_busId (l : List (BusInteraction (Expression p))) (busId : Nat)
-    (env : String → ZMod p) :
+    (env : Variable → ZMod p) :
     (l.map (fun bi => bi.eval env)).filter (fun m => m.busId = busId)
     = (l.filter (fun bi => bi.busId = busId)).map (fun bi => bi.eval env) := by
   induction l with
@@ -89,7 +89,7 @@ theorem map_eval_filter_busId (l : List (BusInteraction (Expression p))) (busId 
     address in the bus's interaction list, with no active same-address message strictly between,
     have equal evaluated payloads (`admissibleMemoryBus.consecutive`). -/
 theorem consecutivePayloadEq (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (env : String → ZMod p)
+    (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (env : Variable → ZMod p)
     (hadm : cs.admissible bs env)
     (busId : Nat) (shape : MemoryBusShape) (hshape : facts.memShape busId = some shape)
     (pre mid post : List (BusInteraction (Expression p)))
@@ -136,7 +136,7 @@ theorem checkPair_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
     (post : List (BusInteraction (Expression p)))
     (hchk : checkPair shape (cs.busInteractions.filter (fun bi => bi.busId = busId))
       pre S mid R post = true)
-    (env : String → ZMod p) (hadm : cs.admissible bs env) :
+    (env : Variable → ZMod p) (hadm : cs.admissible bs env) :
     ∀ c ∈ memEqConstraints shape S R, c.eval env = 0 := by
   unfold checkPair at hchk
   simp only [Bool.and_eq_true] at hchk

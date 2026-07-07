@@ -34,7 +34,7 @@ The evaluated stateful interactions of the filtered system (under `e1`) equal th
 (under `e2`), given that every dropped interaction is stateless and every *stateful* interaction
 evaluates the same under `e1` and `e2`. -/
 theorem sideEffects_drop_eq (bs : BusSemantics p) (keepBi : BusInteraction (Expression p) → Bool)
-    (e1 e2 : String → ZMod p) (L : List (BusInteraction (Expression p)))
+    (e1 e2 : Variable → ZMod p) (L : List (BusInteraction (Expression p)))
     (hst : ∀ bi ∈ L, keepBi bi = false → bs.isStateful bi.busId = false)
     (heq : ∀ bi ∈ L, bs.isStateful bi.busId = true → bi.eval e2 = bi.eval e1) :
     ((L.filter keepBi).filter (fun bi => bs.isStateful bi.busId)).map
@@ -75,7 +75,7 @@ say: every removed item's variables are all "removed" variables (`remV`), the wi
 every removed constraint and makes every removed interaction non-violating, every removed
 interaction is stateless, and every kept item uses only kept variables. -/
 theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (w : String → ZMod p) (remV : String → Bool)
+    (w : Variable → ZMod p) (remV : Variable → Bool)
     (keepCon : Expression p → Bool) (keepBi : BusInteraction (Expression p) → Bool)
     (hCrem : ∀ c ∈ cs.algebraicConstraints, keepCon c = false → ∀ x ∈ c.vars, remV x = true)
     (hCsat : ∀ c ∈ cs.algebraicConstraints, keepCon c = false → c.eval w = 0)
@@ -88,7 +88,7 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     PassCorrect cs { algebraicConstraints := cs.algebraicConstraints.filter keepCon,
                      busInteractions := cs.busInteractions.filter keepBi } bs := by
   -- the merge: keep `env` on kept variables, use the witness on removed ones
-  set m : (String → ZMod p) → (String → ZMod p) :=
+  set m : (Variable → ZMod p) → (Variable → ZMod p) :=
     fun env x => if remV x = true then w x else env x with hm
   -- evaluation of a "removed" expression / interaction under the merge is the witness value
   have hmwC : ∀ env (e : Expression p), (∀ x ∈ e.vars, remV x = true) →
@@ -173,9 +173,9 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     interaction (`groups` = the variable lists; `v2g` = variable → group indices). This only *finds*
     a candidate component — correctness never depends on it, since the pass re-checks the partition
     the result induces. -/
-partial def bfsClosure (groups : Array (List String)) (v2g : Std.HashMap String (List Nat))
-    (visited : Std.HashSet String) (procGroups : Std.HashSet Nat) (stack : List String) :
-    Std.HashSet String :=
+partial def bfsClosure (groups : Array (List Variable)) (v2g : Std.HashMap Variable (List Nat))
+    (visited : Std.HashSet Variable) (procGroups : Std.HashSet Nat) (stack : List Variable) :
+    Std.HashSet Variable :=
   match stack with
   | [] => visited
   | x :: rest =>
@@ -190,21 +190,21 @@ partial def bfsClosure (groups : Array (List String)) (v2g : Std.HashMap String 
     variables (`groups`), and a map from each variable to the indices of the items it occurs in
     (`v2g`). Both `bfsClosure` seeds run over this graph. -/
 def buildGraph (cs : ConstraintSystem p) :
-    Array (List String) × Std.HashMap String (List Nat) :=
-  let groups : Array (List String) :=
+    Array (List Variable) × Std.HashMap Variable (List Nat) :=
+  let groups : Array (List Variable) :=
     (cs.algebraicConstraints.map Expression.vars ++
       cs.busInteractions.map BusInteraction.vars).toArray
-  let v2g : Std.HashMap String (List Nat) :=
+  let v2g : Std.HashMap Variable (List Nat) :=
     (List.range groups.size).foldl
       (fun mp i => (groups.getD i []).foldl (fun mp x => mp.insert x (i :: mp.getD x [])) mp) ∅
   (groups, v2g)
 
 /-- Keep a constraint unless *all* of its variables are removable (and it has at least one). -/
-def keepConWith (remV : String → Bool) (c : Expression p) : Bool :=
+def keepConWith (remV : Variable → Bool) (c : Expression p) : Bool :=
   c.vars.isEmpty || !(c.vars.all remV)
 
 /-- Keep an interaction if it is stateful or has a non-removable variable (or no variables). -/
-def keepBiWith (bs : BusSemantics p) (remV : String → Bool)
+def keepBiWith (bs : BusSemantics p) (remV : Variable → Bool)
     (bi : BusInteraction (Expression p)) : Bool :=
   bs.isStateful bi.busId || bi.vars.isEmpty || !(bi.vars.all remV)
 
@@ -225,9 +225,9 @@ def disconnectedComponentPass : VerifiedPass p := fun cs bs =>
   let conn := bfsClosure groups v2g ∅ ∅
     (cs.busInteractions.foldl (fun acc bi =>
       if bs.isStateful bi.busId then bi.vars ++ acc else acc) [])
-  let disc : String → Bool := fun x => !conn.contains x
+  let disc : Variable → Bool := fun x => !conn.contains x
   -- variables of a disconnected item the all-zero witness fails on: keep its whole component
-  let badSeeds : List String :=
+  let badSeeds : List Variable :=
     cs.algebraicConstraints.foldl (fun acc c =>
         if !c.vars.isEmpty && c.vars.all disc && !decide (c.eval (fun _ => 0) = 0)
         then c.vars ++ acc else acc)
@@ -236,7 +236,7 @@ def disconnectedComponentPass : VerifiedPass p := fun cs bs =>
             && bs.violatesConstraint (bi.eval (fun _ => 0))
         then bi.vars ++ acc else acc) [])
   let bad := bfsClosure groups v2g ∅ ∅ badSeeds
-  let remV : String → Bool := fun x => !conn.contains x && !bad.contains x
+  let remV : Variable → Bool := fun x => !conn.contains x && !bad.contains x
   if hchk : (
       (cs.algebraicConstraints.any (fun c => !keepConWith remV c) ||
         cs.busInteractions.any (fun bi => !keepBiWith bs remV bi)) &&

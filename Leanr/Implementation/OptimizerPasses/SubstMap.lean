@@ -8,7 +8,7 @@ set_option autoImplicit false
 solvable variables that costs one full-system traversal *per variable*. This file provides the
 batch core: substitute a whole *map* of solved variables in a single traversal.
 
-The map is any function `f : String → Option (Expression p)` (passes use a `Std.HashMap`
+The map is any function `f : Variable → Option (Expression p)` (passes use a `Std.HashMap`
 lookup); `x` with `f x = some t` is replaced by `t`. Semantics are stated against the rebound
 environment `envF f env` (each mapped variable rebound to its solution's value), exactly like
 `Function.update` in the single-variable case. The correctness theorem
@@ -26,18 +26,18 @@ variable {p : ℕ}
 
 /-- Substitute every variable `x` with `f x = some t` by `t` (one traversal; inserted
     solutions are not re-visited). -/
-def Expression.substF (f : String → Option (Expression p)) : Expression p → Expression p
+def Expression.substF (f : Variable → Option (Expression p)) : Expression p → Expression p
   | .const n => .const n
   | .var y => match f y with | some t => t | none => .var y
   | .add a b => .add (a.substF f) (b.substF f)
   | .mul a b => .mul (a.substF f) (b.substF f)
 
 /-- The environment with every mapped variable rebound to its solution's value. -/
-def envF (f : String → Option (Expression p)) (env : String → ZMod p) : String → ZMod p :=
+def envF (f : Variable → Option (Expression p)) (env : Variable → ZMod p) : Variable → ZMod p :=
   fun y => match f y with | some t => t.eval env | none => env y
 
-theorem Expression.eval_substF (e : Expression p) (f : String → Option (Expression p))
-    (env : String → ZMod p) : (e.substF f).eval env = e.eval (envF f env) := by
+theorem Expression.eval_substF (e : Expression p) (f : Variable → Option (Expression p))
+    (env : Variable → ZMod p) : (e.substF f).eval env = e.eval (envF f env) := by
   induction e with
   | const n => rfl
   | var y =>
@@ -48,7 +48,7 @@ theorem Expression.eval_substF (e : Expression p) (f : String → Option (Expres
   | mul a b iha ihb => simp only [Expression.substF, Expression.eval, iha, ihb]
 
 /-- If every mapped pair is respected by `env`, rebinding changes nothing. -/
-theorem envF_eq_self (f : String → Option (Expression p)) (env : String → ZMod p)
+theorem envF_eq_self (f : Variable → Option (Expression p)) (env : Variable → ZMod p)
     (H : ∀ y t, f y = some t → env y = t.eval env) : envF f env = env := by
   funext y
   unfold envF
@@ -60,13 +60,13 @@ theorem envF_eq_self (f : String → Option (Expression p)) (env : String → ZM
 
 /-- Substitute the map in every expression of a bus interaction. -/
 def BusInteraction.substF (bi : BusInteraction (Expression p))
-    (f : String → Option (Expression p)) : BusInteraction (Expression p) :=
+    (f : Variable → Option (Expression p)) : BusInteraction (Expression p) :=
   { busId := bi.busId,
     multiplicity := bi.multiplicity.substF f,
     payload := bi.payload.map (·.substF f) }
 
 theorem BusInteraction.eval_substF (bi : BusInteraction (Expression p))
-    (f : String → Option (Expression p)) (env : String → ZMod p) :
+    (f : Variable → Option (Expression p)) (env : Variable → ZMod p) :
     (bi.substF f).eval env = bi.eval (envF f env) := by
   simp only [BusInteraction.substF, BusInteraction.eval, Expression.eval_substF, List.map_map]
   congr 1
@@ -75,7 +75,7 @@ theorem BusInteraction.eval_substF (bi : BusInteraction (Expression p))
   simp only [Function.comp_apply, Expression.eval_substF]
 
 /-- Substitute the map everywhere in a constraint system. -/
-def ConstraintSystem.substF (cs : ConstraintSystem p) (f : String → Option (Expression p)) :
+def ConstraintSystem.substF (cs : ConstraintSystem p) (f : Variable → Option (Expression p)) :
     ConstraintSystem p :=
   { algebraicConstraints := cs.algebraicConstraints.map (·.substF f),
     busInteractions := cs.busInteractions.map (·.substF f) }
@@ -83,7 +83,7 @@ def ConstraintSystem.substF (cs : ConstraintSystem p) (f : String → Option (Ex
 /-- The evaluated interactions of a substituted system, restricted to one bus, are those of
     the original under the rebound environment (substitution never changes a bus id). -/
 theorem ConstraintSystem.msgs_substF (cs : ConstraintSystem p)
-    (f : String → Option (Expression p)) (busId : Nat) (a : String → ZMod p) :
+    (f : Variable → Option (Expression p)) (busId : Nat) (a : Variable → ZMod p) :
     ((cs.substF f).busInteractions.filter (fun bi => bi.busId = busId)).map
       (fun bi => bi.eval a)
     = (cs.busInteractions.filter (fun bi => bi.busId = busId)).map
@@ -99,7 +99,7 @@ theorem ConstraintSystem.msgs_substF (cs : ConstraintSystem p)
 
 /-- `admissible` transfers across simultaneous substitution — generically in the VM predicate. -/
 theorem ConstraintSystem.admissible_substF (cs : ConstraintSystem p)
-    (f : String → Option (Expression p)) (bs : BusSemantics p) (a : String → ZMod p) :
+    (f : Variable → Option (Expression p)) (bs : BusSemantics p) (a : Variable → ZMod p) :
     (cs.substF f).admissible bs a ↔ cs.admissible bs (envF f a) := by
   unfold ConstraintSystem.admissible
   have hmap : (cs.substF f).busInteractions.map (fun bi => bi.eval a)
@@ -110,7 +110,7 @@ theorem ConstraintSystem.admissible_substF (cs : ConstraintSystem p)
 
 /-- `satisfies` transfers across simultaneous substitution. -/
 theorem ConstraintSystem.satisfies_substF (cs : ConstraintSystem p)
-    (f : String → Option (Expression p)) (bs : BusSemantics p) (a : String → ZMod p) :
+    (f : Variable → Option (Expression p)) (bs : BusSemantics p) (a : Variable → ZMod p) :
     (cs.substF f).satisfies bs a ↔ cs.satisfies bs (envF f a) := by
   simp only [ConstraintSystem.satisfies, ConstraintSystem.substF] at *
   constructor
@@ -129,7 +129,7 @@ theorem ConstraintSystem.satisfies_substF (cs : ConstraintSystem p)
 
 /-- `sideEffects` transfers across simultaneous substitution. -/
 theorem ConstraintSystem.sideEffects_substF (cs : ConstraintSystem p)
-    (f : String → Option (Expression p)) (bs : BusSemantics p) (a : String → ZMod p) :
+    (f : Variable → Option (Expression p)) (bs : BusSemantics p) (a : Variable → ZMod p) :
     (cs.substF f).sideEffects bs a = cs.sideEffects bs (envF f a) := by
   simp only [ConstraintSystem.sideEffects, ConstraintSystem.substF]
   induction cs.busInteractions with
@@ -147,7 +147,7 @@ theorem ConstraintSystem.sideEffects_substF (cs : ConstraintSystem p)
     `PassCorrect`: equivalent to `cs` and invariant-preserving. The batch counterpart of
     `ConstraintSystem.subst_correct`. -/
 theorem ConstraintSystem.substF_correct (cs : ConstraintSystem p)
-    (f : String → Option (Expression p)) (bs : BusSemantics p)
+    (f : Variable → Option (Expression p)) (bs : BusSemantics p)
     (H : ∀ env, cs.satisfies bs env → ∀ y t, f y = some t → env y = t.eval env) :
     PassCorrect cs (cs.substF f) bs := by
   refine ⟨⟨?_, ?_⟩, ?_⟩

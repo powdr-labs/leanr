@@ -33,7 +33,7 @@ def Expression.constValue? (e : Expression p) : Option (ZMod p) :=
   | _ => none
 
 theorem Expression.constValue?_sound (e : Expression p) (c : ZMod p)
-    (h : e.constValue? = some c) (env : String → ZMod p) : e.eval env = c := by
+    (h : e.constValue? = some c) (env : Variable → ZMod p) : e.eval env = c := by
   unfold Expression.constValue? at h
   split at h
   · rename_i c' hfold
@@ -52,7 +52,7 @@ def constValues? : List (Expression p) → Option (List (ZMod p))
     | _, _ => none
 
 theorem constValues?_sound (es : List (Expression p)) (vs : List (ZMod p))
-    (h : constValues? es = some vs) (env : String → ZMod p) :
+    (h : constValues? es = some vs) (env : Variable → ZMod p) :
     es.map (fun e => e.eval env) = vs := by
   induction es generalizing vs with
   | nil => simp only [constValues?, Option.some.injEq] at h; subst h; rfl
@@ -78,7 +78,7 @@ def BusInteraction.constMessage? (bi : BusInteraction (Expression p)) :
 
 theorem BusInteraction.constMessage?_sound (bi : BusInteraction (Expression p))
     (msg : BusInteraction (ZMod p)) (h : bi.constMessage? = some msg)
-    (env : String → ZMod p) : bi.eval env = msg := by
+    (env : Variable → ZMod p) : bi.eval env = msg := by
   unfold BusInteraction.constMessage? at h
   cases hm : bi.multiplicity.constValue? with
   | none => rw [hm] at h; exact absurd h (by simp)

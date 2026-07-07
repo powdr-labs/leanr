@@ -24,7 +24,7 @@ def Expression.isConstZero : Expression p → Bool
   | _ => false
 
 theorem Expression.isConstZero_sound (e : Expression p) (h : e.isConstZero = true)
-    (env : String → ZMod p) : e.eval env = 0 := by
+    (env : Variable → ZMod p) : e.eval env = 0 := by
   cases e <;> simp_all [Expression.isConstZero, Expression.eval]
 
 /-- The trivial-constraint removal pass: drop every algebraic constraint whose fold is the literal

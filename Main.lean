@@ -63,17 +63,15 @@ structure Stats where
 def distinctVarCount (cs : ConstraintSystem babyBear) : Nat :=
   let occurrences := cs.algebraicConstraints.flatMap Expression.vars ++
     cs.busInteractions.flatMap BusInteraction.vars
-  (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).size
+  (occurrences.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).size
 
-/-- The distinct variable names of a constraint system, sorted and rendered for display (the
-    `@<id>` witness-column suffix stripped via `Leanr.Spec.Dsl.displayVar`). The report uses these
-    to map variables between the original and optimized circuits (removed / added). Since names are
-    unique without the suffix within a circuit, this stays one-to-one with `distinctVarCount`. -/
+/-- The distinct variable names of a constraint system, sorted and rendered for display.
+    Variables may carry structured powdr IDs internally, but reports show only `Variable.name`. -/
 def distinctVars (cs : ConstraintSystem babyBear) : List String :=
   let occurrences := cs.algebraicConstraints.flatMap Expression.vars ++
     cs.busInteractions.flatMap BusInteraction.vars
-  ((occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList.map
-    Leanr.Spec.Dsl.displayVar).mergeSort (· ≤ ·)
+  ((occurrences.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).toList.map
+    toString).mergeSort (fun a b => decide (a ≤ b))
 
 def statsOf (cs : ConstraintSystem babyBear) : Stats :=
   { vars := distinctVarCount cs,
@@ -132,8 +130,8 @@ def cmdVars (fileName : String) (iters : Nat) : IO Unit := do
   let optimized ← IO.lazyPure (fun _ => openVmOptimizer busMap.toBusMap iters cs)
   let occurrences := optimized.algebraicConstraints.flatMap Expression.vars ++
     optimized.busInteractions.flatMap BusInteraction.vars
-  let distinct := (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList
-  for v in (distinct.map Leanr.Spec.Dsl.displayVar).mergeSort (· ≤ ·) do
+  let distinct := (occurrences.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).toList
+  for v in (distinct.map toString).mergeSort (fun a b => decide (a ≤ b)) do
     IO.println v
 
 /-- Render the optimized system (for diagnosing residual constraints/interactions). -/
