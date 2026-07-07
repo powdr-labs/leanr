@@ -85,6 +85,46 @@ theorem pipelineIters_respectsDeg (iters : Nat) :
 /-- `pipelineIters` with the default cleanup-cycle count. -/
 def pipeline : VerifiedPassW p := pipelineIters 32
 
+/-! ## Witgen-safe (re-encoding-free) pipeline for the FFI path
+
+`reencodePass` is the only pass that introduces brand-new witness columns (the boolean bits it
+uses to re-encode a variable group). For powdr's witgen to fill such a column it needs a
+`DerivedVariable{isNew := true}` hint. The optimizer cannot emit one: the audited spec's
+`optimizerPreservesDerivedColumns` conjunct forces `optimizerWithBusFacts` to carry the input's
+derived columns through *verbatim*, so any hint a pass produced would be discarded — and changing
+that is an audited-surface (`Spec.lean`) change, out of scope here. See
+`docs/design/architecture.md`.
+
+So the FFI/powdr end-to-end path uses `optimizerWithBusFactsNoReencode`, which runs the exact same
+pipeline minus `reencodePass`. The result therefore contains no witness column that lacks a witgen
+recipe, keeping powdr's produced circuit witgen-correct. This variant is still a verified
+refinement (it is built from the same `VerifiedPassW` combinators, each of which bundles its own
+`PassCorrect` proof); it is simply not one of the audited named optimizers. -/
+def cleanupCycleNoReencode : VerifiedPassW p :=
+  gaussElimPass.withFacts.guardDegree
+    |>.andThen normalizePass.withFacts.guardDegree
+    |>.andThen constantFoldPass.withFacts.guardDegree
+    |>.andThen domainBatchPass.guardDegree
+    |>.andThen normalizePass.withFacts.guardDegree
+    |>.andThen constantFoldPass.withFacts.guardDegree
+    |>.andThen trivialConstraintDropPass.withFacts.guardDegree
+    |>.andThen zeroMultBusDropPass.withFacts.guardDegree
+    |>.andThen tautoBusDropPass.withFacts.guardDegree
+    |>.andThen busUnifyPass.guardDegree
+    |>.andThen disconnectedComponentPass.withFacts.guardDegree
+
+def pipelineNoReencodeIters (iters : Nat) : VerifiedPassW p :=
+  constantFoldPass.withFacts.guardDegree
+    |>.andThen (cleanupCycleNoReencode.iterateStable iters)
+    |>.andThen monicScalePass.withFacts.guardDegree
+    |>.andThen constantFoldPass.withFacts.guardDegree
+
+/-- Re-encoding-free counterpart of `optimizerWithBusFacts`. Carries the input's derived columns
+    through verbatim (like `optimizerWithBusFacts`) and never creates a hint-less witness column. -/
+def optimizerWithBusFactsNoReencode {bs : BusSemantics p} (facts : BusFacts p bs) (iters : Nat := 32)
+    (cs : ConstraintSystem p) : ConstraintSystem p :=
+  { (pipelineNoReencodeIters iters cs bs facts).val with derivedColumns := cs.derivedColumns }
+
 /-- The fact-aware circuit optimizer, as a circuit-to-circuit map: given proven `BusFacts` about a
     bus semantics (which fixes the implicit `bs`) and an iteration bound, run the pipeline and
     project out the resulting constraint system. `iters` bounds the number of cleanup cycles (each

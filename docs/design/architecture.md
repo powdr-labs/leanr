@@ -112,6 +112,18 @@ only `algebraicConstraints`/`busInteractions`. Consequently every existing pass 
   or rewrite dead references) is left to the powdr-integration task. Parsing (`JsonParser.lean`) and
   serialization (`JsonSerializer.lean`) match powdr's serde (3-tuple, externally-tagged
   `ComputationMethod`); a missing `derived_columns` key parses to `[]`.
+- **FFI / witgen consequence.** `reencodePass` is the one pass that creates *new* witness columns
+  (the boolean re-encoding bits, named `rnc…`). powdr witgen can only fill a new column from an
+  `isNew=true` hint — which, per the above, the optimizer provably cannot emit under the current
+  spec (verbatim preservation would be violated; that is an audited-`Spec.lean` change). Making such
+  emission *provably correct* would additionally require establishing `derivedColumnsEntailed` for
+  the bit encoding (a nested `IfEqZero` decode) — a substantial per-pass proof. So the FFI entry
+  point (`Leanr/Ffi.lean`) runs `optimizerWithBusFactsNoReencode` — the identical pipeline minus
+  `reencodePass`, still a verified refinement — so the circuit handed to powdr contains no hint-less
+  column and stays witgen-correct. The full (re-encoding) optimizer remains available as the audited
+  `openVmOptimizer` and via `lake exe leanr run` for column-count measurement. Lifting this
+  restriction (emit + prove the `Reencode` hint, and relax the spec to entailment-preservation) is
+  the remaining gap.
 
 ## Adding a pass
 
