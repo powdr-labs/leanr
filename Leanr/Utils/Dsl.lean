@@ -113,10 +113,10 @@ def matchesSnapshot (cs : ConstraintSystem p) (expected : String) : Bool :=
 private def busGroupingSnapshot : ConstraintSystem 7 :=
   { algebraicConstraints := [],
     busInteractions := [
-      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_a@1"] },
-      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_a@2"] },
-      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_b@3"] },
-      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_b@4"] }
+      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_a"] },
+      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_a"] },
+      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_b"] },
+      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_b"] }
     ] }
 
 #guard renderBusInteractions busGroupingSnapshot.busInteractions ==
