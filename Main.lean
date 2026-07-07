@@ -96,8 +96,7 @@ def cmdRun (fileName : String) (iters : Nat) : IO Unit := do
   let t0 ← IO.monoMsNow
   -- IO.lazyPure sequences the pure optimizer run between the clock reads (the compiler is
   -- free to float a plain `let` across IO actions, which breaks the measurement).
-  let optimized ← IO.lazyPure (fun _ => openVmOptimizer (cs := cs)
-    (busMap := busMap.toBusMap) (iters := iters))
+  let optimized ← IO.lazyPure (fun _ => openVmOptimizer busMap.toBusMap iters cs)
   let after ← IO.lazyPure (fun _ => statsOf optimized)
   let t1 ← IO.monoMsNow
   printStats (label := "before") (stats := before)
@@ -113,8 +112,7 @@ def cmdRun (fileName : String) (iters : Nat) : IO Unit := do
     diagnosing which variable classes the optimizer misses). -/
 def cmdVars (fileName : String) (iters : Nat) : IO Unit := do
   let (cs, busMap) ← parseFile fileName
-  let optimized ← IO.lazyPure (fun _ => openVmOptimizer (cs := cs)
-    (busMap := busMap.toBusMap) (iters := iters))
+  let optimized ← IO.lazyPure (fun _ => openVmOptimizer busMap.toBusMap iters cs)
   let occurrences := optimized.algebraicConstraints.flatMap Expression.vars ++
     optimized.busInteractions.flatMap BusInteraction.vars
   let distinct := (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList
@@ -124,8 +122,7 @@ def cmdVars (fileName : String) (iters : Nat) : IO Unit := do
 /-- Render the optimized system (for diagnosing residual constraints/interactions). -/
 def cmdRender (fileName : String) (iters : Nat) : IO Unit := do
   let (cs, busMap) ← parseFile fileName
-  let optimized ← IO.lazyPure (fun _ => openVmOptimizer (cs := cs)
-    (busMap := busMap.toBusMap) (iters := iters))
+  let optimized ← IO.lazyPure (fun _ => openVmOptimizer busMap.toBusMap iters cs)
   IO.println (Leanr.Spec.Dsl.render optimized)
 
 def cmdPowdr (unoptFile : String) (optFile : String) : IO Unit := do
@@ -168,8 +165,7 @@ def circuitJson (cs : ConstraintSystem babyBear) : String :=
 def cmdReport (unoptFile optFile : String) (iters : Nat) : IO Unit := do
   let (cs, busMap) ← parseFile unoptFile
   let (csPowdr, _) ← parseFile optFile
-  let optimized := openVmOptimizer (cs := cs)
-    (busMap := busMap.toBusMap) (iters := iters)
+  let optimized := openVmOptimizer busMap.toBusMap iters cs
   IO.println ("{\"original\":" ++ circuitJson cs ++
     ",\"powdr\":" ++ circuitJson csPowdr ++
     ",\"leanr\":" ++ circuitJson optimized ++ "}")

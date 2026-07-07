@@ -23,17 +23,14 @@ variable {p : ℕ}
 
 Assembles the optimization passes (from `Leanr/Implementation/OptimizerPasses/`) into the
 fact-aware `optimizerWithBusFacts`, using the scaffolding in
-`Leanr/Implementation/OptimizerPasses/Basic.lean` and `FactPass.lean`. `optimizerWithBusFacts`
-consumes proven `BusFacts` about the given semantics (see `Leanr/Implementation/BusFacts.lean`);
-`BusFacts.trivial` recovers the fact-free `optimizer`, which keeps the signature
-`ConstraintSystem p → BusSemantics p → ConstraintSystem p` so the size/effectiveness tooling can
-use it directly.
+`Leanr/Implementation/OptimizerPasses/Basic.lean` and `FactPass.lean`. Given proven `BusFacts`
+about a bus semantics (see `Leanr/Implementation/BusFacts.lean`) and an iteration bound,
+`optimizerWithBusFacts` is a circuit-to-circuit map.
 
-This file is *implementation* — it needs no audit. The correctness theorems that make up the
-audited surface (`optimizerWithBusFacts_maintainsCorrectness`, `optimizer_maintainsCorrectness`,
-and the OpenVM instance `openVmOptimizer`) live in `Leanr/Optimizer.lean`; each is a projection of
-the per-instance `optimizerWithBusFacts_correct` / `optimizerWithBusFacts_respectsDegree` proved
-here.
+This file is *implementation* — it needs no audit. The user-facing optimizer definitions
+(`simpleOptimizer`, `openVmOptimizer`) and the correctness theorems that make up the audited
+surface live in `Leanr/Optimizer.lean`; each theorem is a projection of the per-instance
+`optimizerWithBusFacts_correct` / `optimizerWithBusFacts_respectsDegree` proved here.
 
 **To add an optimization:** write a `VerifiedPass` (or fact-aware `VerifiedPassW`) in a new file
 under `Leanr/Implementation/OptimizerPasses/`, import it here, and `.andThen` it into `pipeline`
@@ -86,34 +83,29 @@ theorem pipelineIters_respectsDeg (iters : Nat) :
 /-- `pipelineIters` with the default cleanup-cycle count. -/
 def pipeline : VerifiedPassW p := pipelineIters 32
 
-/-- The fact-aware circuit optimizer: run the pipeline with proven knowledge about the bus
-    semantics and project out the resulting constraint system. `iters` bounds the number of
-    cleanup cycles (each cycle substitutes at most one variable per substitution pass, so large
-    parsed circuits need more than the snapshot default). -/
-def optimizerWithBusFacts (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (iters : Nat := 32) : ConstraintSystem p :=
+/-- The fact-aware circuit optimizer, as a circuit-to-circuit map: given proven `BusFacts` about a
+    bus semantics (which fixes the implicit `bs`) and an iteration bound, run the pipeline and
+    project out the resulting constraint system. `iters` bounds the number of cleanup cycles (each
+    cycle substitutes at most one variable per substitution pass, so large parsed circuits need
+    more than the snapshot default). -/
+def optimizerWithBusFacts {bs : BusSemantics p} (facts : BusFacts p bs) (iters : Nat := 32)
+    (cs : ConstraintSystem p) : ConstraintSystem p :=
   (pipelineIters iters cs bs facts).val
 
 /-- The fact-aware optimizer is correct: its output `refines` its input (sound, and complete for
     the input's intended executions) and preserves invariants — the same two clauses
     `optimizerMaintainsCorrectness` demands, stated per instance because nontrivial facts are tied
     to one semantics. -/
-theorem optimizerWithBusFacts_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (iters : Nat := 32) :
-    ((optimizerWithBusFacts cs bs facts iters).refines cs bs) ∧
-      (cs.guaranteesInvariants bs → (optimizerWithBusFacts cs bs facts iters).guaranteesInvariants bs) :=
+theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p bs)
+    (iters : Nat := 32) (cs : ConstraintSystem p) :
+    ((optimizerWithBusFacts facts iters cs).refines cs bs) ∧
+      (cs.guaranteesInvariants bs → (optimizerWithBusFacts facts iters cs).guaranteesInvariants bs) :=
   (pipelineIters iters cs bs facts).property
-
-/-- The fact-free circuit optimizer: the fixed signature
-    `ConstraintSystem p → BusSemantics p → ConstraintSystem p` consumed by the size/effectiveness
-    tooling and by the top-level `optimizer_maintainsCorrectness` (in `Leanr/Optimizer.lean`). -/
-def optimizer (cs : ConstraintSystem p) (busSemantics : BusSemantics p) : ConstraintSystem p :=
-  optimizerWithBusFacts cs busSemantics (BusFacts.trivial busSemantics)
 
 /-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree
     bound (every pass is degree-guarded). -/
-theorem optimizerWithBusFacts_respectsDegree (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (iters : Nat := 32)
+theorem optimizerWithBusFacts_respectsDegree {bs : BusSemantics p} (facts : BusFacts p bs)
+    (iters : Nat := 32) (cs : ConstraintSystem p)
     (h : cs.withinDegree bs.degreeBound) :
-    (optimizerWithBusFacts cs bs facts iters).withinDegree bs.degreeBound :=
+    (optimizerWithBusFacts facts iters cs).withinDegree bs.degreeBound :=
   pipelineIters_respectsDeg iters cs bs facts h

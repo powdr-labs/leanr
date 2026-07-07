@@ -13,24 +13,30 @@ theorems, read against the spec (`Leanr/Spec.lean`) and the bus semantics
 
 The file has two sections — first the optimizers, then their correctness. All three correctness
 results are instances of a single `optimizerMaintainsCorrectness bs opt` statement (for bus
-semantics `bs`: `opt` refines its input, preserves invariants, and respects the degree bound). -/
+semantics `bs`: the circuit-to-circuit map `opt` refines its input, preserves invariants, and
+respects the degree bound). -/
 
 variable {p : ℕ}
 
 /-! ## The optimizers
 
-`optimizer` (fact-free) and `optimizerWithBusFacts` (fact-aware) are defined in
-`Leanr/Implementation/Optimizer.lean`. `openVmOptimizer` — the optimizer the `leanr` CLI runs — is
-the fact-aware pipeline instantiated with the OpenVM bus semantics and its proven `BusFacts`. -/
+`optimizerWithBusFacts` (the fact-aware pipeline) is defined in `Leanr/Implementation/`. Applied
+to proven `BusFacts` and an iteration bound it is a circuit-to-circuit map; the two optimizers
+below instantiate it. -/
+
+/-- The fact-free optimizer for a bus semantics `bs`: the pipeline with no bus knowledge
+    (`BusFacts.trivial`). -/
+def simpleOptimizer (bs : BusSemantics p) : ConstraintSystem p → ConstraintSystem p :=
+  optimizerWithBusFacts (BusFacts.trivial bs) 32
 
 namespace Leanr.OpenVM
 
-/-- The optimizer the `leanr` CLI runs on OpenVM circuits: `optimizerWithBusFacts` instantiated
-    with the OpenVM bus semantics and its proven `BusFacts`. `busMap` selects the bus layout
-    (default: `defaultBusMap`); `iters` bounds the cleanup cycles. -/
-def openVmOptimizer (cs : ConstraintSystem babyBear) (busMap : BusMap := defaultBusMap)
-    (iters : Nat := 32) : ConstraintSystem babyBear :=
-  optimizerWithBusFacts cs (openVmBusSemantics babyBear busMap) (openVmFacts babyBear busMap) iters
+/-- The optimizer the `leanr` CLI runs on OpenVM circuits: `optimizerWithBusFacts` at the OpenVM
+    bus semantics and its proven `BusFacts`. `busMap` selects the bus layout (default:
+    `defaultBusMap`); `iters` bounds the cleanup cycles. -/
+def openVmOptimizer (busMap : BusMap := defaultBusMap) (iters : Nat := 32) :
+    ConstraintSystem babyBear → ConstraintSystem babyBear :=
+  optimizerWithBusFacts (openVmFacts babyBear busMap) iters
 
 end Leanr.OpenVM
 
@@ -40,20 +46,19 @@ Each theorem is an instance of `optimizerMaintainsCorrectness bs opt`. The maste
 work; the fact-free and OpenVM optimizers fall out of it as one-liners. -/
 
 /-- **Master correctness theorem.** For any bus semantics `bs`, any proven `BusFacts` for it, and
-    any cleanup-cycle bound `iters`, running the fact-aware pipeline with those facts maintains
-    correctness. The two optimizers below are instances; because `BusFacts p bs` bundles each
-    claim with its soundness proof, no choice of facts can break correctness. -/
+    any cleanup-cycle bound `iters`, the fact-aware pipeline maintains correctness. The two
+    optimizers below are instances; because `BusFacts p bs` bundles each claim with its soundness
+    proof, no choice of facts can break correctness. -/
 theorem optimizerWithBusFacts_maintainsCorrectness (bs : BusSemantics p) (facts : BusFacts p bs)
     (iters : Nat) :
-    optimizerMaintainsCorrectness bs (fun cs => optimizerWithBusFacts cs bs facts iters) :=
-  ⟨fun cs => optimizerWithBusFacts_correct cs bs facts iters,
-   fun cs => optimizerWithBusFacts_respectsDegree cs bs facts iters⟩
+    optimizerMaintainsCorrectness bs (optimizerWithBusFacts facts iters) :=
+  ⟨fun cs => optimizerWithBusFacts_correct facts iters cs,
+   fun cs => optimizerWithBusFacts_respectsDegree facts iters cs⟩
 
-/-- The fact-free `optimizer` maintains correctness, for every bus semantics: the trivial-facts
-    instance of the master theorem (`BusFacts.trivial` claims nothing) at `iters = 32`, the count
-    baked into `optimizer`. -/
-theorem optimizer_maintainsCorrectness (bs : BusSemantics p) :
-    optimizerMaintainsCorrectness bs (fun cs => optimizer cs bs) :=
+/-- The fact-free `simpleOptimizer` maintains correctness, for every bus semantics: the
+    trivial-facts instance of the master theorem (`BusFacts.trivial` claims nothing). -/
+theorem simpleOptimizer_maintainsCorrectness (bs : BusSemantics p) :
+    optimizerMaintainsCorrectness bs (simpleOptimizer bs) :=
   optimizerWithBusFacts_maintainsCorrectness bs (BusFacts.trivial bs) 32
 
 namespace Leanr.OpenVM
@@ -63,7 +68,7 @@ namespace Leanr.OpenVM
     sound by construction (`openVmFacts : BusFacts …`), so no extra audit is needed. -/
 theorem openVmOptimizer_maintainsCorrectness (busMap : BusMap) (iters : Nat) :
     optimizerMaintainsCorrectness (openVmBusSemantics babyBear busMap)
-      (fun cs => openVmOptimizer cs busMap iters) :=
+      (openVmOptimizer busMap iters) :=
   optimizerWithBusFacts_maintainsCorrectness (openVmBusSemantics babyBear busMap)
     (openVmFacts babyBear busMap) iters
 

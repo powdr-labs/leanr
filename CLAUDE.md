@@ -28,7 +28,7 @@ construction — a wrong fact would not compile), and `Leanr/Utils/` is tooling.
 - `Leanr/OpenVmSemantics.lean`, `Leanr/MemoryBus.lean` — the audited OpenVM bus semantics and the
   memory-discipline utility they build on.
 - `Leanr/Optimizer.lean` — the audited top: `optimizerWithBusFacts_maintainsCorrectness` (the
-  master theorem, for all bus facts) plus its instances `optimizer_maintainsCorrectness` and the
+  master theorem, for all bus facts) plus its instances `simpleOptimizer_maintainsCorrectness` and the
   OpenVM `openVmOptimizer` (with `openVmOptimizer_maintainsCorrectness`).
 - `Leanr/Implementation/OptimizerPasses/Basic.lean`, `FactPass.lean` — the framework: a `VerifiedPass` bundles its
   own `PassCorrect` proof, so a pass cannot be written without discharging it.

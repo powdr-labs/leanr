@@ -37,7 +37,7 @@ A **`VerifiedPass`** maps a system to a new one *bundled with a `PassCorrect` pr
 invariant preservation) — so a pass cannot be written without discharging its obligations.
 
 - `andThen` composes passes (correctness by `refines_trans`); `iterate`/`iterateStable` run to a
-  fixpoint; the top-level `optimizer_maintainsCorrectness` is just a projection.
+  fixpoint; the top-level `*_maintainsCorrectness` theorems are just projections.
 - `guardDegree` wraps each pass to fall back to its input if the output would exceed the degree
   bound — degree safety is compositional, with zero per-pass proof burden.
 - `VerifiedPassW` is a pass that may additionally consult proven `BusFacts` (below).
@@ -72,11 +72,12 @@ proven `BusFacts` instance. Both are parameterized by the bus map, defaulting to
 propagation (boolean/one-hot case analysis and bus-fact domains; prime `p` only), trivial /
 zero-multiplicity / tautology drops, `busUnifyPass`, and re-encoding — each `guardDegree`-wrapped.
 `pipelineIters` folds once, runs `cleanupCycle` to a fixpoint (`iterateStable`), then
-monic-scales and folds. `optimizerWithBusFacts` takes a proven `BusFacts` instance; `optimizer` is
-the trivial-facts instance (`BusFacts.trivial`). The audited `Leanr/Optimizer.lean` proves the
-master theorem `optimizerWithBusFacts_maintainsCorrectness` (correctness for *every* bus
-semantics, choice of proven facts, and iteration count) and derives its instances
-`optimizer_maintainsCorrectness` and the OpenVM `openVmOptimizer` (with
+monic-scales and folds. Applied to proven facts and an iteration bound, `optimizerWithBusFacts` is
+a circuit-to-circuit map; `simpleOptimizer` is the trivial-facts instance (`BusFacts.trivial`). The
+audited `Leanr/Optimizer.lean` proves the master theorem
+`optimizerWithBusFacts_maintainsCorrectness` (correctness for *every* bus semantics, choice of
+proven facts, and iteration count) and derives its instances `simpleOptimizer_maintainsCorrectness`
+and the OpenVM `openVmOptimizer` (with
 `openVmOptimizer_maintainsCorrectness`) as one-liners.
 
 ## Adding a pass

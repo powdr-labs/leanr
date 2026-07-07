@@ -8,5 +8,5 @@ import Leanr.Optimizer
 -- The master theorem: the fact-aware optimizer is correct for every choice of proven bus facts.
 #print axioms optimizerWithBusFacts_maintainsCorrectness
 -- Its two instances: the fact-free optimizer, and the concrete OpenVM optimizer the CLI runs.
-#print axioms optimizer_maintainsCorrectness
+#print axioms simpleOptimizer_maintainsCorrectness
 #print axioms Leanr.OpenVM.openVmOptimizer_maintainsCorrectness
