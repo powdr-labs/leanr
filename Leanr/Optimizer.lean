@@ -3,22 +3,7 @@ import Leanr.Implementation.OpenVmFacts
 
 set_option autoImplicit false
 
-/-! # Optimizer correctness (audited)
-
-This is the audited top of the optimizer. Everything it names is defined under
-`Leanr/Implementation/` (the pipeline, the passes, the bus facts) and needs **no** audit; what an
-auditor reviews here are the *statements* of the correctness theorems, against the spec
-(`Leanr/Spec.lean`) and the bus semantics (`Leanr/OpenVmSemantics.lean`). `lake build` checks the
-proofs.
-
-- `optimizerWithBusFacts_maintainsCorrectness` — the master theorem: for **any** assignment of
-  proven `BusFacts` to bus semantics, running the pipeline with those facts satisfies
-  `optimizerMaintainsCorrectness` (refines the input, preserves invariants, respects the degree
-  bound), for every constraint system and every bus semantics.
-- `optimizer_maintainsCorrectness` — the fact-free optimizer as the trivial-facts instance.
-- `openVmOptimizer` (+ `openVmOptimizer_maintainsCorrectness`) — the concrete optimizer the CLI
-  runs on OpenVM circuits, correct by instantiating the master theorem with the (proven-by-
-  construction) `openVmFacts`. -/
+/-! # Proofs of optimizer correctness (audited) -/
 
 variable {p : ℕ}
 
