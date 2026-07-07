@@ -65,12 +65,15 @@ def distinctVarCount (cs : ConstraintSystem babyBear) : Nat :=
     cs.busInteractions.flatMap BusInteraction.vars
   (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).size
 
-/-- The distinct variable names of a constraint system, sorted. The report uses these to map
-    variables between the original and optimized circuits (removed / added). -/
+/-- The distinct variable names of a constraint system, sorted and rendered for display (the
+    `@<id>` witness-column suffix stripped via `Leanr.Spec.Dsl.displayVar`). The report uses these
+    to map variables between the original and optimized circuits (removed / added). Since names are
+    unique without the suffix within a circuit, this stays one-to-one with `distinctVarCount`. -/
 def distinctVars (cs : ConstraintSystem babyBear) : List String :=
   let occurrences := cs.algebraicConstraints.flatMap Expression.vars ++
     cs.busInteractions.flatMap BusInteraction.vars
-  (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList.mergeSort (· ≤ ·)
+  ((occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList.map
+    Leanr.Spec.Dsl.displayVar).mergeSort (· ≤ ·)
 
 def statsOf (cs : ConstraintSystem babyBear) : Stats :=
   { vars := distinctVarCount cs,
@@ -130,7 +133,7 @@ def cmdVars (fileName : String) (iters : Nat) : IO Unit := do
   let occurrences := optimized.algebraicConstraints.flatMap Expression.vars ++
     optimized.busInteractions.flatMap BusInteraction.vars
   let distinct := (occurrences.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList
-  for v in distinct.mergeSort (· ≤ ·) do
+  for v in (distinct.map Leanr.Spec.Dsl.displayVar).mergeSort (· ≤ ·) do
     IO.println v
 
 /-- Render the optimized system (for diagnosing residual constraints/interactions). -/
