@@ -1,5 +1,5 @@
-import Leanr.OptimizerPasses.DomainProp
-import Leanr.OptimizerPasses.TrivialConstraint
+import Leanr.Implementation.OptimizerPasses.DomainProp
+import Leanr.Implementation.OptimizerPasses.TrivialConstraint
 import Leanr.MemoryBus
 
 set_option autoImplicit false

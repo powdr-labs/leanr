@@ -1,7 +1,7 @@
-import Leanr.OptimizerPasses.SubstMap
-import Leanr.OptimizerPasses.Subst
-import Leanr.OptimizerPasses.Affine
-import Leanr.OptimizerPasses.Normalize
+import Leanr.Implementation.OptimizerPasses.SubstMap
+import Leanr.Implementation.OptimizerPasses.Subst
+import Leanr.Implementation.OptimizerPasses.Affine
+import Leanr.Implementation.OptimizerPasses.Normalize
 
 set_option autoImplicit false
 

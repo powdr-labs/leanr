@@ -1,6 +1,6 @@
 import Lean.Data.Json
 import Leanr.Spec
-import Leanr.OpenVM.Semantics
+import Leanr.OpenVmSemantics
 
 /-!
 # JSON parser for powdr `SymbolicMachine` exports

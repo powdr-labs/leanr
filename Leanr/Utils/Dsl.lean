@@ -4,8 +4,8 @@ import Leanr.Spec
 # A small DSL and renderer for spec-level constraint systems
 
 Reusable helpers for *writing* and *pretty-printing* `Expression` / `ConstraintSystem` values
-(see `Leanr/Spec.lean`). Not tied to any particular zkVM — used e.g. by the OpenVM snapshot
-test in `Leanr/OpenVM/Snapshot.lean`.
+(see `Leanr/Spec.lean`). Not tied to any particular zkVM — used e.g. by the CLI's `render`
+command (`Main.lean`).
 
 `Expression` only has `const/var/add/mul`; subtraction and negation are provided here as sugar
 that lowers to multiplication by `-1`.

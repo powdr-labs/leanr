@@ -165,24 +165,30 @@ def ConstraintSystem.withinDegree (s : ConstraintSystem p) (b : DegreeBound) : P
   (∀ bi ∈ s.busInteractions, bi.multiplicity.degree ≤ b.busInteractions ∧
     ∀ e ∈ bi.payload, e.degree ≤ b.busInteractions)
 
-/-- Whether an optimizer respects the zkVM's degree bound. -/
-def optimizerRespectsDegreeBound
-    (optimizer : ConstraintSystem p → BusSemantics p → ConstraintSystem p) : Prop :=
-  ∀ (constraintSystem : ConstraintSystem p) (busSemantics : BusSemantics p),
+/-- Whether an optimizer for the fixed `busSemantics` respects the zkVM's degree bound: a
+    within-bound input always yields a within-bound output. -/
+def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
+    (optimizer : ConstraintSystem p → ConstraintSystem p) : Prop :=
+  ∀ constraintSystem : ConstraintSystem p,
     constraintSystem.withinDegree busSemantics.degreeBound →
-    (optimizer constraintSystem busSemantics).withinDegree busSemantics.degreeBound
+    (optimizer constraintSystem).withinDegree busSemantics.degreeBound
 
-/-- Whether an optimizer maintains correctness. This means that, for all constraint systems
-    and bus semantics:
+/-- Whether an optimizer maintains correctness *with respect to a given `busSemantics`*. This
+    means that, for all constraint systems:
     1. The optimized constraint system `refines` the original: it is sound (every satisfying
        witness of the output is one of the input, with the same side effects) and complete for
        the input's intended (real-trace) executions.
     2. Assuming the original constraint system guarantees invariants, so does the optimized one.
-    3. The optimizer respects the zkVM's degree bound. -/
-def optimizerMaintainsCorrectness (optimizer : ConstraintSystem p → BusSemantics p → ConstraintSystem p) :
-    Prop :=
-  (∀ constraintSystem busSemantics,
-    ((optimizer constraintSystem busSemantics).refines constraintSystem busSemantics) ∧
+    3. The optimizer respects the zkVM's degree bound.
+
+    The bus semantics is a *parameter*: quantifying over it (`∀ bs, optimizerMaintainsCorrectness
+    bs opt`) recovers the "correct for every semantics" reading, while leaving it fixed lets a
+    semantics-specific optimizer — one that bakes in bus knowledge sound only for its own
+    semantics, like the OpenVM optimizer — be an instance too. -/
+def optimizerMaintainsCorrectness (busSemantics : BusSemantics p)
+    (optimizer : ConstraintSystem p → ConstraintSystem p) : Prop :=
+  (∀ constraintSystem : ConstraintSystem p,
+    ((optimizer constraintSystem).refines constraintSystem busSemantics) ∧
     (constraintSystem.guaranteesInvariants busSemantics →
-      (optimizer constraintSystem busSemantics).guaranteesInvariants busSemantics))
-  ∧ optimizerRespectsDegreeBound optimizer
+      (optimizer constraintSystem).guaranteesInvariants busSemantics))
+  ∧ optimizerRespectsDegreeBound busSemantics optimizer

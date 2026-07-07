@@ -1,6 +1,6 @@
-import Leanr.OptimizerPasses.Normalize
-import Leanr.OptimizerPasses.TautoBus
-import Leanr.OptimizerPasses.FactPass
+import Leanr.Implementation.OptimizerPasses.Normalize
+import Leanr.Implementation.OptimizerPasses.TautoBus
+import Leanr.Implementation.OptimizerPasses.FactPass
 import Leanr.Utils.Size
 import Mathlib.Algebra.Field.ZMod
 
@@ -17,7 +17,7 @@ Many circuit variables are pinned to a *finite domain*:
   `x * (x - 1) = 0` forces `x ∈ {0, 1}` (booleanity), `c * (255 - c) = 0` forces
   `c ∈ {0, 255}`. Over an integral domain a product is zero only if a factor is, and an affine
   factor `a·x + b` with `a ≠ 0` has the single root `-b/a` — this is where primality is needed;
-* by a **bus obligation** together with a proven `BusFacts` bound (`Leanr/BusFacts.lean`): an
+* by a **bus obligation** together with a proven `BusFacts` bound (`Leanr/Implementation/BusFacts.lean`): an
   interaction with constant nonzero multiplicity whose payload carries `x` in a slot the
   semantics range-checks gives `x.val < bound`, i.e. `x ∈ [0, bound)`.
 

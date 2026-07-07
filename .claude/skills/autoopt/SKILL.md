@@ -38,8 +38,9 @@ effectiveness against powdr — this is the final evaluation. Report the result 
 
 ## Rules
 
-- **Do not change the audited surface** — `Leanr/Spec.lean`, `Leanr/OpenVM/Semantics.lean`, or
-  `Leanr/MemoryBus.lean`.
+- **Do not change the audited surface** — `Leanr/Spec.lean`, `Leanr/OpenVmSemantics.lean`,
+  `Leanr/MemoryBus.lean`, or the correctness theorems in `Leanr/Optimizer.lean`. All passes and
+  the pipeline they compose into live under `Leanr/Implementation/`, which needs no audit.
 - **No `sorry` / `admit` / `axiom` / `native_decide`** — enforced by CI
   (`Scripts/check-proof-integrity.sh`, runnable locally). If you cannot prove something, break it
   down or pick a simpler idea.
@@ -48,8 +49,8 @@ effectiveness against powdr — this is the final evaluation. Report the result 
 
 ## How to add a pass
 
-Write a `VerifiedPass` in a new `Leanr/OptimizerPasses/` file, import it in `Leanr/Optimizer.lean`,
-and `.andThen … |>.guardDegree` it into `cleanupCycle`. See `CLAUDE.md` and
+Write a `VerifiedPass` in a new `Leanr/Implementation/OptimizerPasses/` file, import it in
+`Leanr/Implementation/Optimizer.lean`, and `.andThen … |>.guardDegree` it into `cleanupCycle`. See `CLAUDE.md` and
 `docs/design/architecture.md` for the architecture; correctness follows from the pass's own
 `PassCorrect`.
 

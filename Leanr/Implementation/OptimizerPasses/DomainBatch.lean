@@ -1,5 +1,5 @@
-import Leanr.OptimizerPasses.DomainProp
-import Leanr.OptimizerPasses.Gauss
+import Leanr.Implementation.OptimizerPasses.DomainProp
+import Leanr.Implementation.OptimizerPasses.Gauss
 
 set_option autoImplicit false
 

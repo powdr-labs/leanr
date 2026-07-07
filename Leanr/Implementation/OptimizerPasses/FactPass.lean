@@ -1,12 +1,12 @@
-import Leanr.OptimizerPasses.Basic
-import Leanr.BusFacts
+import Leanr.Implementation.OptimizerPasses.Basic
+import Leanr.Implementation.BusFacts
 
 set_option autoImplicit false
 
 /-! # Fact-aware verified passes
 
 A `VerifiedPassW` is a `VerifiedPass` that may additionally consult proven `BusFacts` about the
-bus semantics it is given (see `Leanr/BusFacts.lean`). The correctness obligation is unchanged —
+bus semantics it is given (see `Leanr/Implementation/BusFacts.lean`). The correctness obligation is unchanged —
 `PassCorrect` against the *semantics* — the facts only widen what a pass can decide, never what
 it may claim: with `BusFacts.trivial` every fact-aware pass degrades to fact-free behavior. -/
 
