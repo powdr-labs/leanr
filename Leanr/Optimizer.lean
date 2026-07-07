@@ -37,7 +37,8 @@ theorem optimizerWithBusFacts_maintainsCorrectness (bs : BusSemantics p) (facts 
     (iters : Nat) :
     optimizerMaintainsCorrectness bs (optimizerWithBusFacts facts iters) :=
   ⟨fun cs => optimizerWithBusFacts_correct facts iters cs,
-   fun cs => optimizerWithBusFacts_respectsDegree facts iters cs⟩
+   fun cs => optimizerWithBusFacts_respectsDegree facts iters cs,
+   fun cs => optimizerWithBusFacts_preservesDerived facts iters cs⟩
 
 theorem simpleOptimizer_maintainsCorrectness (bs : BusSemantics p) (iters : Nat) :
     optimizerMaintainsCorrectness bs (simpleOptimizer bs iters) :=

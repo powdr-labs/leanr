@@ -101,6 +101,48 @@ partial def parseJsonExpr (j : Lean.Json) : Except String (Expression p) :=
 private def parseConstraint (j : Lean.Json) : Except String (Expression p) :=
   parseJsonExpr j
 
+/-- Parse a powdr `ComputationMethod`, serialized as an externally-tagged enum:
+    `{"Constant": <field>}`, `{"QuotientOrZero": [num, den]}`, or
+    `{"IfEqZero": [cond, then, else]}` (the last two arms are recursive). -/
+partial def parseComputationMethod (j : Lean.Json) : Except String (ComputationMethod p) :=
+  match j with
+  | Lean.Json.obj obj =>
+    match obj.toList with
+    | [("Constant", v)] => do
+      let e ← parseJsonExpr (p := p) v
+      match e with
+      | .const n => .ok (.constant n)
+      | _ => .error s!"Constant expects a field element, got: {v}"
+    | [("QuotientOrZero", Lean.Json.arr args)] =>
+      if h : args.size = 2 then do
+        let num ← parseJsonExpr (p := p) args[0]
+        let den ← parseJsonExpr (p := p) args[1]
+        .ok (.quotientOrZero num den)
+      else .error s!"QuotientOrZero expects 2 args, got {args.size}"
+    | [("IfEqZero", Lean.Json.arr args)] =>
+      if h : args.size = 3 then do
+        let cond ← parseJsonExpr (p := p) args[0]
+        let thenM ← parseComputationMethod args[1]
+        let elseM ← parseComputationMethod args[2]
+        .ok (.ifEqZero cond thenM elseM)
+      else .error s!"IfEqZero expects 3 args, got {args.size}"
+    | [(k, _)] => .error s!"unknown computation method: {k}"
+    | _ => .error s!"unexpected computation method object: {j}"
+  | _ => .error s!"unexpected computation method: {j}"
+
+/-- Parse a powdr `DerivedVariable`, serialized as a 3-tuple
+    `[is_new, "name@id", computation_method]`. -/
+def parseDerivedVariable (j : Lean.Json) : Except String (DerivedVariable p) :=
+  match j with
+  | Lean.Json.arr items =>
+    if h : items.size = 3 then do
+      let isNew ← items[0].getBool?
+      let name ← items[1].getStr?
+      let computation ← parseComputationMethod (p := p) items[2]
+      .ok { isNew := isNew, name := name, computation := computation }
+    else .error s!"DerivedVariable expects a 3-tuple, got {items.size} elements"
+  | _ => .error s!"unexpected derived variable: {j}"
+
 private def parseBusInteraction (j : Lean.Json) :
     Except String (BusInteraction (Expression p)) := do
   let id ← j.getObjVal? "id"
@@ -140,13 +182,25 @@ def parseJsonSystem (jsonStr : String) : Except String (ConstraintSystem p × Bu
   let busInteractions : List (BusInteraction (Expression p)) ←
     busArr.toList.mapM (parseBusInteraction (p := p))
 
+  -- Parse derived columns (witgen hints). Optional: older exports omit the key entirely,
+  -- so a missing `derived_columns` field defaults to no derived columns.
+  let derivedColumns : List (DerivedVariable p) ←
+    match machine.getObjVal? "derived_columns" with
+    | .error _ => pure []
+    | .ok derivedJson =>
+      match derivedJson with
+      | Lean.Json.arr a => a.toList.mapM (parseDerivedVariable (p := p))
+      | Lean.Json.null => pure []
+      | _ => .error "derived_columns is not an array"
+
   -- Parse bus_map
   let busMapJson ← json.getObjVal? "bus_map"
   let busMap ← parseBusMap busMapJson
 
   let system : ConstraintSystem p := {
     algebraicConstraints := constraints,
-    busInteractions := busInteractions
+    busInteractions := busInteractions,
+    derivedColumns := derivedColumns
   }
   pure (system, busMap)
 
