@@ -29,6 +29,47 @@ def Expression.degree : Expression p → Nat
   | .add e1 e2 => max e1.degree e2.degree
   | .mul e1 e2 => e1.degree + e2.degree
 
+--------- Derived Columns (witgen hints) ---------
+
+/-- A *method for computing* the value of a derived column from an assignment, mirroring powdr's
+    `ComputationMethod`. These are witness-generation hints: they do **not** constrain the circuit
+    (they are not checked by the verifier), they instruct witgen how to fill a column. -/
+inductive ComputationMethod (p : ℕ) where
+  /-- A constant field value. -/
+  | constant (n : ZMod p)
+  /-- The quotient `num / den` using field inversion, or `0` when `den` evaluates to `0`. -/
+  | quotientOrZero (num den : Expression p)
+  /-- If `cond` evaluates to `0`, compute via `thenM`, otherwise via `elseM`. -/
+  | ifEqZero (cond : Expression p) (thenM elseM : ComputationMethod p)
+
+/-- Evaluate a computation method under an assignment. Reproduces powdr's
+    `evaluate_computation_method`: `quotientOrZero` uses the field inverse and yields `0` on a
+    zero divisor (matching powdr's explicit guard; note the `if` makes the result independent of
+    mathlib's convention `0⁻¹ = 0`). -/
+def ComputationMethod.eval (m : ComputationMethod p) (env : String → ZMod p) : ZMod p :=
+  match m with
+  | .constant n => n
+  | .quotientOrZero num den =>
+      let d := den.eval env
+      if d = 0 then 0 else num.eval env * d⁻¹
+  | .ifEqZero cond thenM elseM =>
+      if cond.eval env = 0 then thenM.eval env else elseM.eval env
+
+/-- A derived column, mirroring powdr's `DerivedVariable`. `isNew` distinguishes a genuinely new
+    column the optimizer created (witgen must compute it) from a hint for a pre-existing/removed
+    variable (`isNew = false`). `name` is the variable identifier (powdr's `"name@id"`). -/
+structure DerivedVariable (p : ℕ) where
+  isNew : Bool
+  name : String
+  computation : ComputationMethod p
+
+/-- A derived column is *consistent* under an assignment when the variable it names already holds
+    the value its computation method produces from that same assignment — the intended witgen
+    semantics `variable := computation(other columns)`. This is a **declarative** definition of
+    the hint's meaning; it is not enforced by any pass (see `docs/design/architecture.md`). -/
+def DerivedVariable.consistent (dc : DerivedVariable p) (env : String → ZMod p) : Prop :=
+  env dc.name = dc.computation.eval env
+
 --------- Bus Interactions ---------
 
 /-- A bus interaction. Typically, α is
@@ -96,6 +137,10 @@ instance : HasEquiv (BusState p) :=
 structure ConstraintSystem (p : ℕ) where
   algebraicConstraints : List (Expression p)
   busInteractions : List (BusInteraction (Expression p))
+  /-- Derived columns (witgen hints), mirroring powdr's `SymbolicMachine.derived_columns`. These
+      are metadata: they do not participate in `satisfies`/`refines` (see below). Defaulted to
+      `[]` so that constructions that do not care about derived columns are unaffected. -/
+  derivedColumns : List (DerivedVariable p) := []
 
 /-- The side effects of a constraint system under a given environment and bus semantics.
     The side effects are the tuples sent to the *stateful* buses.-/
@@ -120,6 +165,19 @@ def ConstraintSystem.satisfies (s : ConstraintSystem p) (busSemantics : BusSeman
   (∀ bi ∈ s.busInteractions,
     let message := bi.eval env
     message.multiplicity ≠ 0 → busSemantics.violatesConstraint message = false)
+
+/-- All of a system's derived columns are consistent under `env`. -/
+def ConstraintSystem.derivedConsistent (s : ConstraintSystem p) (env : String → ZMod p) : Prop :=
+  ∀ dc ∈ s.derivedColumns, dc.consistent env
+
+/-- A system's derived columns are *entailed* by the system when every satisfying assignment makes
+    them consistent — i.e. the hints are provably correct against the circuit itself. This is the
+    semantic notion of a valid derived column. It is provided declaratively (an emitting pass would
+    establish it for the columns it adds); the current optimizer emits no columns and instead
+    carries them verbatim (see `optimizerPreservesDerivedColumns`). -/
+def ConstraintSystem.derivedColumnsEntailed (s : ConstraintSystem p) (busSemantics : BusSemantics p) :
+    Prop :=
+  ∀ env, s.satisfies busSemantics env → s.derivedConsistent env
 
 /-- Whether a constraint system guarantees that all invariants are maintained under a given bus semantics. -/
 def ConstraintSystem.guaranteesInvariants (s : ConstraintSystem p) (busSemantics : BusSemantics p) : Prop :=
@@ -173,6 +231,16 @@ def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
     constraintSystem.withinDegree busSemantics.degreeBound →
     (optimizer constraintSystem).withinDegree busSemantics.degreeBound
 
+/-- Whether an optimizer carries derived columns (witgen hints) through verbatim: the output's
+    derived columns equal the input's. Derived columns are trusted metadata, not constraints, so
+    the optimizer must neither fabricate a new (possibly bogus) hint nor silently drop one. Since
+    the columns are preserved identically, the output's hints are exactly as valid as the input's
+    (in particular `derivedColumnsEntailed` transfers when the columns are unchanged). -/
+def optimizerPreservesDerivedColumns
+    (optimizer : ConstraintSystem p → ConstraintSystem p) : Prop :=
+  ∀ constraintSystem : ConstraintSystem p,
+    (optimizer constraintSystem).derivedColumns = constraintSystem.derivedColumns
+
 /-- Whether an optimizer maintains correctness *with respect to a given `busSemantics`*. This
     means that, for all constraint systems:
     1. The optimized constraint system `refines` the original: it is sound (every satisfying
@@ -180,6 +248,8 @@ def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
        the input's intended (real-trace) executions.
     2. Assuming the original constraint system guarantees invariants, so does the optimized one.
     3. The optimizer respects the zkVM's degree bound.
+    4. The optimizer preserves derived columns verbatim
+       (`optimizerPreservesDerivedColumns`).
 
     The bus semantics is a *parameter*: quantifying over it (`∀ bs, optimizerMaintainsCorrectness
     bs opt`) recovers the "correct for every semantics" reading, while leaving it fixed lets a
@@ -192,3 +262,4 @@ def optimizerMaintainsCorrectness (busSemantics : BusSemantics p)
     (constraintSystem.guaranteesInvariants busSemantics →
       (optimizer constraintSystem).guaranteesInvariants busSemantics))
   ∧ optimizerRespectsDegreeBound busSemantics optimizer
+  ∧ optimizerPreservesDerivedColumns optimizer

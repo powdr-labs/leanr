@@ -36,6 +36,8 @@ def VerifiedPassW.iterate (f : VerifiedPassW p) : Nat → VerifiedPassW p
   | n + 1 => (f.iterate n).andThen f
 
 deriving instance DecidableEq for Expression
+deriving instance DecidableEq for ComputationMethod
+deriving instance DecidableEq for DerivedVariable
 deriving instance DecidableEq for BusInteraction
 deriving instance DecidableEq for ConstraintSystem
 
