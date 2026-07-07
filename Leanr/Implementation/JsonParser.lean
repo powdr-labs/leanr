@@ -1,5 +1,6 @@
 import Lean.Data.Json
 import Leanr.Spec
+import Leanr.Implementation.Variable
 import Leanr.OpenVmSemantics
 
 /-!

@@ -28,7 +28,7 @@ instance : Sub (Expression p) := ⟨fun a b => a + (-b)⟩
 instance {n : ℕ} : OfNat (Expression p) n := ⟨Expression.const (OfNat.ofNat n)⟩
 
 /-- A variable, referenced by name. -/
-def V (x : String) : Expression p := .var (Variable.ofPowdrName x)
+def V (x : String) : Expression p := .var { name := x }
 
 /-! ## Rendering
 
@@ -52,7 +52,7 @@ mutual
   private partial def prodFold : Expression p → ZMod p × List String
     | .mul a b => let (ca, fa) := prodFold a; let (cb, fb) := prodFold b; (ca * cb, fa ++ fb)
     | .const n => (n, [])
-    | .var x => (1, [toString x])
+    | .var x => (1, [x.name])
     | e =>                                                 -- an additive factor
       match collectSummands e with
       | [(neg, body)] => (if neg then -1 else 1, [body])   -- single term: splice in, no parens

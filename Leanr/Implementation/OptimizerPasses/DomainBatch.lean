@@ -292,13 +292,13 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable 
 
 /-- Canonical key of a variable set, for target deduplication. -/
 def varSetKey (xs : List Variable) : String :=
-  String.intercalate "\x00" ((xs.mergeSort (fun a b => compare a b != .gt)).map toString)
+  String.intercalate "\x00" ((xs.mergeSort (fun a b => compare a b != .gt)).map (fun x => x.name))
 
 /-- Collect forced constants from joint enumerations of the given targets' variable sets,
     skipping variable sets already enumerated. -/
 def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p}
     (T : DomainTable p cs bs) :
-    List (List Variable) → Std.HashSet Variable → Solved p cs bs → Solved p cs bs
+    List (List Variable) → Std.HashSet String → Solved p cs bs → Solved p cs bs
   | [], _, σ => σ
   | xs :: rest, seen, σ =>
     let key := varSetKey xs

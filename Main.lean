@@ -71,7 +71,7 @@ def distinctVars (cs : ConstraintSystem babyBear) : List String :=
   let occurrences := cs.algebraicConstraints.flatMap Expression.vars ++
     cs.busInteractions.flatMap BusInteraction.vars
   ((occurrences.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).toList.map
-    toString).mergeSort (fun a b => decide (a ≤ b))
+    (fun x => x.name)).mergeSort (fun a b => decide (a ≤ b))
 
 def statsOf (cs : ConstraintSystem babyBear) : Stats :=
   { vars := distinctVarCount cs,
@@ -131,7 +131,7 @@ def cmdVars (fileName : String) (iters : Nat) : IO Unit := do
   let occurrences := optimized.algebraicConstraints.flatMap Expression.vars ++
     optimized.busInteractions.flatMap BusInteraction.vars
   let distinct := (occurrences.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).toList
-  for v in (distinct.map toString).mergeSort (fun a b => decide (a ≤ b)) do
+  for v in (distinct.map (fun x => x.name)).mergeSort (fun a b => decide (a ≤ b)) do
     IO.println v
 
 /-- Render the optimized system (for diagnosing residual constraints/interactions). -/
