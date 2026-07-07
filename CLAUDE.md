@@ -37,4 +37,10 @@ and `.andThen … |>.guardDegree` it into `cleanupCycle`. Do not touch `Spec.lea
 `Basic.lean`; correctness follows from the pass's own `PassCorrect`. Build and verify with
 `lake build`.
 
+Effectiveness is measured along three axes (`Leanr/Utils/Size.lean`, reported by the CLI and the
+benchmark), in priority order: **variable effectiveness > bus-interaction effectiveness >
+algebraic-constraint effectiveness** (each is `count before / count after`). Optimize primarily
+for fewer distinct variables; break ties, and pursue variable-neutral wins, by reducing bus
+interactions and then constraints.
+
 When asked to improve the optimizer, use the `autoopt` skill.

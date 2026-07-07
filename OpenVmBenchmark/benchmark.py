@@ -44,26 +44,49 @@ except ModuleNotFoundError:  # allow plain `python3 benchmark.py` without uv
 HERE = Path(__file__).resolve().parent       # OpenVmBenchmark
 REPO = Path(__file__).resolve().parents[1]    # OpenVmBenchmark -> repo root
 NAME_RE = re.compile(r"apc_(\d+)_pc(.+)\.json\.gz$")
-VARS_RE = {  # `leanr compare` lines: "  before: 62 vars, ...", "  leanr : 28 vars, ...", "  powdr : ..."
-    "before": re.compile(r"^\s*before:\s*(\d+)\s+vars"),
-    "leanr": re.compile(r"^\s*leanr\s*:\s*(\d+)\s+vars"),
-    "powdr": re.compile(r"^\s*powdr\s*:\s*(\d+)\s+vars"),
+# `leanr compare` stat lines, e.g. "  before: 62 vars, 55 constraints, 12 bus interactions".
+# Capture all three measures per role (variables, constraints, bus interactions).
+STAT_RE = {
+    role: re.compile(rf"^\s*{role}\s*:\s*(\d+)\s+vars,\s*(\d+)\s+constraints,\s*(\d+)\s+bus")
+    for role in ("before", "leanr", "powdr")
 }
+# Size measures, in priority order (variables > bus interactions > algebraic constraints).
+METRICS = ("vars", "bus", "constraints")
+METRIC_LABEL = {"vars": "variables", "bus": "bus interactions", "constraints": "constraints"}
+
+
+def _ratio(before, after):
+    """Shrink factor `before / after`, guarding the degenerate zero cases so geomean stays finite:
+    nothing to shrink (before == 0) -> 1; everything removed (after == 0) -> before (i.e. / 1)."""
+    if before == 0:
+        return 1.0
+    if after == 0:
+        return float(before)
+    return before / after
 
 
 def parse_compare(text):
+    """Parse a `leanr compare` run into {role: {vars, constraints, bus}} for the three roles."""
     got = {}
     for line in text.splitlines():
-        for key, rx in VARS_RE.items():
+        for role, rx in STAT_RE.items():
             m = rx.match(line)
             if m:
-                got[key] = int(m.group(1))
+                got[role] = {"vars": int(m.group(1)), "constraints": int(m.group(2)),
+                             "bus": int(m.group(3))}
     if {"before", "leanr", "powdr"} <= got.keys():
-        return got["before"], got["leanr"], got["powdr"]
+        return got
     return None
 
 
+def _metrics_from_json(o):
+    """Pull the three size measures out of a `leanr report` circuit object."""
+    return {"vars": o["vars"], "constraints": o["constraints"], "bus": o["bus"]}
+
+
 def run_one(binary, iters, unopt, want_report):
+    """Run one case, returning (name, metrics, report_json, err). `metrics` is
+    {role: {vars, constraints, bus}} for role in before/leanr/powdr, or None on failure."""
     name = unopt.name
     opt = unopt.with_name(unopt.name.replace(".json.gz", ".powdr_opt.json.gz"))
     if not opt.exists():
@@ -77,10 +100,12 @@ def run_one(binary, iters, unopt, want_report):
     if want_report:
         try:
             j = json.loads(out)
-            stats = (j["original"]["vars"], j["leanr"]["vars"], j["powdr"]["vars"])
+            metrics = {"before": _metrics_from_json(j["original"]),
+                       "leanr": _metrics_from_json(j["leanr"]),
+                       "powdr": _metrics_from_json(j["powdr"])}
         except Exception:
             return name, None, None, "report parse failed"
-        return name, stats, j, None
+        return name, metrics, j, None
     parsed = parse_compare(out)
     return name, parsed, None, None if parsed else "parse failed"
 
@@ -148,11 +173,11 @@ def main():
         futures = [pool.submit(run_one, binary, args.iters, c, want_report) for c in cases]
         for fut in tqdm(as_completed(futures), total=len(futures),
                         desc=f"leanr compare (iters={args.iters})", unit="case"):
-            name, stats, report, err = fut.result()
-            if stats is None:
+            name, metrics, report, err = fut.result()
+            if metrics is None:
                 skipped.append((name, err))
                 continue
-            results.append((name, *stats))  # (name, before, leanr, powdr)
+            results.append((name, metrics))  # (name, {role: {vars, constraints, bus}})
             if report is not None:
                 reports[name] = report
 
@@ -160,25 +185,37 @@ def main():
         sys.exit("no results produced")
 
     n = len(results)
-    sum_before = sum(r[1] for r in results)
-    sum_leanr = sum(r[2] for r in results)
-    sum_powdr = sum(r[3] for r in results)
+
+    def agg(role, mt):  # aggregate effectiveness: sum of befores / sum of afters
+        sb = sum(m["before"][mt] for _, m in results)
+        sa = sum(m[role][mt] for _, m in results)
+        return sb / sa if sa else float("inf")
+
+    def geo(role, mt):  # geometric mean of the per-case shrink factors
+        return math.exp(sum(math.log(_ratio(m["before"][mt], m[role][mt]))
+                            for _, m in results) / n)
+
+    # Wins/losses stay on the primary metric (variables).
     summary = {
         "n": n,
-        "leanr_agg": sum_before / sum_leanr,
-        "powdr_agg": sum_before / sum_powdr,
-        "leanr_geo": math.exp(sum(math.log(r[1] / r[2]) for r in results) / n),
-        "powdr_geo": math.exp(sum(math.log(r[1] / r[3]) for r in results) / n),
-        "wins": sum(1 for r in results if r[2] < r[3]),
-        "losses": sum(1 for r in results if r[2] > r[3]),
+        "wins": sum(1 for _, m in results if m["leanr"]["vars"] < m["powdr"]["vars"]),
+        "losses": sum(1 for _, m in results if m["leanr"]["vars"] > m["powdr"]["vars"]),
     }
+    for role in ("leanr", "powdr"):
+        for mt in METRICS:
+            summary[f"{role}_{mt}_agg"] = agg(role, mt)
+            summary[f"{role}_{mt}_geo"] = geo(role, mt)
 
     print(f"\n=== leanr vs powdr over {n} cases (--iters {args.iters}) ===")
-    print(f"leanr : {summary['leanr_agg']:.3f}x aggregate (sum before / sum after)   {summary['leanr_geo']:.3f}x geomean")
-    print(f"powdr : {summary['powdr_agg']:.3f}x aggregate                            {summary['powdr_geo']:.3f}x geomean")
-    print(f"diff  : {summary['leanr_agg'] - summary['powdr_agg']:+.3f}x aggregate   "
-          f"{summary['leanr_geo'] - summary['powdr_geo']:+.3f}x geomean   (leanr - powdr)")
-    print(f"per-case: leanr wins {summary['wins']}, loses {summary['losses']}, "
+    print("effectiveness = size before / size after (larger is better); "
+          "priority: variables > bus interactions > constraints")
+    print(f"  {'measure':<18}{'leanr (agg / geo)':<26}{'powdr (agg / geo)':<26}diff (agg)")
+    for mt in METRICS:
+        la, lg = summary[f"leanr_{mt}_agg"], summary[f"leanr_{mt}_geo"]
+        pa, pg = summary[f"powdr_{mt}_agg"], summary[f"powdr_{mt}_geo"]
+        print(f"  {METRIC_LABEL[mt]:<18}{f'{la:.3f}x / {lg:.3f}x':<26}"
+              f"{f'{pa:.3f}x / {pg:.3f}x':<26}{la - pa:+.3f}x")
+    print(f"per-case (by variables): leanr wins {summary['wins']}, loses {summary['losses']}, "
           f"ties {n - summary['wins'] - summary['losses']}")
     if skipped:
         print(f"\nskipped {len(skipped)}:", file=sys.stderr)
@@ -188,7 +225,7 @@ def main():
     if want_report:
         asm = load_asm(Path(args.dir))
         html_cases = []
-        for name, before, leanr, powdr in sorted(results, key=lambda r: r[0]):
+        for name, _metrics in sorted(results, key=lambda r: r[0]):
             m = NAME_RE.search(name)
             rank, pc = (m.group(1), m.group(2)) if m else ("?", name)
             r = reports[name]
@@ -227,7 +264,11 @@ HTML_TEMPLATE = r"""<!doctype html>
   #sidehead .meta { color:var(--dim); font-size:12px; margin:2px 0 8px; }
   #summary { font-size:12px; line-height:1.7; }
   #summary .el { color:var(--leanr); font-weight:600; } #summary .ep { color:var(--powdr); font-weight:600; }
-  #summary .dim { color:var(--dim); }
+  #summary .dim { color:var(--dim); margin-top:3px; }
+  #summary .srow { display:flex; gap:6px; align-items:baseline; }
+  #summary .srow .slbl { flex:1; color:var(--dim); }
+  #summary .srow .el, #summary .srow .ep { width:48px; text-align:right; }
+  #summary .shead { font-size:11px; }
   #cases { flex:1; overflow:auto; padding:8px; }
   .caseb { display:block; width:100%; text-align:left; background:none; border:1px solid transparent;
            border-radius:8px; color:var(--fg); padding:10px 12px; margin-bottom:4px; cursor:pointer; }
@@ -302,7 +343,12 @@ const DATA = __DATA__, SUM = __SUMMARY__;
 let cur = 0, tab = "leanr";
 const collapsed = { asm: false, orig: true, opt: false };
 
-function effOf(o, x) { return o.vars / x.vars; }
+// Shrink factor of measure `key` (o=original, x=optimized). Guards the zero-denominator case.
+function effBy(o, x, key) { return x[key] ? o[key] / x[key] : (o[key] ? Infinity : 1); }
+function effOf(o, x) { return effBy(o, x, "vars"); }   // primary metric
+function fmtEff(v) { return v === Infinity ? "∞" : v.toFixed(2); }
+// Size measures in priority order: [json key, short label].
+const METRICS = [["vars", "vars"], ["bus", "bus"], ["constraints", "constraints"]];
 function statLine(x) { return x.vars + " vars · " + x.constraints + " constraints · " + x.bus + " bus"; }
 function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function varDiffHTML(orig, opt) {
@@ -348,10 +394,19 @@ function diffToOtherHTML(opt, other, otherName) {
     col(removed, "rem", "removed vs " + otherName) + '</span></span>';
 }
 
+// Aggregate effectiveness per measure (priority order), leanr vs powdr; geomean in the tooltip.
 document.getElementById("summary").innerHTML =
-  '<div><span class="el">leanr</span> ' + SUM.leanr_agg.toFixed(2) + '× agg · ' + SUM.leanr_geo.toFixed(2) + '× geo</div>' +
-  '<div><span class="ep">powdr</span> ' + SUM.powdr_agg.toFixed(2) + '× agg · ' + SUM.powdr_geo.toFixed(2) + '× geo</div>' +
-  '<div class="dim">leanr wins ' + SUM.wins + ' · loses ' + SUM.losses + '</div>';
+  '<div class="srow shead"><span class="slbl"></span><span class="el">leanr</span><span class="ep">powdr</span></div>' +
+  METRICS.map(function(mt) {
+    var k = mt[0];
+    return '<div class="srow" title="geomean — leanr ' + SUM["leanr_" + k + "_geo"].toFixed(2) +
+      '× · powdr ' + SUM["powdr_" + k + "_geo"].toFixed(2) + '×">' +
+      '<span class="slbl">' + mt[1] + '</span>' +
+      '<span class="el">' + SUM["leanr_" + k + "_agg"].toFixed(2) + '×</span>' +
+      '<span class="ep">' + SUM["powdr_" + k + "_agg"].toFixed(2) + '×</span></div>';
+  }).join("") +
+  '<div class="dim">agg = Σbefore ⁄ Σafter · leanr wins ' + SUM.wins + ' / loses ' + SUM.losses +
+  ' (by vars)</div>';
 
 const casesEl = document.getElementById("cases");
 DATA.forEach(function(c, i) {
@@ -393,8 +448,11 @@ function render() {
   content.appendChild(makePanel("asm", "asm", "assembly", "", esc(c.asm || "(no assembly available)")));
   content.appendChild(makePanel("orig", "circuit p-orig", "original", statLine(c.original),
     highlightRender(c.original.render, removedSet, "hl-rem")));
+  const effHTML = METRICS.map(function(mt) {
+    return fmtEff(effBy(c.original, opt, mt[0])) + "× " + mt[1];
+  }).join(" · ");
   content.appendChild(makePanel("opt", "circuit " + (tab === "leanr" ? "p-leanr" : "p-powdr"), tab,
-    statLine(opt) + "  ·  " + effOf(c.original, opt).toFixed(2) + "× fewer vars  ·  " +
+    statLine(opt) + "  ·  " + effHTML + " fewer  ·  " +
       varDiffHTML(c.original, opt) + "  ·  " + diffToOtherHTML(opt, other, otherName),
     highlightRender(opt.render, addedSet, "hl-add")));
 }
