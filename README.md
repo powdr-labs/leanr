@@ -5,10 +5,8 @@ Leanr is a verified constraint system optimizer, designed to be a drop-in replac
 ## Auditing Correctness
 
 Leanr is designed to have a small auditing surface. The audited files live directly under
-[`Leanr/`](./Leanr); everything under [`Leanr/Implementation/`](./Leanr/Implementation) (the
-optimization passes, the pipeline, the proven `BusFacts`, the JSON parser) and
-[`Leanr/Utils/`](./Leanr/Utils) (tooling) needs **no** audit — its correctness is guaranteed by
-the theorems below and, for `BusFacts`, by construction (a wrong fact would not compile). To audit
+[`Leanr/`](./Leanr); everything under [`Leanr/Implementation/`](./Leanr/Implementation) needs **no** audit — its correctness is guaranteed by
+the theorems below and. To audit
 Leanr, it should be sufficient to review:
 1. [`Leanr/Spec.lean`](./Leanr/Spec.lean): Defining the notion of circuit equivalence and optimizer correctness.
 2. [`Leanr/OpenVmSemantics.lean`](./Leanr/OpenVmSemantics.lean): The OpenVM-specific semantics. These are needed for our OpenVM-specific optimizations. If you are instead interested in a different VM, you can skip this file, but must provide semantics for your VM in order to use Leanr.
