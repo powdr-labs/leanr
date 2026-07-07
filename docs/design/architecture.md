@@ -80,6 +80,39 @@ proven facts, and iteration count) and derives its instances `simpleOptimizer_ma
 and the OpenVM `openVmOptimizer` (with
 `openVmOptimizer_maintainsCorrectness`) as one-liners.
 
+## Derived columns (witgen hints)
+
+`ConstraintSystem` carries a `derivedColumns : List (DerivedVariable p)` field (defaulted to `[]`),
+mirroring powdr's `SymbolicMachine.derived_columns`. A `DerivedVariable` is `{ isNew, name,
+computation }`, and a `ComputationMethod` is `constant` / `quotientOrZero` (field-inverse quotient,
+`0` on a zero divisor) / `ifEqZero` — reproducing powdr's `ComputationMethod` and its witgen
+evaluator. These are **witness-generation hints, not constraints**: they are not checked by the
+verifier and are deliberately kept out of `satisfies`/`refines`/`withinDegree`, all of which read
+only `algebraicConstraints`/`busInteractions`. Consequently every existing pass proof is unaffected.
+
+- **Audited definitions.** `DerivedVariable.consistent` (a hint holds when the variable already
+  equals its computed value) and `ConstraintSystem.derivedColumnsEntailed` (every satisfying
+  assignment makes the hints consistent) are *declarative* — they state the intended semantics of a
+  hint for future emitting passes and for cross-tool round-tripping. They are **not** enforced by
+  any pass today.
+- **The correctness guarantee.** `optimizerMaintainsCorrectness` gains a fourth clause,
+  `optimizerPreservesDerivedColumns` (`(opt cs).derivedColumns = cs.derivedColumns`): the optimizer
+  carries hints through verbatim, neither fabricating nor dropping them. This is *not* semantic
+  entailment-preservation, which is **unprovable generically**: `refines` maps a satisfying
+  assignment of the output to a possibly-different one of the input (substitution passes rebind
+  eliminated variables), so output-consistency at `env` cannot be derived from input-consistency at
+  the rebound `env'`. Verbatim preservation is the strongest guarantee provable without per-pass
+  coupling, and is exactly what powdr witgen needs (an `isNew=false` hint is precisely how a removed
+  column is recomputed). The optimizer reattaches `cs.derivedColumns` after the
+  (derived-column-agnostic) pipeline, so the clause holds by `rfl`.
+- **Deferred.** No pass yet *emits* a hint; emission needs a pass-level entailment obligation, out
+  of scope here. Because hints are carried verbatim while substitution passes eliminate variables, a
+  preserved `computation` may reference a variable no longer present in the output constraints —
+  benign for representation/parse/serialize, but reconciling hints with variable elimination (drop
+  or rewrite dead references) is left to the powdr-integration task. Parsing (`JsonParser.lean`) and
+  serialization (`JsonSerializer.lean`) match powdr's serde (3-tuple, externally-tagged
+  `ComputationMethod`); a missing `derived_columns` key parses to `[]`.
+
 ## Adding a pass
 
 Write a `VerifiedPass` (or `VerifiedPassW`) in a new `Leanr/Implementation/OptimizerPasses/` file,
