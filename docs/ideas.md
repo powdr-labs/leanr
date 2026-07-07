@@ -13,3 +13,20 @@ never-violating, non-stateful interaction changes no stateful side effect) and w
 effectiveness without regressing variables — a clean win under the priority order
 (variables > bus interactions > constraints). Check the existing zero-multiplicity drop in
 `cleanupCycle` first; this may be an extension of it rather than a new pass.
+
+## Smarter witnesses for `disconnectedComponentPass`
+
+`disconnectedComponentPass` (entry 43) removes a disconnected component only if the **all-zero**
+witness certifies it satisfiable (every dropped constraint evaluates to `0`, every dropped
+stateless interaction is non-violating). This captures dead range-checked auxiliaries (e.g. the
+`bit_shift_carry` limbs) but **not** the most common disconnected pattern in the benchmark: an
+orphaned register read, whose data limbs survive only in a bitwise byte-check
+`[K − Σ 256ⁱ·limbᵢ, limb₀, 0, 0]` plus range checks. There, `0` is not a satisfying assignment (the
+first bitwise slot is a large constant, not a byte); the satisfying witness is the base-256
+decomposition of `K` (~29 benchmark cases, 3 vars each).
+
+Capturing them needs a witness *finder* that solves a small system of range/byte lookups. The
+correctness machinery already supports any witness (it only re-checks `violatesConstraint`/`eval`
+at run time), so **only the finder needs to change**, not the proof. Caveat: a decomposition solver
+leans toward the OpenVM limb structure — phrase it as a general "solve the component's lookups"
+search (probe `violatesConstraint`) rather than hard-coding base-256, to avoid overfitting.
