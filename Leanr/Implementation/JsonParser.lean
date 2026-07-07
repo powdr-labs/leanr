@@ -1,5 +1,6 @@
 import Lean.Data.Json
 import Leanr.Spec
+import Leanr.Implementation.Variable
 import Leanr.OpenVmSemantics
 
 /-!
@@ -65,7 +66,7 @@ partial def parseJsonExpr (j : Lean.Json) : Except String (Expression p) :=
     -- All constants in powdr exports are integers (exponent 0).
     let z := n.mantissa * (10 ^ n.exponent)
     .ok (.const (z : ZMod p))
-  | Lean.Json.str s => .ok (.var s)
+  | Lean.Json.str s => .ok (.var (Variable.ofPowdrName s))
   | Lean.Json.arr items =>
     if h3 : items.size = 3 then
       let lhs := items[0]

@@ -35,7 +35,7 @@ variable {p : ℕ}
 /-! ## Cheap syntactic helpers (no allocation) -/
 
 /-- Does the expression mention variable `x`? -/
-def Expression.mentions (x : String) : Expression p → Bool
+def Expression.mentions (x : Variable) : Expression p → Bool
   | .const _ => false
   | .var y => y == x
   | .add a b => a.mentions x || b.mentions x
@@ -60,7 +60,7 @@ def Expression.isVar : Expression p → Bool
     cheap; the bundled proof is exactly the hypothesis `ConstraintSystem.substF_correct`
     consumes. -/
 structure Solved (p : ℕ) (cs : ConstraintSystem p) (bs : BusSemantics p) where
-  map : Std.HashMap String (Expression p)
+  map : Std.HashMap Variable (Expression p)
   sound : ∀ env, cs.satisfies bs env → ∀ y t, map[y]? = some t → env y = t.eval env
 
 namespace Solved
@@ -75,23 +75,23 @@ def empty : Solved p cs bs where
     exact absurd h (by simp)
 
 /-- The map as a lookup function (what `substF` consumes). -/
-def fn (σ : Solved p cs bs) : String → Option (Expression p) := fun y => σ.map[y]?
+def fn (σ : Solved p cs bs) : Variable → Option (Expression p) := fun y => σ.map[y]?
 
 /-- Under a satisfying assignment, rebinding by the solution map changes nothing. -/
-theorem envF_self (σ : Solved p cs bs) (env : String → ZMod p)
+theorem envF_self (σ : Solved p cs bs) (env : Variable → ZMod p)
     (hsat : cs.satisfies bs env) : envF σ.fn env = env :=
   envF_eq_self σ.fn env (fun y t hyt => σ.sound env hsat y t hyt)
 
 /-- Reducing an expression by the solution map preserves its value under satisfying
     assignments. -/
-theorem eval_reduce (σ : Solved p cs bs) (e : Expression p) (env : String → ZMod p)
+theorem eval_reduce (σ : Solved p cs bs) (e : Expression p) (env : Variable → ZMod p)
     (hsat : cs.satisfies bs env) :
     ((e.substF σ.fn).normalize).eval env = e.eval env := by
   rw [Expression.normalize_eval, Expression.eval_substF, σ.envF_self env hsat]
 
 /-- Insert a list of entailed pairs (later inserts win, which is harmless: every pair is
     entailed individually). -/
-def insertAll (σ : Solved p cs bs) (pairs : List (String × Expression p))
+def insertAll (σ : Solved p cs bs) (pairs : List (Variable × Expression p))
     (H : ∀ env, cs.satisfies bs env → ∀ yt ∈ pairs, env yt.1 = yt.2.eval env) :
     Solved p cs bs :=
   match pairs with
@@ -117,8 +117,8 @@ end Solved
 /-! ## Pivot choice -/
 
 /-- Occurrence counts of every variable across the system (one traversal). -/
-def occurrenceMap (cs : ConstraintSystem p) : Std.HashMap String Nat :=
-  let addE := fun (m : Std.HashMap String Nat) (e : Expression p) =>
+def occurrenceMap (cs : ConstraintSystem p) : Std.HashMap Variable Nat :=
+  let addE := fun (m : Std.HashMap Variable Nat) (e : Expression p) =>
     e.vars.foldl (fun m x => m.insert x (m.getD x 0 + 1)) m
   let m := cs.algebraicConstraints.foldl addE ∅
   cs.busInteractions.foldl (fun m bi => bi.payload.foldl addE (addE m bi.multiplicity)) m
@@ -127,14 +127,14 @@ def occurrenceMap (cs : ConstraintSystem p) : Std.HashMap String Nat :=
     compound expression into such a slot destroys fact-derivable range knowledge
     (`interactionBound` in `DomainProp.lean` needs the slot to be literally a variable), so
     pivots on these variables are penalized unless their solution is itself a variable. -/
-def protectedVars (cs : ConstraintSystem p) (bs : BusSemantics p) : Std.HashSet String :=
+def protectedVars (cs : ConstraintSystem p) (bs : BusSemantics p) : Std.HashSet Variable :=
   cs.busInteractions.foldl (init := ∅) fun s bi =>
     if bs.isStateful bi.busId then s
     else bi.payload.foldl (fun s e => match e with | .var x => s.insert x | _ => s) s
 
 /-- The duplication cost of a pivot `x := t`, with the protection penalty. -/
-def pivotScore (occ : Std.HashMap String Nat) (prot : Std.HashSet String)
-    (xt : String × Expression p) : Nat :=
+def pivotScore (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (xt : Variable × Expression p) : Nat :=
   let base := (occ.getD xt.1 1 - 1) * (1 + xt.2.varCount)
   if prot.contains xt.1 && !xt.2.isVar then base + 1000000 else base
 
@@ -147,7 +147,7 @@ def pivotScore (occ : Std.HashMap String Nat) (prot : Std.HashSet String)
     applies; stored solutions stay entailed under resolution because `env x = t.eval env`
     makes `Function.update` a no-op. -/
 def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (occ : Std.HashMap String Nat) (prot : Std.HashSet String) :
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
     (pending : List (Expression p)) → (∀ c ∈ pending, c ∈ cs.algebraicConstraints) →
     Solved p cs bs → Solved p cs bs
   | [], _, σ => σ

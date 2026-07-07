@@ -28,7 +28,7 @@ instance : Sub (Expression p) := ⟨fun a b => a + (-b)⟩
 instance {n : ℕ} : OfNat (Expression p) n := ⟨Expression.const (OfNat.ofNat n)⟩
 
 /-- A variable, referenced by name. -/
-def V (x : String) : Expression p := .var x
+def V (x : String) : Expression p := .var { name := x }
 
 /-! ## Rendering
 
@@ -37,18 +37,8 @@ constant folding of numeric factors, dropping `+ 0` / `* 1` / `* 0`, and showing
 upper half of `[0, p)` as negatives — so `x + (p-1) * y` prints as `x - y` and `(p-1) * 2` as `-2`.
 Parentheses are emitted only around sum factors of a product, where precedence requires them.
 
-Variable names carry a trailing `@<id>` witness-column disambiguator (e.g. `opcode_add_flag_0@31`)
-that is stripped for display by `displayVar`; within a single circuit the names are already unique
-without it. -/
-
-/-- Strip a trailing `@<id>` suffix from a variable name for display, e.g. `opcode_add_flag_0@31`
-    renders as `opcode_add_flag_0`. The suffix is a witness-column disambiguator and the names are
-    already unique without it within a single circuit, so this loses no information. A name without
-    such a suffix (no `@`, or a non-numeric one) is returned unchanged. -/
-def displayVar (name : String) : String :=
-  match name.splitOn "@" with
-  | [base, id] => if id ≠ "" && id.all Char.isDigit then base else name
-  | _ => name
+Variables render using only their display name; any parsed powdr witness-column ID is kept
+in the structured `Variable` value but hidden in rendered output. -/
 
 /-- Split a field constant into a sign and magnitude: constants in the upper half of `[0, p)`
     are shown as negatives (e.g. `p - 1` renders as `-1`, `p - 2` as `-2`). -/
@@ -62,7 +52,7 @@ mutual
   private partial def prodFold : Expression p → ZMod p × List String
     | .mul a b => let (ca, fa) := prodFold a; let (cb, fb) := prodFold b; (ca * cb, fa ++ fb)
     | .const n => (n, [])
-    | .var x => (1, [displayVar x])
+    | .var x => (1, [x.name])
     | e =>                                                 -- an additive factor
       match collectSummands e with
       | [(neg, body)] => (if neg then -1 else 1, [body])   -- single term: splice in, no parens
@@ -123,10 +113,10 @@ def matchesSnapshot (cs : ConstraintSystem p) (expected : String) : Bool :=
 private def busGroupingSnapshot : ConstraintSystem 7 :=
   { algebraicConstraints := [],
     busInteractions := [
-      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_a@1"] },
-      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_a@2"] },
-      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_b@3"] },
-      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_b@4"] }
+      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_a"] },
+      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_a"] },
+      { busId := 2, multiplicity := (1 : Expression 7), payload := [V "two_b"] },
+      { busId := 1, multiplicity := (1 : Expression 7), payload := [V "one_b"] }
     ] }
 
 #guard renderBusInteractions busGroupingSnapshot.busInteractions ==

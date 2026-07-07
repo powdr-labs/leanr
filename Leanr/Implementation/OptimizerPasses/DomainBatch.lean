@@ -28,7 +28,7 @@ variable {p : ℕ}
 
 /-- Finite domains for variables, each entailed by every satisfying assignment of `cs`. -/
 structure DomainTable (p : ℕ) (cs : ConstraintSystem p) (bs : BusSemantics p) where
-  map : Std.HashMap String (List (ZMod p))
+  map : Std.HashMap Variable (List (ZMod p))
   sound : ∀ env, cs.satisfies bs env → ∀ x d, map[x]? = some d → env x ∈ d
 
 namespace DomainTable
@@ -43,7 +43,7 @@ def empty : DomainTable p cs bs where
     exact absurd h (by simp)
 
 /-- Insert an entailed domain, keeping the smaller of two candidate domains for a variable. -/
-def insertEntry (T : DomainTable p cs bs) (x : String) (d : List (ZMod p))
+def insertEntry (T : DomainTable p cs bs) (x : Variable) (d : List (ZMod p))
     (h : ∀ env, cs.satisfies bs env → env x ∈ d) : DomainTable p cs bs :=
   let keep : Bool := match T.map[x]? with
     | some d0 => decide (d.length < d0.length)
@@ -64,15 +64,15 @@ def insertEntry (T : DomainTable p cs bs) (x : String) (d : List (ZMod p))
   else T
 
 /-- The table's domains for a variable list, all-or-nothing (mirrors `buildDoms`). -/
-def doms (T : DomainTable p cs bs) : List String → Option (List (String × List (ZMod p)))
+def doms (T : DomainTable p cs bs) : List Variable → Option (List (Variable × List (ZMod p)))
   | [] => some []
   | x :: xs =>
     match T.map[x]?, T.doms xs with
     | some d, some rest => some ((x, d) :: rest)
     | _, _ => none
 
-theorem doms_fst (T : DomainTable p cs bs) (xs : List String)
-    (ds : List (String × List (ZMod p))) (h : T.doms xs = some ds) : ds.map Prod.fst = xs := by
+theorem doms_fst (T : DomainTable p cs bs) (xs : List Variable)
+    (ds : List (Variable × List (ZMod p))) (h : T.doms xs = some ds) : ds.map Prod.fst = xs := by
   induction xs generalizing ds with
   | nil => simp only [doms, Option.some.injEq] at h; subst h; rfl
   | cons x rest ih =>
@@ -88,8 +88,8 @@ theorem doms_fst (T : DomainTable p cs bs) (xs : List String)
         subst h
         simp [ih ds' hr]
 
-theorem doms_sound (T : DomainTable p cs bs) (xs : List String)
-    (ds : List (String × List (ZMod p))) (h : T.doms xs = some ds) (env : String → ZMod p)
+theorem doms_sound (T : DomainTable p cs bs) (xs : List Variable)
+    (ds : List (Variable × List (ZMod p))) (h : T.doms xs = some ds) (env : Variable → ZMod p)
     (hsat : cs.satisfies bs env) : ∀ yd ∈ ds, env yd.1 ∈ yd.2 := by
   induction xs generalizing ds with
   | nil => simp only [doms, Option.some.injEq] at h; subst h; simp
@@ -122,7 +122,7 @@ def addConstraintDoms [Fact p.Prime] {cs : ConstraintSystem p} {bs : BusSemantic
   | c :: rest, hmem, T =>
     let hc := hmem c (List.mem_cons_self ..)
     let hrest := fun c' h => hmem c' (List.mem_cons_of_mem _ h)
-    let rec addVars (xs : List String) (T : DomainTable p cs bs) : DomainTable p cs bs :=
+    let rec addVars (xs : List Variable) (T : DomainTable p cs bs) : DomainTable p cs bs :=
       match xs with
       | [] => T
       | x :: xs =>
@@ -135,7 +135,7 @@ def addConstraintDoms [Fact p.Prime] {cs : ConstraintSystem p} {bs : BusSemantic
     addConstraintDoms rest hrest (if vs.length ≤ 3 then addVars vs T else T)
 
 /-- The raw-variable payload entries of an interaction. -/
-def payloadRawVars (bi : BusInteraction (Expression p)) : List String :=
+def payloadRawVars (bi : BusInteraction (Expression p)) : List Variable :=
   bi.payload.filterMap (fun e => match e with | .var x => some x | _ => none)
 
 /-- Bus-sourced domains: proven slot bounds on raw variable slots of interactions with
@@ -149,7 +149,7 @@ def addBusDoms [NeZero p] {cs : ConstraintSystem p} {bs : BusSemantics p}
   | bi :: rest, hmem, T =>
     let hbi := hmem bi (List.mem_cons_self ..)
     let hrest := fun bi' h => hmem bi' (List.mem_cons_of_mem _ h)
-    let rec addVars (xs : List String) (T : DomainTable p cs bs) : DomainTable p cs bs :=
+    let rec addVars (xs : List Variable) (T : DomainTable p cs bs) : DomainTable p cs bs :=
       match xs with
       | [] => T
       | x :: xs =>
@@ -172,22 +172,22 @@ then collect *every* variable on which the survivors agree. -/
 
 /-- Does the assignment satisfy all covered constraints and survive all covered obligations? -/
 def survivesAllM (bs : BusSemantics p) (es : List (Expression p))
-    (bis : List (BusInteraction (Expression p))) (a : List (String × ZMod p)) : Bool :=
+    (bis : List (BusInteraction (Expression p))) (a : List (Variable × ZMod p)) : Bool :=
   es.all (fun e => decide (e.eval (envOf a) = 0)) &&
     bis.all (fun bi => interactionSurvives bs bi a)
 
 /-- The checked certificate: every surviving assignment gives `x = c`. -/
-def checkForcedM (bs : BusSemantics p) (doms : List (String × List (ZMod p)))
+def checkForcedM (bs : BusSemantics p) (doms : List (Variable × List (ZMod p)))
     (es : List (Expression p)) (bis : List (BusInteraction (Expression p)))
-    (x : String) (c : ZMod p) : Bool :=
+    (x : Variable) (c : ZMod p) : Bool :=
   (assignments doms).all
     (fun a => !survivesAllM bs es bis a || decide (envOf a x = c))
 
 /-- Candidate search (proof-free; `checkForcedM` re-verifies): all variables on which the
     surviving assignments agree, with the agreed value. -/
-def pickForcedM (bs : BusSemantics p) (doms : List (String × List (ZMod p)))
+def pickForcedM (bs : BusSemantics p) (doms : List (Variable × List (ZMod p)))
     (es : List (Expression p)) (bis : List (BusInteraction (Expression p))) :
-    List (String × ZMod p) :=
+    List (Variable × ZMod p) :=
   match (assignments doms).filter (survivesAllM bs es bis) with
   | [] => (doms.map Prod.fst).map (fun x => (x, 0))
   | a₀ :: survivors =>
@@ -196,20 +196,20 @@ def pickForcedM (bs : BusSemantics p) (doms : List (String × List (ZMod p)))
       else none)
 
 /-- The constraints of the system whose variables all lie in `xs`. -/
-def coveredCs (cs : ConstraintSystem p) (xs : List String) : List (Expression p) :=
+def coveredCs (cs : ConstraintSystem p) (xs : List Variable) : List (Expression p) :=
   cs.algebraicConstraints.filter (fun c => c.vars.all (fun v => xs.contains v))
 
 /-- The interactions of the system whose variables all lie in `xs`. -/
-def coveredBis (cs : ConstraintSystem p) (xs : List String) :
+def coveredBis (cs : ConstraintSystem p) (xs : List Variable) :
     List (BusInteraction (Expression p)) :=
   cs.busInteractions.filter (fun bi => bi.vars.all (fun v => xs.contains v))
 
 theorem checkForcedM_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (T : DomainTable p cs bs) (xs : List String) (doms : List (String × List (ZMod p)))
-    (hdoms : T.doms xs = some doms) (x : String) (c : ZMod p)
+    (T : DomainTable p cs bs) (xs : List Variable) (doms : List (Variable × List (ZMod p)))
+    (hdoms : T.doms xs = some doms) (x : Variable) (c : ZMod p)
     (hx : x ∈ doms.map Prod.fst)
     (hchk : checkForcedM bs doms (coveredCs cs xs) (coveredBis cs xs) x c = true)
-    (env : String → ZMod p) (hsat : cs.satisfies bs env) : env x = c := by
+    (env : Variable → ZMod p) (hsat : cs.satisfies bs env) : env x = c := by
   have hkeys : doms.map Prod.fst = xs := T.doms_fst xs doms hdoms
   -- the restriction of `env` to the domains is an enumerated assignment
   have hmem : doms.map (fun yd => (yd.1, env yd.1)) ∈ assignments doms :=
@@ -266,7 +266,7 @@ def maxEnumWork : Nat := 524288
     constraint and no covered interaction with a compound payload slot (a box constrained
     only by the raw range checks that produced the domains can never force anything). -/
 def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable p cs bs)
-    (xs : List String) : List ((x : String) × { c : ZMod p //
+    (xs : List Variable) : List ((x : Variable) × { c : ZMod p //
       ∀ env, cs.satisfies bs env → env x = c }) :=
   match hdoms : T.doms xs with
   | none => []
@@ -291,14 +291,14 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable 
 /-! ## Collecting all forced values -/
 
 /-- Canonical key of a variable set, for target deduplication. -/
-def varSetKey (xs : List String) : String :=
-  String.intercalate "\x00" (xs.mergeSort (· ≤ ·))
+def varSetKey (xs : List Variable) : String :=
+  String.intercalate "\x00" ((xs.mergeSort (fun a b => compare a b != .gt)).map (fun x => x.name))
 
 /-- Collect forced constants from joint enumerations of the given targets' variable sets,
     skipping variable sets already enumerated. -/
 def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p}
     (T : DomainTable p cs bs) :
-    List (List String) → Std.HashSet String → Solved p cs bs → Solved p cs bs
+    List (List Variable) → Std.HashSet String → Solved p cs bs → Solved p cs bs
   | [], _, σ => σ
   | xs :: rest, seen, σ =>
     let key := varSetKey xs

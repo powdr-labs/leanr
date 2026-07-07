@@ -26,7 +26,7 @@ variable {p : ℕ}
 /-! ## Substitution on expressions -/
 
 /-- Substitute variable `x` by expression `t` throughout an expression. -/
-def Expression.subst (e : Expression p) (x : String) (t : Expression p) : Expression p :=
+def Expression.subst (e : Expression p) (x : Variable) (t : Expression p) : Expression p :=
   match e with
   | .const n => .const n
   | .var y => if y = x then t else .var y
@@ -35,8 +35,8 @@ def Expression.subst (e : Expression p) (x : String) (t : Expression p) : Expres
 
 /-- Substitution semantics: substituting `x := t` and evaluating is the same as evaluating in the
     environment with `x` rebound to `t.eval env`. -/
-theorem Expression.eval_subst (e : Expression p) (x : String) (t : Expression p)
-    (env : String → ZMod p) :
+theorem Expression.eval_subst (e : Expression p) (x : Variable) (t : Expression p)
+    (env : Variable → ZMod p) :
     (e.subst x t).eval env = e.eval (Function.update env x (t.eval env)) := by
   induction e with
   | const n => simp [Expression.subst, Expression.eval]
@@ -51,14 +51,14 @@ theorem Expression.eval_subst (e : Expression p) (x : String) (t : Expression p)
 /-! ## Substitution on bus interactions -/
 
 /-- Substitute `x := t` in every expression of a bus interaction. -/
-def BusInteraction.subst (bi : BusInteraction (Expression p)) (x : String) (t : Expression p) :
+def BusInteraction.subst (bi : BusInteraction (Expression p)) (x : Variable) (t : Expression p) :
     BusInteraction (Expression p) :=
   { busId := bi.busId,
     multiplicity := bi.multiplicity.subst x t,
     payload := bi.payload.map (·.subst x t) }
 
-theorem BusInteraction.eval_subst (bi : BusInteraction (Expression p)) (x : String)
-    (t : Expression p) (env : String → ZMod p) :
+theorem BusInteraction.eval_subst (bi : BusInteraction (Expression p)) (x : Variable)
+    (t : Expression p) (env : Variable → ZMod p) :
     (bi.subst x t).eval env = bi.eval (Function.update env x (t.eval env)) := by
   simp only [BusInteraction.subst, BusInteraction.eval, Expression.eval_subst, List.map_map]
   congr 1
@@ -69,15 +69,15 @@ theorem BusInteraction.eval_subst (bi : BusInteraction (Expression p)) (x : Stri
 /-! ## Substitution on constraint systems -/
 
 /-- Substitute `x := t` everywhere in a constraint system. -/
-def ConstraintSystem.subst (cs : ConstraintSystem p) (x : String) (t : Expression p) :
+def ConstraintSystem.subst (cs : ConstraintSystem p) (x : Variable) (t : Expression p) :
     ConstraintSystem p :=
   { algebraicConstraints := cs.algebraicConstraints.map (·.subst x t),
     busInteractions := cs.busInteractions.map (·.subst x t) }
 
 /-- The evaluated interactions of a substituted system, restricted to one bus, are those of the
     original under the rebound environment (substitution never changes a bus id). -/
-theorem ConstraintSystem.msgs_subst (cs : ConstraintSystem p) (x : String) (t : Expression p)
-    (busId : Nat) (a : String → ZMod p) :
+theorem ConstraintSystem.msgs_subst (cs : ConstraintSystem p) (x : Variable) (t : Expression p)
+    (busId : Nat) (a : Variable → ZMod p) :
     ((cs.subst x t).busInteractions.filter (fun bi => bi.busId = busId)).map
       (fun bi => bi.eval a)
     = (cs.busInteractions.filter (fun bi => bi.busId = busId)).map
@@ -93,8 +93,8 @@ theorem ConstraintSystem.msgs_subst (cs : ConstraintSystem p) (x : String) (t : 
 
 /-- `admissible` transfers across substitution — generically in the VM predicate, since
     substitution preserves the evaluated messages under the rebound environment. -/
-theorem ConstraintSystem.admissible_subst (cs : ConstraintSystem p) (x : String)
-    (t : Expression p) (bs : BusSemantics p) (a : String → ZMod p) :
+theorem ConstraintSystem.admissible_subst (cs : ConstraintSystem p) (x : Variable)
+    (t : Expression p) (bs : BusSemantics p) (a : Variable → ZMod p) :
     (cs.subst x t).admissible bs a
       ↔ cs.admissible bs (Function.update a x (t.eval a)) := by
   unfold ConstraintSystem.admissible
@@ -106,8 +106,8 @@ theorem ConstraintSystem.admissible_subst (cs : ConstraintSystem p) (x : String)
 
 /-- `satisfies` transfers across substitution: the substituted system is satisfied at `a` exactly
     when the original is satisfied at `a` with `x` rebound to `t.eval a`. -/
-theorem ConstraintSystem.satisfies_subst (cs : ConstraintSystem p) (x : String) (t : Expression p)
-    (bs : BusSemantics p) (a : String → ZMod p) :
+theorem ConstraintSystem.satisfies_subst (cs : ConstraintSystem p) (x : Variable) (t : Expression p)
+    (bs : BusSemantics p) (a : Variable → ZMod p) :
     (cs.subst x t).satisfies bs a ↔ cs.satisfies bs (Function.update a x (t.eval a)) := by
   simp only [ConstraintSystem.satisfies, ConstraintSystem.subst] at *
   constructor
@@ -125,8 +125,8 @@ theorem ConstraintSystem.satisfies_subst (cs : ConstraintSystem p) (x : String) 
       rw [BusInteraction.eval_subst]; exact hb bi0 hbi0
 
 /-- `sideEffects` transfers across substitution. -/
-theorem ConstraintSystem.sideEffects_subst (cs : ConstraintSystem p) (x : String)
-    (t : Expression p) (bs : BusSemantics p) (a : String → ZMod p) :
+theorem ConstraintSystem.sideEffects_subst (cs : ConstraintSystem p) (x : Variable)
+    (t : Expression p) (bs : BusSemantics p) (a : Variable → ZMod p) :
     (cs.subst x t).sideEffects bs a = cs.sideEffects bs (Function.update a x (t.eval a)) := by
   simp only [ConstraintSystem.sideEffects, ConstraintSystem.subst]
   induction cs.busInteractions with
@@ -142,7 +142,7 @@ theorem ConstraintSystem.sideEffects_subst (cs : ConstraintSystem p) (x : String
 /-- **Substitution correctness.** If every satisfying assignment of `cs` forces `x = t`, then
     substituting `x := t` everywhere produces a `PassCorrect` system: equivalent to `cs` and
     invariant-preserving. This is the workhorse behind all variable-elimination passes. -/
-theorem ConstraintSystem.subst_correct (cs : ConstraintSystem p) (x : String) (t : Expression p)
+theorem ConstraintSystem.subst_correct (cs : ConstraintSystem p) (x : Variable) (t : Expression p)
     (bs : BusSemantics p) (H : ∀ env, cs.satisfies bs env → env x = t.eval env) :
     PassCorrect cs (cs.subst x t) bs := by
   refine ⟨⟨?_, ?_⟩, ?_⟩
@@ -182,8 +182,8 @@ and its soundness lemma. -/
     the algebraic constraints for the first one `solve` handles and substitutes `x := t`; identity
     otherwise. Correct by `subst_correct`, since a solved constraint (being satisfied, hence `0`)
     entails `x = t`. -/
-def substFromConstraint (solve : Expression p → Option (String × Expression p))
-    (hsolve : ∀ (c : Expression p) (x : String) (t : Expression p), solve c = some (x, t) →
+def substFromConstraint (solve : Expression p → Option (Variable × Expression p))
+    (hsolve : ∀ (c : Expression p) (x : Variable) (t : Expression p), solve c = some (x, t) →
       ∀ env, c.eval env = 0 → env x = t.eval env) :
     VerifiedPass p := fun cs bs =>
   match hfound : cs.algebraicConstraints.find? (fun c => (solve c).isSome) with

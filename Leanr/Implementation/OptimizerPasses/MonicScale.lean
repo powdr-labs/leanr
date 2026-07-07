@@ -36,7 +36,7 @@ def monicScaleAffine (e : Expression p) : Expression p × ZMod p × ZMod p :=
         else (e, 1, 1)
     | [] => (e, 1, 1)
 
-theorem monicScaleAffine_eval (e : Expression p) (env : String → ZMod p) :
+theorem monicScaleAffine_eval (e : Expression p) (env : Variable → ZMod p) :
     (monicScaleAffine e).1.eval env = (monicScaleAffine e).2.1 * e.eval env := by
   unfold monicScaleAffine
   split
@@ -75,7 +75,7 @@ def monicScale : Expression p → Expression p × ZMod p × ZMod p
            (monicScale a).2.2 * (monicScale b).2.2)
   | e => monicScaleAffine e
 
-theorem monicScale_eval (e : Expression p) (env : String → ZMod p) :
+theorem monicScale_eval (e : Expression p) (env : Variable → ZMod p) :
     (monicScale e).1.eval env = (monicScale e).2.1 * e.eval env := by
   induction e with
   | const n => exact monicScaleAffine_eval _ env
@@ -110,7 +110,7 @@ theorem monicScale_unit (e : Expression p) :
           _ = 1 := by rw [iha, ihb, one_mul]
 
 /-- Unit scaling preserves the zero set (over any commutative ring). -/
-theorem monicScale_zero_iff (e : Expression p) (env : String → ZMod p) :
+theorem monicScale_zero_iff (e : Expression p) (env : Variable → ZMod p) :
     ((monicScale e).1.eval env = 0 ↔ e.eval env = 0) := by
   rw [monicScale_eval]
   constructor
@@ -132,7 +132,7 @@ def ConstraintSystem.mapConstraints (cs : ConstraintSystem p)
     satisfying assignments are unchanged, and the (bus-only) side effects are untouched. -/
 theorem ConstraintSystem.mapConstraintsIff_correct (cs : ConstraintSystem p)
     (bs : BusSemantics p) (g : Expression p → Expression p)
-    (hg : ∀ (c : Expression p) (env : String → ZMod p), ((g c).eval env = 0 ↔ c.eval env = 0)) :
+    (hg : ∀ (c : Expression p) (env : Variable → ZMod p), ((g c).eval env = 0 ↔ c.eval env = 0)) :
     PassCorrect cs (cs.mapConstraints g) bs := by
   have hiff : ∀ env, (cs.mapConstraints g).satisfies bs env ↔ cs.satisfies bs env := by
     intro env

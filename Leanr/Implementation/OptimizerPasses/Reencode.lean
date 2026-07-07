@@ -32,13 +32,13 @@ variable {p : ℕ}
 /-! ## Environment extension by an association list -/
 
 /-- Override `env` on the keys of `pairs` (first match wins, mirroring `envOf`). -/
-def envExt : List (String × ZMod p) → (String → ZMod p) → String → ZMod p
+def envExt : List (Variable × ZMod p) → (Variable → ZMod p) → Variable → ZMod p
   | [], env, y => env y
   | (x, v) :: rest, env, y => if y = x then v else envExt rest env y
 
 /-- On the keys, `envExt` agrees with `envOf`. -/
-theorem envExt_eq_envOf_of_mem (pairs : List (String × ZMod p)) (env : String → ZMod p)
-    (y : String) (h : y ∈ pairs.map Prod.fst) : envExt pairs env y = envOf pairs y := by
+theorem envExt_eq_envOf_of_mem (pairs : List (Variable × ZMod p)) (env : Variable → ZMod p)
+    (y : Variable) (h : y ∈ pairs.map Prod.fst) : envExt pairs env y = envOf pairs y := by
   induction pairs with
   | nil => simp at h
   | cons t rest ih =>
@@ -54,8 +54,8 @@ theorem envExt_eq_envOf_of_mem (pairs : List (String × ZMod p)) (env : String �
       · exact h
 
 /-- Off the keys, `envExt` is `env`. -/
-theorem envExt_eq_env_of_notmem (pairs : List (String × ZMod p)) (env : String → ZMod p)
-    (y : String) (h : y ∉ pairs.map Prod.fst) : envExt pairs env y = env y := by
+theorem envExt_eq_env_of_notmem (pairs : List (Variable × ZMod p)) (env : Variable → ZMod p)
+    (y : Variable) (h : y ∉ pairs.map Prod.fst) : envExt pairs env y = env y := by
   induction pairs with
   | nil => rfl
   | cons t rest ih =>
@@ -66,7 +66,7 @@ theorem envExt_eq_env_of_notmem (pairs : List (String × ZMod p)) (env : String 
 
 /-! ## `mentions` and variable membership -/
 
-theorem mentions_false_not_mem_vars (x : String) (e : Expression p)
+theorem mentions_false_not_mem_vars (x : Variable) (e : Expression p)
     (h : e.mentions x = false) : x ∉ e.vars := by
   induction e with
   | const n => simp [Expression.vars]
@@ -121,7 +121,7 @@ theorem ConstraintSystem.reencode_correct (cs : ConstraintSystem p) (bsem : BusS
         ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
       busInteractions := cs.busInteractions.map (·.mapExpr rw) } with hout
   -- message-list equality under expression-wise agreement
-  have hmsgs : ∀ (env env' : String → ZMod p),
+  have hmsgs : ∀ (env env' : Variable → ZMod p),
       (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
       ∀ busId, (out.busInteractions.filter (fun bi => bi.busId = busId)).map
           (fun bi => bi.eval env')
@@ -138,7 +138,7 @@ theorem ConstraintSystem.reencode_correct (cs : ConstraintSystem p) (bsem : BusS
     exact List.map_congr_left (fun bi hbi =>
       hB bi (List.mem_of_mem_filter hbi))
   -- side-effect equality under expression-wise agreement
-  have hside : ∀ (env env' : String → ZMod p),
+  have hside : ∀ (env env' : Variable → ZMod p),
       (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
       out.sideEffects bsem env' = cs.sideEffects bsem env := by
     intro env env' hB
@@ -152,7 +152,7 @@ theorem ConstraintSystem.reencode_correct (cs : ConstraintSystem p) (bsem : BusS
     exact List.map_congr_left (fun bi hbi => by
       simp only [Function.comp_apply, hB bi (List.mem_of_mem_filter hbi)])
   -- admissible transfer under expression-wise agreement (the evaluated messages coincide)
-  have hdisc : ∀ (env env' : String → ZMod p),
+  have hdisc : ∀ (env env' : Variable → ZMod p),
       (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
       (out.admissible bsem env' ↔ cs.admissible bsem env) := by
     intro env env' hB
@@ -224,8 +224,8 @@ theorem ConstraintSystem.reencode_correct (cs : ConstraintSystem p) (bsem : BusS
 /-! ## Structure of enumerated assignments -/
 
 /-- Every enumerated assignment has the domains' keys, in order. -/
-theorem assignments_keys (doms : List (String × List (ZMod p)))
-    (a : List (String × ZMod p)) (h : a ∈ assignments doms) :
+theorem assignments_keys (doms : List (Variable × List (ZMod p)))
+    (a : List (Variable × ZMod p)) (h : a ∈ assignments doms) :
     a.map Prod.fst = doms.map Prod.fst := by
   induction doms generalizing a with
   | nil =>
@@ -240,8 +240,8 @@ theorem assignments_keys (doms : List (String × List (ZMod p)))
 
 /-- Every enumerated assignment's value at a (distinct-keyed) domain entry lies in that
     domain. -/
-theorem envOf_mem_of_assignments (doms : List (String × List (ZMod p)))
-    (hnd : (doms.map Prod.fst).Nodup) (a : List (String × ZMod p))
+theorem envOf_mem_of_assignments (doms : List (Variable × List (ZMod p)))
+    (hnd : (doms.map Prod.fst).Nodup) (a : List (Variable × ZMod p))
     (h : a ∈ assignments doms) : ∀ xd ∈ doms, envOf a xd.1 ∈ xd.2 := by
   induction doms generalizing a with
   | nil => simp
@@ -260,7 +260,7 @@ theorem envOf_mem_of_assignments (doms : List (String × List (ZMod p)))
       exact ih hnd.2 a' ha' yd hyd
 
 /-- `envOf` of a zipped image list reads off the image function. -/
-theorem envOf_zipimg (xs : List String) (g : String → ZMod p) (y : String) (hy : y ∈ xs) :
+theorem envOf_zipimg (xs : List Variable) (g : Variable → ZMod p) (y : Variable) (hy : y ∈ xs) :
     envOf (xs.map (fun x => (x, g x))) y = g y := by
   induction xs with
   | nil => simp at hy
@@ -277,21 +277,21 @@ theorem envOf_zipimg (xs : List String) (g : String → ZMod p) (y : String) (hy
 /-! ## Pointwise environment facts for the substitution map -/
 
 /-- `envF` at any variable is the evaluation of the substituted variable expression. -/
-theorem envF_eq_varSubst (σ : String → Option (Expression p)) (env : String → ZMod p)
-    (y : String) : envF σ env y = ((Expression.var y).substF σ).eval env := by
+theorem envF_eq_varSubst (σ : Variable → Option (Expression p)) (env : Variable → ZMod p)
+    (y : Variable) : envF σ env y = ((Expression.var y).substF σ).eval env := by
   show (match σ y with | some t => t.eval env | none => env y)
     = ((match σ y with | some t => t | none => .var y) : Expression p).eval env
   cases σ y <;> rfl
 
 /-- Expression-level agreement from pointwise environment agreement. -/
-theorem substF_eval_agree (σ : String → Option (Expression p)) (env₀ env₁ : String → ZMod p)
+theorem substF_eval_agree (σ : Variable → Option (Expression p)) (env₀ env₁ : Variable → ZMod p)
     (e : Expression p) (h : ∀ y ∈ e.vars, envF σ env₀ y = env₁ y) :
     (e.substF σ).eval env₀ = e.eval env₁ := by
   rw [Expression.eval_substF]
   exact Expression.eval_congr e _ _ h
 
 /-- Bus-interaction-level agreement from pointwise environment agreement over its vars. -/
-theorem substF_bi_agree (σ : String → Option (Expression p)) (env₀ env₁ : String → ZMod p)
+theorem substF_bi_agree (σ : Variable → Option (Expression p)) (env₀ env₁ : Variable → ZMod p)
     (bi : BusInteraction (Expression p)) (h : ∀ y ∈ bi.vars, envF σ env₀ y = env₁ y) :
     (bi.substF σ).eval env₀ = bi.eval env₁ := by
   rw [BusInteraction.eval_substF]
@@ -300,15 +300,15 @@ theorem substF_bi_agree (σ : String → Option (Expression p)) (env₀ env₁ :
 /-! ## Booleanity constraints for the fresh bits -/
 
 /-- `b · (b − 1)`. -/
-def boolConstraint (b : String) : Expression p :=
+def boolConstraint (b : Variable) : Expression p :=
   .mul (.var b) (.add (.var b) (.const (-1)))
 
-theorem boolConstraint_eval_of_bool (b : String) (env : String → ZMod p)
+theorem boolConstraint_eval_of_bool (b : Variable) (env : Variable → ZMod p)
     (h : env b = 0 ∨ env b = 1) : (boolConstraint b).eval env = 0 := by
   show env b * (env b + (-1)) = 0
   rcases h with h | h <;> rw [h] <;> ring
 
-theorem bool_of_boolConstraint_eval [Fact p.Prime] (b : String) (env : String → ZMod p)
+theorem bool_of_boolConstraint_eval [Fact p.Prime] (b : Variable) (env : Variable → ZMod p)
     (h : (boolConstraint b).eval env = 0) : env b = 0 ∨ env b = 1 := by
   have h' : env b * (env b + (-1)) = 0 := h
   rcases mul_eq_zero.mp h' with h0 | h1
@@ -326,13 +326,13 @@ def Expression.hasVar : Expression p → Bool
   | .mul a b => a.hasVar || b.hasVar
 
 /-- Do all the expression's variables lie in `xs`? (No allocation.) -/
-def Expression.varsIn (xs : List String) : Expression p → Bool
+def Expression.varsIn (xs : List Variable) : Expression p → Bool
   | .const _ => true
   | .var y => xs.contains y
   | .add a b => a.varsIn xs && b.varsIn xs
   | .mul a b => a.varsIn xs && b.varsIn xs
 
-theorem Expression.varsIn_sound (xs : List String) (e : Expression p)
+theorem Expression.varsIn_sound (xs : List Variable) (e : Expression p)
     (h : e.varsIn xs = true) : ∀ v ∈ e.vars, v ∈ xs := by
   induction e with
   | const n => simp [Expression.vars]
@@ -355,19 +355,19 @@ theorem Expression.varsIn_sound (xs : List String) (e : Expression p)
       · exact ihb h.2 v hv
 
 /-- Constraints whose (nonempty) variable set lies inside the group. -/
-def coveredBy (xs : List String) (c : Expression p) : Bool :=
+def coveredBy (xs : List Variable) (c : Expression p) : Bool :=
   c.hasVar && c.varsIn xs
 
 /-- Domains for the group's variables, from the covered constraints only. -/
-def groupDoms (es : List (Expression p)) : List String → Option (List (String × List (ZMod p)))
+def groupDoms (es : List (Expression p)) : List Variable → Option (List (Variable × List (ZMod p)))
   | [] => some []
   | x :: rest =>
     match findDomainAlg es x, groupDoms es rest with
     | some d, some ds => some ((x, d) :: ds)
     | _, _ => none
 
-theorem groupDoms_fst (es : List (Expression p)) (xs : List String)
-    (doms : List (String × List (ZMod p))) (h : groupDoms es xs = some doms) :
+theorem groupDoms_fst (es : List (Expression p)) (xs : List Variable)
+    (doms : List (Variable × List (ZMod p))) (h : groupDoms es xs = some doms) :
     doms.map Prod.fst = xs := by
   induction xs generalizing doms with
   | nil => simp only [groupDoms, Option.some.injEq] at h; subst h; rfl
@@ -384,9 +384,9 @@ theorem groupDoms_fst (es : List (Expression p)) (xs : List String)
         subst h
         simp [ih ds hr]
 
-theorem groupDoms_sound [Fact p.Prime] (es : List (Expression p)) (xs : List String)
-    (doms : List (String × List (ZMod p))) (h : groupDoms es xs = some doms)
-    (env : String → ZMod p) (hall : ∀ c ∈ es, c.eval env = 0) :
+theorem groupDoms_sound [Fact p.Prime] (es : List (Expression p)) (xs : List Variable)
+    (doms : List (Variable × List (ZMod p))) (h : groupDoms es xs = some doms)
+    (env : Variable → ZMod p) (hall : ∀ c ∈ es, c.eval env = 0) :
     ∀ yd ∈ doms, env yd.1 ∈ yd.2 := by
   induction xs generalizing doms with
   | nil => simp only [groupDoms, Option.some.injEq] at h; subst h; simp
@@ -407,12 +407,12 @@ theorem groupDoms_sound [Fact p.Prime] (es : List (Expression p)) (xs : List Str
         · exact ih ds hr yd hyd
 
 /-- The group substitution: defined on the group only, backed by a hash map. -/
-def groupSubst (xs : List String) (hm : Std.HashMap String (Expression p)) :
-    String → Option (Expression p) :=
+def groupSubst (xs : List Variable) (hm : Std.HashMap Variable (Expression p)) :
+    Variable → Option (Expression p) :=
   fun y => if xs.contains y then hm[y]? else none
 
 /-- The `{0,1}` domain box of the fresh bits. -/
-def bitBox (bits : List String) : List (String × List (ZMod p)) :=
+def bitBox (bits : List Variable) : List (Variable × List (ZMod p)) :=
   bits.map (fun b => (b, ([0, 1] : List (ZMod p))))
 
 /-! ## Degree-aware group rewriting
@@ -427,7 +427,7 @@ check), otherwise the rewrite falls back to the plain substitution (and the step
 degree guard decides). -/
 
 /-- `Π_j (bit_j or its complement)`: `1` exactly at the given pattern. -/
-def indicatorExpr (aβ : List (String × ZMod p)) : Expression p :=
+def indicatorExpr (aβ : List (Variable × ZMod p)) : Expression p :=
   aβ.foldl (fun acc bv =>
     .mul acc (if bv.2 = 1 then .var bv.1
               else .add (.const 1) (.mul (.const (-1)) (.var bv.1)))) (.const 1)
@@ -440,8 +440,8 @@ def indicatorExpr (aβ : List (String × ZMod p)) : Expression p :=
     chaining — and lowers the degree. Only the `varsIn`/agreement check in `groupRewriteCand`
     consumes `interpOf`, and a constant passes both (no vars; equals the shared value on every
     pattern), so this is transparent to the correctness proof. -/
-def interpOf (σfn : String → Option (Expression p))
-    (patts : List (List (String × ZMod p))) (e : Expression p) : Expression p :=
+def interpOf (σfn : Variable → Option (Expression p))
+    (patts : List (List (Variable × ZMod p))) (e : Expression p) : Expression p :=
   match patts with
   | [] => .const 0
   | aβ₀ :: _ =>
@@ -451,8 +451,8 @@ def interpOf (σfn : String → Option (Expression p))
       .add acc (.mul (indicatorExpr aβ) (.const ((e.substF σfn).eval (envOf aβ))))) (.const 0)
 
 /-- Interpolation candidate with the checked fallback to plain substitution. -/
-def groupRewriteCand (bits : List String) (σfn : String → Option (Expression p))
-    (patts : List (List (String × ZMod p))) (e : Expression p) : Expression p :=
+def groupRewriteCand (bits : List Variable) (σfn : Variable → Option (Expression p))
+    (patts : List (List (Variable × ZMod p))) (e : Expression p) : Expression p :=
   if ((interpOf σfn patts e).fold).varsIn bits &&
       patts.all (fun aβ => decide (((interpOf σfn patts e).fold).eval (envOf aβ)
         = (e.substF σfn).eval (envOf aβ)))
@@ -461,8 +461,8 @@ def groupRewriteCand (bits : List String) (σfn : String → Option (Expression 
 
 /-- Replace maximal wholly-in-group subexpressions by their interpolations; substitute
     variable-wise everywhere else. -/
-def groupRewrite (xs bits : List String) (σfn : String → Option (Expression p))
-    (patts : List (List (String × ZMod p))) : Expression p → Expression p
+def groupRewrite (xs bits : List Variable) (σfn : Variable → Option (Expression p))
+    (patts : List (List (Variable × ZMod p))) : Expression p → Expression p
   | .const n => .const n
   | .var y =>
       if xs.contains y then groupRewriteCand bits σfn patts (.var y) else .var y
@@ -473,9 +473,9 @@ def groupRewrite (xs bits : List String) (σfn : String → Option (Expression p
       if (Expression.mul a b).varsIn xs then groupRewriteCand bits σfn patts (.mul a b)
       else .mul (groupRewrite xs bits σfn patts a) (groupRewrite xs bits σfn patts b)
 
-theorem groupRewriteCand_agree (xs bits : List String)
-    (σfn : String → Option (Expression p)) (patts : List (List (String × ZMod p)))
-    (env₀ env₁ : String → ZMod p) (aβ : List (String × ZMod p)) (haβ : aβ ∈ patts)
+theorem groupRewriteCand_agree (xs bits : List Variable)
+    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
+    (env₀ env₁ : Variable → ZMod p) (aβ : List (Variable × ZMod p)) (haβ : aβ ∈ patts)
     (hbitsagree : ∀ b ∈ bits, env₀ b = envOf aβ b)
     (hpolyvars : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
     (hpoint : ∀ y, y ∉ bits → envF σfn env₀ y = env₁ y)
@@ -516,10 +516,10 @@ theorem groupRewriteCand_agree (xs bits : List String)
     exact hpoint y (hnotbits y hy)
   · exact hsubstF
 
-theorem groupRewrite_agree (xs bits : List String)
-    (σfn : String → Option (Expression p)) (patts : List (List (String × ZMod p)))
+theorem groupRewrite_agree (xs bits : List Variable)
+    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
     (hσnone : ∀ y, y ∉ xs → σfn y = none)
-    (env₀ env₁ : String → ZMod p) (aβ : List (String × ZMod p)) (haβ : aβ ∈ patts)
+    (env₀ env₁ : Variable → ZMod p) (aβ : List (Variable × ZMod p)) (haβ : aβ ∈ patts)
     (hbitsagree : ∀ b ∈ bits, env₀ b = envOf aβ b)
     (hpolyvars : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
     (hpoint : ∀ y, y ∉ bits → envF σfn env₀ y = env₁ y)
@@ -585,10 +585,10 @@ theorem groupRewrite_agree (xs bits : List String)
         rw [iha hfa, ihb hfb]
 
 /-- Bus-interaction-level agreement for the group rewrite. -/
-theorem groupRewrite_bi_agree (xs bits : List String)
-    (σfn : String → Option (Expression p)) (patts : List (List (String × ZMod p)))
+theorem groupRewrite_bi_agree (xs bits : List Variable)
+    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
     (hσnone : ∀ y, y ∉ xs → σfn y = none)
-    (env₀ env₁ : String → ZMod p) (aβ : List (String × ZMod p)) (haβ : aβ ∈ patts)
+    (env₀ env₁ : Variable → ZMod p) (aβ : List (Variable × ZMod p)) (haβ : aβ ∈ patts)
     (hbitsagree : ∀ b ∈ bits, env₀ b = envOf aβ b)
     (hpolyvars : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
     (hpoint : ∀ y, y ∉ bits → envF σfn env₀ y = env₁ y)
@@ -608,27 +608,27 @@ theorem groupRewrite_bi_agree (xs bits : List String)
 
 /-- The re-encoded system: substitute the group everywhere, keep only uncovered constraints,
     add booleanity for the bits. -/
-def reencodeOut (cs : ConstraintSystem p) (xs bits : List String)
-    (hm : Std.HashMap String (Expression p)) : ConstraintSystem p :=
+def reencodeOut (cs : ConstraintSystem p) (xs bits : List Variable)
+    (hm : Std.HashMap Variable (Expression p)) : ConstraintSystem p :=
   { algebraicConstraints :=
       ((cs.algebraicConstraints.filter (fun c => !coveredBy xs c)).map
         (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))) ++ bits.map boolConstraint,
     busInteractions := cs.busInteractions.map (·.mapExpr (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))) }
 
 /-- The group's covered constraints. -/
-def coveredCsOf (cs : ConstraintSystem p) (xs : List String) : List (Expression p) :=
+def coveredCsOf (cs : ConstraintSystem p) (xs : List Variable) : List (Expression p) :=
   cs.algebraicConstraints.filter (coveredBy xs)
 
 /-- The surviving group values: enumerated over the group's domains, filtered by the covered
     constraints. -/
-def groupSurvivors (cs : ConstraintSystem p) (xs : List String)
-    (doms : List (String × List (ZMod p))) : List (List (String × ZMod p)) :=
+def groupSurvivors (cs : ConstraintSystem p) (xs : List Variable)
+    (doms : List (Variable × List (ZMod p))) : List (List (Variable × ZMod p)) :=
   (assignments doms).filter
     (fun a => (coveredCsOf cs xs).all (fun c => decide (c.eval (envOf a) = 0)))
 
 /-- All checked side conditions for one re-encoding step. -/
-def checkReencode (cs : ConstraintSystem p) (xs bits : List String)
-    (hm : Std.HashMap String (Expression p)) : Bool :=
+def checkReencode (cs : ConstraintSystem p) (xs bits : List Variable)
+    (hm : Std.HashMap Variable (Expression p)) : Bool :=
   match groupDoms (coveredCsOf cs xs) xs with
   | none => false
   | some doms =>
@@ -653,7 +653,7 @@ def checkReencode (cs : ConstraintSystem p) (xs bits : List String)
       decide ((c.substF (groupSubst xs hm)).eval (envOf aβ) = 0)))
 
 theorem checkReencode_sound [Fact p.Prime] (cs : ConstraintSystem p) (bsem : BusSemantics p)
-    (xs bits : List String) (hm : Std.HashMap String (Expression p))
+    (xs bits : List Variable) (hm : Std.HashMap Variable (Expression p))
     (hchk : checkReencode cs xs bits hm = true) :
     PassCorrect cs (reencodeOut cs xs bits hm) bsem := by
   unfold checkReencode at hchk
@@ -883,15 +883,15 @@ theorem checkReencode_sound [Fact p.Prime] (cs : ConstraintSystem p) (bsem : Bus
 /-! ## Building the interpolation (proof-free) and the pass -/
 
 /-- Interpolation polynomial for group variable `x` over pattern/survivor pairs. -/
-def interpPoly (pz : List (List (String × ZMod p) × List (String × ZMod p))) (x : String) :
+def interpPoly (pz : List (List (Variable × ZMod p) × List (Variable × ZMod p))) (x : Variable) :
     Expression p :=
   pz.foldl (fun acc az => .add acc (.mul (indicatorExpr az.1) (.const (envOf az.2 x))))
     (.const 0)
 
 /-- Construct the bits and the substitution map for a candidate group (proof-free — the
     checked certificate re-verifies everything). -/
-def buildReencode (cs : ConstraintSystem p) (xs : List String) (freshBase : String) :
-    Option (List String × Std.HashMap String (Expression p)) :=
+def buildReencode (cs : ConstraintSystem p) (xs : List Variable) (freshBase : String) :
+    Option (List Variable × Std.HashMap Variable (Expression p)) :=
   match groupDoms (coveredCsOf cs xs) xs with
   | none => none
   | some doms =>
@@ -900,7 +900,7 @@ def buildReencode (cs : ConstraintSystem p) (xs : List String) (freshBase : Stri
       if 2 ≤ survs.length then
         let k := Nat.clog 2 survs.length
         if k < xs.length then
-          let bits := (List.range k).map (fun j => freshBase ++ "_" ++ toString j)
+          let bits := (List.range k).map (fun j => ({ name := freshBase ++ "_" ++ toString j } : Variable))
           let patts := assignments (bitBox (p := p) bits)
           let survsP := survs ++ List.replicate (patts.length - survs.length) (survs.headD [])
           let pz := patts.zip survsP
@@ -911,7 +911,7 @@ def buildReencode (cs : ConstraintSystem p) (xs : List String) (freshBase : Stri
 
 /-- One checked re-encoding step (identity if construction or certificate fails). -/
 def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p)
-    (xs : List String) (freshBase : String) :
+    (xs : List Variable) (freshBase : String) :
     { out : ConstraintSystem p // PassCorrect cs out bsem } :=
   match buildReencode cs xs freshBase with
   | none => ⟨cs, cs.refines_refl bsem, _root_.id⟩
@@ -926,7 +926,7 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p
 
 /-- Process the candidate groups sequentially (correctness composes by transitivity). -/
 def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) :
-    List (List String) → Nat → (cs : ConstraintSystem p) →
+    List (List Variable) → Nat → (cs : ConstraintSystem p) →
     { out : ConstraintSystem p // PassCorrect cs out bsem }
   | [], _, cs => ⟨cs, cs.refines_refl bsem, _root_.id⟩
   | xs :: rest, idx, cs =>
@@ -945,6 +945,6 @@ def reencodePass : VerifiedPass p := fun cs bsem =>
     haveI : Fact p.Prime := ⟨hpr⟩
     let targets := (cs.algebraicConstraints.filterMap (fun c =>
       let vs := c.vars.dedup
-      if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (· ≤ ·)) else none)).dedup
+      if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt)) else none)).dedup
     reencodeLoop bsem targets 0 cs
   else ⟨cs, cs.refines_refl bsem, _root_.id⟩

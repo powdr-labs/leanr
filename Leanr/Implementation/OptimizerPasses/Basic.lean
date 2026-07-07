@@ -1,4 +1,5 @@
 import Leanr.Spec
+import Leanr.Implementation.Variable
 
 set_option autoImplicit false
 

@@ -21,12 +21,12 @@ variable {p : ℕ}
 /-! ## Merging a linear form's terms -/
 
 /-- Add coefficient `c` to variable `v` in a term list, merging into an existing entry. -/
-def addCoeff (v : String) (c : ZMod p) : List (String × ZMod p) → List (String × ZMod p)
+def addCoeff (v : Variable) (c : ZMod p) : List (Variable × ZMod p) → List (Variable × ZMod p)
   | [] => [(v, c)]
   | (v', c') :: rest => if v' = v then (v', c' + c) :: rest else (v', c') :: addCoeff v c rest
 
-theorem addCoeff_eval (v : String) (c : ZMod p) (ts : List (String × ZMod p))
-    (env : String → ZMod p) :
+theorem addCoeff_eval (v : Variable) (c : ZMod p) (ts : List (Variable × ZMod p))
+    (env : Variable → ZMod p) :
     ((addCoeff v c ts).map (fun t => t.2 * env t.1)).sum
     = c * env v + (ts.map (fun t => t.2 * env t.1)).sum := by
   induction ts with
@@ -41,10 +41,10 @@ theorem addCoeff_eval (v : String) (c : ZMod p) (ts : List (String × ZMod p))
     appending unseen variables at the tail) preserves first-occurrence order, making the merge
     *idempotent* — a `foldr` here would reverse the term order on every application, so
     normalization would oscillate with period 2 instead of reaching a fixpoint. -/
-def mergeTerms (ts : List (String × ZMod p)) : List (String × ZMod p) :=
+def mergeTerms (ts : List (Variable × ZMod p)) : List (Variable × ZMod p) :=
   ts.foldl (fun acc t => addCoeff t.1 t.2 acc) []
 
-theorem foldl_addCoeff_eval (env : String → ZMod p) (ts acc : List (String × ZMod p)) :
+theorem foldl_addCoeff_eval (env : Variable → ZMod p) (ts acc : List (Variable × ZMod p)) :
     ((ts.foldl (fun acc t => addCoeff t.1 t.2 acc) acc).map (fun t => t.2 * env t.1)).sum
     = (acc.map (fun t => t.2 * env t.1)).sum + (ts.map (fun t => t.2 * env t.1)).sum := by
   induction ts generalizing acc with
@@ -53,12 +53,12 @@ theorem foldl_addCoeff_eval (env : String → ZMod p) (ts acc : List (String × 
       simp only [List.foldl_cons, List.map_cons, List.sum_cons, ih, addCoeff_eval]
       ring
 
-theorem mergeTerms_eval (ts : List (String × ZMod p)) (env : String → ZMod p) :
+theorem mergeTerms_eval (ts : List (Variable × ZMod p)) (env : Variable → ZMod p) :
     ((mergeTerms ts).map (fun t => t.2 * env t.1)).sum
     = (ts.map (fun t => t.2 * env t.1)).sum := by
   simp [mergeTerms, foldl_addCoeff_eval]
 
-theorem dropZero_eval (ts : List (String × ZMod p)) (env : String → ZMod p) :
+theorem dropZero_eval (ts : List (Variable × ZMod p)) (env : Variable → ZMod p) :
     ((ts.filter (fun t => t.2 ≠ 0)).map (fun t => t.2 * env t.1)).sum
     = (ts.map (fun t => t.2 * env t.1)).sum := by
   induction ts with
@@ -75,7 +75,7 @@ theorem dropZero_eval (ts : List (String × ZMod p)) (env : String → ZMod p) :
 def LinExpr.norm (l : LinExpr p) : LinExpr p :=
   ⟨l.const, (mergeTerms l.terms).filter (fun t => t.2 ≠ 0)⟩
 
-theorem LinExpr.norm_eval (l : LinExpr p) (env : String → ZMod p) :
+theorem LinExpr.norm_eval (l : LinExpr p) (env : Variable → ZMod p) :
     l.norm.eval env = l.eval env := by
   simp only [LinExpr.norm, LinExpr.eval, dropZero_eval, mergeTerms_eval]
 
@@ -95,7 +95,7 @@ def Expression.normalize : Expression p → Expression p
       | some l => l.norm.toExpr
       | none => .mul a.normalize b.normalize
 
-theorem Expression.normalize_eval (e : Expression p) (env : String → ZMod p) :
+theorem Expression.normalize_eval (e : Expression p) (env : Variable → ZMod p) :
     e.normalize.eval env = e.eval env := by
   induction e with
   | const n => rfl

@@ -36,11 +36,11 @@ def ConstraintSystem.mapExpr (cs : ConstraintSystem p) (g : Expression p → Exp
     busInteractions := cs.busInteractions.map (·.mapExpr g) }
 
 section EvalPreserving
-variable {g : Expression p → Expression p} (hg : ∀ e (env : String → ZMod p), (g e).eval env = e.eval env)
+variable {g : Expression p → Expression p} (hg : ∀ e (env : Variable → ZMod p), (g e).eval env = e.eval env)
 
 include hg
 
-theorem BusInteraction.eval_mapExpr (bi : BusInteraction (Expression p)) (env : String → ZMod p) :
+theorem BusInteraction.eval_mapExpr (bi : BusInteraction (Expression p)) (env : Variable → ZMod p) :
     (bi.mapExpr g).eval env = bi.eval env := by
   simp only [BusInteraction.mapExpr, BusInteraction.eval, hg, List.map_map]
   congr 1
@@ -51,7 +51,7 @@ theorem BusInteraction.eval_mapExpr (bi : BusInteraction (Expression p)) (env : 
 /-- The evaluated interactions of a rewritten system, restricted to one bus, are unchanged
     (an eval-preserving map never changes a bus id or a value). -/
 theorem ConstraintSystem.msgs_mapExpr (cs : ConstraintSystem p) (busId : Nat)
-    (env : String → ZMod p) :
+    (env : Variable → ZMod p) :
     ((cs.mapExpr g).busInteractions.filter (fun bi => bi.busId = busId)).map
       (fun bi => bi.eval env)
     = (cs.busInteractions.filter (fun bi => bi.busId = busId)).map (fun bi => bi.eval env) := by
@@ -66,7 +66,7 @@ theorem ConstraintSystem.msgs_mapExpr (cs : ConstraintSystem p) (busId : Nat)
 
 /-- `admissible` is untouched by eval-preserving rewrites — generically in the VM predicate. -/
 theorem ConstraintSystem.admissible_mapExpr (cs : ConstraintSystem p)
-    (bs : BusSemantics p) (env : String → ZMod p) :
+    (bs : BusSemantics p) (env : Variable → ZMod p) :
     (cs.mapExpr g).admissible bs env ↔ cs.admissible bs env := by
   unfold ConstraintSystem.admissible
   have hmap : (cs.mapExpr g).busInteractions.map (fun bi => bi.eval env)
@@ -76,7 +76,7 @@ theorem ConstraintSystem.admissible_mapExpr (cs : ConstraintSystem p)
   rw [hmap]
 
 theorem ConstraintSystem.satisfies_mapExpr (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (env : String → ZMod p) : (cs.mapExpr g).satisfies bs env ↔ cs.satisfies bs env := by
+    (env : Variable → ZMod p) : (cs.mapExpr g).satisfies bs env ↔ cs.satisfies bs env := by
   simp only [ConstraintSystem.satisfies, ConstraintSystem.mapExpr] at *
   constructor
   · rintro ⟨hc, hb⟩
@@ -89,7 +89,7 @@ theorem ConstraintSystem.satisfies_mapExpr (cs : ConstraintSystem p) (bs : BusSe
     · obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'; rw [bi0.eval_mapExpr hg]; exact hb bi0 hbi0
 
 theorem ConstraintSystem.sideEffects_mapExpr (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (env : String → ZMod p) : (cs.mapExpr g).sideEffects bs env = cs.sideEffects bs env := by
+    (env : Variable → ZMod p) : (cs.mapExpr g).sideEffects bs env = cs.sideEffects bs env := by
   simp only [ConstraintSystem.sideEffects, ConstraintSystem.mapExpr]
   induction cs.busInteractions with
   | nil => rfl
@@ -169,7 +169,7 @@ def ConstraintSystem.filterBus (cs : ConstraintSystem p) (keep : BusInteraction 
     only looks at the active *stateful* evaluated messages, which such a drop leaves unchanged.
     Covers both zero-multiplicity removal (`ZeroMultBus`) and stateless-lookup removal (`TautoBus`). -/
 theorem ConstraintSystem.admissible_filterBus (cs : ConstraintSystem p)
-    (bs : BusSemantics p) (keep : BusInteraction (Expression p) → Bool) (a : String → ZMod p)
+    (bs : BusSemantics p) (keep : BusInteraction (Expression p) → Bool) (a : Variable → ZMod p)
     (h : ∀ bi ∈ cs.busInteractions, keep bi = false →
         (bi.eval a).multiplicity = 0 ∨ bs.isStateful bi.busId = false) :
     (cs.filterBus keep).admissible bs a ↔ cs.admissible bs a := by
@@ -206,7 +206,7 @@ theorem ConstraintSystem.admissible_filterBus (cs : ConstraintSystem p)
 /-- Net multiplicity is unchanged by dropping (via `keep = false`) bus interactions whose evaluated
     multiplicity is `0`: such an interaction contributes `0` to every message's net multiplicity, so
     the two bus states are `≈`-equal. -/
-theorem multiplicitySum_filterBus (bs : BusSemantics p) (env : String → ZMod p)
+theorem multiplicitySum_filterBus (bs : BusSemantics p) (env : Variable → ZMod p)
     (keep : BusInteraction (Expression p) → Bool) (message : BusMessage p)
     (bis : List (BusInteraction (Expression p)))
     (h0 : ∀ bi ∈ bis, keep bi = false → (bi.eval env).multiplicity = 0) :
