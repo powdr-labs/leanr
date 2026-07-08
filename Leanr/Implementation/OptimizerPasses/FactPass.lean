@@ -35,7 +35,8 @@ def VerifiedPassW.iterate (f : VerifiedPassW p) : Nat → VerifiedPassW p
   | 0 => fun cs bs _ => ⟨cs, cs.refines_refl bs, _root_.id⟩
   | n + 1 => (f.iterate n).andThen f
 
-deriving instance DecidableEq for Expression
+-- `DecidableEq (Expression p)` is derived in `Leanr.Implementation.BusFacts` (imported above), so
+-- that fact-consuming passes and the fact instances share one instance.
 deriving instance DecidableEq for BusInteraction
 deriving instance DecidableEq for ConstraintSystem
 

@@ -956,3 +956,77 @@ shift-limbs): 1027 → 1003 vars. The dominant *unremoved* pattern is the orphan
 (data limbs in a bitwise byte-check `[K − Σ256ⁱ·limbᵢ, …]`): all-zero is not a satisfying witness
 there (the affine slot is a large constant, not a byte) — left for a smarter witness finder (see
 `docs/ideas.md`).
+
+### 44. Merge stateless byte-pair range checks (bus-interaction effectiveness)
+Follow-up to entry 42's bus-interaction gap. Investigated where leanr keeps more bus interactions
+than powdr (rendered per-bus counts over 5 top cases): the dominant gap is **stateful** (exec bus
+328 vs 2, memory 952 vs 362 — powdr collapses the send/receive chains), but that is **not provable**
+in this spec: cancelling active stateful interactions changes the active∧stateful message list, and
+the spec's `admissible` is an *opaque* `BusSemantics` predicate that a pass can only *consume*
+(`BusFacts.admissible_sound`), never *reconstruct* — `BusFacts.trivial` could not supply a reverse
+direction, so completeness (`impliesAdmissible`) cannot be discharged. (PC lookups, entry 42's
+suggestion, turned out to be **already** removed by `tautoBusDropPass`: their payloads fold to
+constants and the arity-9 lookup then probes as satisfied.)
+
+The tractable, provable gap is **stateless**: leanr byte-range-checks each limb with a *self-xor*
+bitwise lookup `[x, x, 0, 1]` (op 1, `xor x x = 0` so the only content is "x is a byte"), while
+powdr packs two bytes into one op-0 lookup `[x, y, 0, 0]`. Both are stateless with the identical
+combined obligation `x, y < 256`, so replacing the two with the one is sound *and* stateless →
+`sideEffects` and `admissible` are untouched (both range over active **stateful** messages only).
+
+Implementation (all under `Leanr/Implementation/`, zero audit-surface change):
+- `BusFacts.mergeLookups`: a new proof-carrying fact — given two expression interactions, optionally
+  a merged one that is stateless, active, invariant-safe, and whose `violatesConstraint` obligation
+  is *equivalent to the conjunction* of the two. `BusFacts.trivial` returns `none` (identity).
+- `OpenVmFacts`: proves it for the bitwise bus (`[x,x,0,1] + [y,y,0,1] → [x,y,0,0]`), via
+  `violates_selfxor`/`violates_bytepair` helper lemmas (the audited `isByte` is `private`, so the
+  helpers state the byte bound as its definitional `decide (·.val < 256)` and `change` into it).
+  Guarded on `1 < p` for `ZMod.val_one`.
+- `OptimizerPasses/BusMerge.lean`: `mergeLookupPass : VerifiedPassW`, generic in the semantics —
+  finds the first fact-mergeable pair and replaces every copy of the two with the merged one.
+  `ConstraintSystem.mergeLookups_correct` discharges `PassCorrect` (satisfies both directions via the
+  obligation equivalence; `sideEffects`/`admissible` unchanged since all three are stateless).
+  `.andThen`ed into `cleanupCycle` after `tautoBusDropPass`.
+
+Worked. `lake build` green; `optimizerWithBusFacts/simpleOptimizer/openVmOptimizer_maintainsCorrectness`
+all still `{propext, Classical.choice, Quot.sound}`-only (proof-integrity script passes). On
+`apc_001`: bus interactions **44 → 38** (the 12 self-xor byte checks become 6 op-0 pairs), per-case
+bus effectiveness **1.61× → 1.87×**. Top-20 benchmark (`benchmark.py --n 20`), leanr before → after:
+- **variables 3.980× / 3.508× → 3.980× / 3.508×** (identical — the merge keeps both operands, so no
+  variable is added or removed)
+- **bus interactions 1.550× / 1.477× → 1.566× / 1.526×** (agg +0.016×, geomean +0.049×)
+- **constraints 8.853× / 8.369× → unchanged**
+
+A clean win on the requested axis (bus interactions) with no regression on the higher-priority
+variable axis (nor on constraints). powdr's bus lead (agg 3.525×) remains, but the rest of it is the
+stateful chain collapse (out of reach here) plus varRC→tupleRC packing (a future `mergeLookups`
+instance — see `docs/ideas.md`).
+
+### 45. Byte + range → tuple lookup packing (bus-interaction effectiveness)
+Follow-up to entry 44, implementing the `docs/ideas.md` tuple-packing idea. powdr packs a byte check
+and a variable-range check into one tuple range check: `bitwise[a,a,0,1]` (a < 256) + `varRC[m,13]`
+(m < 2^13 = 8192) → `tupleRangeChecker(256,8192)[a, m]`. On the load/store cases the `mem_ptr_limbs`
+are exactly `varRC[·,13]`, and the circuits declare a `(256, 8192)` tuple bus, so the pattern applies.
+
+Same machinery as entry 44, reusing `ConstraintSystem.mergeLookups_correct`:
+- Second fact `BusFacts.mergeTupleLookups` (identical contract to `mergeLookups`), so a pass can run
+  it *before* `mergeLookupPass` (tuple packing must win over byte-pairing the same byte check).
+- `OpenVmFacts`: `varRcOperand?` (recognize an active `varRC[y, const b]`, `b ≤ 25`), `findTupleBus`
+  (bounded search for a `(256, 2^b)` tuple bus), `tryTuple` + `tryTuple_sound` (obligation:
+  tuple's `x<256 ∧ y<2^b` = byte's ∧ range's), tried in both operand orders. `violates_varrc` /
+  `violates_tuple` helper lemmas.
+- `mergeTuplePass` (parameterized `findMergeable` over the merge fn), `.andThen`ed before
+  `mergeLookupPass`.
+
+Worked. `lake build` green, proof-integrity `{propext, Classical.choice, Quot.sound}`-only. On
+`apc_003` the pass emits `tupleRangeChecker[a__k, mem_ptr_limbs__1_j]` (matching powdr); leanr bus
+interactions 209 → 142 (was 150 pre-merges). Top-20 benchmark bus effectiveness with both merges:
+**1.570× / 1.534× (agg / geo)** — up from byte-pair-only **1.566× / 1.526×** and baseline
+**1.550× / 1.477×**; variables (**3.980× / 3.508×**) and constraints (**8.853× / 8.369×**) unchanged.
+
+Note: `mergeTuplePass` and `mergeLookupPass` each do one merge per cleanup cycle, so they race for
+the byte checks — on `apc_003` only 4 of 8 possible tuples form before the remaining `a__k` get
+byte-paired. Batching all merges per pass (a harder positional proof) would capture the rest; the
+current gain is already a strict, provable improvement (each tuple/byte merge only removes
+interactions, never touches variables). Diminishing returns: the large remaining bus gap vs powdr
+is the stateful exec/memory chain collapse, which stays out of reach (entry 44 / `docs/ideas.md`).
