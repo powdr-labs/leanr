@@ -18,7 +18,7 @@ recent `docs/log.md` entries (`tail -100 docs/log.md`; earlier ones describe sup
 and recent commits to see what has already been tried. Run a case with, e.g.:
 
 ```
-lake exe leanr run OpenVmBenchmark/data/apc_001_pc0x4ecc54.json.gz
+lake exe leanr run OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz
 ```
 
 It reports before/after counts and three effectiveness factors — **variables**, **bus
@@ -31,10 +31,12 @@ removes more bus interactions, and then the one that removes more constraints. A
 bus interactions or constraints without regressing variables is still an improvement worth
 landing. Report all three factors in the log.
 
-Optimization is slow; sampling a few of the 100 cases per iteration is fine. You can use the `*.powdr_opt.*` files for inspiration of new ideas that are possible. For the full picture, `OpenVmBenchmark/benchmark.py` runs `leanr
+Optimization is slow; sampling a few of the 100 cases per iteration is fine. You can use the `*.powdr_opt.*` files for inspiration of new ideas that are possible. For the full picture, `OpenVmBenchmarks/benchmark.py` runs `leanr
 compare` over all 100 cases in parallel (or `--n N` for the top N by cost; `--report out.html` for a
 click-through comparison of the original / powdr / leanr circuits) and reports aggregate/geomean
-effectiveness against powdr — this is the final evaluation. Report the result in the log.
+effectiveness against powdr — this is the final evaluation. It runs the main `openvm-eth` benchmark
+by default; a positional argument selects another set under `OpenVmBenchmarks/`. Report the result
+in the log.
 
 ## Rules
 

@@ -3,3 +3,7 @@
 
 # generated benchmark report
 report.html
+
+# python bytecode cache
+__pycache__/
+*.pyc
