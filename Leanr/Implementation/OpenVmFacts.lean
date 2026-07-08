@@ -255,5 +255,35 @@ def openVmFacts (p : ℕ) [NeZero p]
           decide_eq_false hne, Bool.false_eq_true, if_false]
       rw [heq]
       exact hadm_full busId' shape' hshape'
+  bytePairBus busId := match busMap busId with
+    | some .bitwiseLookup => true
+    | _ => false
+  bytePairBus_sound := by
+    intro busId h
+    -- `h` forces the bus to be the bitwise-lookup bus.
+    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
+      revert h; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    refine ⟨?_, ?_, ?_⟩
+    · -- the bitwise-lookup bus is stateless
+      show (match busMap busId with | some t => t.isStateful | none => false) = false
+      rw [hbus]; rfl
+    · -- a multiplicity-1 packed check never breaks an invariant
+      intro x y
+      show breaksInvariant busMap { busId := busId, multiplicity := 1, payload := [x, y, 0, 0] }
+        = false
+      unfold breaksInvariant; rw [hbus]; simp
+    · intro x y mult
+      -- `(0 : ZMod p).val = 0` and `(1 : ZMod p).val ≤ 1` reduce the `match op.val` branches;
+      -- `isByte` stays opaque — the accepted conditions on both sides coincide by boolean logic.
+      have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
+      have h1le : (1 : ZMod p).val ≤ 1 := by
+        rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_le 1 p
+      show violates busMap { busId := busId, multiplicity := mult, payload := [x, y, 0, 0] } = false ↔
+        violates busMap { busId := busId, multiplicity := mult, payload := [x, x, 0, 1] } = false ∧
+        violates busMap { busId := busId, multiplicity := mult, payload := [y, y, 0, 1] } = false
+      unfold violates; rw [hbus]
+      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1 <;> simp [h1, hv0]
 
 end Leanr.OpenVM

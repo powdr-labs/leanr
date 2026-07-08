@@ -96,6 +96,26 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
         m.multiplicity ≠ 1) →
       bs.admissible (A ++ S :: B ++ R :: C) →
       bs.admissible (A ++ B ++ C)
+  /-- Byte-check pairing on a bitwise-style *stateless* bus. If `bytePairBus busId = true` then the
+      bus is stateless and, for every pair of operand values and any multiplicity, the pair-check
+      message `[x, y, 0, 0]` is accepted exactly when the two single-value checks `[x, x, 0, 1]` and
+      `[y, y, 0, 1]` are. So two single-value byte checks pack losslessly into one pair check, with
+      the *same* satisfying set (each side imposes "both operands are bytes") — a bus-interaction
+      win. `trivial` sets it `false` (recovering fact-free behavior); the OpenVM instance proves it
+      for the bitwise-lookup bus against the concrete table (see `Leanr/Implementation/OpenVmFacts.lean`). -/
+  bytePairBus : (busId : Nat) → Bool
+  bytePairBus_sound :
+    ∀ (busId : Nat), bytePairBus busId = true →
+      bs.isStateful busId = false ∧
+      (∀ (x y : ZMod p),
+        bs.breaksInvariant { busId := busId, multiplicity := 1, payload := [x, y, 0, 0] } = false) ∧
+      ∀ (x y mult : ZMod p),
+        (bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, y, 0, 0] }
+            = false ↔
+          bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, x, 0, 1] }
+              = false ∧
+            bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [y, y, 0, 1] }
+              = false)
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
@@ -110,3 +130,5 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   memShape_stateful := by intro _ _ h; exact absurd h (by simp)
   admissible_sound := by intro _ _ _ _ h; exact absurd h (by simp)
   admissible_dropPair := by intro _ _ _ h; exact absurd h (by simp)
+  bytePairBus _ := false
+  bytePairBus_sound := by intro _ h; exact absurd h (by simp)

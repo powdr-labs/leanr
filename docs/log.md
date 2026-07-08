@@ -1147,3 +1147,45 @@ result is byte-identical to reencode-only on every case sampled (apc_002/003/004
 i.e. effectiveness-neutral but more general (and slightly fewer fixpoint cycles: apc_005 62.3 s → 58.4 s).
 The pass stands on its own if `reencode` is ever dropped (entry-47 option B → ~1939 on this class, keeping
 all flags, close to powdr's 1808).
+
+### 49. Byte-check packing (`BytePack.lean`) — bus-interaction effectiveness
+
+Closes most of the bitwise-lookup bus gap identified in entry 42/46. On OpenVM's `BitwiseLookup`
+bus a single value `e` is byte-range-checked by the self-XOR message `[e, e, 0, 1]` (op 1: asserts
+`e ⊕ e = 0`, forcing `e` to be a byte). powdr packs **two** such checks into one pair check
+`[e₁, e₂, 0, 0]` (op 0: range-check both operands), checking two bytes per interaction where leanr
+kept one per limb — so leanr carried ~2× powdr's bitwise interactions (e.g. apc_001 12 vs 6,
+apc_008 36 vs 10). `bytePackPass` performs the same packing.
+
+Why it is sound (no audited-surface change — `Spec.lean`, `OpenVmSemantics.lean`, `MemoryBus.lean`,
+`Leanr/Optimizer.lean` untouched):
+- The two single checks and the packed check impose the **identical** obligation ("both operands
+  are bytes"), so the satisfying set is unchanged. This table equivalence — `violates [x,y,0,0] =
+  false ↔ violates [x,x,0,1] = false ∧ violates [y,y,0,1] = false` — is a new **proven `BusFacts`
+  field** `bytePairBus` (discharged for the bitwise bus in `OpenVmFacts.lean` against the concrete
+  `violates`; `trivial` sets it `false`, so the pass is a no-op without facts and stays
+  VM-agnostic). The field also carries `breaksInvariant [x,y,0,0] (mult 1) = false` (the new packed
+  interaction preserves invariants).
+- The three interactions are **stateless** (`isStateful = false`), so the swap leaves every stateful
+  side effect and the `admissible` discipline untouched (the stateful-filtered lists coincide). The
+  core `mergeBytePair_correct` is a `PassCorrect.ofEnvEq` (env' = env, no derivations); `out.vars ⊆
+  cs.vars` because the packed check's operands come from the two originals. One pair is packed per
+  invocation, drained by `iterateToFixpoint` (bus length strictly drops by one each step); the
+  candidate scan mirrors `busPairCancel` (the O(n) split-equation `decide` runs only for the chosen
+  candidate).
+
+`lake build` green; `openVmOptimizer_maintainsCorrectness` (and the `simpleOptimizer` /
+`optimizerWithBusFacts` variants) still `{propext, Classical.choice, Quot.sound}`-only; no
+`sorry`/`admit`/`axiom`/`native_decide`; all outputs within the degree bound (the packed check has
+degree ≤ the originals).
+
+**Impact (openvm-eth, top-12 `benchmark.py`, variables and constraints unchanged):** bus-interaction
+effectiveness **3.056× → 3.109× aggregate**, **2.406× → 2.559× geomean** (gap to powdr's 3.552× /
+2.888× narrowed from −0.496 to −0.443 aggregate). Variables **3.997× / 3.403×** and constraints
+**8.784× / 8.546×** are byte-for-byte identical (the pass touches neither). Per case: apc_001 bus
+**30 → 24**, reaching **full parity with powdr (24)**; apc_003 96 → 90; apc_008 89 → 77 (bitwise
+36 → 24). The residual bitwise gap on some blocks (apc_008) is non-self-XOR byte checks the
+recogniser skips; the remaining bus gap is otherwise the tuple-range packing and the memory-pointer
+13-bit checks (see `docs/ideas.md`). Note: variables are ~tied with powdr on this sample (leanr wins
+the aggregate, powdr the geomean and 7/12 cases), so bus interactions are the systematic gap this
+targets.
