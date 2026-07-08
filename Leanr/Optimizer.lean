@@ -14,11 +14,7 @@ variable {p : ℕ}
       with *proven* properties of the bus semantics.
     - `simpleOptimizer bs`: A specialization with `BusFacts.trivial bs` (no bus knowledge). This is the optimizer for
       a new VM with no proven bus facts. It will likely be less effective than the fact-aware optimizer.
-    - `openVmOptimizer busMap`: A specialization for the OpenVM semantics.
-
-    None of them takes an iteration count: the cleanup loop (`iterateToFixpoint`) runs until it stops
-    strictly shrinking the lexicographic size key `(vars, bus, constraints)`, provably terminating on
-    that well-founded measure, so it can never be cut off short. -/
+    - `openVmOptimizer busMap`: A specialization for the OpenVM semantics. -/
 
 /-- Optimizer which does not use any bus facts. Works with any VM, but is less effective. -/
 def simpleOptimizer (bs : BusSemantics p) : ConstraintSystem p → ConstraintSystem p :=
