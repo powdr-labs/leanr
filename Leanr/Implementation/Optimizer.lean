@@ -13,7 +13,6 @@ import Leanr.Implementation.OptimizerPasses.TautoBus
 import Leanr.Implementation.OptimizerPasses.MonicScale
 import Leanr.Implementation.OptimizerPasses.MemoryUnify
 import Leanr.Implementation.OptimizerPasses.BusUnify
-import Leanr.Implementation.OptimizerPasses.BusMerge
 import Leanr.Implementation.OptimizerPasses.DisconnectedComponent
 import Leanr.Implementation.OptimizerPasses.Reencode
 
@@ -46,10 +45,8 @@ pass's own `PassCorrect`. -/
     substitute one variable forced by finite-domain enumeration (boolean/one-hot case
     analysis, bus-fact domains, probed bus obligations; prime `p` only), re-normalize and
     re-fold, drop trivially-true constraints, drop zero-multiplicity bus interactions, drop
-    stateless interactions whose constant message satisfies the bus table, merge pairs of
-    stateless lookups into one carrying their combined obligation (proven bus facts, e.g. two
-    single-byte range checks into one two-byte check), and add the receive-equals-send equations
-    entailed by the memory discipline. Finally, canonicalize:
+    stateless interactions whose constant message satisfies the bus table, and add the
+    receive-equals-send equations entailed by the memory discipline. Finally, canonicalize:
     scale every constraint's affine factors to monic form (zero-set preserving) and re-fold.
     Extend it by composing passes with `.andThen`. -/
 def cleanupCycle : VerifiedPassW p :=
@@ -62,8 +59,6 @@ def cleanupCycle : VerifiedPassW p :=
     |>.andThen trivialConstraintDropPass.withFacts.guardDegree
     |>.andThen zeroMultBusDropPass.withFacts.guardDegree
     |>.andThen tautoBusDropPass.withFacts.guardDegree
-    |>.andThen mergeTuplePass.guardDegree
-    |>.andThen mergeLookupPass.guardDegree
     |>.andThen busUnifyPass.guardDegree
     |>.andThen disconnectedComponentPass.withFacts.guardDegree
     |>.andThen reencodePass.withFacts.guardDegree
