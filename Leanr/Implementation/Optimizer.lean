@@ -92,30 +92,32 @@ def pipeline : VerifiedPassW p := pipelineIters 32
     more than the snapshot default). -/
 def optimizerWithBusFacts {bs : BusSemantics p} (facts : BusFacts p bs) (iters : Nat := 32)
     (cs : ConstraintSystem p) : ConstraintSystem p :=
-  -- The pipeline passes operate on the algebraic/bus part only and reset `derivedColumns` to the
-  -- default `[]`; reattach the input's derived columns verbatim. Since `refines`,
-  -- `guaranteesInvariants` and `withinDegree` read only `algebraicConstraints`/`busInteractions`,
-  -- this reattachment is invisible to all correctness properties.
-  { (pipelineIters iters cs bs facts).val with derivedColumns := cs.derivedColumns }
+  -- The output is exactly the pipeline's result: any derived columns a pass emitted (the terminal
+  -- re-encoding pass emits `isNew = false` hints for the variables it eliminates) flow straight to
+  -- the output. No reattachment — with the strengthened `refines`, the emitted hints' consistency
+  -- under the completeness witness is carried by the pipeline's own `PassCorrect` proof.
+  (pipelineIters iters cs bs facts).val
 
 /-- The fact-aware optimizer is correct: its output `refines` its input (sound, and complete for
-    the input's intended executions) and preserves invariants — the same two clauses
-    `optimizerMaintainsCorrectness` demands, stated per instance because nontrivial facts are tied
-    to one semantics. -/
+    the input's intended executions — now including consistency of the output's derived columns
+    under the completeness witness) and preserves invariants. -/
 theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p bs)
     (iters : Nat := 32) (cs : ConstraintSystem p) :
     ((optimizerWithBusFacts facts iters cs).refines cs bs) ∧
       (cs.guaranteesInvariants bs → (optimizerWithBusFacts facts iters cs).guaranteesInvariants bs) :=
-  -- `refines` and `guaranteesInvariants` read only `algebraicConstraints`/`busInteractions`, which
-  -- the `with derivedColumns := …` update leaves untouched, so the pipeline's proof applies as-is.
   (pipelineIters iters cs bs facts).property
 
-/-- The fact-aware optimizer carries derived columns through verbatim: it reattaches the input's
-    derived columns after running the (derived-column-agnostic) pipeline. -/
-theorem optimizerWithBusFacts_preservesDerived {bs : BusSemantics p} (facts : BusFacts p bs)
-    (iters : Nat := 32) (cs : ConstraintSystem p) :
-    (optimizerWithBusFacts facts iters cs).derivedColumns = cs.derivedColumns :=
-  rfl
+/-- The fact-aware optimizer's output derived columns are consistent under the completeness witness:
+    for every admissible, satisfying, hint-consistent input assignment there is an output-satisfying
+    `env'` under which every emitted hint computes its assigned value. A projection of the
+    `refines` completeness direction (`impliesAdmissible`), which now carries this. -/
+theorem optimizerWithBusFacts_derivedConsistent {bs : BusSemantics p} (facts : BusFacts p bs)
+    (iters : Nat := 32) (cs : ConstraintSystem p) (env : String → ZMod p)
+    (hadm : cs.admissible bs env) (hsat : cs.satisfies bs env) (hdc : cs.derivedConsistent env) :
+    ∃ env', (optimizerWithBusFacts facts iters cs).satisfies bs env' ∧
+      (optimizerWithBusFacts facts iters cs).derivedConsistent env' :=
+  let ⟨env', hsat', _, _, hdc'⟩ := (pipelineIters iters cs bs facts).property.1.2 env hadm hsat hdc
+  ⟨env', hsat', hdc'⟩
 
 /-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree
     bound (every pass is degree-guarded). -/

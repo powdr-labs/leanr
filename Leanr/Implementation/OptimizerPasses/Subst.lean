@@ -152,11 +152,11 @@ theorem ConstraintSystem.subst_correct (cs : ConstraintSystem p) (x : String) (t
     rw [cs.sideEffects_subst]
     exact BusState.equiv_refl _
   · -- completeness: cs intended-implies (cs.subst x t)
-    intro env hint hsat
+    intro env hint hsat _hdc
     have hx : env x = t.eval env := H env hsat
     have hupd : Function.update env x (t.eval env) = env := by
       rw [← hx]; exact Function.update_eq_self x env
-    refine ⟨env, ?_, ?_, ?_⟩
+    refine ⟨env, ?_, ?_, ?_, ConstraintSystem.derivedConsistent_of_nil env rfl⟩
     · rw [cs.satisfies_subst, hupd]; exact hsat
     · rw [cs.admissible_subst, hupd]; exact hint
     · rw [cs.sideEffects_subst, hupd]; exact BusState.equiv_refl _

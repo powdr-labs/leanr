@@ -24,6 +24,14 @@ This module provides:
 
 These proofs are purely structural; none of them need `p` to be prime. -/
 
+/-! ## Derived-column consistency helpers -/
+
+/-- A system with no derived columns is (vacuously) derived-consistent under any assignment. Used
+    by every pass that constructs its output without derived columns (the default `[]`). -/
+theorem ConstraintSystem.derivedConsistent_of_nil {p : ℕ} {s : ConstraintSystem p}
+    (env : String → ZMod p) (h : s.derivedColumns = []) : s.derivedConsistent env := by
+  intro dc hdc; rw [h] at hdc; simp at hdc
+
 /-! ## Equivalence is an equivalence relation -/
 
 /-- `≈` on `BusState` is reflexive: every message trivially has the same net multiplicity in a
@@ -53,21 +61,22 @@ theorem ConstraintSystem.implies_trans {a b c : ConstraintSystem p} {busSemantic
     let ⟨env'', hc, hbc⟩ := h2 env' hb
     ⟨env'', hc, BusState.equiv_trans hab hbc⟩
 
-/-- Any constraint system admissibly-implies itself: the same admissible assignment works. -/
+/-- Any constraint system admissibly-implies itself: the same admissible assignment works. The
+    derived-column consistency delivered is exactly the one assumed (`env' = env`). -/
 theorem ConstraintSystem.impliesAdmissible_refl (cs : ConstraintSystem p)
     (busSemantics : BusSemantics p) : cs.impliesAdmissible cs busSemantics :=
-  fun env hadm hsat => ⟨env, hsat, hadm, BusState.equiv_refl _⟩
+  fun env hadm hsat hdc => ⟨env, hsat, hadm, BusState.equiv_refl _, hdc⟩
 
 /-- `impliesAdmissible` is transitive: chain the admissible witnesses and the side-effect
-    equalities. The middle witness is admissible (delivered by the first step), so the second
-    step applies. -/
+    equalities. The middle witness is admissible *and derived-consistent* (delivered by the first
+    step), so the second step applies; its delivered derived-consistency becomes the result's. -/
 theorem ConstraintSystem.impliesAdmissible_trans {a b c : ConstraintSystem p}
     {busSemantics : BusSemantics p} (h1 : a.impliesAdmissible b busSemantics)
     (h2 : b.impliesAdmissible c busSemantics) : a.impliesAdmissible c busSemantics :=
-  fun env hadm hsat =>
-    let ⟨env', hb, hbadm, hab⟩ := h1 env hadm hsat
-    let ⟨env'', hc, hcadm, hbc⟩ := h2 env' hbadm hb
-    ⟨env'', hc, hcadm, BusState.equiv_trans hab hbc⟩
+  fun env hadm hsat hdc =>
+    let ⟨env', hb, hbadm, hab, hbdc⟩ := h1 env hadm hsat hdc
+    let ⟨env'', hc, hcadm, hbc, hcdc⟩ := h2 env' hbadm hb hbdc
+    ⟨env'', hc, hcadm, BusState.equiv_trans hab hbc, hcdc⟩
 
 /-- Any constraint system refines itself. -/
 theorem ConstraintSystem.refines_refl (cs : ConstraintSystem p) (busSemantics : BusSemantics p) :

@@ -48,9 +48,9 @@ theorem ConstraintSystem.addConstraints_correct (cs : ConstraintSystem p) (bs : 
     intro env hsat
     exact ⟨env, hfwd env hsat, BusState.equiv_refl _⟩
   · -- completeness (uses the discipline to discharge the added constraints)
-    intro env hint hsat
+    intro env hint hsat hdc
     obtain ⟨hc, hb⟩ := hsat
-    refine ⟨env, ⟨fun c hcm => ?_, hb⟩, hint, BusState.equiv_refl _⟩
+    refine ⟨env, ⟨fun c hcm => ?_, hb⟩, hint, BusState.equiv_refl _, hdc⟩
     rcases List.mem_append.1 hcm with h | h
     · exact hc c h
     · exact H env hint ⟨hc, hb⟩ c h

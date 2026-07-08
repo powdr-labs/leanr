@@ -150,9 +150,9 @@ theorem ConstraintSystem.mapConstraintsIff_correct (cs : ConstraintSystem p)
   refine ⟨⟨?_, ?_⟩, ?_⟩
   · intro env hsat
     exact ⟨env, (hiff env).1 hsat, by rw [hside]; exact BusState.equiv_refl _⟩
-  · intro env hint hsat
-    -- `mapConstraints` leaves bus interactions untouched, so `isIntended` is definitionally `cs`'s
-    exact ⟨env, (hiff env).2 hsat, hint, by rw [hside]; exact BusState.equiv_refl _⟩
+  · intro env hint hsat hdc
+    -- `mapConstraints` leaves bus interactions and derived columns untouched
+    exact ⟨env, (hiff env).2 hsat, hint, by rw [hside]; exact BusState.equiv_refl _, hdc⟩
   · intro hinv env hsat bi hbi
     exact hinv env ((hiff env).1 hsat) bi hbi
 

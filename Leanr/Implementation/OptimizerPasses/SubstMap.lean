@@ -157,9 +157,9 @@ theorem ConstraintSystem.substF_correct (cs : ConstraintSystem p)
     rw [cs.sideEffects_substF]
     exact BusState.equiv_refl _
   · -- completeness: cs intended-implies (cs.substF f)
-    intro env hint hsat
+    intro env hint hsat _hdc
     have henv : envF f env = env := envF_eq_self f env (H env hsat)
-    refine ⟨env, ?_, ?_, ?_⟩
+    refine ⟨env, ?_, ?_, ?_, ConstraintSystem.derivedConsistent_of_nil env rfl⟩
     · rw [cs.satisfies_substF, henv]; exact hsat
     · rw [cs.admissible_substF, henv]; exact hint
     · rw [cs.sideEffects_substF, henv]; exact BusState.equiv_refl _

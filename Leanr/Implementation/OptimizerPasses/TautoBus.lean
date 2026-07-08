@@ -144,11 +144,11 @@ theorem ConstraintSystem.filterBusStateless_correct (cs : ConstraintSystem p)
   refine ⟨⟨?_, ?_⟩, ?_⟩
   · intro env hsat
     exact ⟨env, (hiff env).1 hsat, by rw [hside]; exact BusState.equiv_refl _⟩
-  · intro env hint hsat
+  · intro env hint hsat hdc
     exact ⟨env, (hiff env).2 hsat,
       (cs.admissible_filterBus bs keep env
         (fun bi hbi hkf => Or.inr (hstateless bi hbi hkf))).2 hint,
-      by rw [hside]; exact BusState.equiv_refl _⟩
+      by rw [hside]; exact BusState.equiv_refl _, hdc⟩
   · intro hinv env hsat bi hbi
     have hbimem : bi ∈ cs.busInteractions :=
       (List.mem_filter.1 (by simpa only [ConstraintSystem.filterBus] using hbi)).1

@@ -109,9 +109,9 @@ theorem ConstraintSystem.mapExpr_correct (cs : ConstraintSystem p) (bs : BusSema
   · intro env hsat
     refine ⟨env, (cs.satisfies_mapExpr hg bs env).1 hsat, ?_⟩
     rw [cs.sideEffects_mapExpr hg]; exact BusState.equiv_refl _
-  · intro env hint hsat
+  · intro env hint hsat _hdc
     refine ⟨env, (cs.satisfies_mapExpr hg bs env).2 hsat,
-      (cs.admissible_mapExpr hg bs env).2 hint, ?_⟩
+      (cs.admissible_mapExpr hg bs env).2 hint, ?_, ConstraintSystem.derivedConsistent_of_nil env rfl⟩
     rw [cs.sideEffects_mapExpr hg]; exact BusState.equiv_refl _
   · intro hinv env hsat bi hbi
     have hsatcs : cs.satisfies bs env := (cs.satisfies_mapExpr hg bs env).1 hsat
@@ -151,9 +151,9 @@ theorem ConstraintSystem.filterConstraints_correct (cs : ConstraintSystem p) (bs
   refine ⟨⟨?_, ?_⟩, ?_⟩
   · intro env hsat
     exact ⟨env, (hiff env).1 hsat, by rw [hside]; exact BusState.equiv_refl _⟩
-  · intro env hint hsat
-    -- `filterConstraints` leaves bus interactions untouched, so `isIntended` is definitionally `cs`'s
-    exact ⟨env, (hiff env).2 hsat, hint, by rw [hside]; exact BusState.equiv_refl _⟩
+  · intro env hint hsat hdc
+    -- `filterConstraints` leaves bus interactions and derived columns untouched
+    exact ⟨env, (hiff env).2 hsat, hint, by rw [hside]; exact BusState.equiv_refl _, hdc⟩
   · intro hinv env hsat bi hbi
     exact hinv env ((hiff env).1 hsat) bi hbi
 
@@ -270,10 +270,10 @@ theorem ConstraintSystem.filterBus_correct (cs : ConstraintSystem p) (bs : BusSe
   refine ⟨⟨?_, ?_⟩, ?_⟩
   · intro env hsat
     exact ⟨env, (hiff env).1 hsat, BusState.equiv_symm (hside env)⟩
-  · intro env hint hsat
+  · intro env hint hsat hdc
     exact ⟨env, (hiff env).2 hsat,
       (cs.admissible_filterBus bs keep env
-        (fun bi hbi hkf => Or.inl (h bi hbi hkf env))).2 hint, hside env⟩
+        (fun bi hbi hkf => Or.inl (h bi hbi hkf env))).2 hint, hside env, hdc⟩
   · intro hinv env hsat bi hbi
     have hbimem : bi ∈ cs.busInteractions :=
       (List.mem_filter.1 (by simpa only [ConstraintSystem.filterBus] using hbi)).1

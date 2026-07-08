@@ -38,7 +38,8 @@ theorem optimizerWithBusFacts_maintainsCorrectness (bs : BusSemantics p) (facts 
     optimizerMaintainsCorrectness bs (optimizerWithBusFacts facts iters) :=
   ⟨fun cs => optimizerWithBusFacts_correct facts iters cs,
    fun cs => optimizerWithBusFacts_respectsDegree facts iters cs,
-   fun cs => optimizerWithBusFacts_preservesDerived facts iters cs⟩
+   fun cs env hadm hsat hdc =>
+     optimizerWithBusFacts_derivedConsistent facts iters cs env hadm hsat hdc⟩
 
 theorem simpleOptimizer_maintainsCorrectness (bs : BusSemantics p) (iters : Nat) :
     optimizerMaintainsCorrectness bs (simpleOptimizer bs iters) :=

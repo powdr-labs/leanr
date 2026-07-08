@@ -171,10 +171,11 @@ def ConstraintSystem.derivedConsistent (s : ConstraintSystem p) (env : String �
   ∀ dc ∈ s.derivedColumns, dc.consistent env
 
 /-- A system's derived columns are *entailed* by the system when every satisfying assignment makes
-    them consistent — i.e. the hints are provably correct against the circuit itself. This is the
-    semantic notion of a valid derived column. It is provided declaratively (an emitting pass would
-    establish it for the columns it adds); the current optimizer emits no columns and instead
-    carries them verbatim (see `optimizerPreservesDerivedColumns`). -/
+    them consistent — i.e. the hints are provably correct against the circuit itself. This is a
+    stronger (env-universal) notion than the completeness-witness consistency carried by
+    `impliesAdmissible`; it holds for hints of columns still pinned by the constraints, but not for
+    hints of *eliminated* variables (which are free in the output), so the optimizer's guarantee is
+    the witness-level `optimizerDerivedColumnsConsistent`, not entailment. Kept as documentation. -/
 def ConstraintSystem.derivedColumnsEntailed (s : ConstraintSystem p) (busSemantics : BusSemantics p) :
     Prop :=
   ∀ env, s.satisfies busSemantics env → s.derivedConsistent env
@@ -201,12 +202,25 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
     assignments, and the produced witness is itself admissible. This is the *completeness*
     direction of an optimization: the optimizer must reproduce every real trace, but may drop
     spurious (non-trace) satisfying assignments. Delivering an admissible witness is what makes
-    `refines` transitive. -/
+    `refines` transitive.
+
+    **Derived columns (witgen hints).** The obligation additionally *assumes* `self`'s derived
+    columns are consistent under `env` and *delivers* a witness `env'` under which `other`'s derived
+    columns are consistent. This threads witness-generation semantics through the same completeness
+    witness the optimizer already constructs: a real trace of `self` is hint-consistent (witgen
+    filled the hint columns per their computation methods), and the optimizer must produce a real
+    trace of `other` that is likewise hint-consistent. The assume/deliver symmetry is exactly what
+    keeps the relation reflexive (`env' = env` re-delivers the assumption) and transitive (the
+    middle witness carries the hypothesis the next step needs). At the audited boundary the input
+    has no derived columns, so the hypothesis is vacuous and the conclusion is the real guarantee:
+    the optimizer's *output* hints are reconstructible on every real trace. -/
 def ConstraintSystem.impliesAdmissible (self other : ConstraintSystem p)
     (busSemantics : BusSemantics p) : Prop :=
   ∀ env, self.admissible busSemantics env → self.satisfies busSemantics env →
+    self.derivedConsistent env →
     ∃ env', other.satisfies busSemantics env' ∧ other.admissible busSemantics env' ∧
-      self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
+      self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env' ∧
+      other.derivedConsistent env'
 
 /-- Whether `self` is a valid **optimization** of `other` under a given bus semantics:
     * **sound** — `self.implies other`: A satisfying assignment of `self` implies that there exists
@@ -231,15 +245,20 @@ def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
     constraintSystem.withinDegree busSemantics.degreeBound →
     (optimizer constraintSystem).withinDegree busSemantics.degreeBound
 
-/-- Whether an optimizer carries derived columns (witgen hints) through verbatim: the output's
-    derived columns equal the input's. Derived columns are trusted metadata, not constraints, so
-    the optimizer must neither fabricate a new (possibly bogus) hint nor silently drop one. Since
-    the columns are preserved identically, the output's hints are exactly as valid as the input's
-    (in particular `derivedColumnsEntailed` transfers when the columns are unchanged). -/
-def optimizerPreservesDerivedColumns
+/-- Whether an optimizer's *output* derived columns (witgen hints) are consistent under the
+    completeness witness it constructs: for every admissible, satisfying, hint-consistent input
+    assignment there is an output-satisfying `env'` under which every output derived column computes
+    the value it is assigned. This is the meaningful correctness of an emitted hint — witgen,
+    following the hints on a real trace, obtains a consistent assignment — and it forbids
+    fabricating a hint that cannot be reconstructed. It is a direct projection of the `refines`
+    completeness direction (`impliesAdmissible`), which now carries derived-column consistency. -/
+def optimizerDerivedColumnsConsistent (busSemantics : BusSemantics p)
     (optimizer : ConstraintSystem p → ConstraintSystem p) : Prop :=
-  ∀ constraintSystem : ConstraintSystem p,
-    (optimizer constraintSystem).derivedColumns = constraintSystem.derivedColumns
+  ∀ (constraintSystem : ConstraintSystem p) (env : String → ZMod p),
+    constraintSystem.admissible busSemantics env → constraintSystem.satisfies busSemantics env →
+    constraintSystem.derivedConsistent env →
+    ∃ env', (optimizer constraintSystem).satisfies busSemantics env' ∧
+      (optimizer constraintSystem).derivedConsistent env'
 
 /-- Whether an optimizer maintains correctness *with respect to a given `busSemantics`*. This
     means that, for all constraint systems:
@@ -248,8 +267,8 @@ def optimizerPreservesDerivedColumns
        the input's intended (real-trace) executions.
     2. Assuming the original constraint system guarantees invariants, so does the optimized one.
     3. The optimizer respects the zkVM's degree bound.
-    4. The optimizer preserves derived columns verbatim
-       (`optimizerPreservesDerivedColumns`).
+    4. The optimizer's output derived columns (witgen hints) are consistent under the constructed
+       completeness witness (`optimizerDerivedColumnsConsistent`).
 
     The bus semantics is a *parameter*: quantifying over it (`∀ bs, optimizerMaintainsCorrectness
     bs opt`) recovers the "correct for every semantics" reading, while leaving it fixed lets a
@@ -262,4 +281,4 @@ def optimizerMaintainsCorrectness (busSemantics : BusSemantics p)
     (constraintSystem.guaranteesInvariants busSemantics →
       (optimizer constraintSystem).guaranteesInvariants busSemantics))
   ∧ optimizerRespectsDegreeBound busSemantics optimizer
-  ∧ optimizerPreservesDerivedColumns optimizer
+  ∧ optimizerDerivedColumnsConsistent busSemantics optimizer

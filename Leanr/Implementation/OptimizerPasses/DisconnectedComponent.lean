@@ -144,9 +144,10 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
         (fun bi hbi hstate => hmeB env bi (hBkeep bi hbi (hstKeep bi hbi hstate)))
     rw [hse]; exact BusState.equiv_refl _
   · -- completeness: cs.impliesAdmissible out
-    intro env hadm hsat
+    intro env hadm hsat _hdc
     refine ⟨env, ⟨fun c hc => hsat.1 c (List.mem_filter.1 hc).1,
-                  fun bi hbi => hsat.2 bi (List.mem_filter.1 hbi).1⟩, ?_, ?_⟩
+                  fun bi hbi => hsat.2 bi (List.mem_filter.1 hbi).1⟩, ?_, ?_,
+                  ConstraintSystem.derivedConsistent_of_nil env rfl⟩
     · -- admissibility carries over (dropped interactions are stateless)
       exact (cs.admissible_filterBus bs keepBi env
         (fun bi hbi hkf => Or.inr (hBstateless bi hbi hkf))).2 hadm

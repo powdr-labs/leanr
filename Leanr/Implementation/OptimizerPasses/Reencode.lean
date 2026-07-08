@@ -184,9 +184,10 @@ theorem ConstraintSystem.reencode_correct (cs : ConstraintSystem p) (bsem : BusS
     · rw [hside env env' hB]
       exact BusState.equiv_refl _
   · -- completeness: cs intended-implies out
-    intro env hint hsat
+    intro env hint hsat _hdc
     obtain ⟨env', hA, hB, hnew⟩ := hfwd env hsat
-    refine ⟨env', ⟨?_, ?_⟩, (hdisc env env' hB).2 hint, ?_⟩
+    refine ⟨env', ⟨?_, ?_⟩, (hdisc env env' hB).2 hint, ?_,
+      ConstraintSystem.derivedConsistent_of_nil env' (by rw [hout])⟩
     · intro c hc
       rcases List.mem_append.1 hc with h | h
       · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 h
