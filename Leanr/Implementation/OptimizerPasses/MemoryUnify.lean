@@ -32,10 +32,24 @@ variable {p : ℕ}
     `PassCorrect`. The entailment `H` may consume the memory discipline (`admissible`), since it
     is only needed for the completeness direction; soundness drops the added constraints, and the
     added constraints touch no bus interaction, so `admissible` and the side effects are unchanged. -/
+theorem ConstraintSystem.addConstraints_vars_subset (cs : ConstraintSystem p)
+    (new : List (Expression p)) (hnv : ∀ c ∈ new, ∀ z ∈ c.vars, z ∈ cs.vars) :
+    ∀ z ∈ ({ cs with algebraicConstraints := cs.algebraicConstraints ++ new }).vars, z ∈ cs.vars := by
+  intro z hz
+  rw [ConstraintSystem.mem_vars] at hz
+  rcases hz with ⟨c, hc, hzc⟩ | ⟨bi, hbi, hzbi⟩
+  · rcases List.mem_append.1 hc with h | h
+    · exact ConstraintSystem.mem_vars_of_constraint h hzc
+    · exact hnv c h z hzc
+  · rcases hzbi with hm | ⟨e, he, hze⟩
+    · exact ConstraintSystem.mem_vars_of_mult hbi hm
+    · exact ConstraintSystem.mem_vars_of_payload hbi he hze
+
 theorem ConstraintSystem.addConstraints_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (new : List (Expression p))
-    (H : ∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ new, c.eval env = 0) :
-    PassCorrect cs { cs with algebraicConstraints := cs.algebraicConstraints ++ new } bs := by
+    (H : ∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ new, c.eval env = 0)
+    (hnv : ∀ c ∈ new, ∀ z ∈ c.vars, z ∈ cs.vars) :
+    PassCorrect cs { cs with algebraicConstraints := cs.algebraicConstraints ++ new } [] bs := by
   -- soundness helper: the augmented system's satisfaction always implies the original's
   have hfwd : ∀ env,
       (ConstraintSystem.satisfies
@@ -43,20 +57,20 @@ theorem ConstraintSystem.addConstraints_correct (cs : ConstraintSystem p) (bs : 
       → cs.satisfies bs env := by
     rintro env ⟨hc, hb⟩
     exact ⟨fun c hcm => hc c (List.mem_append_left _ hcm), hb⟩
-  refine ⟨⟨?_, ?_⟩, ?_⟩
+  refine PassCorrect.ofEnvEq ?_ ?_ (cs.addConstraints_vars_subset new hnv) ?_
   · -- soundness
     intro env hsat
     exact ⟨env, hfwd env hsat, BusState.equiv_refl _⟩
-  · -- completeness (uses the discipline to discharge the added constraints)
-    intro env hint hsat
-    obtain ⟨hc, hb⟩ := hsat
-    refine ⟨env, ⟨fun c hcm => ?_, hb⟩, hint, BusState.equiv_refl _⟩
-    rcases List.mem_append.1 hcm with h | h
-    · exact hc c h
-    · exact H env hint ⟨hc, hb⟩ c h
   · -- invariant preservation
     intro hinv env hsat bi hbi
     exact hinv env (hfwd env hsat) bi hbi
+  · -- completeness (uses the discipline to discharge the added constraints), witness `env`
+    intro env hadm hsat
+    obtain ⟨hc, hb⟩ := hsat
+    refine ⟨⟨fun c hcm => ?_, hb⟩, hadm, BusState.equiv_refl _⟩
+    rcases List.mem_append.1 hcm with h | h
+    · exact hc c h
+    · exact H env hadm ⟨hc, hb⟩ c h
 
 /-! ## Small verified building blocks -/
 

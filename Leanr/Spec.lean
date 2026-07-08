@@ -36,6 +36,43 @@ def Expression.degree : Expression p → Nat
   | .add e1 e2 => max e1.degree e2.degree
   | .mul e1 e2 => e1.degree + e2.degree
 
+/-- The variables occurring in an expression. -/
+def Expression.vars : Expression p → List Variable
+  | .const _ => []
+  | .var x => [x]
+  | .add e1 e2 => e1.vars ++ e2.vars
+  | .mul e1 e2 => e1.vars ++ e2.vars
+
+--------- Computation Methods ---------
+
+/-- A method for computing a *derived* variable's value from other variables, mirroring powdr's
+    `ComputationMethod`. For newly introduced variables, this is interpreted by powdr's witness
+    generator.
+    `quotientOrZero num den` is `num / den` in the field, or `0` when
+    `den = 0`; `ifEqZero cond thenM elseM` picks `thenM` when `cond` evaluates to `0`, else `elseM`. -/
+inductive ComputationMethod (p : ℕ) where
+  | const (c : ZMod p)
+  | quotientOrZero (num den : Expression p)
+  | ifEqZero (cond : Expression p) (thenM elseM : ComputationMethod p)
+
+/-- Evaluate a computation method under an assignment (cf. powdr's `evaluate_computation_method`). -/
+def ComputationMethod.eval : ComputationMethod p → (Variable → ZMod p) → ZMod p
+  | .const c, _ => c
+  | .quotientOrZero num den, env =>
+      if den.eval env = 0 then 0 else (den.eval env)⁻¹ * num.eval env
+  | .ifEqZero cond thenM elseM, env =>
+      if cond.eval env = 0 then thenM.eval env else elseM.eval env
+
+/-- The variables a computation method may read. -/
+def ComputationMethod.vars : ComputationMethod p → List Variable
+  | .const _ => []
+  | .quotientOrZero num den => num.vars ++ den.vars
+  | .ifEqZero cond thenM elseM => cond.vars ++ thenM.vars ++ elseM.vars
+
+/-- A list of derived variables paired with how to compute each, in order — the extra output of
+    the optimizer, consumed by witness generation. -/
+abbrev Derivations (p : ℕ) := List (Variable × ComputationMethod p)
+
 --------- Bus Interactions ---------
 
 /-- A bus interaction. Typically, α is
@@ -104,6 +141,12 @@ structure ConstraintSystem (p : ℕ) where
   algebraicConstraints : List (Expression p)
   busInteractions : List (BusInteraction (Expression p))
 
+/-- The variables occurring anywhere in a constraint system. -/
+def ConstraintSystem.vars (cs : ConstraintSystem p) : List Variable :=
+  cs.algebraicConstraints.flatMap Expression.vars ++
+    cs.busInteractions.flatMap
+      (fun bi => bi.multiplicity.vars ++ bi.payload.flatMap Expression.vars)
+
 /-- The side effects of a constraint system under a given environment and bus semantics.
     The side effects are the tuples sent to the *stateful* buses.-/
 def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
@@ -112,6 +155,32 @@ def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
     |>.map (fun bi =>
       let m := bi.eval env
       ((m.busId, m.payload), m.multiplicity))
+
+--------- Derived variables ---------
+
+/-- The `ComputationMethod` witness generation uses for `v`: the **last** one `ds` lists for it
+    (later derivations override earlier ones), or `none` if `v` is not derived. -/
+def Derivations.methodFor : Derivations p → Variable → Option (ComputationMethod p)
+  | [], _ => none
+  | (u, cm) :: rest, v =>
+      (Derivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
+
+/-- Derived-variable reconstruction under `e`: every no-powdr-ID variable of `cs` is computed by
+    the method `ds` uses for it, reading only input (powdr-ID) variables. -/
+def ConstraintSystem.reconstructs (cs : ConstraintSystem p) (ds : Derivations p)
+    (e : Variable → ZMod p) : Prop :=
+  ∀ v ∈ cs.vars, v.powdrId? = none →
+    ∃ cm, Derivations.methodFor ds v = some cm ∧ (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval e = e v
+
+/-- The `out` constraint system variable assignment `env'` can be completely derived from `inp`
+    constraint system assignment `env`: Either the variables are reused, or they are computed by
+    methods in `ds` reading only input variables. -/
+def ConstraintSystem.derivesWitnessFrom (out inp : ConstraintSystem p) (ds : Derivations p)
+    (env env' : Variable → ZMod p) : Prop :=
+  out.reconstructs ds env' ∧
+  (∀ v ∈ out.vars, v.powdrId?.isSome → v ∈ inp.vars ∧ env' v = env v)
+
+--------- Constraint system implications ---------
 
 /-- Whether a given assignment is admissible under the bus semantics. -/
 def ConstraintSystem.admissible (s : ConstraintSystem p) (busSemantics : BusSemantics p)
@@ -147,24 +216,28 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
       self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
 
 /-- Like `implies`, but the obligation is only required for `self`'s **admissible** (real-trace)
-    assignments, and the produced witness is itself admissible. This is the *completeness*
-    direction of an optimization: the optimizer must reproduce every real trace, but may drop
-    spurious (non-trace) satisfying assignments. Delivering an admissible witness is what makes
-    `refines` transitive. -/
+    assignments, the produced witness is itself admissible and it can be derived from a valid
+    witness for `self`.
+    This is the *completeness* direction of an optimization: the optimizer must reproduce every
+    real trace, but may drop spurious (non-trace) satisfying assignments. Delivering an admissible
+    witness is what makes `refines` transitive. -/
 def ConstraintSystem.impliesAdmissible (self other : ConstraintSystem p)
-    (busSemantics : BusSemantics p) : Prop :=
+    (busSemantics : BusSemantics p) (ds : Derivations p) : Prop :=
   ∀ env, self.admissible busSemantics env → self.satisfies busSemantics env →
     ∃ env', other.satisfies busSemantics env' ∧ other.admissible busSemantics env' ∧
-      self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
+      self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env' ∧
+      ((∀ v ∈ self.vars, v.powdrId?.isSome) → other.derivesWitnessFrom self ds env env')
 
 /-- Whether `self` is a valid **optimization** of `other` under a given bus semantics:
     * **sound** — `self.implies other`: A satisfying assignment of `self` implies that there exists
       a satisfying assignment of `other` with the same side effects.;
     * **complete for admissible executions** — `other.impliesAdmissible self`: every *admissible*
       (real-trace) satisfying assignment of `other` is reproduced by `self`. -/
-def ConstraintSystem.refines (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
-    Prop :=
-  self.implies other busSemantics ∧ other.impliesAdmissible self busSemantics
+def ConstraintSystem.refines (self other : ConstraintSystem p) (busSemantics : BusSemantics p)
+    (ds : Derivations p) : Prop :=
+  self.implies other busSemantics ∧ other.impliesAdmissible self busSemantics ds
+
+--------- Degree bound ---------
 
 /-- Whether a constraint system stays within a degree bound. -/
 def ConstraintSystem.withinDegree (s : ConstraintSystem p) (b : DegreeBound) : Prop :=
@@ -180,6 +253,8 @@ def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
     constraintSystem.withinDegree busSemantics.degreeBound →
     (optimizer constraintSystem).withinDegree busSemantics.degreeBound
 
+--------- Optimizer correctness ---------
+
 /-- Whether an optimizer maintains correctness *with respect to a given `busSemantics`*. This
     means that, for all constraint systems:
     1. The optimized constraint system `refines` the original: it is sound (every satisfying
@@ -191,11 +266,16 @@ def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
     The bus semantics is a *parameter*: quantifying over it (`∀ bs, optimizerMaintainsCorrectness
     bs opt`) recovers the "correct for every semantics" reading, while leaving it fixed lets a
     semantics-specific optimizer — one that bakes in bus knowledge sound only for its own
-    semantics, like the OpenVM optimizer — be an instance too. -/
+    semantics, like the OpenVM optimizer — be an instance too.
+
+    The optimizer additionally returns `Derivations`: `refines` demands that the completeness
+    witness be reconstructible from the input trace via them (`derivesWitness`), so witness
+    generation can fill the output's derived variables. -/
 def optimizerMaintainsCorrectness (busSemantics : BusSemantics p)
-    (optimizer : ConstraintSystem p → ConstraintSystem p) : Prop :=
+    (optimizer : ConstraintSystem p → ConstraintSystem p × Derivations p) : Prop :=
   (∀ constraintSystem : ConstraintSystem p,
-    ((optimizer constraintSystem).refines constraintSystem busSemantics) ∧
+    let (optimized, derivations) := optimizer constraintSystem
+    (optimized.refines constraintSystem busSemantics derivations) ∧
     (constraintSystem.guaranteesInvariants busSemantics →
-      (optimizer constraintSystem).guaranteesInvariants busSemantics))
-  ∧ optimizerRespectsDegreeBound busSemantics optimizer
+      optimized.guaranteesInvariants busSemantics))
+  ∧ optimizerRespectsDegreeBound busSemantics (fun cs => (optimizer cs).1)

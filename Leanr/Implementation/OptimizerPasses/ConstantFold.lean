@@ -65,8 +65,37 @@ theorem Expression.fold_eval (e : Expression p) (env : Variable → ZMod p) :
   | add a b iha ihb => rw [Expression.fold, Expression.foldAdd_eval, iha, ihb]; rfl
   | mul a b iha ihb => rw [Expression.fold, Expression.foldMul_eval, iha, ihb]; rfl
 
+theorem Expression.foldAdd_vars (a b : Expression p) :
+    ∀ x ∈ (a.foldAdd b).vars, x ∈ a.vars ++ b.vars := by
+  intro x hx
+  unfold Expression.foldAdd at hx
+  split at hx <;> (try split_ifs at hx) <;> simp_all [Expression.vars]
+
+theorem Expression.foldMul_vars (a b : Expression p) :
+    ∀ x ∈ (a.foldMul b).vars, x ∈ a.vars ++ b.vars := by
+  intro x hx
+  unfold Expression.foldMul at hx
+  split at hx <;> (try split_ifs at hx) <;> simp_all [Expression.vars]
+
+theorem Expression.fold_vars (e : Expression p) : ∀ x ∈ e.fold.vars, x ∈ e.vars := by
+  induction e with
+  | const n => intro x hx; simp [Expression.fold, Expression.vars] at hx
+  | var y => intro x hx; simpa [Expression.fold] using hx
+  | add a b iha ihb =>
+      intro x hx
+      rw [Expression.fold] at hx
+      rcases List.mem_append.1 (Expression.foldAdd_vars _ _ x hx) with h | h
+      · exact List.mem_append.2 (Or.inl (iha x h))
+      · exact List.mem_append.2 (Or.inr (ihb x h))
+  | mul a b iha ihb =>
+      intro x hx
+      rw [Expression.fold] at hx
+      rcases List.mem_append.1 (Expression.foldMul_vars _ _ x hx) with h | h
+      · exact List.mem_append.2 (Or.inl (iha x h))
+      · exact List.mem_append.2 (Or.inr (ihb x h))
+
 /-- The constant-folding pass: normalize every expression. Correct via `mapExpr_correct`. -/
 def constantFoldPass : VerifiedPass p := fun cs bs =>
-  ⟨cs.mapExpr Expression.fold,
+  ⟨cs.mapExpr Expression.fold, [],
    ConstraintSystem.mapExpr_correct (g := Expression.fold)
-     (fun e env => Expression.fold_eval e env) cs bs⟩
+     (fun e env => Expression.fold_eval e env) cs bs Expression.fold_vars⟩

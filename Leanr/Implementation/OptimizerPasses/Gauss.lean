@@ -62,6 +62,7 @@ def Expression.isVar : Expression p → Bool
 structure Solved (p : ℕ) (cs : ConstraintSystem p) (bs : BusSemantics p) where
   map : Std.HashMap Variable (Expression p)
   sound : ∀ env, cs.satisfies bs env → ∀ y t, map[y]? = some t → env y = t.eval env
+  varsIn : ∀ (y : Variable) (t : Expression p), map[y]? = some t → ∀ z ∈ t.vars, z ∈ cs.vars
 
 namespace Solved
 
@@ -71,6 +72,10 @@ def empty : Solved p cs bs where
   map := ∅
   sound := by
     intro _ _ y t h
+    rw [Std.HashMap.getElem?_empty] at h
+    exact absurd h (by simp)
+  varsIn := by
+    intro y t h
     rw [Std.HashMap.getElem?_empty] at h
     exact absurd h (by simp)
 
@@ -92,7 +97,8 @@ theorem eval_reduce (σ : Solved p cs bs) (e : Expression p) (env : Variable →
 /-- Insert a list of entailed pairs (later inserts win, which is harmless: every pair is
     entailed individually). -/
 def insertAll (σ : Solved p cs bs) (pairs : List (Variable × Expression p))
-    (H : ∀ env, cs.satisfies bs env → ∀ yt ∈ pairs, env yt.1 = yt.2.eval env) :
+    (H : ∀ env, cs.satisfies bs env → ∀ yt ∈ pairs, env yt.1 = yt.2.eval env)
+    (Hv : ∀ yt ∈ pairs, ∀ z ∈ yt.2.vars, z ∈ cs.vars) :
     Solved p cs bs :=
   match pairs with
   | [] => σ
@@ -109,8 +115,19 @@ def insertAll (σ : Solved p cs bs) (pairs : List (Variable × Expression p))
               subst hxy'; subst hts
               exact H env hsat (x, t) (List.mem_cons_self ..)
             · rw [if_neg hxy] at hys
-              exact σ.sound env hsat y s hys }
+              exact σ.sound env hsat y s hys
+          varsIn := by
+            intro y s hys
+            rw [Std.HashMap.getElem?_insert] at hys
+            by_cases hxy : (x == y) = true
+            · rw [if_pos hxy] at hys
+              have hts : t = s := by simpa using hys
+              subst hts
+              exact Hv (x, t) (List.mem_cons_self ..)
+            · rw [if_neg hxy] at hys
+              exact σ.varsIn y s hys }
       σ'.insertAll rest (fun env hsat yt hyt => H env hsat yt (List.mem_cons_of_mem _ hyt))
+        (fun yt hyt => Hv yt (List.mem_cons_of_mem _ hyt))
 
 end Solved
 
@@ -166,6 +183,19 @@ def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
           rcases List.mem_append.1 (List.argmin_mem hbest) with h | h
           · exact pm1PivotsOf_sound c' x t h env hc'
           · exact unitPivotsOf_sound c' x t h env hc'
+        -- every variable of the reduced constraint (hence of any pivot solved from it) is a
+        -- variable of `cs`: reduction only substitutes stored solutions (all in `cs`) and folds
+        have hc'vars : ∀ z ∈ c'.vars, z ∈ cs.vars := by
+          intro z hz
+          rcases Expression.substF_vars σ.fn c z (Expression.normalize_vars _ z hz) with
+            h2 | ⟨y', t', hft', hzt'⟩
+          · exact ConstraintSystem.mem_vars_of_constraint (hmem c (List.mem_cons_self ..)) h2
+          · exact σ.varsIn y' t' hft' z hzt'
+        have htvars : ∀ z ∈ t.vars, z ∈ cs.vars := by
+          intro z hz
+          rcases List.mem_append.1 (List.argmin_mem hbest) with h | h
+          · exact hc'vars z (pm1PivotsOf_vars c' x t h z hz)
+          · exact hc'vars z (unitPivotsOf_vars c' x t h z hz)
         -- resolve `x` out of the stored solutions, then store `x := t`
         let touched := σ.map.toList.filter (fun ys => ys.2.mentions x)
         let pairs := touched.map (fun ys => (ys.1, (ys.2.subst x t).normalize)) ++ [(x, t)]
@@ -182,7 +212,18 @@ def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
               Function.update_eq_self, hy]
           · obtain rfl : yt = (x, t) := by simpa using h
             exact hx env hsat
-        gaussLoop cs bs occ prot rest hrest (σ.insertAll pairs hpairs)
+        have hpairsV : ∀ yt ∈ pairs, ∀ z ∈ yt.2.vars, z ∈ cs.vars := by
+          intro yt hyt z hz
+          rcases List.mem_append.1 hyt with h | h
+          · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 h
+            have hmemys : σ.map[y]? = some s :=
+              Std.HashMap.mem_toList_iff_getElem?_eq_some.1 (List.mem_of_mem_filter hys)
+            rcases Expression.subst_vars s x t z (Expression.normalize_vars _ z hz) with h2 | h2
+            · exact σ.varsIn y s hmemys z h2
+            · exact htvars z h2
+          · obtain rfl : yt = (x, t) := by simpa using h
+            exact htvars z hz
+        gaussLoop cs bs occ prot rest hrest (σ.insertAll pairs hpairs hpairsV)
 
 /-- The batch linear-elimination pass. Two sweeps over the constraints (so substitutions can
     unlock later pivots within one invocation), then a single full-system substitution. -/
@@ -192,6 +233,7 @@ def gaussElimPass : VerifiedPass p := fun cs bs =>
   let pending := cs.algebraicConstraints ++ cs.algebraicConstraints
   let σ := gaussLoop cs bs occ prot pending
     (fun _c hc => (List.mem_append.1 hc).elim id id) Solved.empty
-  if σ.map.isEmpty then ⟨cs, cs.refines_refl bs, _root_.id⟩
-  else ⟨cs.substF σ.fn,
-    cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)⟩
+  if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
+  else ⟨cs.substF σ.fn, [],
+    cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)
+      (fun y t hyt => σ.varsIn y t hyt)⟩

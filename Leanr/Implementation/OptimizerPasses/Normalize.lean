@@ -111,8 +111,74 @@ theorem Expression.normalize_eval (e : Expression p) (env : Variable → ZMod p)
       · next l hl => rw [LinExpr.toExpr_eval, LinExpr.norm_eval, ← linearize_eval _ l hl]
       · rw [Expression.eval, iha, ihb, Expression.eval]
 
+/-! ## Variable bounds -/
+
+theorem addCoeff_fst (v : Variable) (c : ZMod p) (ts : List (Variable × ZMod p)) (x : Variable)
+    (h : x ∈ (addCoeff v c ts).map Prod.fst) : x = v ∨ x ∈ ts.map Prod.fst := by
+  induction ts with
+  | nil => simp only [addCoeff, List.map_cons, List.map_nil, List.mem_singleton] at h; exact Or.inl h
+  | cons t rest ih =>
+      obtain ⟨v', c'⟩ := t
+      simp only [addCoeff] at h
+      split at h
+      · rename_i hv
+        simp only [List.map_cons, List.mem_cons] at h ⊢
+        tauto
+      · simp only [List.map_cons, List.mem_cons] at h ⊢
+        rcases h with h | h
+        · exact Or.inr (Or.inl h)
+        · exact (ih h).imp id (Or.inr ·)
+
+theorem foldl_addCoeff_fst (ts : List (Variable × ZMod p)) :
+    ∀ (init : List (Variable × ZMod p)) (x : Variable),
+      x ∈ (ts.foldl (fun acc t => addCoeff t.1 t.2 acc) init).map Prod.fst →
+      x ∈ init.map Prod.fst ∨ x ∈ ts.map Prod.fst := by
+  induction ts with
+  | nil => intro init x hx; exact Or.inl hx
+  | cons t rest ih =>
+      intro init x hx
+      simp only [List.foldl_cons] at hx
+      rcases ih _ x hx with h | h
+      · rcases addCoeff_fst t.1 t.2 init x h with h | h
+        · exact Or.inr (by simp [h])
+        · exact Or.inl h
+      · exact Or.inr (List.mem_cons_of_mem _ h)
+
+theorem mergeTerms_fst (ts : List (Variable × ZMod p)) (x : Variable)
+    (h : x ∈ (mergeTerms ts).map Prod.fst) : x ∈ ts.map Prod.fst := by
+  rcases foldl_addCoeff_fst ts [] x h with h | h
+  · simp at h
+  · exact h
+
+theorem LinExpr.norm_terms_fst (l : LinExpr p) (x : Variable)
+    (h : x ∈ l.norm.terms.map Prod.fst) : x ∈ l.terms.map Prod.fst := by
+  simp only [LinExpr.norm, List.mem_map] at h
+  obtain ⟨t, ht, rfl⟩ := h
+  exact mergeTerms_fst l.terms t.1 (List.mem_map.2 ⟨t, List.mem_of_mem_filter ht, rfl⟩)
+
+theorem Expression.normalize_vars (e : Expression p) : ∀ x ∈ e.normalize.vars, x ∈ e.vars := by
+  induction e with
+  | const n => intro x hx; simpa [Expression.normalize] using hx
+  | var y => intro x hx; simpa [Expression.normalize] using hx
+  | add a b iha ihb =>
+      intro x hx
+      simp only [Expression.normalize] at hx
+      split at hx
+      · rename_i l hl
+        exact linearize_vars _ l hl x (l.norm_terms_fst x (LinExpr.toExpr_vars _ x hx))
+      · simp only [Expression.vars, List.mem_append] at hx ⊢
+        exact hx.imp (iha x) (ihb x)
+  | mul a b iha ihb =>
+      intro x hx
+      simp only [Expression.normalize] at hx
+      split at hx
+      · rename_i l hl
+        exact linearize_vars _ l hl x (l.norm_terms_fst x (LinExpr.toExpr_vars _ x hx))
+      · simp only [Expression.vars, List.mem_append] at hx ⊢
+        exact hx.imp (iha x) (ihb x)
+
 /-- The affine-normalization pass. Correct via `mapExpr_correct` (only `normalize_eval`). -/
 def normalizePass : VerifiedPass p := fun cs bs =>
-  ⟨cs.mapExpr Expression.normalize,
+  ⟨cs.mapExpr Expression.normalize, [],
    ConstraintSystem.mapExpr_correct (g := Expression.normalize)
-     (fun e env => Expression.normalize_eval e env) cs bs⟩
+     (fun e env => Expression.normalize_eval e env) cs bs Expression.normalize_vars⟩

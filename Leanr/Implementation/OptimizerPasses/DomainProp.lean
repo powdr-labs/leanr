@@ -751,9 +751,11 @@ def domainPropPass : VerifiedPassW p := fun cs bs facts =>
     haveI : NeZero p := ⟨hp.ne_zero⟩
     match hf : findForced cs.algebraicConstraints bs facts cs.busInteractions with
     | some (x, c) =>
-        ⟨cs.subst x (.const c),
-         cs.subst_correct x (.const c) bs (fun env hsat =>
-           findForced_sound cs.algebraicConstraints bs facts cs.busInteractions x c hf
-             env (fun c' hc' => hsat.1 c' hc') (fun bi hbi => hsat.2 bi hbi))⟩
-    | none => ⟨cs, cs.refines_refl bs, _root_.id⟩
-  else ⟨cs, cs.refines_refl bs, _root_.id⟩
+        ⟨cs.subst x (.const c), [],
+         cs.subst_correct x (.const c) bs
+           (fun env hsat =>
+             findForced_sound cs.algebraicConstraints bs facts cs.busInteractions x c hf
+               env (fun c' hc' => hsat.1 c' hc') (fun bi hbi => hsat.2 bi hbi))
+           (fun y hy => by simp [Expression.vars] at hy)⟩
+    | none => ⟨cs, [], PassCorrect.refl cs bs⟩
+  else ⟨cs, [], PassCorrect.refl cs bs⟩

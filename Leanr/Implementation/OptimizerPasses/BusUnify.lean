@@ -254,11 +254,18 @@ def busUnifyPass : VerifiedPassW p := fun cs bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then
     let ⟨eqs, heqs⟩ := collectAllBuses cs bs facts hp1
       ((cs.busInteractions.map (fun bi => bi.busId)).dedup)
+    -- keep only equalities over existing columns, so the pass introduces no new variable
+    -- (the real slot equalities are built from `cs`'s payloads, so none are dropped)
     let new := eqs.filter
-      (fun c => !c.normalize.fold.isConstZero && !cs.algebraicConstraints.contains c)
-    if new.isEmpty then ⟨cs, cs.refines_refl bs, _root_.id⟩
+      (fun c => !c.normalize.fold.isConstZero && !cs.algebraicConstraints.contains c
+        && c.vars.all (fun z => decide (z ∈ cs.vars)))
+    if new.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else
-      ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new },
-       cs.addConstraints_correct bs new (fun env hadm hsat c hc =>
-         heqs env hadm hsat c (List.mem_of_mem_filter hc))⟩
-  else ⟨cs, cs.refines_refl bs, _root_.id⟩
+      ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new }, [],
+       cs.addConstraints_correct bs new
+         (fun env hadm hsat c hc => heqs env hadm hsat c (List.mem_of_mem_filter hc))
+         (fun c hc z hz => by
+           have hp := (List.mem_filter.1 hc).2
+           simp only [Bool.and_eq_true, List.all_eq_true] at hp
+           exact of_decide_eq_true (hp.2 z hz))⟩
+  else ⟨cs, [], PassCorrect.refl cs bs⟩

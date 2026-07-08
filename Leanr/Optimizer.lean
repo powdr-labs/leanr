@@ -16,15 +16,16 @@ variable {p : ℕ}
       a new VM with no proven bus facts. It will likely be less effective than the fact-aware optimizer.
     - `openVmOptimizer busMap`: A specialization for the OpenVM semantics. -/
 
-/-- Optimizer which does not use any bus facts. Works with any VM, but is less effective. -/
-def simpleOptimizer (bs : BusSemantics p) : ConstraintSystem p → ConstraintSystem p :=
+/-- Optimizer which does not use any bus facts. Works with any VM, but is less effective. Returns
+    the optimized system together with the `Derivations` for its newly-introduced columns. -/
+def simpleOptimizer (bs : BusSemantics p) : ConstraintSystem p → ConstraintSystem p × Derivations p :=
   optimizerWithBusFacts (BusFacts.trivial bs)
 
 namespace Leanr.OpenVM
 
 /-- Optimizer specialized for the OpenVM semantics. -/
 def openVmOptimizer (busMap : BusMap := defaultBusMap) :
-    ConstraintSystem babyBear → ConstraintSystem babyBear :=
+    ConstraintSystem babyBear → ConstraintSystem babyBear × Derivations babyBear :=
   optimizerWithBusFacts (openVmFacts babyBear busMap)
 
 end Leanr.OpenVM

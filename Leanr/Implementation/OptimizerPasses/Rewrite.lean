@@ -35,6 +35,26 @@ def ConstraintSystem.mapExpr (cs : ConstraintSystem p) (g : Expression p → Exp
   { algebraicConstraints := cs.algebraicConstraints.map g,
     busInteractions := cs.busInteractions.map (·.mapExpr g) }
 
+/-- If `g` introduces no new variables per expression, the rewritten system introduces none. -/
+theorem ConstraintSystem.mapExpr_vars_subset (cs : ConstraintSystem p)
+    {g : Expression p → Expression p}
+    (hgv : ∀ (e : Expression p) (x : Variable), x ∈ (g e).vars → x ∈ e.vars) :
+    ∀ x ∈ (cs.mapExpr g).vars, x ∈ cs.vars := by
+  intro x hx
+  rw [ConstraintSystem.mem_vars] at hx
+  rcases hx with ⟨c, hc, hxc⟩ | ⟨bi, hbi, hxbi⟩
+  · simp only [ConstraintSystem.mapExpr, List.mem_map] at hc
+    obtain ⟨c0, hc0, rfl⟩ := hc
+    exact ConstraintSystem.mem_vars_of_constraint hc0 (hgv c0 x hxc)
+  · simp only [ConstraintSystem.mapExpr, List.mem_map] at hbi
+    obtain ⟨bi0, hbi0, rfl⟩ := hbi
+    rcases hxbi with hm | ⟨e, he, hxe⟩
+    · simp only [BusInteraction.mapExpr] at hm
+      exact ConstraintSystem.mem_vars_of_mult hbi0 (hgv bi0.multiplicity x hm)
+    · simp only [BusInteraction.mapExpr, List.mem_map] at he
+      obtain ⟨e0, he0, rfl⟩ := he
+      exact ConstraintSystem.mem_vars_of_payload hbi0 he0 (hgv e0 x hxe)
+
 section EvalPreserving
 variable {g : Expression p → Expression p} (hg : ∀ e (env : Variable → ZMod p), (g e).eval env = e.eval env)
 
@@ -101,17 +121,15 @@ theorem ConstraintSystem.sideEffects_mapExpr (cs : ConstraintSystem p) (bs : Bus
       · simp only [if_pos hstate, List.map_cons, ih, bi.eval_mapExpr hg]
       · simp only [if_neg hstate, ih]
 
-/-- **Correctness of eval-preserving maps.** If `g` never changes what an expression evaluates to,
-    then rewriting every expression with `g` yields an equivalent, invariant-preserving system. -/
-theorem ConstraintSystem.mapExpr_correct (cs : ConstraintSystem p) (bs : BusSemantics p) :
-    PassCorrect cs (cs.mapExpr g) bs := by
-  refine ⟨⟨?_, ?_⟩, ?_⟩
+/-- **Correctness of eval-preserving maps.** If `g` never changes what an expression evaluates to
+    (`hg`) and introduces no new variables (`hgv`), then rewriting every expression with `g` yields
+    an equivalent, invariant-preserving system. -/
+theorem ConstraintSystem.mapExpr_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (hgv : ∀ (e : Expression p) (x : Variable), x ∈ (g e).vars → x ∈ e.vars) :
+    PassCorrect cs (cs.mapExpr g) [] bs := by
+  refine PassCorrect.ofEnvEq ?_ ?_ (cs.mapExpr_vars_subset hgv) ?_
   · intro env hsat
     refine ⟨env, (cs.satisfies_mapExpr hg bs env).1 hsat, ?_⟩
-    rw [cs.sideEffects_mapExpr hg]; exact BusState.equiv_refl _
-  · intro env hint hsat
-    refine ⟨env, (cs.satisfies_mapExpr hg bs env).2 hsat,
-      (cs.admissible_mapExpr hg bs env).2 hint, ?_⟩
     rw [cs.sideEffects_mapExpr hg]; exact BusState.equiv_refl _
   · intro hinv env hsat bi hbi
     have hsatcs : cs.satisfies bs env := (cs.satisfies_mapExpr hg bs env).1 hsat
@@ -119,6 +137,9 @@ theorem ConstraintSystem.mapExpr_correct (cs : ConstraintSystem p) (bs : BusSema
     obtain ⟨bi0, hbi0, rfl⟩ := hbi
     simp only [bi0.eval_mapExpr hg]
     exact hinv env hsatcs bi0 hbi0
+  · intro env hadm hsat
+    refine ⟨(cs.satisfies_mapExpr hg bs env).2 hsat, (cs.admissible_mapExpr hg bs env).2 hadm, ?_⟩
+    rw [cs.sideEffects_mapExpr hg]; exact BusState.equiv_refl _
 
 end EvalPreserving
 
@@ -129,12 +150,20 @@ def ConstraintSystem.filterConstraints (cs : ConstraintSystem p) (keep : Express
     ConstraintSystem p :=
   { cs with algebraicConstraints := cs.algebraicConstraints.filter keep }
 
+theorem ConstraintSystem.filterConstraints_vars_subset (cs : ConstraintSystem p)
+    (keep : Expression p → Bool) : ∀ x ∈ (cs.filterConstraints keep).vars, x ∈ cs.vars := by
+  intro x hx
+  rw [ConstraintSystem.mem_vars] at hx ⊢
+  rcases hx with ⟨c, hc, hxc⟩ | ⟨bi, hbi, hxbi⟩
+  · exact Or.inl ⟨c, List.mem_of_mem_filter hc, hxc⟩
+  · exact Or.inr ⟨bi, hbi, hxbi⟩
+
 /-- **Correctness of trivial-constraint removal.** Dropping algebraic constraints is equivalence-
     preserving as long as every dropped constraint is identically zero (hence vacuously true). -/
 theorem ConstraintSystem.filterConstraints_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (keep : Expression p → Bool)
     (h : ∀ c ∈ cs.algebraicConstraints, keep c = false → ∀ env, c.eval env = 0) :
-    PassCorrect cs (cs.filterConstraints keep) bs := by
+    PassCorrect cs (cs.filterConstraints keep) [] bs := by
   have hiff : ∀ env, (cs.filterConstraints keep).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     simp only [ConstraintSystem.satisfies, ConstraintSystem.filterConstraints]
@@ -148,14 +177,13 @@ theorem ConstraintSystem.filterConstraints_correct (cs : ConstraintSystem p) (bs
       exact ⟨fun c hcmem => hc c (List.mem_filter.1 hcmem).1, hb⟩
   have hside : ∀ env, (cs.filterConstraints keep).sideEffects bs env = cs.sideEffects bs env :=
     fun _ => rfl
-  refine ⟨⟨?_, ?_⟩, ?_⟩
+  refine PassCorrect.ofEnvEq ?_ ?_ (cs.filterConstraints_vars_subset keep) ?_
   · intro env hsat
     exact ⟨env, (hiff env).1 hsat, by rw [hside]; exact BusState.equiv_refl _⟩
-  · intro env hint hsat
-    -- `filterConstraints` leaves bus interactions untouched, so `isIntended` is definitionally `cs`'s
-    exact ⟨env, (hiff env).2 hsat, hint, by rw [hside]; exact BusState.equiv_refl _⟩
   · intro hinv env hsat bi hbi
     exact hinv env ((hiff env).1 hsat) bi hbi
+  · intro env hadm hsat
+    exact ⟨(hiff env).2 hsat, hadm, by rw [hside]; exact BusState.equiv_refl _⟩
 
 /-! ## Removing zero-multiplicity bus interactions -/
 
@@ -163,6 +191,15 @@ theorem ConstraintSystem.filterConstraints_correct (cs : ConstraintSystem p) (bs
 def ConstraintSystem.filterBus (cs : ConstraintSystem p) (keep : BusInteraction (Expression p) → Bool) :
     ConstraintSystem p :=
   { cs with busInteractions := cs.busInteractions.filter keep }
+
+theorem ConstraintSystem.filterBus_vars_subset (cs : ConstraintSystem p)
+    (keep : BusInteraction (Expression p) → Bool) :
+    ∀ x ∈ (cs.filterBus keep).vars, x ∈ cs.vars := by
+  intro x hx
+  rw [ConstraintSystem.mem_vars] at hx ⊢
+  rcases hx with ⟨c, hc, hxc⟩ | ⟨bi, hbi, hxbi⟩
+  · exact Or.inl ⟨c, hc, hxc⟩
+  · exact Or.inr ⟨bi, List.mem_of_mem_filter hbi, hxbi⟩
 
 /-- Dropping interactions that are (under `a`) either inactive (multiplicity `0`) or on a
     stateless bus preserves `admissible` — generically in the VM predicate. `ConstraintSystem.admissible`
@@ -250,7 +287,7 @@ theorem multiplicitySum_filterBus (bs : BusSemantics p) (env : Variable → ZMod
 theorem ConstraintSystem.filterBus_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (keep : BusInteraction (Expression p) → Bool) (_hp1 : (1 : ZMod p) ≠ 0)
     (h : ∀ bi ∈ cs.busInteractions, keep bi = false → ∀ env, (bi.eval env).multiplicity = 0) :
-    PassCorrect cs (cs.filterBus keep) bs := by
+    PassCorrect cs (cs.filterBus keep) [] bs := by
   have hiff : ∀ env, (cs.filterBus keep).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     simp only [ConstraintSystem.satisfies]
@@ -267,14 +304,14 @@ theorem ConstraintSystem.filterBus_correct (cs : ConstraintSystem p) (bs : BusSe
     simp only [ConstraintSystem.sideEffects, ConstraintSystem.filterBus]
     exact multiplicitySum_filterBus bs env keep message cs.busInteractions
       (fun bi hbi hkf => h bi hbi hkf env)
-  refine ⟨⟨?_, ?_⟩, ?_⟩
+  refine PassCorrect.ofEnvEq ?_ ?_ (cs.filterBus_vars_subset keep) ?_
   · intro env hsat
     exact ⟨env, (hiff env).1 hsat, BusState.equiv_symm (hside env)⟩
-  · intro env hint hsat
-    exact ⟨env, (hiff env).2 hsat,
-      (cs.admissible_filterBus bs keep env
-        (fun bi hbi hkf => Or.inl (h bi hbi hkf env))).2 hint, hside env⟩
   · intro hinv env hsat bi hbi
     have hbimem : bi ∈ cs.busInteractions :=
       (List.mem_filter.1 (by simpa only [ConstraintSystem.filterBus] using hbi)).1
     exact hinv env ((hiff env).1 hsat) bi hbimem
+  · intro env hadm hsat
+    exact ⟨(hiff env).2 hsat,
+      (cs.admissible_filterBus bs keep env (fun bi hbi hkf => Or.inl (h bi hbi hkf env))).2 hadm,
+      hside env⟩

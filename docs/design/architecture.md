@@ -26,7 +26,20 @@ Side effects are the messages on **stateful** buses, compared up to **net multip
 message (`≈`) — so an identical-payload send/receive pair cancels. `admissible` is an abstract
 per-VM predicate (`BusSemantics.admissible`) over the active stateful messages; it is where the
 "this is a real trace" assumption lives (see [Bus knowledge](#bus-knowledge) and the README's
-assumptions). `optimizerMaintainsCorrectness bs opt` bundles `refines`, preservation of
+assumptions).
+
+**Derived variables.** The optimizer returns not just a circuit but a `Derivations` list — a
+`ComputationMethod` (powdr's `Constant`/`QuotientOrZero`/`IfEqZero`, with an `eval`) for each
+variable it introduces. The completeness direction (folded into `refines` / `impliesAdmissible`) is
+strengthened accordingly: the reproduced witness must **`derivesWitness`** — every variable of the
+output that carries a powdr ID is an input column present in the input with an unchanged value, and
+every no-ID (derived) variable is computed by the method `Derivations` lists for it (`methodFor`,
+its last entry — duplicates are allowed, the later one wins) reading only input columns. This is
+exactly what lets witness generation extend an input trace to an output trace. (The requirement is
+only demanded when the input's columns all carry powdr IDs — the intended shape of an exported
+circuit; a variable with no powdr ID cannot be read from the input trace.)
+
+`optimizerMaintainsCorrectness bs opt` bundles `refines`, preservation of
 `guaranteesInvariants`, and staying within the VM's degree bound — for a *given* bus semantics
 `bs` (quantify over `bs` for the "correct for every semantics" reading; fixing it lets a
 semantics-specific optimizer be an instance).
@@ -36,9 +49,10 @@ semantics-specific optimizer be an instance).
 A **`VerifiedPass`** maps a system to a new one *bundled with a `PassCorrect` proof* (`refines` +
 invariant preservation) — so a pass cannot be written without discharging its obligations.
 
-- `andThen` composes passes (correctness by `refines_trans`); `iterateToFixpoint` runs a pass to a
-  fixpoint, proven to terminate on the well-founded lexicographic size key (see the pipeline
-  section); the top-level `*_maintainsCorrectness` theorems are just projections.
+- `andThen` composes passes (correctness by composing the per-pass `PassCorrect` proofs, with
+  derivations concatenating); `iterateToFixpoint` runs a pass to a fixpoint, proven to terminate on
+  the well-founded lexicographic size key (see the pipeline section); the top-level
+  `*_maintainsCorrectness` theorems are just projections.
 - `guardDegree` wraps each pass to fall back to its input if the output would exceed the degree
   bound — degree safety is compositional, with zero per-pass proof burden.
 - `VerifiedPassW` is a pass that may additionally consult proven `BusFacts` (below).

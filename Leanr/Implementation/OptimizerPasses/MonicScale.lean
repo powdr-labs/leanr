@@ -63,6 +63,22 @@ theorem monicScaleAffine_unit (e : Expression p) :
       · simp
     · simp
 
+theorem monicScaleAffine_vars (e : Expression p) :
+    ∀ z ∈ (monicScaleAffine e).1.vars, z ∈ e.vars := by
+  intro z hz
+  unfold monicScaleAffine at hz
+  split at hz
+  · exact hz
+  · rename_i l hlin
+    split at hz
+    · rename_i y k rest ht
+      split_ifs at hz with hk
+      · have h1 := LinExpr.toExpr_vars _ z hz
+        rw [LinExpr.scale_terms_fst] at h1
+        exact linearize_vars e l hlin z (l.norm_terms_fst z h1)
+      · exact hz
+    · exact hz
+
 /-- Scale the affine factors of a product tree to monic form, with the accumulated unit
     certificate. -/
 def monicScale : Expression p → Expression p × ZMod p × ZMod p
@@ -121,6 +137,19 @@ theorem monicScale_zero_iff (e : Expression p) (env : Variable → ZMod p) :
   · intro h
     rw [h, mul_zero]
 
+theorem monicScale_vars (e : Expression p) : ∀ z ∈ (monicScale e).1.vars, z ∈ e.vars := by
+  induction e with
+  | const n => exact monicScaleAffine_vars _
+  | var y => exact monicScaleAffine_vars _
+  | add a b _ _ => exact monicScaleAffine_vars _
+  | mul a b iha ihb =>
+      intro z hz
+      rw [monicScale] at hz
+      split at hz
+      · exact monicScaleAffine_vars _ z hz
+      · simp only [Expression.vars, List.mem_append] at hz ⊢
+        exact hz.imp (iha z) (ihb z)
+
 /-! ## The correctness core: zero-set-preserving constraint rewrites -/
 
 /-- Rewrite only the algebraic constraints. -/
@@ -128,12 +157,25 @@ def ConstraintSystem.mapConstraints (cs : ConstraintSystem p)
     (g : Expression p → Expression p) : ConstraintSystem p :=
   { cs with algebraicConstraints := cs.algebraicConstraints.map g }
 
+theorem ConstraintSystem.mapConstraints_vars_subset (cs : ConstraintSystem p)
+    {g : Expression p → Expression p}
+    (hgv : ∀ (c : Expression p) (z : Variable), z ∈ (g c).vars → z ∈ c.vars) :
+    ∀ z ∈ (cs.mapConstraints g).vars, z ∈ cs.vars := by
+  intro z hz
+  rw [ConstraintSystem.mem_vars] at hz ⊢
+  rcases hz with ⟨c, hc, hzc⟩ | ⟨bi, hbi, hzbi⟩
+  · simp only [ConstraintSystem.mapConstraints, List.mem_map] at hc
+    obtain ⟨c0, hc0, rfl⟩ := hc
+    exact Or.inl ⟨c0, hc0, hgv c0 z hzc⟩
+  · exact Or.inr ⟨bi, hbi, hzbi⟩
+
 /-- Rewriting constraints with any pointwise zero-set-preserving map is `PassCorrect`: the
     satisfying assignments are unchanged, and the (bus-only) side effects are untouched. -/
 theorem ConstraintSystem.mapConstraintsIff_correct (cs : ConstraintSystem p)
     (bs : BusSemantics p) (g : Expression p → Expression p)
-    (hg : ∀ (c : Expression p) (env : Variable → ZMod p), ((g c).eval env = 0 ↔ c.eval env = 0)) :
-    PassCorrect cs (cs.mapConstraints g) bs := by
+    (hg : ∀ (c : Expression p) (env : Variable → ZMod p), ((g c).eval env = 0 ↔ c.eval env = 0))
+    (hgv : ∀ (c : Expression p) (z : Variable), z ∈ (g c).vars → z ∈ c.vars) :
+    PassCorrect cs (cs.mapConstraints g) [] bs := by
   have hiff : ∀ env, (cs.mapConstraints g).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     simp only [ConstraintSystem.satisfies, ConstraintSystem.mapConstraints]
@@ -147,18 +189,18 @@ theorem ConstraintSystem.mapConstraintsIff_correct (cs : ConstraintSystem p)
       exact (hg c0 env).2 (hc c0 hc0)
   have hside : ∀ env, (cs.mapConstraints g).sideEffects bs env = cs.sideEffects bs env :=
     fun _ => rfl
-  refine ⟨⟨?_, ?_⟩, ?_⟩
+  refine PassCorrect.ofEnvEq ?_ ?_ (cs.mapConstraints_vars_subset hgv) ?_
   · intro env hsat
     exact ⟨env, (hiff env).1 hsat, by rw [hside]; exact BusState.equiv_refl _⟩
-  · intro env hint hsat
-    -- `mapConstraints` leaves bus interactions untouched, so `isIntended` is definitionally `cs`'s
-    exact ⟨env, (hiff env).2 hsat, hint, by rw [hside]; exact BusState.equiv_refl _⟩
   · intro hinv env hsat bi hbi
     exact hinv env ((hiff env).1 hsat) bi hbi
+  · intro env hadm hsat
+    exact ⟨(hiff env).2 hsat, hadm, by rw [hside]; exact BusState.equiv_refl _⟩
 
 /-! ## The pass -/
 
 /-- The monic-scaling pass: canonicalize every constraint's affine factors to monic form. -/
 def monicScalePass : VerifiedPass p := fun cs bs =>
-  ⟨cs.mapConstraints (fun c => (monicScale c).1),
-   cs.mapConstraintsIff_correct bs _ (fun c env => monicScale_zero_iff c env)⟩
+  ⟨cs.mapConstraints (fun c => (monicScale c).1), [],
+   cs.mapConstraintsIff_correct bs _ (fun c env => monicScale_zero_iff c env)
+     (fun c z hz => monicScale_vars c z hz)⟩

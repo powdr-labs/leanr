@@ -161,6 +161,83 @@ theorem LinExpr.toExpr_eval (l : LinExpr p) (env : Variable → ZMod p) :
     l.toExpr.eval env = l.eval env := by
   simp only [LinExpr.toExpr, LinExpr.eval, toExpr_foldl_eval, Expression.eval]
 
+/-! ## Variable bounds (for `out.vars ⊆ cs.vars`) -/
+
+theorem toExpr_foldl_vars (terms : List (Variable × ZMod p)) :
+    ∀ (init : Expression p) (x : Variable),
+      x ∈ (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init).vars →
+      x ∈ init.vars ∨ x ∈ terms.map Prod.fst := by
+  induction terms with
+  | nil => intro init x hx; exact Or.inl hx
+  | cons t rest ih =>
+      intro init x hx
+      simp only [List.foldl_cons] at hx
+      rcases ih _ x hx with h | h
+      · simp only [Expression.vars, List.mem_append, List.nil_append, List.mem_singleton] at h
+        rcases h with h | h
+        · exact Or.inl h
+        · exact Or.inr (by subst h; exact List.mem_cons_self ..)
+      · exact Or.inr (List.mem_cons_of_mem _ h)
+
+/-- `toExpr` only mentions the term variables. -/
+theorem LinExpr.toExpr_vars (l : LinExpr p) : ∀ x ∈ l.toExpr.vars, x ∈ l.terms.map Prod.fst := by
+  intro x hx
+  rcases toExpr_foldl_vars l.terms _ x hx with h | h
+  · simp [Expression.vars] at h
+  · exact h
+
+theorem LinExpr.scale_terms_fst (k : ZMod p) (l : LinExpr p) :
+    (l.scale k).terms.map Prod.fst = l.terms.map Prod.fst := by
+  simp [LinExpr.scale, List.map_map, Function.comp]
+
+theorem LinExpr.others_terms_fst_subset (l : LinExpr p) (v x : Variable)
+    (h : x ∈ (l.others v).terms.map Prod.fst) : x ∈ l.terms.map Prod.fst := by
+  simp only [LinExpr.others, List.mem_map] at h ⊢
+  obtain ⟨t, ht, rfl⟩ := h
+  exact ⟨t, List.mem_of_mem_filter ht, rfl⟩
+
+/-- Linearization introduces no variable outside the expression. -/
+theorem linearize_vars (e : Expression p) (l : LinExpr p) (h : linearize e = some l) :
+    ∀ x ∈ l.terms.map Prod.fst, x ∈ e.vars := by
+  induction e generalizing l with
+  | const n => simp only [linearize, Option.some.injEq] at h; subst h; simp
+  | var y =>
+      simp only [linearize, Option.some.injEq] at h; subst h
+      intro x hx; simpa [Expression.vars] using hx
+  | add a b iha ihb =>
+      cases hla : linearize a with
+      | none => simp [linearize, hla] at h
+      | some la => cases hlb : linearize b with
+        | none => simp [linearize, hla, hlb] at h
+        | some lb =>
+          simp only [linearize, hla, hlb, Option.some.injEq] at h
+          subst h
+          intro x hx
+          simp only [LinExpr.add, List.map_append, List.mem_append] at hx
+          simp only [Expression.vars, List.mem_append]
+          exact hx.imp (iha la hla x) (ihb lb hlb x)
+  | mul a b iha ihb =>
+      cases hla : linearize a with
+      | none => simp [linearize, hla] at h
+      | some la => cases hlb : linearize b with
+        | none => simp [linearize, hla, hlb] at h
+        | some lb =>
+          by_cases h1 : la.terms.isEmpty = true
+          · simp only [linearize, hla, hlb, if_pos h1, Option.some.injEq] at h
+            subst h
+            intro x hx
+            rw [LinExpr.scale_terms_fst] at hx
+            exact List.mem_append.2 (Or.inr (ihb lb hlb x hx))
+          · by_cases h2 : lb.terms.isEmpty = true
+            · simp only [linearize, hla, hlb, if_neg h1, if_pos h2, Option.some.injEq] at h
+              subst h
+              intro x hx
+              rw [LinExpr.scale_terms_fst] at hx
+              exact List.mem_append.2 (Or.inl (iha la hla x hx))
+            · simp only [linearize, hla, hlb] at h
+              rw [if_neg h1, if_neg h2] at h
+              exact absurd h (by simp)
+
 /-- Try to solve the linear form `= 0` for variable `v`, when `v` has coefficient `±1`. -/
 def LinExpr.trySolve (l : LinExpr p) (v : Variable) : Option (Variable × Expression p) :=
   if l.coeff v = 1 then some (v, ((l.others v).scale (-1)).toExpr)
@@ -206,6 +283,31 @@ theorem LinExpr.trySolveUnit_sound (l : LinExpr p) (v x : Variable) (t : Express
   have hs := l.eval_split v env
   have h0 : l.coeff v * env v + (l.others v).eval env = 0 := by rw [← hs]; exact hl
   linear_combination (l.coeff v)⁻¹ * h0 - env v * h1
+
+theorem LinExpr.trySolve_vars (l : LinExpr p) (v x : Variable) (t : Expression p)
+    (h : l.trySolve v = some (x, t)) : ∀ y ∈ t.vars, y ∈ l.terms.map Prod.fst := by
+  intro y hy
+  unfold LinExpr.trySolve at h
+  split_ifs at h with h1 h2
+  · simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    have := LinExpr.toExpr_vars _ y hy
+    rw [LinExpr.scale_terms_fst] at this
+    exact l.others_terms_fst_subset v y this
+  · simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact l.others_terms_fst_subset v y (LinExpr.toExpr_vars _ y hy)
+
+theorem LinExpr.trySolveUnit_vars (l : LinExpr p) (v x : Variable) (t : Expression p)
+    (h : l.trySolveUnit v = some (x, t)) : ∀ y ∈ t.vars, y ∈ l.terms.map Prod.fst := by
+  intro y hy
+  unfold LinExpr.trySolveUnit at h
+  split_ifs at h with h1
+  simp only [Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl⟩ := h
+  have := LinExpr.toExpr_vars _ y hy
+  rw [LinExpr.scale_terms_fst] at this
+  exact l.others_terms_fst_subset v y this
 
 /-- Solve the linear form for the first `±1`-coefficient variable; failing that, for the first
     variable whose coefficient is a unit. -/
@@ -304,6 +406,37 @@ theorem solvableFrom_sound (all : List (Expression p)) (x : Variable) (t : Expre
   · exact pm1PivotsOf_sound c x t hp env (hall c hc)
   · exact unitPivotsOf_sound c x t hp env (hall c hc)
 
+theorem pm1PivotsOf_vars (c : Expression p) (x : Variable) (t : Expression p)
+    (h : (x, t) ∈ pm1PivotsOf c) : ∀ y ∈ t.vars, y ∈ c.vars := by
+  intro y hy
+  unfold pm1PivotsOf at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i l hlin
+    obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
+    exact linearize_vars c l hlin y (l.trySolve_vars v x t hv y hy)
+
+theorem unitPivotsOf_vars (c : Expression p) (x : Variable) (t : Expression p)
+    (h : (x, t) ∈ unitPivotsOf c) : ∀ y ∈ t.vars, y ∈ c.vars := by
+  intro y hy
+  unfold unitPivotsOf at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i l hlin
+    obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
+    cases htr : l.trySolve v with
+    | some r => rw [htr] at hv; exact absurd hv (by simp)
+    | none =>
+        rw [htr] at hv
+        exact linearize_vars c l hlin y (l.trySolveUnit_vars v x t hv y hy)
+
+theorem solvableFrom_vars (all : List (Expression p)) (x : Variable) (t : Expression p)
+    (h : (x, t) ∈ solvableFrom all) : ∀ y ∈ t.vars, ∃ c ∈ all, y ∈ c.vars := by
+  intro y hy
+  rcases List.mem_append.1 h with h' | h' <;> obtain ⟨c, hc, hp⟩ := List.mem_flatMap.1 h'
+  · exact ⟨c, hc, pm1PivotsOf_vars c x t hp y hy⟩
+  · exact ⟨c, hc, unitPivotsOf_vars c x t hp y hy⟩
+
 /-- The duplication cost of substituting `x := t`: every *other* occurrence of `x` is replaced
     by a copy of `t`. A variable occurring only in its defining constraint costs `0`. -/
 def pivotCost (cs : ConstraintSystem p) (x : Variable) (t : Expression p) : Nat :=
@@ -319,7 +452,12 @@ def bestAffinePivot (cs : ConstraintSystem p) : Option (Variable × Expression p
 def affineSubstPass : VerifiedPass p := fun cs bs =>
   match hf : bestAffinePivot cs with
   | some (x, t) =>
-      ⟨cs.subst x t, cs.subst_correct x t bs (fun env hsat =>
-        solvableFrom_sound cs.algebraicConstraints x t
-          (List.argmin_mem hf) env (fun c hc => hsat.1 c hc))⟩
-  | none => ⟨cs, cs.refines_refl bs, _root_.id⟩
+      ⟨cs.subst x t, [], cs.subst_correct x t bs
+        (fun env hsat =>
+          solvableFrom_sound cs.algebraicConstraints x t
+            (List.argmin_mem hf) env (fun c hc => hsat.1 c hc))
+        (fun y hy => by
+          obtain ⟨c, hc, hyc⟩ :=
+            solvableFrom_vars cs.algebraicConstraints x t (List.argmin_mem hf) y hy
+          exact ConstraintSystem.mem_vars_of_constraint hc hyc)⟩
+  | none => ⟨cs, [], PassCorrect.refl cs bs⟩

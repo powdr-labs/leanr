@@ -86,7 +86,7 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (hBstateless : ∀ bi ∈ cs.busInteractions, keepBi bi = false → bs.isStateful bi.busId = false)
     (hBkeep : ∀ bi ∈ cs.busInteractions, keepBi bi = true → ∀ x ∈ bi.vars, remV x = false) :
     PassCorrect cs { algebraicConstraints := cs.algebraicConstraints.filter keepCon,
-                     busInteractions := cs.busInteractions.filter keepBi } bs := by
+                     busInteractions := cs.busInteractions.filter keepBi } [] bs := by
   -- the merge: keep `env` on kept variables, use the witness on removed ones
   set m : (Variable → ZMod p) → (Variable → ZMod p) :=
     fun env x => if remV x = true then w x else env x with hm
@@ -131,7 +131,7 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
         exact hsb bi (List.mem_filter.2 ⟨hbi, hk⟩) hne
       · rw [hmwB env bi (hBrem bi hbi (by simpa using hk))]
         exact hBsat bi hbi (by simpa using hk)
-  refine ⟨⟨?_, ?_⟩, ?_⟩
+  refine PassCorrect.ofEnvEq ?_ ?_ ?_ ?_
   · -- soundness: out.implies cs
     intro env hsat
     refine ⟨m env, keySat env hsat.1 hsat.2, ?_⟩
@@ -143,10 +143,27 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
         (fun bi hbi hkf => hBstateless bi hbi hkf)
         (fun bi hbi hstate => hmeB env bi (hBkeep bi hbi (hstKeep bi hbi hstate)))
     rw [hse]; exact BusState.equiv_refl _
-  · -- completeness: cs.impliesAdmissible out
+  · -- invariant preservation
+    intro hinv env hsat bi hbi
+    have hbimem : bi ∈ cs.busInteractions := (List.mem_filter.1 hbi).1
+    have hbikeep : keepBi bi = true := (List.mem_filter.1 hbi).2
+    have hsatm : cs.satisfies bs (m env) := keySat env hsat.1 hsat.2
+    have heval : bi.eval (m env) = bi.eval env := hmeB env bi (hBkeep bi hbimem hbikeep)
+    have key := hinv (m env) hsatm bi hbimem
+    simp only [heval] at key
+    exact key
+  · -- introduces no new variable (both lists are filtered)
+    intro z hz
+    rw [ConstraintSystem.mem_vars] at hz
+    rcases hz with ⟨c, hc, hzc⟩ | ⟨bi, hbi, hzbi⟩
+    · exact ConstraintSystem.mem_vars_of_constraint (List.mem_of_mem_filter hc) hzc
+    · rcases hzbi with hmm | ⟨e, he, hze⟩
+      · exact ConstraintSystem.mem_vars_of_mult (List.mem_of_mem_filter hbi) hmm
+      · exact ConstraintSystem.mem_vars_of_payload (List.mem_of_mem_filter hbi) he hze
+  · -- completeness: witness `env`
     intro env hadm hsat
-    refine ⟨env, ⟨fun c hc => hsat.1 c (List.mem_filter.1 hc).1,
-                  fun bi hbi => hsat.2 bi (List.mem_filter.1 hbi).1⟩, ?_, ?_⟩
+    refine ⟨⟨fun c hc => hsat.1 c (List.mem_filter.1 hc).1,
+             fun bi hbi => hsat.2 bi (List.mem_filter.1 hbi).1⟩, ?_, ?_⟩
     · -- admissibility carries over (dropped interactions are stateless)
       exact (cs.admissible_filterBus bs keepBi env
         (fun bi hbi hkf => Or.inr (hBstateless bi hbi hkf))).2 hadm
@@ -157,15 +174,6 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
         sideEffects_drop_eq bs keepBi env env cs.busInteractions
           (fun bi hbi hkf => hBstateless bi hbi hkf) (fun _ _ _ => rfl)
       rw [hse]; exact BusState.equiv_refl _
-  · -- invariant preservation
-    intro hinv env hsat bi hbi
-    have hbimem : bi ∈ cs.busInteractions := (List.mem_filter.1 hbi).1
-    have hbikeep : keepBi bi = true := (List.mem_filter.1 hbi).2
-    have hsatm : cs.satisfies bs (m env) := keySat env hsat.1 hsat.2
-    have heval : bi.eval (m env) = bi.eval env := hmeB env bi (hBkeep bi hbimem hbikeep)
-    have key := hinv (m env) hsatm bi hbimem
-    simp only [heval] at key
-    exact key
 
 /-! ## Finding a component: connectivity from the stateful buses -/
 
@@ -249,7 +257,7 @@ def disconnectedComponentPass : VerifiedPass p := fun cs bs =>
         !keepBiWith bs remV bi || bi.vars.all (fun x => !remV x))
     ) = true then
     ⟨{ algebraicConstraints := cs.algebraicConstraints.filter (keepConWith remV),
-       busInteractions := cs.busInteractions.filter (keepBiWith bs remV) },
+       busInteractions := cs.busInteractions.filter (keepBiWith bs remV) }, [],
      by
        simp only [Bool.and_eq_true, and_assoc] at hchk
        obtain ⟨_hne, hcz, hbz, hck, hbk⟩ := hchk
@@ -290,4 +298,4 @@ def disconnectedComponentPass : VerifiedPass p := fun cs bs =>
          simp only [Bool.not_true, Bool.false_or] at h1
          simpa using (List.all_eq_true.1 h1) x hx⟩
   else
-    ⟨cs, cs.refines_refl bs, id⟩
+    ⟨cs, [], PassCorrect.refl cs bs⟩

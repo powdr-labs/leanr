@@ -142,27 +142,70 @@ theorem ConstraintSystem.sideEffects_substF (cs : ConstraintSystem p)
       · simp only [if_pos hstate, List.map_cons, ih, BusInteraction.eval_substF]
       · simp only [if_neg hstate, ih]
 
+/-- Simultaneous substitution introduces no variable outside `e` and the mapped solutions. -/
+theorem Expression.substF_vars (f : Variable → Option (Expression p)) (e : Expression p) :
+    ∀ z ∈ (e.substF f).vars, z ∈ e.vars ∨ ∃ y t, f y = some t ∧ z ∈ t.vars := by
+  induction e with
+  | const n => intro z hz; simp [Expression.substF, Expression.vars] at hz
+  | var y =>
+      intro z hz
+      cases hfy : f y with
+      | none => simp only [Expression.substF, hfy] at hz; exact Or.inl hz
+      | some t => simp only [Expression.substF, hfy] at hz; exact Or.inr ⟨y, t, hfy, hz⟩
+  | add a b iha ihb =>
+      intro z hz
+      simp only [Expression.substF, Expression.vars, List.mem_append] at hz
+      rcases hz with hz | hz
+      · exact (iha z hz).imp (List.mem_append.2 <| Or.inl ·) id
+      · exact (ihb z hz).imp (List.mem_append.2 <| Or.inr ·) id
+  | mul a b iha ihb =>
+      intro z hz
+      simp only [Expression.substF, Expression.vars, List.mem_append] at hz
+      rcases hz with hz | hz
+      · exact (iha z hz).imp (List.mem_append.2 <| Or.inl ·) id
+      · exact (ihb z hz).imp (List.mem_append.2 <| Or.inr ·) id
+
+/-- If every mapped solution mentions only `cs`'s variables, substitution introduces no new one. -/
+theorem ConstraintSystem.substF_vars_subset (cs : ConstraintSystem p)
+    (f : Variable → Option (Expression p))
+    (hfv : ∀ (y : Variable) (t : Expression p), f y = some t → ∀ z ∈ t.vars, z ∈ cs.vars) :
+    ∀ z ∈ (cs.substF f).vars, z ∈ cs.vars := by
+  intro z hz
+  rw [ConstraintSystem.mem_vars] at hz
+  rcases hz with ⟨c, hc, hzc⟩ | ⟨bi, hbi, hzbi⟩
+  · simp only [ConstraintSystem.substF, List.mem_map] at hc
+    obtain ⟨c0, hc0, rfl⟩ := hc
+    rcases Expression.substF_vars f c0 z hzc with h | ⟨y, t, hft, hzt⟩
+    · exact ConstraintSystem.mem_vars_of_constraint hc0 h
+    · exact hfv y t hft z hzt
+  · simp only [ConstraintSystem.substF, List.mem_map] at hbi
+    obtain ⟨bi0, hbi0, rfl⟩ := hbi
+    rcases hzbi with hm | ⟨e, he, hze⟩
+    · simp only [BusInteraction.substF] at hm
+      rcases Expression.substF_vars f bi0.multiplicity z hm with h | ⟨y, t, hft, hzt⟩
+      · exact ConstraintSystem.mem_vars_of_mult hbi0 h
+      · exact hfv y t hft z hzt
+    · simp only [BusInteraction.substF, List.mem_map] at he
+      obtain ⟨e0, he0, rfl⟩ := he
+      rcases Expression.substF_vars f e0 z hze with h | ⟨y, t, hft, hzt⟩
+      · exact ConstraintSystem.mem_vars_of_payload hbi0 he0 h
+      · exact hfv y t hft z hzt
+
 /-- **Simultaneous-substitution correctness.** If every satisfying assignment of `cs` forces
-    `x = t` for every mapped pair `f x = some t`, then substituting the whole map at once is
-    `PassCorrect`: equivalent to `cs` and invariant-preserving. The batch counterpart of
+    `x = t` for every mapped pair `f x = some t`, and every solution mentions only `cs`'s
+    variables, then substituting the whole map at once is `PassCorrect`. The batch counterpart of
     `ConstraintSystem.subst_correct`. -/
 theorem ConstraintSystem.substF_correct (cs : ConstraintSystem p)
     (f : Variable → Option (Expression p)) (bs : BusSemantics p)
-    (H : ∀ env, cs.satisfies bs env → ∀ y t, f y = some t → env y = t.eval env) :
-    PassCorrect cs (cs.substF f) bs := by
-  refine ⟨⟨?_, ?_⟩, ?_⟩
+    (H : ∀ env, cs.satisfies bs env → ∀ y t, f y = some t → env y = t.eval env)
+    (hfv : ∀ (y : Variable) (t : Expression p), f y = some t → ∀ z ∈ t.vars, z ∈ cs.vars) :
+    PassCorrect cs (cs.substF f) [] bs := by
+  refine PassCorrect.ofEnvEq ?_ ?_ (cs.substF_vars_subset f hfv) ?_
   · -- soundness: (cs.substF f) implies cs
     intro env hsat
     refine ⟨envF f env, (cs.satisfies_substF f bs env).1 hsat, ?_⟩
     rw [cs.sideEffects_substF]
     exact BusState.equiv_refl _
-  · -- completeness: cs intended-implies (cs.substF f)
-    intro env hint hsat
-    have henv : envF f env = env := envF_eq_self f env (H env hsat)
-    refine ⟨env, ?_, ?_, ?_⟩
-    · rw [cs.satisfies_substF, henv]; exact hsat
-    · rw [cs.admissible_substF, henv]; exact hint
-    · rw [cs.sideEffects_substF, henv]; exact BusState.equiv_refl _
   · -- invariant preservation
     intro hinv env hsat bi hbi
     have hsatcs : cs.satisfies bs (envF f env) := (cs.satisfies_substF f bs env).1 hsat
@@ -170,3 +213,10 @@ theorem ConstraintSystem.substF_correct (cs : ConstraintSystem p)
     obtain ⟨bi0, hbi0, rfl⟩ := hbi
     simp only [bi0.eval_substF f env]
     exact hinv (envF f env) hsatcs bi0 hbi0
+  · -- completeness: cs intended-implies (cs.substF f), witness `env`
+    intro env hadm hsat
+    have henv : envF f env = env := envF_eq_self f env (H env hsat)
+    refine ⟨?_, ?_, ?_⟩
+    · rw [cs.satisfies_substF, henv]; exact hsat
+    · rw [cs.admissible_substF, henv]; exact hadm
+    · rw [cs.sideEffects_substF, henv]; exact BusState.equiv_refl _
