@@ -61,7 +61,22 @@ def cleanupCycle : VerifiedPassW p :=
     |>.andThen tautoBusDropPass.withFacts.guardDegree
     |>.andThen busUnifyPass.guardDegree
     |>.andThen disconnectedComponentPass.withFacts.guardDegree
-    |>.andThen reencodePass.withFacts.guardDegree
+    -- NOTE: `reencodePass` is intentionally NOT wired into the shipped pipeline. It is the only
+    -- pass that emits `Derivations`, and every derivation it emits (a fresh bit's `bitCM`) reads
+    -- exactly the group columns `xs` that the pass substitutes OUT of the circuit
+    -- (`bitCM_vars : ∀ v ∈ (bitCM …).vars, v ∈ xs`). powdr's witness generator indexes derivation
+    -- methods by presence in the optimized machine's `main_columns` (constraints + bus
+    -- interactions) and panics on any removed column (see issue #64,
+    -- `evaluate_computation_method` in openvm cpu/mod.rs). The bits are irreducibly circular: the
+    -- only recorded substitution for `xs` is `xs → interp(bits)`, so composing a bit's method over
+    -- surviving columns yields the self-referential tautology `bit_j := bit_j` (evaluated against
+    -- the uninitialized bits at witgen time) — it cannot recover the real witness. The group value
+    -- lived only in the removed columns (powdr filled them from the dummy instruction trace), so no
+    -- surviving column determines the bits. Re-encoding is therefore incompatible with powdr's
+    -- current witgen contract; the pass and its correctness proof are kept in `Reencode.lean` (and
+    -- still build-checked via the import) for a future powdr-side fix, but not shipped.
+    -- (Removing it makes the optimizer emit zero derivations, so witgen never references a removed
+    -- column.)
 
 theorem cleanupCycle_respectsDeg : RespectsDeg (cleanupCycle (p := p)) := by
   repeat' apply VerifiedPassW.andThen_respectsDeg
