@@ -33,7 +33,8 @@ def BusInteraction.mapExpr (bi : BusInteraction (Expression p)) (g : Expression 
 def ConstraintSystem.mapExpr (cs : ConstraintSystem p) (g : Expression p → Expression p) :
     ConstraintSystem p :=
   { algebraicConstraints := cs.algebraicConstraints.map g,
-    busInteractions := cs.busInteractions.map (·.mapExpr g) }
+    busInteractions := cs.busInteractions.map (·.mapExpr g),
+    derivedColumns := cs.derivedColumns }
 
 section EvalPreserving
 variable {g : Expression p → Expression p} (hg : ∀ e (env : String → ZMod p), (g e).eval env = e.eval env)
@@ -109,9 +110,9 @@ theorem ConstraintSystem.mapExpr_correct (cs : ConstraintSystem p) (bs : BusSema
   · intro env hsat
     refine ⟨env, (cs.satisfies_mapExpr hg bs env).1 hsat, ?_⟩
     rw [cs.sideEffects_mapExpr hg]; exact BusState.equiv_refl _
-  · intro env hint hsat _hdc
+  · intro env hint hsat hdc
     refine ⟨env, (cs.satisfies_mapExpr hg bs env).2 hsat,
-      (cs.admissible_mapExpr hg bs env).2 hint, ?_, ConstraintSystem.derivedConsistent_of_nil env rfl⟩
+      (cs.admissible_mapExpr hg bs env).2 hint, ?_, hdc⟩
     rw [cs.sideEffects_mapExpr hg]; exact BusState.equiv_refl _
   · intro hinv env hsat bi hbi
     have hsatcs : cs.satisfies bs env := (cs.satisfies_mapExpr hg bs env).1 hsat

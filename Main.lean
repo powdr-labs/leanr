@@ -1,4 +1,5 @@
 import Leanr.Implementation.JsonParser
+import Leanr.Implementation.JsonSerializer
 import Leanr.Optimizer
 import Leanr.Utils.Size
 import Leanr.Utils.Dsl
@@ -123,6 +124,9 @@ def cmdRun (fileName : String) (iters : Nat) : IO Unit := do
   IO.println s!"  degree bound (identities {bound.identities}, bus {bound.busInteractions}): \
     input {if cs.withinDegreeB bound then "ok" else "EXCEEDED"}, \
     output {if optimized.withinDegreeB bound then "ok" else "EXCEEDED"}"
+  IO.println s!"  derived columns (witgen hints) emitted: {optimized.derivedColumns.length}"
+  if h : optimized.derivedColumns.length > 0 then
+    IO.println s!"    sample: {(serializeDerivedVariable optimized.derivedColumns[0]).compress}"
   IO.println s!"  ({iters} iters, {t1 - t0} ms)"
 
 /-- Like `cmdRun`, but also dump the distinct variables remaining after optimization (for

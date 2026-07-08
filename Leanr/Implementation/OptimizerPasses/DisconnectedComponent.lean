@@ -86,7 +86,8 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (hBstateless : ∀ bi ∈ cs.busInteractions, keepBi bi = false → bs.isStateful bi.busId = false)
     (hBkeep : ∀ bi ∈ cs.busInteractions, keepBi bi = true → ∀ x ∈ bi.vars, remV x = false) :
     PassCorrect cs { algebraicConstraints := cs.algebraicConstraints.filter keepCon,
-                     busInteractions := cs.busInteractions.filter keepBi } bs := by
+                     busInteractions := cs.busInteractions.filter keepBi,
+                     derivedColumns := cs.derivedColumns } bs := by
   -- the merge: keep `env` on kept variables, use the witness on removed ones
   set m : (String → ZMod p) → (String → ZMod p) :=
     fun env x => if remV x = true then w x else env x with hm
@@ -137,23 +138,24 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     refine ⟨m env, keySat env hsat.1 hsat.2, ?_⟩
     -- side effects: out under env = cs under (m env)
     have hse : ({ algebraicConstraints := cs.algebraicConstraints.filter keepCon,
-                  busInteractions := cs.busInteractions.filter keepBi } :
+                  busInteractions := cs.busInteractions.filter keepBi,
+                  derivedColumns := cs.derivedColumns } :
                   ConstraintSystem p).sideEffects bs env = cs.sideEffects bs (m env) :=
       sideEffects_drop_eq bs keepBi env (m env) cs.busInteractions
         (fun bi hbi hkf => hBstateless bi hbi hkf)
         (fun bi hbi hstate => hmeB env bi (hBkeep bi hbi (hstKeep bi hbi hstate)))
     rw [hse]; exact BusState.equiv_refl _
   · -- completeness: cs.impliesAdmissible out
-    intro env hadm hsat _hdc
+    intro env hadm hsat hdc
     refine ⟨env, ⟨fun c hc => hsat.1 c (List.mem_filter.1 hc).1,
-                  fun bi hbi => hsat.2 bi (List.mem_filter.1 hbi).1⟩, ?_, ?_,
-                  ConstraintSystem.derivedConsistent_of_nil env rfl⟩
+                  fun bi hbi => hsat.2 bi (List.mem_filter.1 hbi).1⟩, ?_, ?_, hdc⟩
     · -- admissibility carries over (dropped interactions are stateless)
       exact (cs.admissible_filterBus bs keepBi env
         (fun bi hbi hkf => Or.inr (hBstateless bi hbi hkf))).2 hadm
     · -- side effects: cs under env = out under env
       have hse : ({ algebraicConstraints := cs.algebraicConstraints.filter keepCon,
-                    busInteractions := cs.busInteractions.filter keepBi } :
+                    busInteractions := cs.busInteractions.filter keepBi,
+                    derivedColumns := cs.derivedColumns } :
                     ConstraintSystem p).sideEffects bs env = cs.sideEffects bs env :=
         sideEffects_drop_eq bs keepBi env env cs.busInteractions
           (fun bi hbi hkf => hBstateless bi hbi hkf) (fun _ _ _ => rfl)
@@ -250,7 +252,8 @@ def disconnectedComponentPass : VerifiedPass p := fun cs bs =>
         !keepBiWith bs remV bi || bi.vars.all (fun x => !remV x))
     ) = true then
     ⟨{ algebraicConstraints := cs.algebraicConstraints.filter (keepConWith remV),
-       busInteractions := cs.busInteractions.filter (keepBiWith bs remV) },
+       busInteractions := cs.busInteractions.filter (keepBiWith bs remV),
+       derivedColumns := cs.derivedColumns },
      by
        simp only [Bool.and_eq_true, and_assoc] at hchk
        obtain ⟨_hne, hcz, hbz, hck, hbk⟩ := hchk

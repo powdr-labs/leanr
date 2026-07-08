@@ -72,7 +72,8 @@ theorem BusInteraction.eval_subst (bi : BusInteraction (Expression p)) (x : Stri
 def ConstraintSystem.subst (cs : ConstraintSystem p) (x : String) (t : Expression p) :
     ConstraintSystem p :=
   { algebraicConstraints := cs.algebraicConstraints.map (·.subst x t),
-    busInteractions := cs.busInteractions.map (·.subst x t) }
+    busInteractions := cs.busInteractions.map (·.subst x t),
+    derivedColumns := cs.derivedColumns }
 
 /-- The evaluated interactions of a substituted system, restricted to one bus, are those of the
     original under the rebound environment (substitution never changes a bus id). -/
@@ -152,11 +153,11 @@ theorem ConstraintSystem.subst_correct (cs : ConstraintSystem p) (x : String) (t
     rw [cs.sideEffects_subst]
     exact BusState.equiv_refl _
   · -- completeness: cs intended-implies (cs.subst x t)
-    intro env hint hsat _hdc
+    intro env hint hsat hdc
     have hx : env x = t.eval env := H env hsat
     have hupd : Function.update env x (t.eval env) = env := by
       rw [← hx]; exact Function.update_eq_self x env
-    refine ⟨env, ?_, ?_, ?_, ConstraintSystem.derivedConsistent_of_nil env rfl⟩
+    refine ⟨env, ?_, ?_, ?_, hdc⟩
     · rw [cs.satisfies_subst, hupd]; exact hsat
     · rw [cs.admissible_subst, hupd]; exact hint
     · rw [cs.sideEffects_subst, hupd]; exact BusState.equiv_refl _
