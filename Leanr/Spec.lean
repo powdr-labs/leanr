@@ -166,21 +166,19 @@ def Derivations.methodFor : Derivations p → Variable → Option (ComputationMe
       (Derivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
 
 /-- Derived-variable reconstruction under `e`: every no-powdr-ID variable of `cs` is computed by
-    the method `ds` uses for it, reading only input (powdr-ID) columns. -/
+    the method `ds` uses for it, reading only input (powdr-ID) variables. -/
 def ConstraintSystem.reconstructs (cs : ConstraintSystem p) (ds : Derivations p)
     (e : Variable → ZMod p) : Prop :=
   ∀ v ∈ cs.vars, v.powdrId? = none →
     ∃ cm, Derivations.methodFor ds v = some cm ∧ (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval e = e v
 
-/-- How the completeness witness `env'` of an output `out` is obtained from an assignment `env` of
-    the input `inp`, via derivations `ds`: every variable of `out` that carries a powdr ID is an
-    input column, present in `inp` with an unchanged value; every derived variable (no powdr ID) is
-    computed by a method in `ds` reading only input columns. This is exactly the data witness
-    generation needs to extend an input trace to an output trace. -/
-def ConstraintSystem.derivesWitness (out inp : ConstraintSystem p) (ds : Derivations p)
+/-- The `out` constraint system variable assignment `env'` can be completely derived from `inp`
+    constraint system assignment `env`: Either the variables are reused, or they are computed by
+    methods in `ds` reading only input variables. -/
+def ConstraintSystem.derivesWitnessFrom (out inp : ConstraintSystem p) (ds : Derivations p)
     (env env' : Variable → ZMod p) : Prop :=
-  (∀ v ∈ out.vars, v.powdrId?.isSome → v ∈ inp.vars ∧ env' v = env v) ∧
-  out.reconstructs ds env'
+  out.reconstructs ds env' ∧
+  (∀ v ∈ out.vars, v.powdrId?.isSome → v ∈ inp.vars ∧ env' v = env v)
 
 --------- Constraint system implications ---------
 
@@ -218,28 +216,23 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
       self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
 
 /-- Like `implies`, but the obligation is only required for `self`'s **admissible** (real-trace)
-    assignments, the produced witness is itself admissible, and — when `self`'s variables are all
-    genuine input columns — that witness additionally `derivesWitness`: it is reconstructible from
-    the input assignment via `ds`. This is the *completeness* direction of an optimization: it must
-    reproduce every real trace (dropping spurious satisfying assignments is fine) and say how
-    witness generation computes the columns it introduces. Delivering an admissible witness is what
-    makes `refines` transitive; the reconstruction is only demanded for all-input-column inputs
-    (the intended shape of a circuit fed to the optimizer — a column with no powdr ID cannot be
-    read from the input trace). -/
+    assignments, the produced witness is itself admissible and it can be derived from a valid
+    witness for `self`.
+    This is the *completeness* direction of an optimization: the optimizer must reproduce every
+    real trace, but may drop spurious (non-trace) satisfying assignments. Delivering an admissible
+    witness is what makes `refines` transitive. -/
 def ConstraintSystem.impliesAdmissible (self other : ConstraintSystem p)
     (busSemantics : BusSemantics p) (ds : Derivations p) : Prop :=
   ∀ env, self.admissible busSemantics env → self.satisfies busSemantics env →
     ∃ env', other.satisfies busSemantics env' ∧ other.admissible busSemantics env' ∧
       self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env' ∧
-      ((∀ v ∈ self.vars, v.powdrId?.isSome) → other.derivesWitness self ds env env')
+      ((∀ v ∈ self.vars, v.powdrId?.isSome) → other.derivesWitnessFrom self ds env env')
 
-/-- Whether `self` is a valid **optimization** of `other`, carrying the witness-reconstruction
-    data `ds`:
-    * **sound** — `self.implies other`: every satisfying assignment of `self` maps to one of
-      `other` with the same side effects;
-    * **complete for admissible executions** — `other.impliesAdmissible self ds`: every *admissible*
-      (real-trace) satisfying assignment of `other` is reproduced by `self`, with a witness that
-      `derivesWitness` via `ds`. -/
+/-- Whether `self` is a valid **optimization** of `other` under a given bus semantics:
+    * **sound** — `self.implies other`: A satisfying assignment of `self` implies that there exists
+      a satisfying assignment of `other` with the same side effects.;
+    * **complete for admissible executions** — `other.impliesAdmissible self`: every *admissible*
+      (real-trace) satisfying assignment of `other` is reproduced by `self`. -/
 def ConstraintSystem.refines (self other : ConstraintSystem p) (busSemantics : BusSemantics p)
     (ds : Derivations p) : Prop :=
   self.implies other busSemantics ∧ other.impliesAdmissible self busSemantics ds

@@ -130,14 +130,14 @@ theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
   exact fun v hvout hvnone => hrec v (hsub v hvout) hvnone
 
 /-- Bridge to the audited spec: a threaded `PassCorrect` (with incoming derivations `[]`) gives the
-    spec's `refines` — soundness, plus completeness whose witness `derivesWitness` (when the input's
+    spec's `refines` — soundness, plus completeness whose witness `derivesWitnessFrom` (when the input's
     columns all carry powdr IDs, so it has no unaccounted derived variables). -/
 theorem PassCorrect.toRefines {cs out : ConstraintSystem p} {ds : Derivations p}
     {bs : BusSemantics p} (h : PassCorrect cs out ds bs) : out.refines cs bs ds := by
   obtain ⟨himpl, _hinv, hS, hcomp⟩ := h
   refine ⟨himpl, fun env hadm hsat => ?_⟩
   obtain ⟨env', hsat', hadm', hse, hA, hR⟩ := hcomp env hadm hsat
-  refine ⟨env', hsat', hadm', hse, fun hpow => ⟨fun v hvout hvpow => ⟨hS v hvout hvpow, hA v hvpow⟩, ?_⟩⟩
+  refine ⟨env', hsat', hadm', hse, fun hpow => ⟨?_, fun v hvout hvpow => ⟨hS v hvout hvpow, hA v hvpow⟩⟩⟩
   have hrec0 : cs.reconstructs [] env :=
     fun v hv hvnone => absurd (hpow v hv) (by simp [hvnone])
   simpa using hR [] hrec0
