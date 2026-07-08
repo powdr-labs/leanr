@@ -76,6 +76,26 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       ∀ (busId : Nat) (shape : MemoryBusShape), memShape busId = some shape →
         admissibleMemoryBus shape ((msgs.filter (fun m => m.busId = busId)).filter
           (fun m => decide (m.multiplicity ≠ 0)))
+  /-- Reverse bridge for pair cancellation (the completeness half). Dropping a matched, isolated
+      send→receive pair from a declared bus preserves `admissible`: given a send `S` and a later
+      receive `R` on `busId` with equal addresses, no active same-address message between them
+      (`B`), and no active same-address send before `S` (`A`), removing both from the active-stateful
+      message list keeps it admissible. Gated on `memShape busId = some shape`, so `trivial` (no
+      shapes) discharges it vacuously; for a VM whose `admissible` is the per-bus `admissibleMemoryBus`
+      conjunction it follows from `admissibleMemoryBus_dropPair`. Takes `1 ≠ 0` (the pass supplies
+      it; the degenerate `ZMod 1` is then out of the way). -/
+  admissible_dropPair :
+    (1 : ZMod p) ≠ 0 →
+    ∀ (busId : Nat) (shape : MemoryBusShape), memShape busId = some shape →
+    ∀ (A B C : List (BusInteraction (ZMod p))) (S R : BusInteraction (ZMod p)),
+      S.busId = busId → R.busId = busId →
+      S.multiplicity = 1 → R.multiplicity = -1 →
+      shape.address S = shape.address R →
+      (∀ m ∈ B, m.busId = busId → m.multiplicity ≠ 0 → shape.address m = shape.address S → False) →
+      (∀ m ∈ A, m.busId = busId → m.multiplicity ≠ 0 → shape.address m = shape.address S →
+        m.multiplicity ≠ 1) →
+      bs.admissible (A ++ S :: B ++ R :: C) →
+      bs.admissible (A ++ B ++ C)
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
@@ -89,3 +109,4 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   memShape _ := none
   memShape_stateful := by intro _ _ h; exact absurd h (by simp)
   admissible_sound := by intro _ _ _ _ h; exact absurd h (by simp)
+  admissible_dropPair := by intro _ _ _ h; exact absurd h (by simp)
