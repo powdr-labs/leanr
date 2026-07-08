@@ -3,6 +3,7 @@ import Leanr.Optimizer
 import Leanr.Utils.Size
 import Leanr.Utils.Dsl
 import Leanr.OpenVmSemantics
+import Leanr.Ffi
 
 /-!
 # The leanr CLI
