@@ -151,11 +151,16 @@ def parseJsonSystem (jsonStr : String) : Except String (ConstraintSystem p × Bu
   }
   pure (system, busMap)
 
-/-- info: Parsed 9168 constraints, 3117 bus interactions, 6 bus types -/
+/- A real powdr export from the `openvm-eth` benchmark set, exercising every parser path
+   (constraints, bus interactions, all six bus types). The fixture is gzipped like the CLI
+   inputs, so decompress it with `gunzip -c` exactly as `Main.readInput` does. -/
+/-- info: Parsed 117 constraints, 71 bus interactions, 6 bus types -/
 #guard_msgs in
 #eval! do
-  let contents ← IO.FS.readFile "apc_reth_op_bug.json"
-  match parseJsonSystem (p := 2013265921) contents with
+  let result ← IO.Process.output
+    { cmd := "gunzip",
+      args := #["-c", "OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz"] }
+  match parseJsonSystem (p := 2013265921) result.stdout with
   | .ok (system, busMap) =>
     IO.println s!"Parsed {system.algebraicConstraints.length} constraints, {system.busInteractions.length} bus interactions, {busMap.length} bus types"
   | .error e =>
