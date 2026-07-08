@@ -1111,3 +1111,39 @@ so fold in bus interactions / non-covered constraints), env'=env, no derivations
 collapse (powdr's 1808 is the rough target; leanr's chaining is if anything stronger) but not the ~13%
 flag compression, which is genuinely reencode-only (it's why leanr *beats* powdr here: 1683 < 1808). Full
 proposal + the keep-both-vs-replace decision in `docs/ideas.md`. No optimizer/spec change in this entry.
+
+### 48. Domain-constant subexpression folding (`DomainFold.lean`) — the entry-47 pass, kept alongside `reencode`
+Implemented the entry-47 proposal (Georg chose "keep both"): a new `domainFoldPass`, placed **before**
+`busUnifyPass` in `cleanupCycle`. For each constraint's small variable group (2–8 vars, same targets as
+`reencode`), enumerate the surviving joint values over the group's constraint-derived domains
+(`groupDoms`/`groupSurvivors`, shared with `reencode`) and replace every *maximal wholly-in-group*
+**compound** subexpression that is constant on all survivors by that constant — **keeping** the group's
+variables (no bits, no group substitution). This folds the flag-polynomial memory offsets
+(`52 − flag_poly → 52`) that block `busUnify`'s `addrConstsNeq`, so the register/timestamp chains
+collapse in the *same* cleanup cycle — exactly powdr's range/domain simplification, made explicit.
+
+Correctness is a pure rewrite via `PassCorrect.ofEnvEq` (`env' = env`, no new variables, no derivations):
+the folded subexpression's defining equation `e − c = 0` is entailed by the group's covered constraints,
+which are kept **verbatim** in the output, so any assignment satisfying the output pins the group to a
+survivor under which `foldRewrite` agrees with the identity (`foldRewrite_agree_covered`). Soundness,
+completeness, admissible/side-effect preservation and `out.vars ⊆ cs.vars` all follow from that one
+agreement. Strictly simpler than `reencode` (no witness transport / backward direction); a `systemHasFoldable`
+Bool gate keeps it identity when nothing folds. Folding only lowers degree, so the guard never bites.
+
+`lake build` green; `optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`,
+`openVmOptimizer_maintainsCorrectness` all still `{propext, Classical.choice, Quot.sound}`-only; no
+`sorry`/`admit`/`axiom`/`native_decide` (`check-proof-integrity.sh` passes).
+
+**Measured (apc_005, the 5406-var load/store class).** Isolating the pass by toggling `reencode`:
+- other passes only (no reencode, no fold): **3619** vars, 1801 constr, 1951 bus.
+- **fold only (no reencode): 1939** vars, 1481 constr, **831** bus.
+- reencode only, and fold+reencode (kept config): **1683** vars, 841 constr, 831 bus (byte-identical).
+- powdr: 1808 vars.
+
+So the fold pass **alone** recovers 3619 → 1939 (−1680, the full chaining collapse — bus already down to
+831, matching reencode) and the residual 1939 → 1683 (−256) is exactly the flag compression only
+`reencode` does. This confirms entry 47's 87%/13% split almost to the variable. With **both** passes the
+result is byte-identical to reencode-only on every case sampled (apc_002/003/004/008/010/014/023/025/028/030/069),
+i.e. effectiveness-neutral but more general (and slightly fewer fixpoint cycles: apc_005 62.3 s → 58.4 s).
+The pass stands on its own if `reencode` is ever dropped (entry-47 option B → ~1939 on this class, keeping
+all flags, close to powdr's 1808).
