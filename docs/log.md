@@ -1034,3 +1034,43 @@ variable-sets that are mostly *pinned* (domain-1) with a few free vars, so each 
 a long assignment. Excluding pinned domain-1 vars from the enumerated box (substituting their constants
 into the covered constraints, enumerating only the free vars) would shrink the assignments sharply, but
 needs `forcedOver`'s soundness reproven against the reduced box — left as a follow-up.
+
+### 46. Memory/exec-bus send↔receive pair cancellation (`BusPairCancel.lean`) — bus-interaction effectiveness
+
+Georg's "Memory optimizer" hint (log entry 14), realizable under the entry-38+ `refines`/`admissible`
+spec (its earlier block is gone). After `busUnifyPass` unifies a consecutive send `S` (mult `1`) and
+receive `R` (mult `-1`) on a memory bus to the **same payload**, the two are the same message with
+opposite multiplicity — net-zero on the bus — so dropping **both** is equivalence-preserving. Exactly
+powdr's memory-interaction cancellation; it improves the **bus-interaction** metric (entry 42) without
+touching the variable count.
+
+Why it is sound (no audit-surface change — `Spec.lean`, `OpenVmSemantics.lean`, `MemoryBus.lean`
+untouched):
+- **soundness** (`out.implies cs`): the pair is on a `neverViolates` bus, so re-adding it to build a
+  `cs` witness imposes no `violatesConstraint` obligation, and the identical-payload/opposite-mult
+  pair adds `0` to every message's net multiplicity (`≈` preserved).
+- **completeness** (`cs.impliesAdmissible out`): removing the pair preserves the VM's `admissible`
+  predicate — **provided `S` is the earliest active send to its address** (else the drop could expose a
+  fresh consecutive send→receive pair with mismatched payloads). Proved at the `admissibleMemoryBus`
+  level (`admissibleMemoryBus_dropPair` in `Implementation/MemoryBusDrop.lean`, a single-element
+  `dropOne` applied twice), bridged to the abstract `bs.admissible` by a new proven `BusFacts` field
+  `admissible_dropPair` (definitional for OpenVM; vacuous for `trivial`, gated on `memShape`).
+
+The pass drops no variables, so it is a `PassCorrect.ofEnvEq` (env' = env) with **no derivations**;
+`out.vars ⊆ cs.vars` because the pair is removed. It scans each declared `neverViolates` memory bus
+for the earliest cancelable pair (fused linear scan; the O(n) split-equation `decide` runs only for
+the chosen candidate) and is drained to a fixpoint within one cleanup cycle via
+`iterateToFixpoint busPairCancelPass` (bus length strictly decreases each drop). A whole access chain
+collapses to its endpoints (first receive `R1` reading the context's prior value; last send `Sn`, the
+final write — neither can cancel). Also fires on the execution bridge (empty-address shape),
+cancelling the pc/timestamp chain likewise.
+
+`lake build` green; `openVmOptimizer_maintainsCorrectness` (and the `simpleOptimizer`/`optimizerWithBusFacts`
+variants) still `{propext, Classical.choice, Quot.sound}`-only; no `sorry`/`admit`/`axiom`/`native_decide`;
+all outputs within the degree bound.
+
+**Impact (bus interactions; variables unchanged):** apc_003 209 → **96** (2.18×; was 150 before this
+pass, powdr 85). Across a sample (apc_001–008; the small cases re-confirmed identical post-rebase),
+bus interactions total 5839 → **leanr 1894** (3.08×) vs **powdr 1637** (3.57×), with variables
+unchanged (leanr keeps ≤ powdr's on every sampled case). The remaining leanr-vs-powdr bus gap is the PC lookups (bus 2),
+which powdr removes and leanr keeps (never-violating model) — a separate follow-up (`docs/ideas.md`).

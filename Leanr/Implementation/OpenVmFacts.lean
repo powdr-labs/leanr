@@ -1,5 +1,6 @@
 import Leanr.Implementation.BusFacts
 import Leanr.OpenVmSemantics
+import Leanr.Implementation.MemoryBusDrop
 
 set_option autoImplicit false
 
@@ -221,5 +222,38 @@ def openVmFacts (p : ℕ) [NeZero p]
       · rw [hb, hstateful]; simp
       · simp [hb]
     rwa [hlist] at hd
+  admissible_dropPair := by
+    -- `openVmBusSemantics.admissible` is the per-declared-bus `admissibleMemoryBus` conjunction.
+    intro hp1 busId shape hshape A B C S R hSbus hRbus hSm hRm haddrEq hcons hearliest hadm_full
+      busId' shape' hshape'
+    by_cases hbb : busId' = busId
+    · subst busId'
+      obtain rfl : shape = shape' := Option.some.inj (hshape.symm.trans hshape')
+      have hgoal : (A ++ B ++ C).filter (fun m => m.busId = busId)
+          = A.filter (fun m => m.busId = busId) ++ B.filter (fun m => m.busId = busId)
+            ++ C.filter (fun m => m.busId = busId) := by
+        simp only [List.filter_append]
+      rw [hgoal]
+      have hfull := hadm_full busId shape hshape
+      have hfiltFull : (A ++ S :: B ++ R :: C).filter (fun m => m.busId = busId)
+          = A.filter (fun m => m.busId = busId) ++ S :: B.filter (fun m => m.busId = busId)
+            ++ R :: C.filter (fun m => m.busId = busId) := by
+        simp only [List.filter_append, List.filter_cons, hSbus, hRbus, decide_true, if_true]
+      rw [hfiltFull] at hfull
+      refine admissibleMemoryBus_dropPair shape hp1 _ _ _ S R hfull ?_ ?_ haddrEq
+      · intro m hm hmne hmaddr
+        rw [List.mem_filter] at hm
+        exact hcons m hm.1 (of_decide_eq_true hm.2) hmne hmaddr
+      · intro m hm hmne hmaddr
+        rw [List.mem_filter] at hm
+        exact hearliest m hm.1 (of_decide_eq_true hm.2) hmne hmaddr
+    · -- `busId' ≠ busId`: `S`, `R` are on `busId`, so they drop out and the filter is unchanged.
+      have hne : busId ≠ busId' := fun h => hbb h.symm
+      have heq : (A ++ B ++ C).filter (fun m => m.busId = busId')
+          = (A ++ S :: B ++ R :: C).filter (fun m => m.busId = busId') := by
+        simp only [List.filter_append, List.filter_cons, hSbus, hRbus,
+          decide_eq_false hne, Bool.false_eq_true, if_false]
+      rw [heq]
+      exact hadm_full busId' shape' hshape'
 
 end Leanr.OpenVM

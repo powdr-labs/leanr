@@ -1,11 +1,10 @@
 # Ideas for future optimization passes
 
-## Drop never-violating stateless lookups (bus-interaction effectiveness)
+## Drop never-violating stateless lookups (close the residual pc-lookup bus gap)
 
-The new bus-interaction metric (log entry 42) shows leanr well behind powdr on bus interactions
-(~1.4× vs ~2.5× on a small sample), while at variable parity. powdr removes PC lookups and other
-stateless lookups that are proven never to violate; leanr keeps them (never-violating model), so
-they inflate the bus count without affecting variables.
+After memory/exec send↔receive pair cancellation (log entry 46), leanr is at near-parity with powdr
+on bus interactions; the residual gap is essentially the **PC lookups** (bus 2): powdr removes them,
+leanr keeps them (never-violating model), so they inflate the bus count without affecting variables.
 
 A `VerifiedPass` that drops a stateless bus interaction whose multiplicity is provably `0`, or that
 is proven never-violating via `BusFacts.neverViolates`, would be sound (removing a
@@ -30,3 +29,12 @@ correctness machinery already supports any witness (it only re-checks `violatesC
 at run time), so **only the finder needs to change**, not the proof. Caveat: a decomposition solver
 leans toward the OpenVM limb structure — phrase it as a general "solve the component's lookups"
 search (probe `violatesConstraint`) rather than hard-coding base-256, to avoid overfitting.
+
+## Batch pair cancellation in one traversal
+
+`busPairCancelPass` (entry 46) drops one pair per invocation and is drained via `iterateToFixpoint`
+inside the cleanup cycle. On the largest blocks (~hundreds of pairs) this is the dominant per-pass
+cost. A single-traversal "drop all matched interior send/receive pairs per address" would be O(n)
+instead of O(pairs·n), but needs a multi-drop discipline lemma (the current proof is per-pair via
+`admissibleMemoryBus_dropOne` applied twice). Only worth it if the pass becomes a benchmark
+bottleneck.
