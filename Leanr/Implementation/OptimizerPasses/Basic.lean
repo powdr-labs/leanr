@@ -52,7 +52,7 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
 
 /-- Derived-variable reconstruction under `e` (glue, formerly in `Spec.lean`): every no-powdr-ID
     variable of `cs` is computed by the method `ds` uses for it, reading only powdr-ID variables.
-    Threaded through the passes; the spec's `witnessDerivableFrom` is recovered from it at the top. -/
+    Threaded through the passes; the pipeline top uses it to match the spec's `witgen` output. -/
 def ConstraintSystem.reconstructs (cs : ConstraintSystem p) (ds : Derivations p)
     (e : Variable → ZMod p) : Prop :=
   ∀ v ∈ cs.vars, v.powdrId? = none →
@@ -147,25 +147,14 @@ theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
   rw [List.append_nil]
   exact fun v hvout hvnone => hrec v (hsub v hvout) hvnone
 
-/-- Bridge to the audited spec: a threaded `PassCorrect` (with incoming derivations `[]`) gives both
-    spec obligations — `isSoundReplacementOf` (soundness plus invariant preservation) and
-    `isCompleteReplacementOf` (real-trace completeness whose witness is `witnessDerivableFrom`, valid
-    because the input's columns all carry powdr IDs, so it has no unaccounted derived variables). -/
-theorem PassCorrect.toReplacement {cs out : ConstraintSystem p} {ds : Derivations p}
-    {bs : BusSemantics p} (h : PassCorrect cs out ds bs) :
-    out.isSoundReplacementOf cs bs ∧ out.isCompleteReplacementOf cs bs ds := by
-  obtain ⟨himpl, hinv, hS, hcomp⟩ := h
-  refine ⟨⟨himpl, hinv⟩, fun env hadm hsat => ?_⟩
-  obtain ⟨env', hsat', hadm', hse, hA, hR⟩ := hcomp env hadm hsat
-  refine ⟨env', hsat', hadm', hse, ?_⟩
-  intro hpow v hvout
-  have hrec : out.reconstructs ds env' := by
-    have hrec0 : cs.reconstructs [] env :=
-      fun u hu hunone => absurd (hpow u hu) (by simp [hunone])
-    simpa using hR [] hrec0
-  cases hv : v.powdrId? with
-  | none => exact hrec v hvout hv
-  | some w => exact ⟨hS v hvout (by simp [hv]), hA v (by simp [hv])⟩
+/-- Soundness bridge to the audited spec: a `PassCorrect` gives `isSoundReplacementOf` (soundness
+    plus invariant preservation). The completeness half (`isCompleteReplacementOf`) is discharged at
+    the pipeline top in `Leanr/Implementation/Optimizer.lean`, where it is stated as satisfaction of
+    the concrete `witgen` output and so needs the evaluation-congruence lemmas proved among the
+    passes. -/
+theorem PassCorrect.toSound {cs out : ConstraintSystem p} {ds : Derivations p}
+    {bs : BusSemantics p} (h : PassCorrect cs out ds bs) : out.isSoundReplacementOf cs bs :=
+  ⟨h.1, h.2.1⟩
 
 /-- The result of a verified pass: the transformed system, the derivations it introduces, and the
     correctness proof. -/

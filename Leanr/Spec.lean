@@ -165,20 +165,18 @@ def Derivations.methodFor : Derivations p → Variable → Option (ComputationMe
   | (u, cm) :: rest, v =>
       (Derivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
 
-/-- The output circuit's assignment can be derived from the input circuit's assignment
-    by the following algorithm:
-    - If the variable has a powdr ID, it must be present in the input circuit and have the same value.
-    - If the variable does not have a powdr ID, it must be derivable using the provided derivations.
-
-    ASSUMPTION: all variables in the input circuit have a powdr ID. -/
-def ConstraintSystem.witnessDerivableFrom (outputCS inputCS : ConstraintSystem p) (ds : Derivations p)
-    (inputEnv outputEnv : Variable → ZMod p) : Prop :=
-  (∀ v ∈ inputCS.vars, v.powdrId?.isSome) →
-  ∀ v ∈ outputCS.vars,
+/-- Witness generation: reconstruct an output assignment from an input assignment. Every powdr-ID
+    (input) column passes through unchanged; every other column is computed by the method `ds`
+    records for it, read from the input columns. This is what powdr runs to fill the optimized
+    circuit's columns from an input trace. -/
+def Derivations.witgen (ds : Derivations p) (inputEnv : Variable → ZMod p) : Variable → ZMod p :=
+  fun v =>
     match v.powdrId? with
-    | some _ => v ∈ inputCS.vars ∧ outputEnv v = inputEnv v
-    | none => ∃ cm, Derivations.methodFor ds v = some cm ∧
-        (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval outputEnv = outputEnv v
+    | some _ => inputEnv v
+    | none =>
+      match Derivations.methodFor ds v with
+      | some cm => cm.eval inputEnv
+      | none => inputEnv v
 
 --------- Constraint system implications ---------
 
@@ -214,17 +212,17 @@ def ConstraintSystem.isSoundReplacementOf (optimizedCS originalCS : ConstraintSy
       optimizedCS.sideEffects busSemantics env ≈ originalCS.sideEffects busSemantics env') ∧
   (originalCS.guaranteesInvariants busSemantics → optimizedCS.guaranteesInvariants busSemantics)
 
-/-- Whether an optimized constraint system is a complete replacement for an original constraint system.
-    Informally, for any admissible and satisfying assignment of the original system, there exists a
-    corresponding admissible and satisfying assignment of the optimized system *with equivalent side effects*.
-    Also, it should be possible to derive a witness for the optimized system from a valid witness of the
-    original system. -/
+/-- Whether an optimized constraint system is a complete replacement for an original one. Assuming
+    every input column carries a powdr ID, running witness generation (`ds.witgen`) on any admissible
+    satisfying assignment of the original yields an assignment of the optimized system that is itself
+    satisfying and admissible, with equivalent side effects. -/
 def ConstraintSystem.isCompleteReplacementOf (optimizedCS originalCS : ConstraintSystem p)
     (busSemantics : BusSemantics p) (ds : Derivations p) : Prop :=
+  (∀ v ∈ originalCS.vars, v.powdrId?.isSome) →
   ∀ env, originalCS.admissible busSemantics env → originalCS.satisfies busSemantics env →
-    ∃ env', optimizedCS.satisfies busSemantics env' ∧ optimizedCS.admissible busSemantics env' ∧
-      originalCS.sideEffects busSemantics env ≈ optimizedCS.sideEffects busSemantics env' ∧
-      (optimizedCS.witnessDerivableFrom originalCS ds env env')
+    let env' := Derivations.witgen ds env
+    optimizedCS.satisfies busSemantics env' ∧ optimizedCS.admissible busSemantics env' ∧
+      originalCS.sideEffects busSemantics env ≈ optimizedCS.sideEffects busSemantics env'
 
 --------- Degree bound ---------
 
