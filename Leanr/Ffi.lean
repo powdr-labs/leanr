@@ -23,12 +23,12 @@ open Leanr.OpenVM (openVmOptimizer babyBear)
 private def escapeJson (s : String) : String :=
   (Lean.Json.str s).compress
 
-/-- Parse a powdr export, run the OpenVM optimizer (32 cleanup cycles, matching the CLI default),
-    and serialize the optimized machine. Returns `{"error": ...}` on failure. -/
+/-- Parse a powdr export, run the OpenVM optimizer, and serialize the optimized machine.
+    Returns `{"error": ...}` on failure. -/
 @[export leanr_optimize_json]
 def leanrOptimizeJson (input : String) : String :=
   match parseJsonSystem (p := babyBear) input with
   | .error err => "{\"error\":" ++ escapeJson err ++ "}"
   | .ok (cs, busMap) =>
-    let optimized := openVmOptimizer busMap.toBusMap 32 cs
+    let optimized := openVmOptimizer busMap.toBusMap cs
     Leanr.Serialize.serializeSystem optimized

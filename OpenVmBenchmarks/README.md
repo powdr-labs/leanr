@@ -18,7 +18,7 @@ order: variables, then bus interactions, then algebraic constraints), as both ag
 (Σbefore ⁄ Σafter) and geomean:
 
 ```bash
-OpenVmBenchmarks/benchmark.py                # all openvm-eth cases (--iters 32, --jobs = cores)
+OpenVmBenchmarks/benchmark.py                # all openvm-eth cases (--jobs = cores)
 OpenVmBenchmarks/benchmark.py openvm-eth     # same, named explicitly
 OpenVmBenchmarks/benchmark.py --n 20         # top 20 by cost rank
 OpenVmBenchmarks/benchmark.py --n 10 --report report.html   # + interactive HTML report

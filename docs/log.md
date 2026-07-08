@@ -956,3 +956,32 @@ shift-limbs): 1027 → 1003 vars. The dominant *unremoved* pattern is the orphan
 (data limbs in a bitwise byte-check `[K − Σ256ⁱ·limbᵢ, …]`): all-zero is not a satisfying witness
 there (the affine slot is a large constant, not a byte) — left for a smarter witness finder (see
 `docs/ideas.md`).
+
+### 44. Remove the `iters` parameter: provably-terminating fixpoint cleanup loop
+
+The optimizer no longer takes an iteration count (`iters` / `--iters` / the fixed default 32).
+`cleanupCycle` is run to a fixpoint by `iterateToFixpoint` (`FactPass.lean`): it recurses while each
+cycle strictly lowers the **lexicographic size key** `sizeKey = (distinct vars, bus interactions,
+constraints)` — variables most significant, matching the effectiveness priority — and stops
+otherwise. `sizeKey : Nat ×ₗ Nat ×ₗ Nat` is well-founded (`sizeKey_wf`, the inverse image of `<` on
+the Mathlib lex product), and the recursion is guarded by exactly the strict decrease it needs, so
+`decreasing_by exact h` discharges termination — no fuel, no cap a large basic block could exceed.
+This mirrors the pattern the pre-rewrite `solve_pure` used (`termination_by constraints.size`), now
+generalized to the lexicographic priority order. Distinct-var count uses a `HashSet` (not
+`ConstraintSystem.size`'s quadratic `dedup`) to keep the per-cycle measure cheap.
+
+Two corollaries, by strong induction on `sizeKey`: `iterateToFixpoint_respectsDeg` (degree bound
+preserved) and **`iterateToFixpoint_monotone`** — the loop's output never has a larger size key than
+its input, i.e. the optimizer can only shrink the circuit ("passes only improve"). Removed the
+now-dead `iterateStable`; the audited correctness theorems in `Leanr/Optimizer.lean` lose their
+`iters` argument (they were already `∀ iters`, so this is a one-line change).
+
+Correctness axioms unchanged (`{propext, Classical.choice, Quot.sound}`); no `sorry`/`native_decide`.
+Validated the count-based stop against the old structural no-op by tracing per-cycle
+`(vars, bus, constraints)` on 10 cases: the triple is monotonically non-increasing, each non-final
+cycle strictly lex-decreases, and the first non-decreasing cycle *is* the structural fixpoint — the
+two stops coincide, so zero effectiveness change (outputs reproduce exactly, e.g. apc_069 28/6/22,
+apc_001 42/18/38, apc_100 1003/601/1866). Also removed the `iters`/`--iters` CLI flag and updated
+`benchmark.py`, the READMEs, the architecture doc, and CLAUDE.md. The FFI entry point `Leanr/Ffi.lean`
+drops its now-stale `openVmOptimizer … 32 …` iters argument (the serializer's own `Variable`-struct
+reconciliation landed separately on `main`).

@@ -29,16 +29,16 @@ The `leanr` executable runs the optimizer on powdr `SymbolicMachine` exports (`A
 lake build
 
 # Optimize one case and report effectiveness
-lake exe leanr run [--iters N] OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz
+lake exe leanr run OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz
 
 # powdr's own effectiveness, from its serialized optimizer output
 lake exe leanr powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
 
 # Both, side by side
-lake exe leanr compare [--iters N] <unopt>.json.gz <unopt>.powdr_opt.json.gz
+lake exe leanr compare <unopt>.json.gz <unopt>.powdr_opt.json.gz
 ```
 
-`--iters` caps the optimizer's cleanup-cycle loop (default 32). The loop runs the cleanup cycle to a fixpoint and stops as soon as a cycle changes nothing, so `--iters` is only an upper bound, not a fixed count — in practice even the largest benchmark case (≈9.5k variables) converges well within 32 cycles, so raising it does not change the result. The benchmark sets live in [`OpenVmBenchmarks/`](./OpenVmBenchmarks/) (see its README); the main one, used for optimization, is the top-100 `openvm-eth` set in [`OpenVmBenchmarks/openvm-eth/`](./OpenVmBenchmarks/openvm-eth/).
+The benchmark sets live in [`OpenVmBenchmarks/`](./OpenVmBenchmarks/) (see its README); the main one, used for optimization, is the top-100 `openvm-eth` set in [`OpenVmBenchmarks/openvm-eth/`](./OpenVmBenchmarks/openvm-eth/).
 
 ## Benchmark
 
@@ -47,7 +47,7 @@ As the main benchmark, we use `openvm-eth`: the 100 costliest basic blocks in [o
 To sweep a benchmark set in parallel and report aggregate leanr-vs-powdr effectiveness (the positional argument selects the benchmark by name, defaulting to `openvm-eth`):
 
 ```bash
-OpenVmBenchmarks/benchmark.py                # all openvm-eth cases (--iters 32, --jobs = cores)
+OpenVmBenchmarks/benchmark.py                # all openvm-eth cases (--jobs = cores)
 OpenVmBenchmarks/benchmark.py --n 20         # top 20 by cost rank
 OpenVmBenchmarks/benchmark.py --n 10 --report report.html   # + interactive HTML report
 ```

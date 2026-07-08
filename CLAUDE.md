@@ -34,7 +34,9 @@ construction — a wrong fact would not compile), and `Leanr/Utils/` is tooling.
   own `PassCorrect` proof, so a pass cannot be written without discharging it.
 - `Leanr/Implementation/OptimizerPasses/*.lean` — one file per optimization pass.
 - `Leanr/Implementation/Optimizer.lean` — assembles the passes into `optimizer` /
-  `optimizerWithBusFacts` (`cleanupCycle`, `pipeline`).
+  `optimizerWithBusFacts` (`cleanupCycle`, `pipelineIters`; the cleanup-cycle budget is derived
+  runs to a fixpoint by `iterateToFixpoint`, provably terminating on a lexicographic size measure,
+  with no iteration count passed in).
 - `Leanr/Implementation/BusFacts.lean`, `Leanr/Implementation/OpenVmFacts.lean` — the proven
   `BusFacts` (design + OpenVM instance); zero audit surface.
 - `Leanr/Implementation/JsonParser.lean`, `Main.lean` — the powdr-export parser and the benchmark CLI (see

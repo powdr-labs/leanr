@@ -8,9 +8,10 @@
 Each benchmark is a subdirectory of OpenVmBenchmarks/ holding apc_<rank>_pc<pc>.json.gz
 case pairs (plus manifest.json / apc_candidates.json). The default and main benchmark
 used for optimization is `openvm-eth`. For each case, run `leanr compare` (the same
-optimizer run as the autoopt loop; --iters 32 by default) and aggregate effectiveness
--- distinct variables before / after -- for leanr vs powdr. Cases run in parallel with
-a progress bar.
+optimizer run as the autoopt loop) and aggregate effectiveness -- distinct variables
+before / after -- for leanr vs powdr. Cases run in parallel with a progress bar. The
+optimizer takes no iteration count: its cleanup loop runs to a fixpoint on an
+input-derived budget.
 
 Run it directly (uv installs tqdm automatically); the optional positional argument
 selects the benchmark by name (default: openvm-eth):
@@ -90,7 +91,7 @@ def _metrics_from_json(o):
     return {"vars": o["vars"], "constraints": o["constraints"], "bus": o["bus"]}
 
 
-def run_one(binary, iters, unopt, want_report):
+def run_one(binary, unopt, want_report):
     """Run one case, returning (name, metrics, report_json, err). `metrics` is
     {role: {vars, constraints, bus}} for role in before/leanr/powdr, or None on failure."""
     name = unopt.name
@@ -99,7 +100,7 @@ def run_one(binary, iters, unopt, want_report):
         return name, None, None, "no .powdr_opt"
     sub = "report" if want_report else "compare"
     try:
-        out = subprocess.run([str(binary), sub, "--iters", str(iters), str(unopt), str(opt)],
+        out = subprocess.run([str(binary), sub, str(unopt), str(opt)],
                              capture_output=True, text=True, check=True).stdout
     except subprocess.CalledProcessError:
         return name, None, None, "leanr failed"
@@ -157,7 +158,6 @@ def main():
     ap.add_argument("benchmark", nargs="?", default=DEFAULT_BENCHMARK,
                     help=f"benchmark name -- a subdirectory of OpenVmBenchmarks/ "
                          f"(default: {DEFAULT_BENCHMARK})")
-    ap.add_argument("--iters", type=int, default=32, help="optimizer cleanup-cycle cap (default: 32)")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4,
                     help="cases to run in parallel (default: number of cores)")
     ap.add_argument("--n", type=int, default=None, metavar="N",
@@ -188,9 +188,9 @@ def main():
     want_report = args.report is not None
     results, reports, skipped = [], {}, []
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures = [pool.submit(run_one, binary, args.iters, c, want_report) for c in cases]
+        futures = [pool.submit(run_one, binary, c, want_report) for c in cases]
         for fut in tqdm(as_completed(futures), total=len(futures),
-                        desc=f"leanr compare (iters={args.iters})", unit="case"):
+                        desc="leanr compare", unit="case"):
             name, metrics, report, err = fut.result()
             if metrics is None:
                 skipped.append((name, err))
@@ -224,7 +224,7 @@ def main():
             summary[f"{role}_{mt}_agg"] = agg(role, mt)
             summary[f"{role}_{mt}_geo"] = geo(role, mt)
 
-    print(f"\n=== {args.benchmark}: leanr vs powdr over {n} cases (--iters {args.iters}) ===")
+    print(f"\n=== {args.benchmark}: leanr vs powdr over {n} cases ===")
     print("effectiveness = size before / size after (larger is better); "
           "priority: variables > bus interactions > constraints")
     print(f"  {'measure':<18}{'leanr (agg / geo)':<26}{'powdr (agg / geo)':<26}diff (agg)")
@@ -249,15 +249,14 @@ def main():
             r = reports[name]
             html_cases.append({"rank": rank, "pc": pc, "asm": asm.get(name, ""),
                                "original": r["original"], "powdr": r["powdr"], "leanr": r["leanr"]})
-        args.report.write_text(build_html(html_cases, args.benchmark, args.iters, summary))
+        args.report.write_text(build_html(html_cases, args.benchmark, summary))
         print(f"\nwrote report ({len(html_cases)} cases) to {args.report}", file=sys.stderr)
 
 
-def build_html(cases, benchmark, iters, summary):
+def build_html(cases, benchmark, summary):
     return (HTML_TEMPLATE
             .replace("__BENCH__", benchmark)
             .replace("__N__", str(len(cases)))
-            .replace("__ITERS__", str(iters))
             .replace("__SUMMARY__", json.dumps(summary))
             .replace("__DATA__", json.dumps(cases).replace("</", "<\\/")))
 
@@ -345,7 +344,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   <aside id="side">
     <div id="sidehead">
       <div class="title">leanr benchmark report</div>
-      <div class="meta">__BENCH__ · __N__ cases · --iters __ITERS__</div>
+      <div class="meta">__BENCH__ · __N__ cases</div>
       <div id="summary"></div>
     </div>
     <div id="cases"></div>
