@@ -197,7 +197,7 @@ def applyTimed (pass : VerifiedPassW babyBear) (cs : ConstraintSystem babyBear)
     (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs) :
     IO (ConstraintSystem babyBear × Nat) := do
   let t0 ← IO.monoMsNow
-  let out ← IO.lazyPure (fun _ => (pass cs bs facts).out)
+  let out ← IO.lazyPure (fun _ => (pass cs [] bs facts).out)
   -- Force the whole output structure (varCount traverses every expression node).
   let _ ← IO.lazyPure (fun _ =>
     out.varCount + out.algebraicConstraints.length + out.busInteractions.length)

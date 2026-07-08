@@ -797,7 +797,8 @@ theorem findForced_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
 /-- The finite-domain propagation pass: substitute one variable whose value is forced by
     domain enumeration (over constraints or probed bus obligations). Requires `p` prime
     (decided at runtime; identity otherwise). -/
-def domainPropPass : VerifiedPassW p := fun cs bs facts =>
+def domainPropPass : VerifiedPassW p := fun cs dsIn bs facts =>
+  guardEmpty dsIn <|
   if hp : p.Prime then
     haveI : Fact p.Prime := ⟨hp⟩
     haveI : NeZero p := ⟨hp.ne_zero⟩
@@ -809,5 +810,5 @@ def domainPropPass : VerifiedPassW p := fun cs bs facts =>
              findForced_sound cs.algebraicConstraints bs facts cs.busInteractions x c hf
                env (fun c' hc' => hsat.1 c' hc') (fun bi hbi => hsat.2 bi hbi))
            (fun y hy => by simp [Expression.vars] at hy)⟩
-    | none => ⟨cs, [], PassCorrect.refl cs bs⟩
-  else ⟨cs, [], PassCorrect.refl cs bs⟩
+    | none => ⟨cs, [], PassCorrect.refl cs [] bs⟩
+  else ⟨cs, [], PassCorrect.refl cs [] bs⟩

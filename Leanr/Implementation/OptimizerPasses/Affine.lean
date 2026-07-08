@@ -449,7 +449,8 @@ def bestAffinePivot (cs : ConstraintSystem p) : Option (Variable × Expression p
 /-- The affine-substitution pass: eliminate one variable pinned by a linear constraint (unit
     coefficient), choosing the occurrence-cheapest pivot. Generalizes `constantFixPass`.
     Iterate (with folding) for a fixpoint. -/
-def affineSubstPass : VerifiedPass p := fun cs bs =>
+def affineSubstPass : VerifiedPass p := fun cs dsIn bs =>
+  guardEmpty dsIn <|
   match hf : bestAffinePivot cs with
   | some (x, t) =>
       ⟨cs.subst x t, [], cs.subst_correct x t bs
@@ -460,4 +461,4 @@ def affineSubstPass : VerifiedPass p := fun cs bs =>
           obtain ⟨c, hc, hyc⟩ :=
             solvableFrom_vars cs.algebraicConstraints x t (List.argmin_mem hf) y hy
           exact ConstraintSystem.mem_vars_of_constraint hc hyc)⟩
-  | none => ⟨cs, [], PassCorrect.refl cs bs⟩
+  | none => ⟨cs, [], PassCorrect.refl cs [] bs⟩

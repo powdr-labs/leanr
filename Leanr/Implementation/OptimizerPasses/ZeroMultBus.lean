@@ -20,8 +20,9 @@ variable {p : ℕ}
 /-- The zero-multiplicity bus-removal pass: drop every bus interaction whose multiplicity folds to
     `0`. Correct via `filterBus_correct`, discharging the multiplicity-is-zero obligation through
     `fold_eval` and `isConstZero_sound`. -/
-def zeroMultBusDropPass : VerifiedPass p := fun cs bs =>
-  if hp1 : (1 : ZMod p) = 0 then ⟨cs, [], PassCorrect.refl cs bs⟩
+def zeroMultBusDropPass : VerifiedPass p := fun cs dsIn bs =>
+  guardEmpty dsIn <|
+  if hp1 : (1 : ZMod p) = 0 then ⟨cs, [], PassCorrect.refl cs [] bs⟩
   else
     ⟨cs.filterBus (fun bi => !bi.multiplicity.fold.isConstZero), [],
      cs.filterBus_correct bs (fun bi => !bi.multiplicity.fold.isConstZero) hp1 (by

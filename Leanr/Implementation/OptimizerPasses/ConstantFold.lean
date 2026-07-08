@@ -95,7 +95,8 @@ theorem Expression.fold_vars (e : Expression p) : ∀ x ∈ e.fold.vars, x ∈ e
       · exact List.mem_append.2 (Or.inr (ihb x h))
 
 /-- The constant-folding pass: normalize every expression. Correct via `mapExpr_correct`. -/
-def constantFoldPass : VerifiedPass p := fun cs bs =>
-  ⟨cs.mapExpr Expression.fold, [],
-   ConstraintSystem.mapExpr_correct (g := Expression.fold)
-     (fun e env => Expression.fold_eval e env) cs bs Expression.fold_vars⟩
+def constantFoldPass : VerifiedPass p := fun cs dsIn bs =>
+  guardEmpty dsIn
+   ⟨cs.mapExpr Expression.fold, [],
+    ConstraintSystem.mapExpr_correct (g := Expression.fold)
+      (fun e env => Expression.fold_eval e env) cs bs Expression.fold_vars⟩

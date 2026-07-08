@@ -74,10 +74,12 @@ derivations) and the composition of invariant-preservation.
 /-- The per-pass correctness obligation. `out` is sound (`implies cs`), preserves invariants, adds
     no new powdr-ID column, and satisfies the completeness direction: every admissible satisfying
     assignment of `cs` extends to one of `out` with equal side effects that keeps every input-column
-    value and reconstructs `out`'s derived variables from the input columns. `dsLocal` are the
-    derivations this step introduces; reconstruction is threaded through any incoming `dsIn`, so
-    passes compose simply by concatenating derivations. -/
-def PassCorrect (cs out : ConstraintSystem p) (dsLocal : Derivations p) (bs : BusSemantics p) :
+    value. Derivations are **threaded**, not merely concatenated: given the incoming derivations
+    `dsIn` (which reconstruct `cs`'s derived variables from `cs`'s own columns), the pass produces
+    outgoing derivations `dsOut` reconstructing `out`'s derived variables from `out`'s own columns.
+    A variable-removing pass must therefore *rewrite* the incoming derivations (substituting the
+    variable it eliminated) so that no method references a column absent from `out` (leanr #64). -/
+def PassCorrect (cs out : ConstraintSystem p) (dsIn dsOut : Derivations p) (bs : BusSemantics p) :
     Prop :=
   out.implies cs bs ∧
   (cs.guaranteesInvariants bs → out.guaranteesInvariants bs) ∧
@@ -86,35 +88,36 @@ def PassCorrect (cs out : ConstraintSystem p) (dsLocal : Derivations p) (bs : Bu
     ∃ env', out.satisfies bs env' ∧ out.admissible bs env' ∧
       cs.sideEffects bs env ≈ out.sideEffects bs env' ∧
       (∀ v, v.powdrId?.isSome → env' v = env v) ∧
-      (∀ dsIn, cs.reconstructs dsIn env → out.reconstructs (dsIn ++ dsLocal) env'))
+      (cs.reconstructs dsIn env → out.reconstructs dsOut env'))
 
-/-- Reflexivity: the unchanged system with no new derivations is correct. -/
-theorem PassCorrect.refl (cs : ConstraintSystem p) (bs : BusSemantics p) :
-    PassCorrect cs cs [] bs :=
+/-- Reflexivity: the unchanged system passes the derivations through unchanged. -/
+theorem PassCorrect.refl (cs : ConstraintSystem p) (ds : Derivations p) (bs : BusSemantics p) :
+    PassCorrect cs cs ds ds bs :=
   ⟨cs.implies_refl bs, _root_.id, fun _ hv _ => hv,
    fun env hadm hsat =>
-     ⟨env, hsat, hadm, BusState.equiv_refl _, fun _ _ => rfl,
-      fun dsIn hrec => by rwa [List.append_nil]⟩⟩
+     ⟨env, hsat, hadm, BusState.equiv_refl _, fun _ _ => rfl, fun hrec => hrec⟩⟩
 
-/-- Sequential composition: derivations concatenate, soundness/invariants compose, and the threaded
-    reconstruction chains (`dsIn ↦ dsIn ++ df ↦ (dsIn ++ df) ++ dg = dsIn ++ (df ++ dg)`). -/
+/-- Sequential composition: soundness/invariants compose, and the threaded reconstruction chains
+    (`dsIn ↦ dMid ↦ dOut`). -/
 theorem PassCorrect.andThen {cs mid out : ConstraintSystem p} {bs : BusSemantics p}
-    {df dg : Derivations p} (hf : PassCorrect cs mid df bs) (hg : PassCorrect mid out dg bs) :
-    PassCorrect cs out (df ++ dg) bs := by
+    {dIn dMid dOut : Derivations p} (hf : PassCorrect cs mid dIn dMid bs)
+    (hg : PassCorrect mid out dMid dOut bs) :
+    PassCorrect cs out dIn dOut bs := by
   obtain ⟨hf1, hf2, hf3, hf4⟩ := hf
   obtain ⟨hg1, hg2, hg3, hg4⟩ := hg
   refine ⟨ConstraintSystem.implies_trans hg1 hf1, fun h => hg2 (hf2 h),
     fun v hv hpw => hf3 v (hg3 v hv hpw) hpw, fun env hadm hsat => ?_⟩
   obtain ⟨env1, hs1, ha1, he1, hpw1, hr1⟩ := hf4 env hadm hsat
   obtain ⟨env2, hs2, ha2, he2, hpw2, hr2⟩ := hg4 env1 ha1 hs1
-  refine ⟨env2, hs2, ha2, BusState.equiv_trans he1 he2,
-    fun v hpw => by rw [hpw2 v hpw, hpw1 v hpw], fun dsIn hrec => ?_⟩
-  have := hr2 (dsIn ++ df) (hr1 dsIn hrec)
-  rwa [List.append_assoc] at this
+  exact ⟨env2, hs2, ha2, BusState.equiv_trans he1 he2,
+    fun v hpw => by rw [hpw2 v hpw, hpw1 v hpw], fun hrec => hr2 (hr1 hrec)⟩
 
 /-- Build `PassCorrect` for a pass whose completeness witness is the input assignment itself and
     which introduces no new variables (`out.vars ⊆ cs.vars`) — the shape of every pass except the
-    column-introducing re-encoder. It emits no derivations. -/
+    column-introducing re-encoder. It emits **no** derivations and requires none: the reconstruction
+    obligation is vacuous, because an incoming `cs.reconstructs [] env` forces `cs` (hence `out`) to
+    have no derived variables at all. Variable-removing passes use this only when there are no
+    accumulated derivations to keep valid (see `guardEmpty`). -/
 theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
     (hsound : out.implies cs bs)
     (hinv : cs.guaranteesInvariants bs → out.guaranteesInvariants bs)
@@ -122,48 +125,47 @@ theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
     (hcomp : ∀ env, cs.admissible bs env → cs.satisfies bs env →
       out.satisfies bs env ∧ out.admissible bs env ∧
         cs.sideEffects bs env ≈ out.sideEffects bs env) :
-    PassCorrect cs out [] bs := by
+    PassCorrect cs out [] [] bs := by
   refine ⟨hsound, hinv, fun v hv _ => hsub v hv, fun env hadm hsat => ?_⟩
   obtain ⟨ho1, ho2, ho3⟩ := hcomp env hadm hsat
-  refine ⟨env, ho1, ho2, ho3, fun _ _ => rfl, fun dsIn hrec => ?_⟩
-  rw [List.append_nil]
-  exact fun v hvout hvnone => hrec v (hsub v hvout) hvnone
+  refine ⟨env, ho1, ho2, ho3, fun _ _ => rfl, fun hrec v hvout hvnone => ?_⟩
+  obtain ⟨cm, hcm, _, _⟩ := hrec v (hsub v hvout) hvnone
+  simp [Derivations.methodFor] at hcm
 
-/-- Bridge to the audited spec: a threaded `PassCorrect` (with incoming derivations `[]`) gives the
-    spec's `refines` — soundness, plus completeness whose witness `derivesWitnessFrom` (when the input's
-    columns all carry powdr IDs, so it has no unaccounted derived variables). -/
+/-- Bridge to the audited spec: a threaded `PassCorrect` (with **empty** incoming derivations) gives
+    the spec's `refines` — soundness, plus completeness whose witness `derivesWitnessFrom` (when the
+    input's columns all carry powdr IDs, so it has no unaccounted derived variables; that assumption
+    is exactly what makes the empty incoming reconstruction hold). -/
 theorem PassCorrect.toRefines {cs out : ConstraintSystem p} {ds : Derivations p}
-    {bs : BusSemantics p} (h : PassCorrect cs out ds bs) : out.refines cs bs ds := by
+    {bs : BusSemantics p} (h : PassCorrect cs out [] ds bs) : out.refines cs bs ds := by
   obtain ⟨himpl, _hinv, hS, hcomp⟩ := h
   refine ⟨himpl, fun env hadm hsat => ?_⟩
   obtain ⟨env', hsat', hadm', hse, hA, hR⟩ := hcomp env hadm hsat
   refine ⟨env', hsat', hadm', hse, fun hpow => ⟨?_, fun v hvout hvpow => ⟨hS v hvout hvpow, hA v hvpow⟩⟩⟩
-  have hrec0 : cs.reconstructs [] env :=
-    fun v hv hvnone => absurd (hpow v hv) (by simp [hvnone])
-  simpa using hR [] hrec0
+  exact hR (fun v hv hvnone => absurd (hpow v hv) (by simp [hvnone]))
 
-/-- The result of a verified pass: the transformed system, the derivations it introduces, and the
-    correctness proof. -/
-structure PassResult {p : ℕ} (cs : ConstraintSystem p) (bs : BusSemantics p) where
+/-- The result of a verified pass: the transformed system, the derivations it produces from the
+    incoming `dsIn`, and the correctness proof. -/
+structure PassResult {p : ℕ} (cs : ConstraintSystem p) (dsIn : Derivations p) (bs : BusSemantics p) where
   out : ConstraintSystem p
   derivs : Derivations p
-  correct : PassCorrect cs out derivs bs
+  correct : PassCorrect cs out dsIn derivs bs
 
-/-- A proof-carrying optimization pass: maps a constraint system to a new one and the derivations it
-    introduces, bundled with a `PassCorrect` proof. -/
+/-- A proof-carrying optimization pass: maps a constraint system and the derivations accumulated so
+    far to a new system and updated derivations, bundled with a `PassCorrect` proof. -/
 abbrev VerifiedPass (p : ℕ) :=
-  (cs : ConstraintSystem p) → (bs : BusSemantics p) → PassResult cs bs
+  (cs : ConstraintSystem p) → (dsIn : Derivations p) → (bs : BusSemantics p) → PassResult cs dsIn bs
 
-/-- The identity pass: returns the system unchanged, correct by reflexivity. -/
+/-- The identity pass: returns the system and derivations unchanged, correct by reflexivity. -/
 def VerifiedPass.id : VerifiedPass p :=
-  fun cs bs => ⟨cs, [], PassCorrect.refl cs bs⟩
+  fun cs ds bs => ⟨cs, ds, PassCorrect.refl cs ds bs⟩
 
-/-- Sequential composition: run `f`, then run `g` on its output; concatenate derivations. -/
+/-- Sequential composition: run `f`, then run `g` on its output and derivations. -/
 def VerifiedPass.andThen (f g : VerifiedPass p) : VerifiedPass p :=
-  fun cs bs =>
-    let r1 := f cs bs
-    let r2 := g r1.out bs
-    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
+  fun cs ds bs =>
+    let r1 := f cs ds bs
+    let r2 := g r1.out r1.derivs bs
+    ⟨r2.out, r2.derivs, r1.correct.andThen r2.correct⟩
 
 /-- Iterate a pass `n` times. Used to run local, one-step passes (e.g. "substitute one variable")
     to a fixpoint: each application is a `VerifiedPass`, so the composite is correct by construction.
@@ -171,6 +173,18 @@ def VerifiedPass.andThen (f g : VerifiedPass p) : VerifiedPass p :=
 def VerifiedPass.iterate (f : VerifiedPass p) : Nat → VerifiedPass p
   | 0 => VerifiedPass.id
   | n + 1 => (f.iterate n).andThen f
+
+/-- Lift a circuit transform — a pass result computed for **empty** incoming derivations — into a
+    full pass result for any incoming derivations, applying it only when there are none to keep
+    valid, and acting as the identity otherwise. Every variable-removing / rewriting pass is
+    expressed this way: the sole derivation-producing pass (`reencodePass`) runs after them, so at
+    runtime they always see empty derivations and always fire, while the guard keeps them provably
+    correct for any incoming derivations. -/
+def guardEmpty {cs : ConstraintSystem p} (dsIn : Derivations p) {bs : BusSemantics p}
+    (r : PassResult cs [] bs) : PassResult cs dsIn bs :=
+  match dsIn with
+  | [] => r
+  | d :: ds => ⟨cs, d :: ds, PassCorrect.refl cs (d :: ds) bs⟩
 
 /-! ## Variable-set membership
 

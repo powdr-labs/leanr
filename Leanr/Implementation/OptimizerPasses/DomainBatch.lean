@@ -322,7 +322,7 @@ def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p}
 /-- The batch finite-domain propagation pass: build the domain table once, collect every
     checked forced constant from constraints and bus obligations, substitute them all in one
     traversal. Prime `p` only (runtime-decided); identity otherwise. -/
-def domainBatchPass : VerifiedPassW p := fun cs bs facts =>
+def domainBatchPass : VerifiedPassW p := fun cs dIn bs facts =>
   if hp : p.Prime then
     haveI : Fact p.Prime := ⟨hp⟩
     haveI : NeZero p := ⟨hp.ne_zero⟩
@@ -332,8 +332,8 @@ def domainBatchPass : VerifiedPassW p := fun cs bs facts =>
     let targets := cs.algebraicConstraints.map (fun e => e.vars.dedup) ++
       cs.busInteractions.map (fun bi => bi.vars.dedup)
     let σ := collectForced T targets ∅ Solved.empty
-    if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
-    else ⟨cs.substF σ.fn, [],
-      cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)
+    if σ.map.isEmpty then ⟨cs, dIn, PassCorrect.refl cs dIn bs⟩
+    else ⟨cs.substF σ.fn, dIn.map (fun x => (x.1, x.2.substF σ.fn)),
+      cs.substF_correct_D σ.fn bs dIn (fun env hsat y t hyt => σ.sound env hsat y t hyt)
         (fun y t hyt => σ.varsIn y t hyt)⟩
-  else ⟨cs, [], PassCorrect.refl cs bs⟩
+  else ⟨cs, dIn, PassCorrect.refl cs dIn bs⟩

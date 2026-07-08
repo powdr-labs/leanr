@@ -1034,3 +1034,39 @@ variable-sets that are mostly *pinned* (domain-1) with a few free vars, so each 
 a long assignment. Excluding pinned domain-1 vars from the enumerated box (substituting their constants
 into the covered constraints, enumerating only the free vars) would shrink the assignments sharply, but
 needs `forcedOver`'s soundness reproven against the reduced box — left as a follow-up.
+
+### 46. Spec fix (leanr #64, Georg-requested): derived-variable methods reference only *existing* columns
+Powdr expects each derived column's `ComputationMethod` to reference only variables that exist in
+the machine it hands to witness generation, which indexes columns from the *optimized* circuit's
+`main_columns()` and panics on a reference to a removed one. The re-encoding pass violated this: it
+emits a `ComputationMethod` per fresh boolean bit as a decision tree over the *original group
+columns* `xs` — the very columns re-encoding substitutes out of the circuit. So every re-encode-firing
+export carried derivation methods referencing removed columns (apc_002: 1372 such refs), not
+witgen-realizable on the optimized circuit.
+
+**Spec (`Spec.lean`, audited).** `ConstraintSystem.reconstructs` now requires each derived
+variable's method to read only variables **present in the (output) system** — `∀ x ∈ cm.vars,
+x ∈ cs.vars` in place of the old `x.powdrId?.isSome`. This is exactly "methods reference only
+existing columns"; the completeness witness is still evaluated on the output assignment, so it is
+now realizable by a witness generator on the optimized circuit alone.
+
+**Framework (`Basic.lean`/`FactPass.lean`).** `PassCorrect` no longer quantifies over an arbitrary
+incoming `dsIn` with `dsLocal` appended; it *threads* concrete derivations `dsIn ↦ dsOut`
+(`PassCorrect cs out dsIn dsOut bs`), and passes compose by chaining the threading. Georg's guidance
+— "whenever a variable gets removed, scan the derivations and replace it there as well" — is
+realized as: the variable-eliminating passes substitute the removed variable inside every
+accumulated derivation. `ComputationMethod.substF` + `ConstraintSystem.substF_correct_D` (SubstMap)
+drive `gaussElimPass`/`domainBatchPass`; `addConstraints_correct_D` (MemoryUnify) passes derivations
+through `busUnifyPass` unchanged (it removes nothing); the re-encoder emits each bit's method already
+substituted into the surviving bits (`checkReencode_sound_D`, using new
+`reencodeOut_vars_rev`/`substF_vars_out`). Non-eliminating passes (fold/normalize/monic and the
+constraint/bus drops) run only while there are no derivations yet (`guardEmpty`), so they keep their
+short proofs.
+
+**Impact.** Empirically, methods now reference **0** removed columns on every fixture
+(apc_002: 1372 → 0). Effectiveness: cases
+where re-encoding never fires are byte-identical; re-encode-firing cases lose a few variables because
+the constraint/bus drops no longer run in cycles after the first re-encode (apc_002 49 → 52 vars,
+2.20× → 2.08×). `optimizer{WithBusFacts,}_maintainsCorrectness`, its two instances, and
+`optimizer_respectsDegree` are all still `{propext, Classical.choice, Quot.sound}`-only; full build
+green.

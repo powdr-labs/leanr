@@ -30,10 +30,11 @@ theorem Expression.isConstZero_sound (e : Expression p) (h : e.isConstZero = tru
 /-- The trivial-constraint removal pass: drop every algebraic constraint whose fold is the literal
     `0`. Correct via `filterConstraints_correct`, discharging the dropped-constraints-are-zero
     obligation through `fold_eval` and `isConstZero_sound`. -/
-def trivialConstraintDropPass : VerifiedPass p := fun cs bs =>
-  ⟨cs.filterConstraints (fun c => !c.fold.isConstZero), [],
-   cs.filterConstraints_correct bs (fun c => !c.fold.isConstZero) (by
-     intro c _ hkf env
-     have hz : c.fold.isConstZero = true := by simpa using hkf
-     rw [← c.fold_eval env]
-     exact c.fold.isConstZero_sound hz env)⟩
+def trivialConstraintDropPass : VerifiedPass p := fun cs dsIn bs =>
+  guardEmpty dsIn
+   ⟨cs.filterConstraints (fun c => !c.fold.isConstZero), [],
+    cs.filterConstraints_correct bs (fun c => !c.fold.isConstZero) (by
+      intro c _ hkf env
+      have hz : c.fold.isConstZero = true := by simpa using hkf
+      rw [← c.fold_eval env]
+      exact c.fold.isConstZero_sound hz env)⟩

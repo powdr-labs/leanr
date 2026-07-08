@@ -126,7 +126,7 @@ theorem ConstraintSystem.sideEffects_mapExpr (cs : ConstraintSystem p) (bs : Bus
     an equivalent, invariant-preserving system. -/
 theorem ConstraintSystem.mapExpr_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (hgv : ∀ (e : Expression p) (x : Variable), x ∈ (g e).vars → x ∈ e.vars) :
-    PassCorrect cs (cs.mapExpr g) [] bs := by
+    PassCorrect cs (cs.mapExpr g) [] [] bs := by
   refine PassCorrect.ofEnvEq ?_ ?_ (cs.mapExpr_vars_subset hgv) ?_
   · intro env hsat
     refine ⟨env, (cs.satisfies_mapExpr hg bs env).1 hsat, ?_⟩
@@ -163,7 +163,7 @@ theorem ConstraintSystem.filterConstraints_vars_subset (cs : ConstraintSystem p)
 theorem ConstraintSystem.filterConstraints_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (keep : Expression p → Bool)
     (h : ∀ c ∈ cs.algebraicConstraints, keep c = false → ∀ env, c.eval env = 0) :
-    PassCorrect cs (cs.filterConstraints keep) [] bs := by
+    PassCorrect cs (cs.filterConstraints keep) [] [] bs := by
   have hiff : ∀ env, (cs.filterConstraints keep).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     simp only [ConstraintSystem.satisfies, ConstraintSystem.filterConstraints]
@@ -287,7 +287,7 @@ theorem multiplicitySum_filterBus (bs : BusSemantics p) (env : Variable → ZMod
 theorem ConstraintSystem.filterBus_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (keep : BusInteraction (Expression p) → Bool) (_hp1 : (1 : ZMod p) ≠ 0)
     (h : ∀ bi ∈ cs.busInteractions, keep bi = false → ∀ env, (bi.eval env).multiplicity = 0) :
-    PassCorrect cs (cs.filterBus keep) [] bs := by
+    PassCorrect cs (cs.filterBus keep) [] [] bs := by
   have hiff : ∀ env, (cs.filterBus keep).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     simp only [ConstraintSystem.satisfies]

@@ -86,7 +86,7 @@ theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (hBstateless : ∀ bi ∈ cs.busInteractions, keepBi bi = false → bs.isStateful bi.busId = false)
     (hBkeep : ∀ bi ∈ cs.busInteractions, keepBi bi = true → ∀ x ∈ bi.vars, remV x = false) :
     PassCorrect cs { algebraicConstraints := cs.algebraicConstraints.filter keepCon,
-                     busInteractions := cs.busInteractions.filter keepBi } [] bs := by
+                     busInteractions := cs.busInteractions.filter keepBi } [] [] bs := by
   -- the merge: keep `env` on kept variables, use the witness on removed ones
   set m : (Variable → ZMod p) → (Variable → ZMod p) :=
     fun env x => if remV x = true then w x else env x with hm
@@ -227,7 +227,8 @@ def keepBiWith (bs : BusSemantics p) (remV : Variable → Bool)
     uncertifiable component is kept without blocking the others. The final partition is re-checked
     (`hchk`) so correctness never depends on the connectivity search; if a check fails the pass is
     the identity. -/
-def disconnectedComponentPass : VerifiedPass p := fun cs bs =>
+def disconnectedComponentPass : VerifiedPass p := fun cs dsIn bs =>
+  guardEmpty dsIn <|
   let (groups, v2g) := buildGraph cs
   -- variables connected to a stateful bus interaction
   let conn := bfsClosure groups v2g ∅ ∅
@@ -298,4 +299,4 @@ def disconnectedComponentPass : VerifiedPass p := fun cs bs =>
          simp only [Bool.not_true, Bool.false_or] at h1
          simpa using (List.all_eq_true.1 h1) x hx⟩
   else
-    ⟨cs, [], PassCorrect.refl cs bs⟩
+    ⟨cs, [], PassCorrect.refl cs [] bs⟩

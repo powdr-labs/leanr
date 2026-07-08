@@ -104,7 +104,7 @@ theorem ConstraintSystem.filterBusStateless_correct (cs : ConstraintSystem p)
       bs.isStateful bi.busId = false)
     (hok : ∀ bi ∈ cs.busInteractions, keep bi = false → ∀ env,
       bs.violatesConstraint (bi.eval env) = false) :
-    PassCorrect cs (cs.filterBus keep) [] bs := by
+    PassCorrect cs (cs.filterBus keep) [] [] bs := by
   have hiff : ∀ env, (cs.filterBus keep).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     simp only [ConstraintSystem.satisfies]
@@ -165,9 +165,10 @@ def isTautoLookup (bs : BusSemantics p) (bi : BusInteraction (Expression p)) : B
 
 /-- The tautology-lookup removal pass: drop stateless interactions whose constant message is
     accepted by the bus's table. -/
-def tautoBusDropPass : VerifiedPass p := fun cs bs =>
-  ⟨cs.filterBus (fun bi => !isTautoLookup bs bi), [],
-   cs.filterBusStateless_correct bs _
+def tautoBusDropPass : VerifiedPass p := fun cs dsIn bs =>
+  guardEmpty dsIn
+   ⟨cs.filterBus (fun bi => !isTautoLookup bs bi), [],
+    cs.filterBusStateless_correct bs _
      (by
        intro bi _ hkf
        have htauto : isTautoLookup bs bi = true := by simpa using hkf

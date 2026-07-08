@@ -49,7 +49,7 @@ theorem ConstraintSystem.addConstraints_correct (cs : ConstraintSystem p) (bs : 
     (new : List (Expression p))
     (H : ∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ new, c.eval env = 0)
     (hnv : ∀ c ∈ new, ∀ z ∈ c.vars, z ∈ cs.vars) :
-    PassCorrect cs { cs with algebraicConstraints := cs.algebraicConstraints ++ new } [] bs := by
+    PassCorrect cs { cs with algebraicConstraints := cs.algebraicConstraints ++ new } [] [] bs := by
   -- soundness helper: the augmented system's satisfaction always implies the original's
   have hfwd : ∀ env,
       (ConstraintSystem.satisfies
@@ -71,6 +71,29 @@ theorem ConstraintSystem.addConstraints_correct (cs : ConstraintSystem p) (bs : 
     rcases List.mem_append.1 hcm with h | h
     · exact hc c h
     · exact H env hadm ⟨hc, hb⟩ c h
+
+/-- The `Derivations`-carrying version of `addConstraints_correct`. Adding constraints removes no
+    variable, so incoming derivations pass through unchanged (their methods still read only surviving
+    columns). -/
+theorem ConstraintSystem.addConstraints_correct_D (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (new : List (Expression p)) (dIn : Derivations p)
+    (H : ∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ new, c.eval env = 0)
+    (hnv : ∀ c ∈ new, ∀ z ∈ c.vars, z ∈ cs.vars) :
+    PassCorrect cs { cs with algebraicConstraints := cs.algebraicConstraints ++ new } dIn dIn bs := by
+  obtain ⟨himpl, hinv, hS, _⟩ := cs.addConstraints_correct bs new H hnv
+  refine ⟨himpl, hinv, hS, fun env hadm hsat => ?_⟩
+  obtain ⟨hc, hb⟩ := hsat
+  refine ⟨env, ⟨fun c hcm => ?_, hb⟩, hadm, BusState.equiv_refl _, fun _ _ => rfl, ?_⟩
+  · rcases List.mem_append.1 hcm with h | h
+    · exact hc c h
+    · exact H env hadm ⟨hc, hb⟩ c h
+  · intro hrec w hwout hwnone
+    obtain ⟨cm, hcm, hcmv, hcmeval⟩ :=
+      hrec w (cs.addConstraints_vars_subset new hnv w hwout) hwnone
+    refine ⟨cm, hcm, fun z hz => ?_, hcmeval⟩
+    rcases ConstraintSystem.mem_vars.1 (hcmv z hz) with ⟨c, hc', hzc⟩ | ⟨bi, hbi, hzbi⟩
+    · exact ConstraintSystem.mem_vars_of_constraint (List.mem_append_left _ hc') hzc
+    · exact ConstraintSystem.mem_vars.2 (Or.inr ⟨bi, hbi, hzbi⟩)
 
 /-! ## Small verified building blocks -/
 

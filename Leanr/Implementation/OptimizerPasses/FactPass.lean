@@ -16,22 +16,23 @@ variable {p : ℕ}
 
 /-- A proof-carrying pass that may consult proven facts about the bus semantics. -/
 abbrev VerifiedPassW (p : ℕ) :=
-  (cs : ConstraintSystem p) → (bs : BusSemantics p) → (facts : BusFacts p bs) → PassResult cs bs
+  (cs : ConstraintSystem p) → (dsIn : Derivations p) → (bs : BusSemantics p) →
+    (facts : BusFacts p bs) → PassResult cs dsIn bs
 
 /-- Any fact-free pass is a fact-aware pass that ignores the facts. -/
 def VerifiedPass.withFacts (f : VerifiedPass p) : VerifiedPassW p :=
-  fun cs bs _ => f cs bs
+  fun cs ds bs _ => f cs ds bs
 
-/-- Sequential composition (same proof shape as `VerifiedPass.andThen`): derivations concatenate. -/
+/-- Sequential composition (same proof shape as `VerifiedPass.andThen`): derivations are threaded. -/
 def VerifiedPassW.andThen (f g : VerifiedPassW p) : VerifiedPassW p :=
-  fun cs bs facts =>
-    let r1 := f cs bs facts
-    let r2 := g r1.out bs facts
-    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
+  fun cs ds bs facts =>
+    let r1 := f cs ds bs facts
+    let r2 := g r1.out r1.derivs bs facts
+    ⟨r2.out, r2.derivs, r1.correct.andThen r2.correct⟩
 
 /-- Iterate a fact-aware pass `n` times. -/
 def VerifiedPassW.iterate (f : VerifiedPassW p) : Nat → VerifiedPassW p
-  | 0 => fun cs bs _ => ⟨cs, [], PassCorrect.refl cs bs⟩
+  | 0 => fun cs ds bs _ => ⟨cs, ds, PassCorrect.refl cs ds bs⟩
   | n + 1 => (f.iterate n).andThen f
 
 deriving instance DecidableEq for Expression
@@ -71,14 +72,14 @@ def ConstraintSystem.sizeKey (cs : ConstraintSystem p) : Nat ×ₗ Nat ×ₗ Nat
     the input unchanged. Terminates because every recursive step strictly decreases the well-founded
     `sizeKey`. Correct by construction (each kept step is `PassCorrect`, derivations concatenating;
     stopping returns the input, correct by reflexivity). -/
-def iterateToFixpoint (f : VerifiedPassW p) (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) : PassResult cs bs :=
-  let r := f cs bs facts
+def iterateToFixpoint (f : VerifiedPassW p) (cs : ConstraintSystem p) (dsIn : Derivations p)
+    (bs : BusSemantics p) (facts : BusFacts p bs) : PassResult cs dsIn bs :=
+  let r := f cs dsIn bs facts
   if _h : r.out.sizeKey < cs.sizeKey then
-    let r2 := iterateToFixpoint f r.out bs facts
-    ⟨r2.out, r.derivs ++ r2.derivs, r.correct.andThen r2.correct⟩
+    let r2 := iterateToFixpoint f r.out r.derivs bs facts
+    ⟨r2.out, r2.derivs, r.correct.andThen r2.correct⟩
   else
-    ⟨cs, [], PassCorrect.refl cs bs⟩
+    ⟨cs, dsIn, PassCorrect.refl cs dsIn bs⟩
   termination_by cs.sizeKey
   decreasing_by exact _h
 
@@ -91,20 +92,20 @@ composition and iteration. -/
 
 /-- A pass never pushes a within-bound system past the semantics' degree bound. -/
 def RespectsDeg (f : VerifiedPassW p) : Prop :=
-  ∀ (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs),
-    cs.withinDegree bs.degreeBound → (f cs bs facts).out.withinDegree bs.degreeBound
+  ∀ (cs : ConstraintSystem p) (dsIn : Derivations p) (bs : BusSemantics p) (facts : BusFacts p bs),
+    cs.withinDegree bs.degreeBound → (f cs dsIn bs facts).out.withinDegree bs.degreeBound
 
 /-- Wrap a pass with a degree guard: if the output would exceed the bound, keep the input. -/
 def VerifiedPassW.guardDegree (f : VerifiedPassW p) : VerifiedPassW p :=
-  fun cs bs facts =>
-    let r := f cs bs facts
+  fun cs ds bs facts =>
+    let r := f cs ds bs facts
     if r.out.withinDegreeB bs.degreeBound then r
-    else ⟨cs, [], PassCorrect.refl cs bs⟩
+    else ⟨cs, ds, PassCorrect.refl cs ds bs⟩
 
 theorem VerifiedPassW.guardDegree_respectsDeg (f : VerifiedPassW p) :
     RespectsDeg f.guardDegree := by
-  intro cs bs facts h
-  by_cases hok : (f cs bs facts).out.withinDegreeB bs.degreeBound = true
+  intro cs ds bs facts h
+  by_cases hok : (f cs ds bs facts).out.withinDegreeB bs.degreeBound = true
   · simp only [VerifiedPassW.guardDegree, hok, if_true]
     exact (ConstraintSystem.withinDegreeB_iff _ _).1 hok
   · simp only [VerifiedPassW.guardDegree, hok]
@@ -112,12 +113,12 @@ theorem VerifiedPassW.guardDegree_respectsDeg (f : VerifiedPassW p) :
 
 theorem VerifiedPassW.andThen_respectsDeg {f g : VerifiedPassW p}
     (hf : RespectsDeg f) (hg : RespectsDeg g) : RespectsDeg (f.andThen g) := by
-  intro cs bs facts h
-  exact hg _ bs facts (hf cs bs facts h)
+  intro cs ds bs facts h
+  exact hg _ _ bs facts (hf cs ds bs facts h)
 
 theorem VerifiedPassW.iterate_respectsDeg {f : VerifiedPassW p} (hf : RespectsDeg f) :
     ∀ n, RespectsDeg (f.iterate n)
-  | 0 => fun _ _ _ h => h
+  | 0 => fun _ _ _ _ h => h
   | n + 1 => VerifiedPassW.andThen_respectsDeg (iterate_respectsDeg hf n) hf
 
 /-- The `sizeKey` order on constraint systems is well-founded (it is the inverse image of `<` on
@@ -134,23 +135,23 @@ theorem iterateToFixpoint_respectsDeg {f : VerifiedPassW p} (hf : RespectsDeg f)
   intro cs
   induction cs using sizeKey_wf.induction with
   | _ cs ih =>
-    intro bs facts hcs
+    intro dsIn bs facts hcs
     rw [iterateToFixpoint]
     split
     · rename_i h
-      exact ih _ h bs facts (hf cs bs facts hcs)
+      exact ih _ h _ bs facts (hf cs dsIn bs facts hcs)
     · exact hcs
 
 /-- **The cleanup loop can only improve the circuit.** `iterateToFixpoint f`'s output never has a
     larger lexicographic `sizeKey` (distinct vars, then bus interactions, then constraints) than its
     input: every recursive step strictly lowers the key, and the stopping case returns the input. -/
 theorem iterateToFixpoint_monotone {f : VerifiedPassW p}
-    (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs) :
-    (iterateToFixpoint f cs bs facts).out.sizeKey ≤ cs.sizeKey := by
-  induction cs using sizeKey_wf.induction with
+    (cs : ConstraintSystem p) (dsIn : Derivations p) (bs : BusSemantics p) (facts : BusFacts p bs) :
+    (iterateToFixpoint f cs dsIn bs facts).out.sizeKey ≤ cs.sizeKey := by
+  induction cs using sizeKey_wf.induction generalizing dsIn with
   | _ cs ih =>
     rw [iterateToFixpoint]
     split
     · rename_i h
-      exact le_trans (ih _ h) (le_of_lt h)
+      exact le_trans (ih _ h _) (le_of_lt h)
     · exact le_refl _

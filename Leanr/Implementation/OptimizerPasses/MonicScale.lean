@@ -175,7 +175,7 @@ theorem ConstraintSystem.mapConstraintsIff_correct (cs : ConstraintSystem p)
     (bs : BusSemantics p) (g : Expression p → Expression p)
     (hg : ∀ (c : Expression p) (env : Variable → ZMod p), ((g c).eval env = 0 ↔ c.eval env = 0))
     (hgv : ∀ (c : Expression p) (z : Variable), z ∈ (g c).vars → z ∈ c.vars) :
-    PassCorrect cs (cs.mapConstraints g) [] bs := by
+    PassCorrect cs (cs.mapConstraints g) [] [] bs := by
   have hiff : ∀ env, (cs.mapConstraints g).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     simp only [ConstraintSystem.satisfies, ConstraintSystem.mapConstraints]
@@ -200,7 +200,8 @@ theorem ConstraintSystem.mapConstraintsIff_correct (cs : ConstraintSystem p)
 /-! ## The pass -/
 
 /-- The monic-scaling pass: canonicalize every constraint's affine factors to monic form. -/
-def monicScalePass : VerifiedPass p := fun cs bs =>
-  ⟨cs.mapConstraints (fun c => (monicScale c).1), [],
-   cs.mapConstraintsIff_correct bs _ (fun c env => monicScale_zero_iff c env)
-     (fun c z hz => monicScale_vars c z hz)⟩
+def monicScalePass : VerifiedPass p := fun cs dsIn bs =>
+  guardEmpty dsIn
+   ⟨cs.mapConstraints (fun c => (monicScale c).1), [],
+    cs.mapConstraintsIff_correct bs _ (fun c env => monicScale_zero_iff c env)
+      (fun c z hz => monicScale_vars c z hz)⟩

@@ -166,15 +166,15 @@ def Derivations.methodFor : Derivations p → Variable → Option (ComputationMe
       (Derivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
 
 /-- Derived-variable reconstruction under `e`: every no-powdr-ID variable of `cs` is computed by
-    the method `ds` uses for it, reading only input (powdr-ID) variables. -/
+    the method `ds` uses for it, reading only variables that still occur in `cs`. -/
 def ConstraintSystem.reconstructs (cs : ConstraintSystem p) (ds : Derivations p)
     (e : Variable → ZMod p) : Prop :=
   ∀ v ∈ cs.vars, v.powdrId? = none →
-    ∃ cm, Derivations.methodFor ds v = some cm ∧ (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval e = e v
+    ∃ cm, Derivations.methodFor ds v = some cm ∧ (∀ x ∈ cm.vars, x ∈ cs.vars) ∧ cm.eval e = e v
 
 /-- The `out` constraint system variable assignment `env'` can be completely derived from `inp`
     constraint system assignment `env`: Either the variables are reused, or they are computed by
-    methods in `ds` reading only input variables. -/
+    methods in `ds` reading only variables that still occur in `out`. -/
 def ConstraintSystem.derivesWitnessFrom (out inp : ConstraintSystem p) (ds : Derivations p)
     (env env' : Variable → ZMod p) : Prop :=
   out.reconstructs ds env' ∧

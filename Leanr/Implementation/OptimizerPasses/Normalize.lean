@@ -178,7 +178,8 @@ theorem Expression.normalize_vars (e : Expression p) : ∀ x ∈ e.normalize.var
         exact hx.imp (iha x) (ihb x)
 
 /-- The affine-normalization pass. Correct via `mapExpr_correct` (only `normalize_eval`). -/
-def normalizePass : VerifiedPass p := fun cs bs =>
-  ⟨cs.mapExpr Expression.normalize, [],
-   ConstraintSystem.mapExpr_correct (g := Expression.normalize)
-     (fun e env => Expression.normalize_eval e env) cs bs Expression.normalize_vars⟩
+def normalizePass : VerifiedPass p := fun cs dsIn bs =>
+  guardEmpty dsIn
+   ⟨cs.mapExpr Expression.normalize, [],
+    ConstraintSystem.mapExpr_correct (g := Expression.normalize)
+      (fun e env => Expression.normalize_eval e env) cs bs Expression.normalize_vars⟩

@@ -67,6 +67,13 @@ theorem cleanupCycle_respectsDeg : RespectsDeg (cleanupCycle (p := p)) := by
   repeat' apply VerifiedPassW.andThen_respectsDeg
   all_goals exact VerifiedPassW.guardDegree_respectsDeg _
 
+/-- The cleanup cycle runs to a fixpoint. Derivations are **threaded**: the derivation-producing
+    pass (`reencodePass`) runs inside the cycle, and the variable-eliminating passes that follow it
+    in later cycles (`gaussElimPass`, `domainBatchPass`, `busUnifyPass`) substitute the removed
+    variables inside the accumulated derivations, so every emitted method keeps referencing only
+    columns present in the optimized circuit (leanr #64). The remaining, non-eliminating passes see
+    only empty derivations (they run before the first re-encode) and so apply unconditionally
+    (`guardEmpty`). -/
 def pipeline : VerifiedPassW p :=
   constantFoldPass.withFacts.guardDegree
     |>.andThen (iterateToFixpoint cleanupCycle)
@@ -89,7 +96,7 @@ theorem pipeline_respectsDeg : RespectsDeg (pipeline (p := p)) := by
     budget to set, and no cap a large basic block could exceed. -/
 def optimizerWithBusFacts {bs : BusSemantics p} (facts : BusFacts p bs)
     (cs : ConstraintSystem p) : ConstraintSystem p × Derivations p :=
-  let r := pipeline cs bs facts
+  let r := pipeline cs [] bs facts
   (r.out, r.derivs)
 
 /-- The fact-aware optimizer is correct: its output `refines` its input (sound, and complete for
@@ -100,7 +107,7 @@ theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p 
     (cs : ConstraintSystem p) :
     ((optimizerWithBusFacts facts cs).1.refines cs bs (optimizerWithBusFacts facts cs).2) ∧
       (cs.guaranteesInvariants bs → (optimizerWithBusFacts facts cs).1.guaranteesInvariants bs) :=
-  ⟨(pipeline cs bs facts).correct.toRefines, (pipeline cs bs facts).correct.2.1⟩
+  ⟨(pipeline cs [] bs facts).correct.toRefines, (pipeline cs [] bs facts).correct.2.1⟩
 
 /-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree
     bound (every pass is degree-guarded). -/
@@ -108,4 +115,4 @@ theorem optimizerWithBusFacts_respectsDegree {bs : BusSemantics p} (facts : BusF
     (cs : ConstraintSystem p)
     (h : cs.withinDegree bs.degreeBound) :
     (optimizerWithBusFacts facts cs).1.withinDegree bs.degreeBound :=
-  pipeline_respectsDeg cs bs facts h
+  pipeline_respectsDeg cs [] bs facts h

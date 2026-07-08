@@ -250,7 +250,7 @@ def collectAllBuses (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
 /-- The unified bus-unification pass: add the entailed consecutive send→receive slot equalities
     for every declared memory / execution-bridge bus (skipping equations already present or
     trivially zero). Replaces `memoryUnifyBatchPass`, `execChainPass`, and `chainUnifyPass`. -/
-def busUnifyPass : VerifiedPassW p := fun cs bs facts =>
+def busUnifyPass : VerifiedPassW p := fun cs dIn bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then
     let ⟨eqs, heqs⟩ := collectAllBuses cs bs facts hp1
       ((cs.busInteractions.map (fun bi => bi.busId)).dedup)
@@ -262,13 +262,13 @@ def busUnifyPass : VerifiedPassW p := fun cs bs facts =>
     let new := eqs.filter
       (fun c => !c.normalize.fold.isConstZero && !cs.algebraicConstraints.contains c
         && c.vars.all (fun z => decide (z ∈ csVars)))
-    if new.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
+    if new.isEmpty then ⟨cs, dIn, PassCorrect.refl cs dIn bs⟩
     else
-      ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new }, [],
-       cs.addConstraints_correct bs new
+      ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new }, dIn,
+       cs.addConstraints_correct_D bs new dIn
          (fun env hadm hsat c hc => heqs env hadm hsat c (List.mem_of_mem_filter hc))
          (fun c hc z hz => by
            have hp := (List.mem_filter.1 hc).2
            simp only [Bool.and_eq_true, List.all_eq_true] at hp
            exact of_decide_eq_true (hp.2 z hz))⟩
-  else ⟨cs, [], PassCorrect.refl cs bs⟩
+  else ⟨cs, dIn, PassCorrect.refl cs dIn bs⟩

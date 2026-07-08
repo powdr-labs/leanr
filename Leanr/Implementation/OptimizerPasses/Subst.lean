@@ -192,7 +192,7 @@ theorem ConstraintSystem.subst_vars_subset (cs : ConstraintSystem p) (x : Variab
 theorem ConstraintSystem.subst_correct (cs : ConstraintSystem p) (x : Variable) (t : Expression p)
     (bs : BusSemantics p) (H : ∀ env, cs.satisfies bs env → env x = t.eval env)
     (htv : ∀ y ∈ t.vars, y ∈ cs.vars) :
-    PassCorrect cs (cs.subst x t) [] bs := by
+    PassCorrect cs (cs.subst x t) [] [] bs := by
   refine PassCorrect.ofEnvEq ?_ ?_ (cs.subst_vars_subset x t htv) ?_
   · -- soundness: (cs.subst x t) implies cs
     intro env hsat
@@ -235,9 +235,10 @@ def substFromConstraint (solve : Expression p → Option (Variable × Expression
       ∀ env, c.eval env = 0 → env x = t.eval env)
     (hsolveV : ∀ (c : Expression p) (x : Variable) (t : Expression p), solve c = some (x, t) →
       ∀ y ∈ t.vars, y ∈ c.vars) :
-    VerifiedPass p := fun cs bs =>
+    VerifiedPass p := fun cs dsIn bs =>
+  guardEmpty dsIn <|
   match hfound : cs.algebraicConstraints.find? (fun c => (solve c).isSome) with
-  | none => ⟨cs, [], PassCorrect.refl cs bs⟩
+  | none => ⟨cs, [], PassCorrect.refl cs [] bs⟩
   | some c =>
       have hmem : c ∈ cs.algebraicConstraints := List.mem_of_find?_eq_some hfound
       match hc : solve c with

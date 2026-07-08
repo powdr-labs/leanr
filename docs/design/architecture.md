@@ -34,10 +34,16 @@ variable it introduces. The completeness direction (folded into `refines` / `imp
 strengthened accordingly: the reproduced witness must **`derivesWitness`** — every variable of the
 output that carries a powdr ID is an input column present in the input with an unchanged value, and
 every no-ID (derived) variable is computed by the method `Derivations` lists for it (`methodFor`,
-its last entry — duplicates are allowed, the later one wins) reading only input columns. This is
-exactly what lets witness generation extend an input trace to an output trace. (The requirement is
-only demanded when the input's columns all carry powdr IDs — the intended shape of an exported
-circuit; a variable with no powdr ID cannot be read from the input trace.)
+its last entry — duplicates are allowed, the later one wins) reading **only columns that still occur
+in the optimized circuit** (`∀ x ∈ cm.vars, x ∈ cs.vars` in `reconstructs`). That last requirement
+is what makes the derivations realizable by a witness generator running on the *optimized* machine —
+powdr's does, indexing columns from `main_columns()` and panicking on a reference to a removed one
+(leanr #64). It is enforced through the pass framework by *threading* the derivations: a
+variable-eliminating pass (`gaussElimPass`, `domainBatchPass`) substitutes the removed variable
+inside every accumulated derivation's method (`ComputationMethod.substF`), and the re-encoder emits
+each fresh bit's method already substituted into the surviving bits. (The requirement is only
+demanded when the input's columns all carry powdr IDs — the intended shape of an exported circuit; a
+variable with no powdr ID cannot be read from the input trace.)
 
 `optimizerMaintainsCorrectness bs opt` bundles `refines`, preservation of
 `guaranteesInvariants`, and staying within the VM's degree bound — for a *given* bus semantics
@@ -49,10 +55,11 @@ semantics-specific optimizer be an instance).
 A **`VerifiedPass`** maps a system to a new one *bundled with a `PassCorrect` proof* (`refines` +
 invariant preservation) — so a pass cannot be written without discharging its obligations.
 
-- `andThen` composes passes (correctness by composing the per-pass `PassCorrect` proofs, with
-  derivations concatenating); `iterateToFixpoint` runs a pass to a fixpoint, proven to terminate on
-  the well-founded lexicographic size key (see the pipeline section); the top-level
-  `*_maintainsCorrectness` theorems are just projections.
+- `andThen` composes passes (correctness by composing the per-pass `PassCorrect` proofs, with each
+  pass *threading* the derivations `dsIn ↦ dsOut` — see "Derived variables" above);
+  `iterateToFixpoint` runs a pass to a fixpoint, proven to terminate on the well-founded
+  lexicographic size key (see the pipeline section); the top-level `*_maintainsCorrectness` theorems
+  are just projections.
 - `guardDegree` wraps each pass to fall back to its input if the output would exceed the degree
   bound — degree safety is compositional, with zero per-pass proof burden.
 - `VerifiedPassW` is a pass that may additionally consult proven `BusFacts` (below).

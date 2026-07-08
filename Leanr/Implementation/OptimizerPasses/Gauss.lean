@@ -227,13 +227,13 @@ def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
 
 /-- The batch linear-elimination pass. Two sweeps over the constraints (so substitutions can
     unlock later pivots within one invocation), then a single full-system substitution. -/
-def gaussElimPass : VerifiedPass p := fun cs bs =>
+def gaussElimPass : VerifiedPass p := fun cs dIn bs =>
   let occ := occurrenceMap cs
   let prot := protectedVars cs bs
   let pending := cs.algebraicConstraints ++ cs.algebraicConstraints
   let σ := gaussLoop cs bs occ prot pending
     (fun _c hc => (List.mem_append.1 hc).elim id id) Solved.empty
-  if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
-  else ⟨cs.substF σ.fn, [],
-    cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)
+  if σ.map.isEmpty then ⟨cs, dIn, PassCorrect.refl cs dIn bs⟩
+  else ⟨cs.substF σ.fn, dIn.map (fun x => (x.1, x.2.substF σ.fn)),
+    cs.substF_correct_D σ.fn bs dIn (fun env hsat y t hyt => σ.sound env hsat y t hyt)
       (fun y t hyt => σ.varsIn y t hyt)⟩
