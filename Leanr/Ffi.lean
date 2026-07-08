@@ -30,7 +30,7 @@ def leanrOptimizeJson (input : String) : String :=
   match parseJsonSystem (p := babyBear) input with
   | .error err => "{\"error\":" ++ escapeJson err ++ "}"
   | .ok (cs, busMap) =>
-    -- `.1` is the optimized circuit; `.2` are the `Derivations` for witness generation, not yet
-    -- threaded through the JSON serialization (would need a matching powdr-side format).
-    let optimized := (openVmOptimizer busMap.toBusMap cs).1
-    Leanr.Serialize.serializeSystem optimized
+    -- `.1` is the optimized circuit; `.2` are the `Derivations` (optimizer-introduced witness
+    -- columns paired with how powdr's witgen computes each), serialized under `derived_columns`.
+    let (optimized, ds) := openVmOptimizer busMap.toBusMap cs
+    Leanr.Serialize.serializeSystem optimized ds
