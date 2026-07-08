@@ -165,7 +165,7 @@ def Derivations.methodFor : Derivations p → Variable → Option (ComputationMe
   | (u, cm) :: rest, v =>
       (Derivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
 
-/-- The provided output circuit assignment can be derived from the provided input circuit assignment
+/-- The output circuit's assignment can be derived from the input circuit's assignment
     by the following algorithm:
     - If the variable has a powdr ID, it must be present in the input circuit and have the same value.
     - If the variable does not have a powdr ID, it must be derivable using the provided derivations.
@@ -246,9 +246,8 @@ def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
 
 abbrev Optimizer (p : ℕ) := ConstraintSystem p → ConstraintSystem p × Derivations p
 
-/-- An optimizer is correct, for all possible input constraint systems, replacing it
-    by the optimized constraint system is sound and complete. Also, it has to respect
-    the degree bound. -/
+/-- An optimizer is correct if, for every input constraint system, replacing it with the optimized
+    system is both sound and complete, and the optimizer respects the degree bound. -/
 def Optimizer.isCorrect (optimizer : Optimizer p) (busSemantics : BusSemantics p) : Prop :=
   (∀ originalCS : ConstraintSystem p,
     let (optimizedCS, derivations) := optimizer originalCS
