@@ -154,7 +154,7 @@ theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p 
       (optimizerWithBusFacts facts cs).1.isCompleteReplacementOf cs bs (optimizerWithBusFacts facts cs).2 := by
   refine ⟨(pipeline cs bs facts).correct.toSound, ?_⟩
   intro hpow env hadm hsat
-  obtain ⟨_himpl, _hinv, _hS, hcomp⟩ := (pipeline cs bs facts).correct
+  obtain ⟨_himpl, _hinv, hS, hcomp⟩ := (pipeline cs bs facts).correct
   obtain ⟨env', hsat', hadm', hse, hA, hR⟩ := hcomp env hadm hsat
   have hrec : (pipeline cs bs facts).out.reconstructs (pipeline cs bs facts).derivs env' := by
     have hrec0 : cs.reconstructs [] env :=
@@ -172,12 +172,18 @@ theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p 
         simp only [Derivations.witgen, hpw, hm]
         rw [← heq]
         exact ComputationMethod.eval_congr cm env env' (fun x hx => (hA x (hxpow x hx)).symm)
-  refine ⟨(ConstraintSystem.satisfies_congr hagree).mpr hsat',
+  refine ⟨?_, (ConstraintSystem.satisfies_congr hagree).mpr hsat',
     (ConstraintSystem.admissible_congr hagree).mpr hadm', ?_⟩
-  show cs.sideEffects bs env
-      ≈ (pipeline cs bs facts).out.sideEffects bs (Derivations.witgen (pipeline cs bs facts).derivs env)
-  rw [ConstraintSystem.sideEffects_congr hagree]
-  exact hse
+  · -- `ds` covers the output columns: reused ones exist in the input (`hS`), derived ones have a
+    -- method reading only powdr-ID columns (from the reconstruction).
+    intro v hv
+    cases hpw : v.powdrId? with
+    | some w => exact hS v hv (by simp [hpw])
+    | none => obtain ⟨cm, hm, hxpow, _⟩ := hrec v hv hpw; exact ⟨cm, hm, hxpow⟩
+  · show cs.sideEffects bs env
+        ≈ (pipeline cs bs facts).out.sideEffects bs (Derivations.witgen (pipeline cs bs facts).derivs env)
+    rw [ConstraintSystem.sideEffects_congr hagree]
+    exact hse
 
 /-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree
     bound (every pass is degree-guarded). -/

@@ -165,17 +165,30 @@ def Derivations.methodFor : Derivations p → Variable → Option (ComputationMe
   | (u, cm) :: rest, v =>
       (Derivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
 
+/-- Whether `ds` lets witness generation produce every element of `outputVars` from `inputVars`:
+    each output variable is either an input variable (reused) or a derived variable with a method that
+    reads only input variables. -/
+def Derivations.cover (ds : Derivations p) (inputVars outputVars : List Variable) : Prop :=
+  ∀ v ∈ outputVars,
+    match v.powdrId? with
+    | some _ => v ∈ inputVars
+    | none => ∃ cm, ds.methodFor v = some cm ∧ ∀ x ∈ cm.vars, x ∈ inputVars
+
 /-- Witness generation: reconstruct an output assignment from an input assignment. Every powdr-ID
-    (input) column passes through unchanged; every other column is computed by the method `ds`
-    records for it, read from the input columns. This is what powdr runs to fill the optimized
-    circuit's columns from an input trace. -/
+    (input) variable passes through unchanged; every other variable is computed by the method `ds`
+    records for it, read from the input variables. This is what powdr runs to fill the optimized
+    circuit's variables from an input trace. -/
 def Derivations.witgen (ds : Derivations p) (inputEnv : Variable → ZMod p) : Variable → ZMod p :=
   fun v =>
     match v.powdrId? with
+    -- Note that by `Derivations.cover`, if `v` appears in the output constraint system,
+    -- it must also exist in the input constraint system, so this case is always well-defined.
     | some _ => inputEnv v
     | none =>
       match Derivations.methodFor ds v with
       | some cm => cm.eval inputEnv
+      -- Note that by `Derivations.cover`, if `v` appears in the output constraint system,
+      -- this case is impossible.
       | none => inputEnv v
 
 --------- Constraint system implications ---------
@@ -213,13 +226,14 @@ def ConstraintSystem.isSoundReplacementOf (optimizedCS originalCS : ConstraintSy
   (originalCS.guaranteesInvariants busSemantics → optimizedCS.guaranteesInvariants busSemantics)
 
 /-- Whether an optimized constraint system is a complete replacement for an original one. Assuming
-    every input column carries a powdr ID, running witness generation (`ds.witgen`) on any admissible
-    satisfying assignment of the original yields an assignment of the optimized system that is itself
-    satisfying and admissible, with equivalent side effects. -/
+    every input variable carries a powdr ID, then for any admissible satisfying assignment of the
+    original constraint system, there is a computable assignment of the optimized system that is
+    itself satisfying and admissible, with equivalent side effects. -/
 def ConstraintSystem.isCompleteReplacementOf (optimizedCS originalCS : ConstraintSystem p)
     (busSemantics : BusSemantics p) (ds : Derivations p) : Prop :=
   (∀ v ∈ originalCS.vars, v.powdrId?.isSome) →
   ∀ env, originalCS.admissible busSemantics env → originalCS.satisfies busSemantics env →
+    ds.cover originalCS.vars optimizedCS.vars ∧
     let env' := Derivations.witgen ds env
     optimizedCS.satisfies busSemantics env' ∧ optimizedCS.admissible busSemantics env' ∧
       originalCS.sideEffects busSemantics env ≈ optimizedCS.sideEffects busSemantics env'
