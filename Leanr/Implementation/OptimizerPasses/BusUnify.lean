@@ -255,10 +255,13 @@ def busUnifyPass : VerifiedPassW p := fun cs bs facts =>
     let ⟨eqs, heqs⟩ := collectAllBuses cs bs facts hp1
       ((cs.busInteractions.map (fun bi => bi.busId)).dedup)
     -- keep only equalities over existing columns, so the pass introduces no new variable
-    -- (the real slot equalities are built from `cs`'s payloads, so none are dropped)
+    -- (the real slot equalities are built from `cs`'s payloads, so none are dropped).
+    -- `csVars` is bound once here rather than recomputed for every variable of every candidate
+    -- (`cs.vars` rebuilds the whole occurrence list); the `let` zeta-reduces in the proof below.
+    let csVars := cs.vars
     let new := eqs.filter
       (fun c => !c.normalize.fold.isConstZero && !cs.algebraicConstraints.contains c
-        && c.vars.all (fun z => decide (z ∈ cs.vars)))
+        && c.vars.all (fun z => decide (z ∈ csVars)))
     if new.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else
       ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new }, [],

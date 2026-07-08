@@ -1,5 +1,6 @@
 import Leanr.Implementation.JsonParser
 import Leanr.Optimizer
+import Leanr.Implementation.Optimizer
 import Leanr.Utils.Size
 import Leanr.Utils.Dsl
 import Leanr.OpenVmSemantics
@@ -189,8 +190,83 @@ def cmdReport (unoptFile optFile : String) : IO Unit := do
     ",\"powdr\":" ++ circuitJson csPowdr ++
     ",\"leanr\":" ++ circuitJson optimized ++ "}")
 
+open Leanr.OpenVM in
+/-- Profiling helper: apply one fact-aware pass, forcing full evaluation, and return the new
+    system plus the elapsed milliseconds. -/
+def applyTimed (pass : VerifiedPassW babyBear) (cs : ConstraintSystem babyBear)
+    (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs) :
+    IO (ConstraintSystem babyBear × Nat) := do
+  let t0 ← IO.monoMsNow
+  let out ← IO.lazyPure (fun _ => (pass cs bs facts).out)
+  -- Force the whole output structure (varCount traverses every expression node).
+  let _ ← IO.lazyPure (fun _ =>
+    out.varCount + out.algebraicConstraints.length + out.busInteractions.length)
+  let t1 ← IO.monoMsNow
+  pure (out, t1 - t0)
+
+open Leanr.OpenVM in
+/-- Run one cleanup cycle's passes in order, accumulating per-pass elapsed time. -/
+partial def runCycleTimed (passes : List (String × VerifiedPassW babyBear))
+    (cs : ConstraintSystem babyBear) (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs)
+    (acc : Std.HashMap String Nat) : IO (ConstraintSystem babyBear × Std.HashMap String Nat) := do
+  let mut c := cs
+  let mut a := acc
+  for (name, pass) in passes do
+    let (c', dt) ← applyTimed pass c bs facts
+    c := c'
+    a := a.insert name (a.getD name 0 + dt)
+  pure (c, a)
+
+open Leanr.OpenVM in
+/-- Iterate the cleanup cycle to a fixpoint (mirroring `iterateToFixpoint`), accumulating per-pass
+    time and counting iterations. -/
+partial def profileLoop (passes : List (String × VerifiedPassW babyBear))
+    (cs : ConstraintSystem babyBear) (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs)
+    (acc : Std.HashMap String Nat) (iter : Nat) :
+    IO (ConstraintSystem babyBear × Std.HashMap String Nat × Nat) := do
+  let (cs', acc') ← runCycleTimed passes cs bs facts acc
+  if cs'.sizeKey < cs.sizeKey then
+    profileLoop passes cs' bs facts acc' (iter + 1)
+  else
+    pure (cs, acc', iter)
+
+open Leanr.OpenVM in
+/-- `profile <file>`: run the OpenVM pipeline with per-pass timing, reporting the cumulative time
+    spent in each pass across all fixpoint iterations. -/
+def cmdProfile (fileName : String) : IO Unit := do
+  let (cs, busMap) ← parseFile fileName
+  let bs := openVmBusSemantics babyBear busMap.toBusMap
+  let facts := openVmFacts babyBear busMap.toBusMap
+  let cleanupPasses : List (String × VerifiedPassW babyBear) :=
+    [ ("gauss", gaussElimPass.withFacts.guardDegree),
+      ("normalize1", normalizePass.withFacts.guardDegree),
+      ("constFold1", constantFoldPass.withFacts.guardDegree),
+      ("domainBatch", domainBatchPass.guardDegree),
+      ("normalize2", normalizePass.withFacts.guardDegree),
+      ("constFold2", constantFoldPass.withFacts.guardDegree),
+      ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree),
+      ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree),
+      ("tautoBus", tautoBusDropPass.withFacts.guardDegree),
+      ("busUnify", busUnifyPass.guardDegree),
+      ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
+      ("reencode", reencodePass.withFacts.guardDegree) ]
+  let t0 ← IO.monoMsNow
+  -- pipeline prelude: constantFold
+  let (cs, acc) ← runCycleTimed [("constFold0", constantFoldPass.withFacts.guardDegree)] cs bs facts ∅
+  let (cs, acc, iters) ← profileLoop cleanupPasses cs bs facts acc 0
+  -- pipeline coda: monicScale, constantFold
+  let (_, acc) ← runCycleTimed
+    [("monicScale", monicScalePass.withFacts.guardDegree),
+     ("constFoldEnd", constantFoldPass.withFacts.guardDegree)] cs bs facts acc
+  let t1 ← IO.monoMsNow
+  IO.println s!"profile {fileName}: {iters} cleanup iterations, {t1 - t0} ms total"
+  let sorted := acc.toList.toArray.qsort (fun a b => a.2 > b.2)
+  for (name, ms) in sorted do
+    IO.println s!"  {name}: {ms} ms"
+
 def usage : String :=
   "usage: leanr run <file.json[.gz]>\n" ++
+  "       leanr profile <file.json[.gz]>  (per-pass optimizer timing)\n" ++
   "       leanr powdr <unopt.json[.gz]> <opt.json[.gz]>\n" ++
   "       leanr compare <unopt.json[.gz]> <opt.json[.gz]>\n" ++
   "       leanr report  <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n\n" ++
@@ -201,6 +277,7 @@ def usage : String :=
 def main (args : List String) : IO Unit := do
   match args with
   | ["run", fileName] => cmdRun (fileName := fileName)
+  | ["profile", fileName] => cmdProfile (fileName := fileName)
   | ["vars", fileName] => cmdVars (fileName := fileName)
   | ["render", fileName] => cmdRender (fileName := fileName)
   | ["powdr", unoptFile, optFile] => cmdPowdr (unoptFile := unoptFile) (optFile := optFile)

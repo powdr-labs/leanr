@@ -985,3 +985,52 @@ apc_001 42/18/38, apc_100 1003/601/1866). Also removed the `iters`/`--iters` CLI
 `benchmark.py`, the READMEs, the architecture doc, and CLAUDE.md. The FFI entry point `Leanr/Ffi.lean`
 drops its now-stale `openVmOptimizer … 32 …` iters argument (the serializer's own `Variable`-struct
 reconciliation landed separately on `main`).
+
+### 45. Optimizer runtime: profile-guided speedups (effectiveness unchanged)
+
+Pure **performance** work — the optimizer's *output* is unchanged (every change is
+output-preserving, verified by re-running the whole benchmark and comparing `vars/constraints/bus`
+per case: identical on all 100, e.g. apc_100 stays `1003/601/1866`), so effectiveness is identical
+and only the wall-clock cost of running the optimizer drops. Nothing in the audited surface,
+`Basic.lean`, or the spec changed; correctness axioms stay `{propext, Classical.choice, Quot.sound}`;
+`lake build` green, no `sorry`/`native_decide`.
+
+Profiled per-pass on the slowest cases (added a `leanr profile <file>` CLI command that times each
+pass across the fixpoint loop). Three passes dominated — `domainBatch`, `reencode`, `busUnify` — and
+each turned out to be paying for a *recomputation inside a loop* rather than doing irreducible work.
+Fixes, each preserving the exact output:
+
+1. **`coveredCs`/`coveredBis` allocation (`DomainBatch.lean`)** — the per-target covered-item scan used
+   `c.vars.all (· ∈ xs)`, which *materializes* every constraint/interaction's variable list once per
+   target. Replaced with an allocation-free `Expression.varsIn`/`BusInteraction.varsIn` (added to
+   `DomainProp.lean`, shared with `Reencode`, which dropped its private copy); same boolean, so the
+   filtered list — hence the output — is identical.
+2. **`reencode` target dedup (`Reencode.lean`)** — the target variable-sets were deduped with the
+   quadratic `List.dedup`; replaced with a linear hash-set `dedupHash` returning the identical list
+   (each element kept at its last-occurrence position, exactly `List.dedup`).
+3. **`domainBatch` enumeration (`forcedOver`)** — `checkForcedM` re-enumerated the domain box and
+   re-ran `survivesAllM` *once per candidate variable*. Now the surviving assignments are computed
+   **once** per target (`forcedFromSurvivors` + `forcedFromSurvivors_sound`) and every candidate is
+   checked against that precomputed list; `forcedFromSurvivors` reproduces the old candidates exactly.
+   Removed the now-dead `pickForcedM`/`checkForcedM`/`checkForcedM_sound`.
+4. **recompute-in-lambda hoists (`Reencode.lean`)** — `groupSurvivors` rebuilt `coveredCsOf cs xs`
+   *inside* its filter (once per enumerated assignment, ≤256×); `checkReencode` recomputed
+   `groupSurvivors`, `assignments (bitBox …)` (twice each) and `coveredCsOf` (once per bit pattern).
+   Bound each once with a `let`; the `let` zeta-reduces during elaboration, so the soundness proofs are
+   untouched. Also compute `reencodeOut` once (it was built twice for accepted groups).
+5. **`busUnify` (`BusUnify.lean`)** — the new-equation filter tested `z ∈ cs.vars` per variable, and
+   `cs.vars` rebuilds the whole ~10⁵-entry occurrence list on every reference. Bound `cs.vars` once
+   with a `let` (zeta-transparent in the proof) — the single biggest per-pass win.
+
+**Impact (openvm-eth, all 100 cases, optimizer time only, `leanr run`):**
+total **3,393,648 ms → 1,978,903 ms (1.72×, −41.7%)**; geometric-mean per-case speedup **1.64×**;
+slowest case apc_037 **258,362 ms → 165,964 ms (1.56×, −35.8%)** (apc_100 229,950 → 171,924). Per-pass
+on apc_100 (profiler): domainBatch 135.7s→94.0s, reencode 78.3s→59.1s, busUnify 18.3s→3.4s.
+
+Remaining bottleneck (documented for future work): `domainBatch`/`reencode` spend the balance in the
+finite-domain **enumeration** — building `assignments doms` and evaluating covered constraints under
+the list-based `envOf`, whose lookup is linear in the assignment size. The expensive targets are large
+variable-sets that are mostly *pinned* (domain-1) with a few free vars, so each `envOf` lookup is over
+a long assignment. Excluding pinned domain-1 vars from the enumerated box (substituting their constants
+into the covered constraints, enumerating only the free vars) would shrink the assignments sharply, but
+needs `forcedOver`'s soundness reproven against the reduced box — left as a follow-up.

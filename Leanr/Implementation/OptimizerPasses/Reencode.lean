@@ -419,35 +419,6 @@ def Expression.hasVar : Expression p → Bool
   | .add a b => a.hasVar || b.hasVar
   | .mul a b => a.hasVar || b.hasVar
 
-/-- Do all the expression's variables lie in `xs`? (No allocation.) -/
-def Expression.varsIn (xs : List Variable) : Expression p → Bool
-  | .const _ => true
-  | .var y => xs.contains y
-  | .add a b => a.varsIn xs && b.varsIn xs
-  | .mul a b => a.varsIn xs && b.varsIn xs
-
-theorem Expression.varsIn_sound (xs : List Variable) (e : Expression p)
-    (h : e.varsIn xs = true) : ∀ v ∈ e.vars, v ∈ xs := by
-  induction e with
-  | const n => simp [Expression.vars]
-  | var y =>
-      intro v hv
-      simp only [Expression.vars, List.mem_singleton] at hv
-      subst hv
-      exact List.contains_iff_mem.mp (by simpa [Expression.varsIn] using h)
-  | add a b iha ihb =>
-      rw [Expression.varsIn, Bool.and_eq_true] at h
-      intro v hv
-      rcases List.mem_append.1 hv with hv | hv
-      · exact iha h.1 v hv
-      · exact ihb h.2 v hv
-  | mul a b iha ihb =>
-      rw [Expression.varsIn, Bool.and_eq_true] at h
-      intro v hv
-      rcases List.mem_append.1 hv with hv | hv
-      · exact iha h.1 v hv
-      · exact ihb h.2 v hv
-
 /-- Constraints whose (nonempty) variable set lies inside the group. -/
 def coveredBy (xs : List Variable) (c : Expression p) : Bool :=
   c.hasVar && c.varsIn xs
@@ -714,11 +685,13 @@ def coveredCsOf (cs : ConstraintSystem p) (xs : List Variable) : List (Expressio
   cs.algebraicConstraints.filter (coveredBy xs)
 
 /-- The surviving group values: enumerated over the group's domains, filtered by the covered
-    constraints. -/
+    constraints. The covered set is bound outside the filter so it is computed **once**, not once
+    per enumerated assignment (the `let` zeta-reduces away in proofs, so this is transparent). -/
 def groupSurvivors (cs : ConstraintSystem p) (xs : List Variable)
     (doms : List (Variable × List (ZMod p))) : List (List (Variable × ZMod p)) :=
+  let es := coveredCsOf cs xs
   (assignments doms).filter
-    (fun a => (coveredCsOf cs xs).all (fun c => decide (c.eval (envOf a) = 0)))
+    (fun a => es.all (fun c => decide (c.eval (envOf a) = 0)))
 
 /-- All checked side conditions for one re-encoding step. -/
 def checkReencode (cs : ConstraintSystem p) (xs bits : List Variable)
@@ -726,8 +699,14 @@ def checkReencode (cs : ConstraintSystem p) (xs bits : List Variable)
   match groupDoms (coveredCsOf cs xs) xs with
   | none => false
   | some doms =>
+    -- Bind these once rather than recomputing them inside the checks below: `groupSurvivors` and
+    -- `assignments (bitBox …)` each appear twice, and `coveredCsOf` was rebuilt once per bit
+    -- pattern. The `let`s zeta-reduce away in `checkReencode_sound_D`, so this is transparent.
+    let survs := groupSurvivors cs xs doms
+    let patts := assignments (bitBox bits)
+    let es := coveredCsOf cs xs
     decide ((doms.map (fun yd => yd.2.length)).prod ≤ 256) &&
-    decide (2 ≤ (groupSurvivors cs xs doms).length) &&
+    decide (2 ≤ survs.length) &&
     decide (bits.length < xs.length) &&
     decide (bits.Nodup) &&
     -- freshness: no bit occurs anywhere in the system
@@ -739,11 +718,11 @@ def checkReencode (cs : ConstraintSystem p) (xs bits : List Variable)
     xs.all (fun x =>
       ((Expression.var x).substF (groupSubst xs hm)).vars.all (fun v => bits.contains v)) &&
     -- completeness: every surviving group value is hit by some bit pattern
-    (groupSurvivors cs xs doms).all (fun s => (assignments (bitBox bits)).any (fun aβ =>
+    survs.all (fun s => patts.any (fun aβ =>
       xs.all (fun x =>
         decide (((Expression.var x).substF (groupSubst xs hm)).eval (envOf aβ) = envOf s x)))) &&
     -- soundness: every bit pattern's image satisfies the covered constraints
-    (assignments (bitBox bits)).all (fun aβ => (coveredCsOf cs xs).all (fun c =>
+    patts.all (fun aβ => es.all (fun c =>
       decide ((c.substF (groupSubst xs hm)).eval (envOf aβ) = 0)))
 
 /-! ## Derived-variable methods for the fresh bits
@@ -1365,8 +1344,9 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p
     if hxsB : xs.all (fun x => decide (x ∉ bits)) = true then
     if hbn : bits.all (fun b => decide (b.powdrId? = none)) = true then
     if hchk : checkReencode cs xs bits hm = true then
-      if (reencodeOut cs xs bits hm).withinDegreeB bsem.degreeBound then
-        ⟨reencodeOut cs xs bits hm,
+      let ro := reencodeOut cs xs bits hm
+      if ro.withinDegreeB bsem.degreeBound then
+        ⟨ro,
          bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b)),
          checkReencode_sound_D cs bsem xs bits hm
            (fun x hx => by simpa using List.all_eq_true.mp hxs x hx)
@@ -1389,14 +1369,25 @@ def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) :
     let r2 := reencodeLoop bsem rest (idx + 1) r1.out
     ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
 
+/-- `List.dedup` computed in linear time via a hash set, with the **identical** result: an element
+    is kept at its last-occurrence position (exactly `List.dedup`'s order), so swapping this in is a
+    pure speedup — `reencodeLoop`'s correctness is independent of the target list, and its
+    (order-sensitive, greedy) behaviour is unchanged because the list itself is unchanged. -/
+def dedupHash {α : Type} [BEq α] [Hashable α] (l : List α) : List α :=
+  (l.reverse.foldl (fun (st : List α × Std.HashSet α) t =>
+    if st.2.contains t then st else (t :: st.1, st.2.insert t))
+    (([], ∅) : List α × Std.HashSet α)).1
+
 /-- The witness re-encoding pass: for every constraint's (small) all-input-column variable group
     whose covered constraints allow only a few joint values, re-encode the group with `⌈log₂ m⌉`
     fresh booleans and ship each bit's derived-variable method. Prime `p` only; identity otherwise. -/
 def reencodePass : VerifiedPass p := fun cs bsem =>
   if hpr : p.Prime then
     haveI : Fact p.Prime := ⟨hpr⟩
-    let targets := (cs.algebraicConstraints.filterMap (fun c =>
+    -- `dedupHash` replaces the quadratic `List.dedup` over the (up to thousands of) target
+    -- variable-sets, producing the identical list in linear time.
+    let targets := dedupHash (cs.algebraicConstraints.filterMap (fun c =>
       let vs := c.vars.dedup
-      if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt)) else none)).dedup
+      if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt)) else none))
     reencodeLoop bsem targets 0 cs
   else ⟨cs, [], PassCorrect.refl cs bsem⟩
