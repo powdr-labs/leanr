@@ -19,10 +19,6 @@ interaction, so facts can be conditional on e.g. an op-selector slot (see `Leanr
 
 variable {p : ℕ}
 
--- Structural equality of expressions, needed by fact instances (e.g. recognizing a self-xor
--- lookup `[x, x, …]`) and by fact-consuming passes.
-deriving instance DecidableEq for Expression
-
 /-- Does a payload match a pattern? Same length, and every constant pattern entry agrees. -/
 def Matches (payload : List (ZMod p)) (pattern : List (Option (ZMod p))) : Prop :=
   payload.length = pattern.length ∧
@@ -61,46 +57,6 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
   neverViolates_sound :
     ∀ (m : BusInteraction (ZMod p)),
       neverViolates m.busId = true → bs.violatesConstraint m = false
-  /-- Optionally merge two lookup interactions into one that imposes *exactly* the two obligations
-      together — the "pack several range/table checks into one bus interaction" knowledge (e.g. two
-      single-byte range checks becoming one two-byte range check). Expression-level: the merged
-      interaction is built from the inputs' sub-expressions so a pass can splice it into the system
-      in place of the two originals. All three must be stateless (so removing/adding them cannot
-      affect stateful side effects or the `admissible` filter), active, invariant-safe, and the
-      merged message's obligation must be equivalent to the conjunction of the two. -/
-  mergeLookups : BusInteraction (Expression p) → BusInteraction (Expression p) →
-    Option (BusInteraction (Expression p))
-  mergeLookups_sound :
-    ∀ (bi1 bi2 bi3 : BusInteraction (Expression p)),
-      mergeLookups bi1 bi2 = some bi3 →
-      bs.isStateful bi1.busId = false ∧
-      bs.isStateful bi2.busId = false ∧
-      bs.isStateful bi3.busId = false ∧
-      (∀ env, (bi1.eval env).multiplicity ≠ 0) ∧
-      (∀ env, (bi2.eval env).multiplicity ≠ 0) ∧
-      (∀ env, (bi3.eval env).multiplicity ≠ 0) ∧
-      (∀ env, bs.breaksInvariant (bi3.eval env) = false) ∧
-      (∀ env, bs.violatesConstraint (bi3.eval env) = false ↔
-        (bs.violatesConstraint (bi1.eval env) = false ∧
-          bs.violatesConstraint (bi2.eval env) = false))
-  /-- A second lookup-merge channel with the identical contract as `mergeLookups`, kept separate so
-      a pass can apply it *before* `mergeLookups` (e.g. packing a byte check and a range check into
-      a tuple range check, which must win over pairing the byte check with another byte check). -/
-  mergeTupleLookups : BusInteraction (Expression p) → BusInteraction (Expression p) →
-    Option (BusInteraction (Expression p))
-  mergeTupleLookups_sound :
-    ∀ (bi1 bi2 bi3 : BusInteraction (Expression p)),
-      mergeTupleLookups bi1 bi2 = some bi3 →
-      bs.isStateful bi1.busId = false ∧
-      bs.isStateful bi2.busId = false ∧
-      bs.isStateful bi3.busId = false ∧
-      (∀ env, (bi1.eval env).multiplicity ≠ 0) ∧
-      (∀ env, (bi2.eval env).multiplicity ≠ 0) ∧
-      (∀ env, (bi3.eval env).multiplicity ≠ 0) ∧
-      (∀ env, bs.breaksInvariant (bi3.eval env) = false) ∧
-      (∀ env, bs.violatesConstraint (bi3.eval env) = false ↔
-        (bs.violatesConstraint (bi1.eval env) = false ∧
-          bs.violatesConstraint (bi2.eval env) = false))
   /-- The last-write-wins shape declared for a bus, or `none`. Passes read `addressFields` to
       group same-address accesses; this is the VM-side memory knowledge (`Leanr/MemoryBus.lean`)
       the spec's abstract `admissible` predicate deliberately omits. -/
@@ -130,10 +86,6 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   slotFun_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)
   neverViolates _ := false
   neverViolates_sound := by intro _ h; exact absurd h (by simp)
-  mergeLookups _ _ := none
-  mergeLookups_sound := by intro _ _ _ h; exact absurd h (by simp)
-  mergeTupleLookups _ _ := none
-  mergeTupleLookups_sound := by intro _ _ _ h; exact absurd h (by simp)
   memShape _ := none
   memShape_stateful := by intro _ _ h; exact absurd h (by simp)
   admissible_sound := by intro _ _ _ _ h; exact absurd h (by simp)
