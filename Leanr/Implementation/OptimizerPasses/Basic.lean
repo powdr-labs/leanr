@@ -51,12 +51,16 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
       self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
 
 /-- Derived-variable reconstruction under `e` (glue, formerly in `Spec.lean`): every no-powdr-ID
-    variable of `cs` is computed by the method `ds` uses for it, reading only powdr-ID variables.
-    Threaded through the passes; the pipeline top uses it to match the spec's `witgen` output. -/
-def ConstraintSystem.reconstructs (cs : ConstraintSystem p) (ds : Derivations p)
-    (e : Variable → ZMod p) : Prop :=
+    variable of `cs` is computed by the method `ds` uses for it, reading only powdr-ID variables
+    from the fixed original input variable set. Threaded through the passes; the pipeline top uses
+    it to match the spec's `witgen` output and `Derivations.cover`. -/
+def ConstraintSystem.reconstructs (inputVars : List Variable) (cs : ConstraintSystem p)
+    (ds : Derivations p) (e : Variable → ZMod p) : Prop :=
   ∀ v ∈ cs.vars, v.powdrId? = none →
-    ∃ cm, Derivations.methodFor ds v = some cm ∧ (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval e = e v
+    ∃ cm, Derivations.methodFor ds v = some cm ∧
+      (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧
+      (∀ x ∈ cm.vars, x ∈ inputVars) ∧
+      cm.eval e = e v
 
 /-- Any constraint system implies itself: the same satisfying assignment works and its side
     effects are (reflexively) equal. -/
@@ -104,15 +108,17 @@ def PassCorrect (cs out : ConstraintSystem p) (dsLocal : Derivations p) (bs : Bu
     ∃ env', out.satisfies bs env' ∧ out.admissible bs env' ∧
       cs.sideEffects bs env ≈ out.sideEffects bs env' ∧
       (∀ v, v.powdrId?.isSome → env' v = env v) ∧
-      (∀ dsIn, cs.reconstructs dsIn env → out.reconstructs (dsIn ++ dsLocal) env'))
+      (∀ inputVars, (∀ v ∈ cs.vars, v.powdrId?.isSome → v ∈ inputVars) →
+        ∀ dsIn, cs.reconstructs inputVars dsIn env →
+          out.reconstructs inputVars (dsIn ++ dsLocal) env'))
 
 /-- Reflexivity: the unchanged system with no new derivations is correct. -/
 theorem PassCorrect.refl (cs : ConstraintSystem p) (bs : BusSemantics p) :
     PassCorrect cs cs [] bs :=
   ⟨cs.implies_refl bs, _root_.id, fun _ hv _ => hv,
    fun env hadm hsat =>
-     ⟨env, hsat, hadm, BusState.equiv_refl _, fun _ _ => rfl,
-      fun dsIn hrec => by rwa [List.append_nil]⟩⟩
+     ⟨env, hsat, hadm, BusState.equiv_refl _,
+       ⟨fun _ _ => rfl, fun _ _ dsIn hrec => by rwa [List.append_nil]⟩⟩⟩
 
 /-- Sequential composition: derivations concatenate, soundness/invariants compose, and the threaded
     reconstruction chains (`dsIn ↦ dsIn ++ df ↦ (dsIn ++ df) ++ dg = dsIn ++ (df ++ dg)`). -/
@@ -126,8 +132,11 @@ theorem PassCorrect.andThen {cs mid out : ConstraintSystem p} {bs : BusSemantics
   obtain ⟨env1, hs1, ha1, he1, hpw1, hr1⟩ := hf4 env hadm hsat
   obtain ⟨env2, hs2, ha2, he2, hpw2, hr2⟩ := hg4 env1 ha1 hs1
   refine ⟨env2, hs2, ha2, BusState.equiv_trans he1 he2,
-    fun v hpw => by rw [hpw2 v hpw, hpw1 v hpw], fun dsIn hrec => ?_⟩
-  have := hr2 (dsIn ++ df) (hr1 dsIn hrec)
+    ⟨fun v hpw => by rw [hpw2 v hpw, hpw1 v hpw],
+      fun inputVars hpowIn dsIn hrec => ?_⟩⟩
+  have hmidIn : ∀ v ∈ mid.vars, v.powdrId?.isSome → v ∈ inputVars :=
+    fun v hv hpw => hpowIn v (hf3 v hv hpw) hpw
+  have := hr2 inputVars hmidIn (dsIn ++ df) (hr1 inputVars hpowIn dsIn hrec)
   rwa [List.append_assoc] at this
 
 /-- Build `PassCorrect` for a pass whose completeness witness is the input assignment itself and
@@ -143,7 +152,7 @@ theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
     PassCorrect cs out [] bs := by
   refine ⟨hsound, hinv, fun v hv _ => hsub v hv, fun env hadm hsat => ?_⟩
   obtain ⟨ho1, ho2, ho3⟩ := hcomp env hadm hsat
-  refine ⟨env, ho1, ho2, ho3, fun _ _ => rfl, fun dsIn hrec => ?_⟩
+  refine ⟨env, ho1, ho2, ho3, ⟨fun _ _ => rfl, fun _ _ dsIn hrec => ?_⟩⟩
   rw [List.append_nil]
   exact fun v hvout hvnone => hrec v (hsub v hvout) hvnone
 

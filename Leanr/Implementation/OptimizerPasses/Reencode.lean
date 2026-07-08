@@ -248,10 +248,11 @@ theorem ConstraintSystem.reencode_correct_D (cs : ConstraintSystem p) (bsem : Bu
       (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) ∧
       (∀ c ∈ newCs, c.eval env' = 0) ∧
       (∀ v : Variable, v.powdrId?.isSome → env' v = env v) ∧
-      (∀ dsIn : Derivations p, cs.reconstructs dsIn env →
+      (∀ inputVars, (∀ v ∈ cs.vars, v.powdrId?.isSome → v ∈ inputVars) →
+        ∀ dsIn : Derivations p, cs.reconstructs inputVars dsIn env →
         ({ algebraicConstraints := ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
            busInteractions := cs.busInteractions.map (·.mapExpr rw) } :
-             ConstraintSystem p).reconstructs (dsIn ++ deriv) env'))
+             ConstraintSystem p).reconstructs inputVars (dsIn ++ deriv) env'))
     (hbwd : ∀ env',
       (ConstraintSystem.satisfies
         { algebraicConstraints :=
@@ -991,7 +992,8 @@ theorem Derivations.methodFor_map (bits : List Variable) (g : Variable → Compu
 
 theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : BusSemantics p)
     (xs bits : List Variable) (hm : Std.HashMap Variable (Expression p))
-    (hxs : ∀ x ∈ xs, x.powdrId?.isSome) (hxsB : ∀ x ∈ xs, x ∉ bits)
+    (hxs : ∀ x ∈ xs, x.powdrId?.isSome) (hxsCs : ∀ x ∈ xs, x ∈ cs.vars)
+    (hxsB : ∀ x ∈ xs, x ∉ bits)
     (hbn : ∀ b ∈ bits, b.powdrId? = none)
     (hchk : checkReencode cs xs bits hm = true) :
     PassCorrect cs (reencodeOut cs xs bits hm)
@@ -1080,8 +1082,9 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
         (bi.mapExpr (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))).eval env' = bi.eval env) ∧
       (∀ c ∈ bits.map boolConstraint, c.eval env' = 0) ∧
       (∀ v : Variable, v.powdrId?.isSome → env' v = env v) ∧
-      (∀ dsIn : Derivations p, cs.reconstructs dsIn env →
-        (reencodeOut cs xs bits hm).reconstructs
+      (∀ inputVars, (∀ v ∈ cs.vars, v.powdrId?.isSome → v ∈ inputVars) →
+        ∀ dsIn : Derivations p, cs.reconstructs inputVars dsIn env →
+        (reencodeOut cs xs bits hm).reconstructs inputVars
           (dsIn ++ bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b))) env') := by
     intro env hsat
     have hallES : ∀ c ∈ coveredCsOf cs xs, c.eval env = 0 := fun c hc =>
@@ -1176,12 +1179,12 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
         rw [hbn v hvb] at hvpow
         simp at hvpow
       · -- reconstruction (later derivations win, so a fresh bit's method overrides any dsIn entry)
-        intro dsIn hdsIn w hwout hwnone
+        intro inputVars hpowIn dsIn hdsIn w hwout hwnone
         rcases hvars w hwout with hwcs | hwb
         · -- a surviving input column of `cs`: not a fresh bit, so `dsIn`'s method is the one used
           have hwnb : w ∉ bits := fun h => hbitsCs w h hwcs
-          obtain ⟨cm, hcm, hcmv, hcmeval⟩ := hdsIn w hwcs hwnone
-          refine ⟨cm, ?_, hcmv, ?_⟩
+          obtain ⟨cm, hcm, hcmv, hcmin, hcmeval⟩ := hdsIn w hwcs hwnone
+          refine ⟨cm, ?_, hcmv, hcmin, ?_⟩
           · simp [Derivations.methodFor_append, Derivations.methodFor_map, hwnb, hcm]
           · rw [ComputationMethod.eval_congr cm (envExt aβ env) env (fun v hv => by
               refine envExt_eq_env_of_notmem aβ env v ?_
@@ -1194,7 +1197,10 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
               rw [hkeysβ]; intro hwb; exact hbitsCs w hwb hwcs)).symm
         · -- a fresh bit: its `bitCM` method (the last listed for `w`) computes it
           refine ⟨bitCM (assignments (bitBox bits)) xs hm w, ?_,
-            fun v hv => hxs v (bitCM_vars _ xs hm w v hv), ?_⟩
+            fun v hv => hxs v (bitCM_vars _ xs hm w v hv),
+            fun v hv =>
+              hpowIn v (hxsCs v (bitCM_vars _ xs hm w v hv))
+                (hxs v (bitCM_vars _ xs hm w v hv)), ?_⟩
           · simp [Derivations.methodFor_append, Derivations.methodFor_map, hwb]
           · rw [ComputationMethod.eval_congr (bitCM (assignments (bitBox bits)) xs hm w)
               (envExt aβ env) env (fun v hv => henvxs v (bitCM_vars _ xs hm w v hv)),
@@ -1338,6 +1344,7 @@ def buildReencode (cs : ConstraintSystem p) (xs : List Variable) (freshBase : St
 def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p)
     (xs : List Variable) (freshBase : String) : PassResult cs bsem :=
   if hxs : xs.all (fun x => x.powdrId?.isSome) = true then
+  if hxsCs : xs.all (fun x => decide (x ∈ cs.vars)) = true then
   match hb : buildReencode cs xs freshBase with
   | none => ⟨cs, [], PassCorrect.refl cs bsem⟩
   | some (bits, hm) =>
@@ -1350,10 +1357,12 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p
          bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b)),
          checkReencode_sound_D cs bsem xs bits hm
            (fun x hx => by simpa using List.all_eq_true.mp hxs x hx)
+           (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsCs x hx))
            (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsB x hx))
            (fun b hbm => of_decide_eq_true (List.all_eq_true.mp hbn b hbm))
            hchk⟩
       else ⟨cs, [], PassCorrect.refl cs bsem⟩
+    else ⟨cs, [], PassCorrect.refl cs bsem⟩
     else ⟨cs, [], PassCorrect.refl cs bsem⟩
     else ⟨cs, [], PassCorrect.refl cs bsem⟩
     else ⟨cs, [], PassCorrect.refl cs bsem⟩

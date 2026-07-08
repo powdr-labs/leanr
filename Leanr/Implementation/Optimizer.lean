@@ -156,10 +156,11 @@ theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p 
   intro hpow env hadm hsat
   obtain ⟨_himpl, _hinv, hS, hcomp⟩ := (pipeline cs bs facts).correct
   obtain ⟨env', hsat', hadm', hse, hA, hR⟩ := hcomp env hadm hsat
-  have hrec : (pipeline cs bs facts).out.reconstructs (pipeline cs bs facts).derivs env' := by
-    have hrec0 : cs.reconstructs [] env :=
+  have hrec : (pipeline cs bs facts).out.reconstructs cs.vars
+      (pipeline cs bs facts).derivs env' := by
+    have hrec0 : cs.reconstructs cs.vars [] env :=
       fun u hu hunone => absurd (hpow u hu) (by simp [hunone])
-    simpa using hR [] hrec0
+    simpa using hR cs.vars (fun v hv _ => hv) [] hrec0
   have hagree : ∀ v ∈ (pipeline cs bs facts).out.vars,
       Derivations.witgen (pipeline cs bs facts).derivs env v = env' v := by
     intro v hv
@@ -168,7 +169,7 @@ theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p 
         simp only [Derivations.witgen, hpw]
         exact (hA v (by simp [hpw])).symm
     | none =>
-        obtain ⟨cm, hm, hxpow, heq⟩ := hrec v hv hpw
+        obtain ⟨cm, hm, hxpow, _hxinput, heq⟩ := hrec v hv hpw
         simp only [Derivations.witgen, hpw, hm]
         rw [← heq]
         exact ComputationMethod.eval_congr cm env env' (fun x hx => (hA x (hxpow x hx)).symm)
@@ -179,7 +180,7 @@ theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p 
     intro v hv
     cases hpw : v.powdrId? with
     | some w => exact hS v hv (by simp [hpw])
-    | none => obtain ⟨cm, hm, hxpow, _⟩ := hrec v hv hpw; exact ⟨cm, hm, hxpow⟩
+    | none => obtain ⟨cm, hm, _hxpow, hxinput, _⟩ := hrec v hv hpw; exact ⟨cm, hm, hxinput⟩
   · show cs.sideEffects bs env
         ≈ (pipeline cs bs facts).out.sideEffects bs (Derivations.witgen (pipeline cs bs facts).derivs env)
     rw [ConstraintSystem.sideEffects_congr hagree]
