@@ -165,20 +165,20 @@ def Derivations.methodFor : Derivations p → Variable → Option (ComputationMe
   | (u, cm) :: rest, v =>
       (Derivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
 
-/-- Derived-variable reconstruction under `e`: every no-powdr-ID variable of `cs` is computed by
-    the method `ds` uses for it, reading only input (powdr-ID) variables. -/
-def ConstraintSystem.reconstructs (cs : ConstraintSystem p) (ds : Derivations p)
-    (e : Variable → ZMod p) : Prop :=
-  ∀ v ∈ cs.vars, v.powdrId? = none →
-    ∃ cm, Derivations.methodFor ds v = some cm ∧ (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval e = e v
+/-- The provided output circuit assignment can be derived from the provided input circuit assignment
+    by the following algorithm:
+    - If the variable has a powdr ID, it must be present in the input circuit and have the same value.
+    - If the variable does not have a powdr ID, it must be derivable using the provided derivations.
 
-/-- The `out` constraint system variable assignment `env'` can be completely derived from `inp`
-    constraint system assignment `env`: Either the variables are reused, or they are computed by
-    methods in `ds` reading only input variables. -/
-def ConstraintSystem.derivesWitnessFrom (out inp : ConstraintSystem p) (ds : Derivations p)
-    (env env' : Variable → ZMod p) : Prop :=
-  out.reconstructs ds env' ∧
-  (∀ v ∈ out.vars, v.powdrId?.isSome → v ∈ inp.vars ∧ env' v = env v)
+    ASSUMPTION: all variables in the input circuit have a powdr ID. -/
+def ConstraintSystem.witnessDerivableFrom (outputCS inputCS : ConstraintSystem p) (ds : Derivations p)
+    (outputEnv inputEnv : Variable → ZMod p) : Prop :=
+  (∀ v ∈ inputCS.vars, v.powdrId?.isSome) →
+  ∀ v ∈ outputCS.vars,
+    match v.powdrId? with
+    | some _ => v ∈ inputCS.vars ∧ inputEnv v = outputEnv v
+    | none => ∃ cm, Derivations.methodFor ds v = some cm ∧
+        (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval inputEnv = inputEnv v
 
 --------- Constraint system implications ---------
 
@@ -203,39 +203,28 @@ def ConstraintSystem.guaranteesInvariants (s : ConstraintSystem p) (busSemantics
     let message := bi.eval env
     message.multiplicity ≠ 0 → busSemantics.breaksInvariant message = false
 
-/-- Whether a constraint system implies another under a given bus semantics.
-    Informally, a constraint system `self` implies a system `other` if for every
-    satisfying assignment of `self`:
-    1. There exists a satisfying assignment of `other`
-    2. The side effects of `self` under the given environment and bus semantics
-       are equal to the side effects of `other` under the corresponding environment. -/
-def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
+/-- Whether an optimized constraint system is a sound replacement for an original constraint system.
+    Informally, for any satisfying assignment of the optimized system, there exists a corresponding
+    satisfying assignment of the original system *with equivalent side effects*. Also, the optimized
+    system must maintain all invariants guaranteed by the original system. -/
+def ConstraintSystem.isSoundReplacementOf (optimizedCS originalCS : ConstraintSystem p) (busSemantics : BusSemantics p) :
     Prop :=
-  ∀ env, self.satisfies busSemantics env →
-    ∃ env', other.satisfies busSemantics env' ∧
-      self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
+  (∀ env, optimizedCS.satisfies busSemantics env →
+    ∃ env', originalCS.satisfies busSemantics env' ∧
+      optimizedCS.sideEffects busSemantics env ≈ originalCS.sideEffects busSemantics env') ∧
+  (originalCS.guaranteesInvariants busSemantics → optimizedCS.guaranteesInvariants busSemantics)
 
-/-- Like `implies`, but the obligation is only required for `self`'s **admissible** (real-trace)
-    assignments, the produced witness is itself admissible and it can be derived from a valid
-    witness for `self`.
-    This is the *completeness* direction of an optimization: the optimizer must reproduce every
-    real trace, but may drop spurious (non-trace) satisfying assignments. Delivering an admissible
-    witness is what makes `refines` transitive. -/
-def ConstraintSystem.impliesAdmissible (self other : ConstraintSystem p)
+/-- Whether an optimized constraint system is a complete replacement for an original constraint system.
+    Informally, for any admissible and satisfying assignment of the original system, there exists a
+    corresponding admissible and satisfying assignment of the optimized system *with equivalent side effects*.
+    Also, it should be possible to derive a witness for the optimized system from a valid witness of the
+    original system. -/
+def ConstraintSystem.isCompleteReplacementOf (optimizedCS originalCS : ConstraintSystem p)
     (busSemantics : BusSemantics p) (ds : Derivations p) : Prop :=
-  ∀ env, self.admissible busSemantics env → self.satisfies busSemantics env →
-    ∃ env', other.satisfies busSemantics env' ∧ other.admissible busSemantics env' ∧
-      self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env' ∧
-      ((∀ v ∈ self.vars, v.powdrId?.isSome) → other.derivesWitnessFrom self ds env env')
-
-/-- Whether `self` is a valid **optimization** of `other` under a given bus semantics:
-    * **sound** — `self.implies other`: A satisfying assignment of `self` implies that there exists
-      a satisfying assignment of `other` with the same side effects.;
-    * **complete for admissible executions** — `other.impliesAdmissible self`: every *admissible*
-      (real-trace) satisfying assignment of `other` is reproduced by `self`. -/
-def ConstraintSystem.refines (self other : ConstraintSystem p) (busSemantics : BusSemantics p)
-    (ds : Derivations p) : Prop :=
-  self.implies other busSemantics ∧ other.impliesAdmissible self busSemantics ds
+  ∀ env, originalCS.admissible busSemantics env → originalCS.satisfies busSemantics env →
+    ∃ env', optimizedCS.satisfies busSemantics env' ∧ optimizedCS.admissible busSemantics env' ∧
+      originalCS.sideEffects busSemantics env ≈ optimizedCS.sideEffects busSemantics env' ∧
+      (optimizedCS.witnessDerivableFrom originalCS ds env env')
 
 --------- Degree bound ---------
 
@@ -248,34 +237,21 @@ def ConstraintSystem.withinDegree (s : ConstraintSystem p) (b : DegreeBound) : P
 /-- Whether an optimizer for the fixed `busSemantics` respects the zkVM's degree bound: a
     within-bound input always yields a within-bound output. -/
 def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
-    (optimizer : ConstraintSystem p → ConstraintSystem p) : Prop :=
+    (optimizer : ConstraintSystem p → ConstraintSystem p × Derivations p) : Prop :=
   ∀ constraintSystem : ConstraintSystem p,
     constraintSystem.withinDegree busSemantics.degreeBound →
-    (optimizer constraintSystem).withinDegree busSemantics.degreeBound
+    (optimizer constraintSystem).1.withinDegree busSemantics.degreeBound
 
 --------- Optimizer correctness ---------
 
-/-- Whether an optimizer maintains correctness *with respect to a given `busSemantics`*. This
-    means that, for all constraint systems:
-    1. The optimized constraint system `refines` the original: it is sound (every satisfying
-       witness of the output is one of the input, with the same side effects) and complete for
-       the input's intended (real-trace) executions.
-    2. Assuming the original constraint system guarantees invariants, so does the optimized one.
-    3. The optimizer respects the zkVM's degree bound.
+abbrev Optimizer (p : ℕ) := ConstraintSystem p → ConstraintSystem p × Derivations p
 
-    The bus semantics is a *parameter*: quantifying over it (`∀ bs, optimizerMaintainsCorrectness
-    bs opt`) recovers the "correct for every semantics" reading, while leaving it fixed lets a
-    semantics-specific optimizer — one that bakes in bus knowledge sound only for its own
-    semantics, like the OpenVM optimizer — be an instance too.
-
-    The optimizer additionally returns `Derivations`: `refines` demands that the completeness
-    witness be reconstructible from the input trace via them (`derivesWitness`), so witness
-    generation can fill the output's derived variables. -/
-def optimizerMaintainsCorrectness (busSemantics : BusSemantics p)
-    (optimizer : ConstraintSystem p → ConstraintSystem p × Derivations p) : Prop :=
-  (∀ constraintSystem : ConstraintSystem p,
-    let (optimized, derivations) := optimizer constraintSystem
-    (optimized.refines constraintSystem busSemantics derivations) ∧
-    (constraintSystem.guaranteesInvariants busSemantics →
-      optimized.guaranteesInvariants busSemantics))
-  ∧ optimizerRespectsDegreeBound busSemantics (fun cs => (optimizer cs).1)
+/-- An optimizer is correct, for all possible input constraint systems, replacing it
+    by the optimized constraint system is sound and complete. Also, it has to respect
+    the degree bound. -/
+def Optimizer.isCorrect (optimizer : Optimizer p) (busSemantics : BusSemantics p) : Prop :=
+  (∀ originalCS : ConstraintSystem p,
+    let (optimizedCS, derivations) := optimizer originalCS
+    (optimizedCS.isSoundReplacementOf originalCS busSemantics) ∧
+    (optimizedCS.isCompleteReplacementOf originalCS busSemantics derivations))
+  ∧ optimizerRespectsDegreeBound busSemantics optimizer
