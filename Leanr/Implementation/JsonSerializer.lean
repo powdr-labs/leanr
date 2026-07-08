@@ -1,6 +1,7 @@
 import Lean.Data.Json
 import Leanr.Spec
 import Leanr.Utils.Size
+import Leanr.Implementation.Variable
 
 /-!
 # JSON serializer for powdr `SymbolicMachine` exports
@@ -24,11 +25,11 @@ Output schema (matched empirically against powdr's serde):
 
 ## Fresh variables
 
-Some passes (e.g. `Reencode`) introduce brand-new variables whose names carry no `@<id>`
-suffix (the exporter's `AlgebraicReference` requires an `@`). Before serializing we assign every
-such name a **fresh, unique** id strictly greater than any id already present, memoized so that
-equal names get equal ids and distinct names get distinct ids. The Rust side then reseeds its
-`ColumnAllocator` from the returned machine, so these ids never collide with later passes.
+Some passes (e.g. `Reencode`) introduce brand-new variables that carry no `powdrId?` (the
+exporter's `AlgebraicReference` requires an `@<id>`). Before serializing we assign every such
+variable a **fresh, unique** id strictly greater than any id already present, memoized so that
+equal variables get equal ids and distinct variables get distinct ids. The Rust side then reseeds
+its `ColumnAllocator` from the returned machine, so these ids never collide with later passes.
 
 This file is in the (unaudited) implementation layer: a wrong serialization can only make the
 round-trip fail, never affect the proven optimizer.
@@ -42,48 +43,42 @@ variable {p : ℕ}
 
 namespace Leanr.Serialize
 
-/-- The id encoded in a variable name `name@id` (after the *last* `@`, matching powdr's
-    `rfind('@')`), or `none` if the name carries no numeric `@`-suffix. -/
-def parseVarId (x : String) : Option Nat :=
-  match (x.splitOn "@").reverse with
-  | idStr :: _ :: _ => idStr.toNat?
-  | _ => none
-
-/-- Distinct variable names occurring anywhere in the system. -/
-def distinctVars (cs : ConstraintSystem p) : List String :=
+/-- Distinct variables occurring anywhere in the system. -/
+def distinctVars (cs : ConstraintSystem p) : List Variable :=
   let occ := cs.algebraicConstraints.flatMap Expression.vars ++
     cs.busInteractions.flatMap BusInteraction.vars
-  (occ.foldl (init := (∅ : Std.HashSet String)) (·.insert ·)).toList
+  (occ.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).toList
 
-/-- A renaming that maps every fresh (suffix-less) variable name to `name@<fresh id>`, with fresh
-    ids taken strictly above the maximum id already present. Names that already carry an id map to
-    themselves (absent from the map). -/
-def freshRenaming (cs : ConstraintSystem p) : Std.HashMap String String :=
+/-- A renaming that assigns every fresh (id-less) variable a fresh id, taken strictly above the
+    maximum id already present. Variables that already carry an id are absent from the map. -/
+def freshRenaming (cs : ConstraintSystem p) : Std.HashMap Variable Nat :=
   let vars := distinctVars cs
-  let maxId := vars.foldl (fun m x => match parseVarId x with
+  let maxId := vars.foldl (fun m x => match x.powdrId? with
     | some i => Nat.max m i
     | none => m) 0
-  let fresh := vars.filter (fun x => (parseVarId x).isNone)
-  (fresh.foldl (init := ((∅ : Std.HashMap String String), maxId + 1))
-    (fun (acc, i) x => (acc.insert x (x ++ "@" ++ toString i), i + 1))).1
+  let fresh := vars.filter (fun x => x.powdrId?.isNone)
+  (fresh.foldl (init := ((∅ : Std.HashMap Variable Nat), maxId + 1))
+    (fun (acc, i) x => (acc.insert x i, i + 1))).1
 
-/-- The reference string emitted for a variable, applying the fresh renaming. -/
-def refString (m : Std.HashMap String String) (x : String) : String :=
-  m.getD x x
+/-- The reference string `name@id` emitted for a variable, drawing the id from the variable's own
+    `powdrId?` when present, otherwise from the fresh renaming. -/
+def refString (m : Std.HashMap Variable Nat) (x : Variable) : String :=
+  let id := x.powdrId?.getD (m.getD x 0)
+  x.name ++ "@" ++ toString id
 
 /-- A field constant as a JSON integer, using its canonical representative in `[0, p)`. -/
 def constJson (n : ZMod p) : Json :=
   Json.num (JsonNumber.fromNat n.val)
 
 /-- Serialize an expression to `Lean.Json`. -/
-def serializeExpr (m : Std.HashMap String String) : Expression p → Json
+def serializeExpr (m : Std.HashMap Variable Nat) : Expression p → Json
   | .const n => constJson n
   | .var x => Json.str (refString m x)
   | .add a b => Json.arr #[serializeExpr m a, Json.str "+", serializeExpr m b]
   | .mul a b => Json.arr #[serializeExpr m a, Json.str "*", serializeExpr m b]
 
 /-- Serialize a bus interaction to a `{id, mult, args}` object. -/
-def serializeBus (m : Std.HashMap String String) (bi : BusInteraction (Expression p)) : Json :=
+def serializeBus (m : Std.HashMap Variable Nat) (bi : BusInteraction (Expression p)) : Json :=
   Json.mkObj [
     ("id", Json.num (JsonNumber.fromNat bi.busId)),
     ("mult", serializeExpr m bi.multiplicity),
