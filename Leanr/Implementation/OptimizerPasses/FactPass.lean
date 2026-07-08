@@ -76,7 +76,7 @@ def ConstraintSystem.sizeKey (cs : ConstraintSystem p) : Nat ×ₗ Nat ×ₗ Nat
 def iterateToFixpoint (f : VerifiedPassW p) (cs : ConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) : { out : ConstraintSystem p // PassCorrect cs out bs } :=
   let r := f cs bs facts
-  if h : r.val.sizeKey < cs.sizeKey then
+  if _h : r.val.sizeKey < cs.sizeKey then
     let r2 := iterateToFixpoint f r.val bs facts
     ⟨r2.val,
      ConstraintSystem.refines_trans r2.property.1 r.property.1,
@@ -84,7 +84,7 @@ def iterateToFixpoint (f : VerifiedPassW p) (cs : ConstraintSystem p) (bs : BusS
   else
     ⟨cs, cs.refines_refl bs, _root_.id⟩
   termination_by cs.sizeKey
-  decreasing_by exact h
+  decreasing_by exact _h
 
 /-! ## Degree guarding
 
