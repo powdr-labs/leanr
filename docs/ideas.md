@@ -12,6 +12,14 @@ Only worth it if the flag-compression edge is judged not worth `reencode`'s comp
 pass would then also want a `bits ≥ vars` / large-group path (groups `reencode` skips) to claw some of
 it back. Left for Georg to decide.
 
+Effectiveness priority: **variables > bus interactions > constraints**. As of the byte-check
+packing pass (log entry 49), on the top-12 `openvm-eth` sample leanr and powdr are ~tied on
+variables (leanr wins the aggregate, powdr the geomean) and leanr leads on constraints; the
+remaining *systematic* gap is bus interactions. The bus gap now decomposes as: (a) range-check
+packing via the tuple range checker, (b) memory-pointer-limb 13-bit checks on memory-heavy blocks,
+(c) residual bitwise checks that are not self-XOR byte checks, (d) occasional missed memory
+send↔receive cancellations. See the `docs/log.md` entry 42/46/49 discussion for measurements.
+
 ## Drop never-violating stateless lookups (close the residual pc-lookup bus gap)
 
 After memory/exec send↔receive pair cancellation (log entry 46), leanr is at near-parity with powdr
@@ -25,28 +33,65 @@ effectiveness without regressing variables — a clean win under the priority or
 (variables > bus interactions > constraints). Check the existing zero-multiplicity drop in
 `cleanupCycle` first; this may be an extension of it rather than a new pass.
 
+## Range-check packing via the tuple range checker (bus interactions)
+
+powdr merges a byte check and an N-bit range check into a single `TupleRangeChecker` interaction
+`[x, y]` (checking `x < s1 ∧ y < s2`); leanr keeps them as two separate `variableRangeChecker`
+lookups. This is the same shape as the byte-check packing already landed (entry 49): add a
+`BusFacts` fact that a tuple-range message `[x, y]` is accepted iff the two single range checks
+`[x, bits1]`, `[y, bits2]` are, then a pass that pairs a byte check with a matching-width range
+check into one tuple interaction. Sound (identical satisfying set), stateless, variable-neutral —
+a clean bus win. Modest per case (~2–8 interactions), but general.
+
+## Extend byte-check packing to non-self and cross-form checks (bus interactions)
+
+`bytePackPass` (entry 49) recognises only the self-XOR byte check `[e, e, 0, 1]`. Some blocks
+(e.g. apc_008) keep bitwise interactions in other forms — genuine XOR `[x, y, z, 1]` with `x ≠ y`,
+or byte checks already half-packed — that it leaves alone, so its bitwise count stays above powdr's.
+Generalise the recogniser (and the `bytePairBus` fact) to pack any two messages that each impose a
+"this operand is a byte" obligation, regardless of the carrier form. Still a stateless, sound,
+variable-neutral bus win.
+
+## Eliminate memory-pointer-limb decompositions / redundant range checks (bus interactions)
+
+On memory-heavy blocks (e.g. apc_005) leanr keeps ~2× powdr's `mem_ptr_limbs` decompositions and
+their 13-bit range checks (the high/"page" limb is identical across same-base accesses but leanr
+re-decomposes and re-checks per access). The limbs are pinned by **degree-2 carry constraints**
+`(L₁)(L₂) = 0` whose roots are `base + offset` (parameterised by the base variable), so no linear
+(`gauss`/`affine`) or finite-*constant*-domain (`domainProp`/`domainBatch`/`reencode`) pass can
+touch them. Closing it needs a **carry-branch-resolution** step: use the proven byte/range bounds
+(`BusFacts.slotBound`) to show one factor of the product can't vanish, collapsing `(L₁)(L₂)=0` to
+the linear `Lᵢ=0` so Gauss can unify the shared limb and drop the duplicate check. This is the
+hardest of the current ideas — dropping a range check is sound only if the shared limb is *proven*
+equal (a bounded-no-wrap argument in the style of `MemoryUnify.boundedSumMax`) — and it is a bus
+win on an axis where leanr is already ~tied with powdr on variables, so lower leverage than the
+packing passes.
+
+## Is-zero / is-equal witness reduction (variables)
+
+An equality/is-zero gadget `cmp = [vector ≠ 0]` is encoded with one inverse-marker witness per limb
+(`diff_inv_marker__i`, in the single constraint `−cmp + Σ (a_i − b_i)·inv_i = 0`); powdr collapses
+the `k` markers to **one** by combining the byte-bounded limbs into a single value whose zeroness is
+equivalent (a weighted sum `Σ 256ⁱ (a_i − b_i)` is zero iff all limbs are, given byte bounds so the
+sum can't wrap). Reduces `k−1` variables per comparison. Sound but byte-bound-dependent (needs the
+`boundedSumMax`-style no-wrap argument and a transport via `reencode_correct_D`). Note: `cmp` itself
+must become a derived column (powdr's `QuotientOrZero`/`IfEqZero`, already in `ComputationMethod`),
+since a free `cmp` with the certificate dropped would be under-constrained. Small per case, and
+variables are ~tied overall — do the cheaper bus wins first.
+
 ## Smarter witnesses for `disconnectedComponentPass`
 
 `disconnectedComponentPass` (entry 43) removes a disconnected component only if the **all-zero**
-witness certifies it satisfiable (every dropped constraint evaluates to `0`, every dropped
-stateless interaction is non-violating). This captures dead range-checked auxiliaries (e.g. the
-`bit_shift_carry` limbs) but **not** the most common disconnected pattern in the benchmark: an
-orphaned register read, whose data limbs survive only in a bitwise byte-check
-`[K − Σ 256ⁱ·limbᵢ, limb₀, 0, 0]` plus range checks. There, `0` is not a satisfying assignment (the
-first bitwise slot is a large constant, not a byte); the satisfying witness is the base-256
-decomposition of `K` (~29 benchmark cases, 3 vars each).
+witness certifies it satisfiable. This misses the common orphaned-register-read pattern (data limbs
+surviving only in a bitwise byte-check `[K − Σ 256ⁱ·limbᵢ, limb₀, 0, 0]` plus range checks), where
+the satisfying witness is the base-256 decomposition of `K`, not `0`. A witness *finder* that solves
+the component's lookups (probe `violatesConstraint`) would capture them. Only the finder changes,
+not the proof. Phrase it as a general "solve the component's lookups" search, not hard-coded
+base-256, to avoid overfitting to the OpenVM limb structure.
 
-Capturing them needs a witness *finder* that solves a small system of range/byte lookups. The
-correctness machinery already supports any witness (it only re-checks `violatesConstraint`/`eval`
-at run time), so **only the finder needs to change**, not the proof. Caveat: a decomposition solver
-leans toward the OpenVM limb structure — phrase it as a general "solve the component's lookups"
-search (probe `violatesConstraint`) rather than hard-coding base-256, to avoid overfitting.
+## Batch pair cancellation in one traversal (performance)
 
-## Batch pair cancellation in one traversal
-
-`busPairCancelPass` (entry 46) drops one pair per invocation and is drained via `iterateToFixpoint`
-inside the cleanup cycle. On the largest blocks (~hundreds of pairs) this is the dominant per-pass
-cost. A single-traversal "drop all matched interior send/receive pairs per address" would be O(n)
-instead of O(pairs·n), but needs a multi-drop discipline lemma (the current proof is per-pair via
-`admissibleMemoryBus_dropOne` applied twice). Only worth it if the pass becomes a benchmark
-bottleneck.
+`busPairCancelPass` (entry 46) drops one pair per invocation and is drained via `iterateToFixpoint`;
+`bytePackPass` (entry 49) is the same shape. On the largest blocks this is O(pairs·n). A
+single-traversal multi-drop would be O(n) but needs a multi-drop discipline lemma. Only worth it if
+these passes become a benchmark bottleneck.
