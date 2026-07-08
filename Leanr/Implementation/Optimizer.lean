@@ -94,15 +94,15 @@ def optimizerWithBusFacts {bs : BusSemantics p} (facts : BusFacts p bs)
   let r := pipeline cs bs facts
   (r.out, r.derivs)
 
-/-- The fact-aware optimizer is correct: its output `refines` its input (sound, and complete for
-    the input's intended executions with the returned witness-reconstruction data) and preserves
-    invariants — the same clauses `optimizerMaintainsCorrectness` demands, stated per instance
-    because nontrivial facts are tied to one semantics. -/
+/-- The fact-aware optimizer is correct: its output is a sound replacement for its input (soundness
+    plus invariant preservation) and a complete replacement for the input's intended (real-trace)
+    executions, with the returned witness-reconstruction data — the clauses `Optimizer.isCorrect`
+    demands, stated per instance because nontrivial facts are tied to one semantics. -/
 theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p bs)
     (cs : ConstraintSystem p) :
-    ((optimizerWithBusFacts facts cs).1.refines cs bs (optimizerWithBusFacts facts cs).2) ∧
-      (cs.guaranteesInvariants bs → (optimizerWithBusFacts facts cs).1.guaranteesInvariants bs) :=
-  ⟨(pipeline cs bs facts).correct.toRefines, (pipeline cs bs facts).correct.2.1⟩
+    (optimizerWithBusFacts facts cs).1.isSoundReplacementOf cs bs ∧
+      (optimizerWithBusFacts facts cs).1.isCompleteReplacementOf cs bs (optimizerWithBusFacts facts cs).2 :=
+  (pipeline cs bs facts).correct.toReplacement
 
 /-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree
     bound (every pass is degree-guarded). -/

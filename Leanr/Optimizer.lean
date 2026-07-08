@@ -35,19 +35,19 @@ end Leanr.OpenVM
     In the following theorems, we establish that the optimizers maintain correctness. -/
 
 theorem optimizerWithBusFacts_maintainsCorrectness (bs : BusSemantics p) (facts : BusFacts p bs) :
-    optimizerCorrectness bs (optimizerWithBusFacts facts) :=
+    Optimizer.isCorrect (optimizerWithBusFacts facts) bs :=
   ⟨fun cs => optimizerWithBusFacts_correct facts cs,
    fun cs => optimizerWithBusFacts_respectsDegree facts cs⟩
 
 theorem simpleOptimizer_maintainsCorrectness (bs : BusSemantics p) :
-    optimizerCorrectness bs (simpleOptimizer bs) :=
+    Optimizer.isCorrect (simpleOptimizer bs) bs :=
   optimizerWithBusFacts_maintainsCorrectness bs (BusFacts.trivial bs)
 
 namespace Leanr.OpenVM
 
 theorem openVmOptimizer_maintainsCorrectness (busMap : BusMap) :
-    optimizerCorrectness (openVmBusSemantics babyBear busMap)
-      (openVmOptimizer busMap) :=
+    Optimizer.isCorrect (openVmOptimizer busMap)
+      (openVmBusSemantics babyBear busMap) :=
   optimizerWithBusFacts_maintainsCorrectness (openVmBusSemantics babyBear busMap)
     (openVmFacts babyBear busMap)
 

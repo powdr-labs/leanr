@@ -15,9 +15,10 @@ in `Leanr/Optimizer.lean`).
 
 This module provides:
 
-* the relation glue for the spec's notions (`≈` on `BusState`, `ConstraintSystem.implies`,
-  `ConstraintSystem.impliesAdmissible`, `ConstraintSystem.refines`) — reflexivity and transitivity
-  — which is what lets passes *compose* without re-proving a growing monolith;
+* the relation glue that lets passes *compose* without re-proving a growing monolith: `≈` on
+  `BusState`, plus `ConstraintSystem.implies` / `.reconstructs` (the soundness- and
+  reconstruction-halves the spec's `isSoundReplacementOf` / `isCompleteReplacementOf` are built from
+  at the pipeline top), with their reflexivity and transitivity lemmas;
 * `PassCorrect`, the per-step correctness obligation;
 * `VerifiedPass`, a pass bundled with its own `PassCorrect` proof (so a pass cannot be written
   without discharging its obligations), and `VerifiedPass.andThen`/`VerifiedPass.id` to compose
@@ -40,6 +41,23 @@ theorem BusState.equiv_symm {s t : BusState p} (h : s ≈ t) : t ≈ s :=
 theorem BusState.equiv_trans {s t u : BusState p} (h1 : s ≈ t) (h2 : t ≈ u) : s ≈ u :=
   fun message => (h1 message).trans (h2 message)
 
+/-- Soundness half of a replacement (glue, formerly in `Spec.lean`): every satisfying assignment of
+    `self` maps to one of `other` with the same stateful side effects. The spec's
+    `isSoundReplacementOf` is exactly this together with invariant preservation. -/
+def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
+    Prop :=
+  ∀ env, self.satisfies busSemantics env →
+    ∃ env', other.satisfies busSemantics env' ∧
+      self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
+
+/-- Derived-variable reconstruction under `e` (glue, formerly in `Spec.lean`): every no-powdr-ID
+    variable of `cs` is computed by the method `ds` uses for it, reading only powdr-ID variables.
+    Threaded through the passes; the spec's `witnessDerivableFrom` is recovered from it at the top. -/
+def ConstraintSystem.reconstructs (cs : ConstraintSystem p) (ds : Derivations p)
+    (e : Variable → ZMod p) : Prop :=
+  ∀ v ∈ cs.vars, v.powdrId? = none →
+    ∃ cm, Derivations.methodFor ds v = some cm ∧ (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval e = e v
+
 /-- Any constraint system implies itself: the same satisfying assignment works and its side
     effects are (reflexively) equal. -/
 theorem ConstraintSystem.implies_refl (cs : ConstraintSystem p) (busSemantics : BusSemantics p) :
@@ -58,9 +76,9 @@ theorem ConstraintSystem.implies_trans {a b c : ConstraintSystem p} {busSemantic
 
 A single optimization step, packaged with its correctness proof. `VerifiedPass` is a function
 that, given a constraint system and bus semantics, returns a new constraint system **together
-with a proof** that it (a) `refines` the input and (b) preserves invariants. Because the
-proof is part of the return value, there is no separate theorem to weaken: a pass simply cannot
-be written down without discharging its obligations.
+with a proof** that it (a) is a sound and (real-trace) complete replacement for the input and
+(b) preserves invariants. Because the proof is part of the return value, there is no separate
+theorem to weaken: a pass simply cannot be written down without discharging its obligations.
 
 Passes compose with `VerifiedPass.andThen` (run one, then the next), which threads the two proofs
 through `PassCorrect.andThen` (soundness via `implies_trans`, reconstruction by concatenating
@@ -129,18 +147,25 @@ theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
   rw [List.append_nil]
   exact fun v hvout hvnone => hrec v (hsub v hvout) hvnone
 
-/-- Bridge to the audited spec: a threaded `PassCorrect` (with incoming derivations `[]`) gives the
-    spec's `refines` — soundness, plus completeness whose witness `derivesWitnessFrom` (when the input's
-    columns all carry powdr IDs, so it has no unaccounted derived variables). -/
-theorem PassCorrect.toRefines {cs out : ConstraintSystem p} {ds : Derivations p}
-    {bs : BusSemantics p} (h : PassCorrect cs out ds bs) : out.refines cs bs ds := by
-  obtain ⟨himpl, _hinv, hS, hcomp⟩ := h
-  refine ⟨himpl, fun env hadm hsat => ?_⟩
+/-- Bridge to the audited spec: a threaded `PassCorrect` (with incoming derivations `[]`) gives both
+    spec obligations — `isSoundReplacementOf` (soundness plus invariant preservation) and
+    `isCompleteReplacementOf` (real-trace completeness whose witness is `witnessDerivableFrom`, valid
+    because the input's columns all carry powdr IDs, so it has no unaccounted derived variables). -/
+theorem PassCorrect.toReplacement {cs out : ConstraintSystem p} {ds : Derivations p}
+    {bs : BusSemantics p} (h : PassCorrect cs out ds bs) :
+    out.isSoundReplacementOf cs bs ∧ out.isCompleteReplacementOf cs bs ds := by
+  obtain ⟨himpl, hinv, hS, hcomp⟩ := h
+  refine ⟨⟨himpl, hinv⟩, fun env hadm hsat => ?_⟩
   obtain ⟨env', hsat', hadm', hse, hA, hR⟩ := hcomp env hadm hsat
-  refine ⟨env', hsat', hadm', hse, fun hpow => ⟨?_, fun v hvout hvpow => ⟨hS v hvout hvpow, hA v hvpow⟩⟩⟩
-  have hrec0 : cs.reconstructs [] env :=
-    fun v hv hvnone => absurd (hpow v hv) (by simp [hvnone])
-  simpa using hR [] hrec0
+  refine ⟨env', hsat', hadm', hse, ?_⟩
+  intro hpow v hvout
+  have hrec : out.reconstructs ds env' := by
+    have hrec0 : cs.reconstructs [] env :=
+      fun u hu hunone => absurd (hpow u hu) (by simp [hunone])
+    simpa using hR [] hrec0
+  cases hv : v.powdrId? with
+  | none => exact hrec v hvout hv
+  | some w => exact ⟨hS v hvout (by simp [hv]), hA v (by simp [hv])⟩
 
 /-- The result of a verified pass: the transformed system, the derivations it introduces, and the
     correctness proof. -/
