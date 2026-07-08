@@ -90,28 +90,42 @@ evaluator. These are **witness-generation hints, not constraints**: they are not
 verifier and are deliberately kept out of `satisfies`/`refines`/`withinDegree`, all of which read
 only `algebraicConstraints`/`busInteractions`. Consequently every existing pass proof is unaffected.
 
-- **Audited definitions.** `DerivedVariable.consistent` (a hint holds when the variable already
-  equals its computed value) and `ConstraintSystem.derivedColumnsEntailed` (every satisfying
-  assignment makes the hints consistent) are *declarative* — they state the intended semantics of a
-  hint for future emitting passes and for cross-tool round-tripping. They are **not** enforced by
-  any pass today.
-- **The correctness guarantee.** `optimizerMaintainsCorrectness` gains a fourth clause,
-  `optimizerPreservesDerivedColumns` (`(opt cs).derivedColumns = cs.derivedColumns`): the optimizer
-  carries hints through verbatim, neither fabricating nor dropping them. This is *not* semantic
-  entailment-preservation, which is **unprovable generically**: `refines` maps a satisfying
-  assignment of the output to a possibly-different one of the input (substitution passes rebind
-  eliminated variables), so output-consistency at `env` cannot be derived from input-consistency at
-  the rebound `env'`. Verbatim preservation is the strongest guarantee provable without per-pass
-  coupling, and is exactly what powdr witgen needs (an `isNew=false` hint is precisely how a removed
-  column is recomputed). The optimizer reattaches `cs.derivedColumns` after the
-  (derived-column-agnostic) pipeline, so the clause holds by `rfl`.
-- **Deferred.** No pass yet *emits* a hint; emission needs a pass-level entailment obligation, out
-  of scope here. Because hints are carried verbatim while substitution passes eliminate variables, a
-  preserved `computation` may reference a variable no longer present in the output constraints —
-  benign for representation/parse/serialize, but reconciling hints with variable elimination (drop
-  or rewrite dead references) is left to the powdr-integration task. Parsing (`JsonParser.lean`) and
-  serialization (`JsonSerializer.lean`) match powdr's serde (3-tuple, externally-tagged
-  `ComputationMethod`); a missing `derived_columns` key parses to `[]`.
+- **Correctness lives in `refines`.** `impliesAdmissible` (the completeness direction) now
+  *assumes* `self.derivedConsistent env` and *delivers* a witness `env'` with
+  `other.derivedConsistent env'`. This assume/deliver symmetry is what keeps the relation reflexive
+  (`env' = env` re-delivers the assumption) and transitive (the middle witness carries the
+  hypothesis the next step needs), so all pass composition (`refines_trans`) is unchanged. Soundness
+  (`implies`) is deliberately left untouched: an adversarial output-satisfying assignment cannot be
+  made hint-consistent, nor needs to be — hints are witgen instructions, not verifier constraints.
+  `optimizerMaintainsCorrectness`'s fourth clause, `optimizerDerivedColumnsConsistent`, is the
+  projection: for every admissible, satisfying, hint-consistent input there is an output-satisfying
+  `env'` under which every emitted hint computes its assigned value.
+- **Why this and not env-universal entailment.** `derivedColumnsEntailed` (every satisfying
+  assignment makes the hints consistent) is kept as documentation but is *not* the guarantee: it
+  fails for hints of *eliminated* variables, which are free in the output, so no output constraint
+  pins them. Consistency under the *constructed completeness witness* is the right, provable notion —
+  and is exactly what witgen needs (following the hints on a real trace yields a consistent
+  assignment).
+- **Emission.** The re-encoding pass (`Reencode.lean`) emits an `isNew = false` hint
+  `QuotientOrZero(interpolation-over-fresh-bits, 1)` (= powdr's `ComputationMethod::expression`) for
+  each group variable it eliminates, accumulating onto any hints already present. Its freshness
+  certificate (`checkReencode`) requires the fresh bits to avoid the eliminated group vars and every
+  existing derived column (name + computation), so accumulated hints transport across each step. The
+  emitted-hint consistency is discharged from the pass's own forward witness.
+- **Preservation.** Every *non-emitting* pass preserves derived columns unchanged. Because each
+  such pass's completeness witness is `env' = env`, consistency transfers for free (the pass reuses
+  its `derivedConsistent` hypothesis). This lets the emitting re-encoding pass stay inside the
+  iterated cleanup cycle — so effectiveness (variables/bus/constraints) is byte-identical to the
+  hint-free pipeline — while its hints survive verbatim to the optimizer output.
+- **Serialization.** Parsing (`JsonParser.lean`) and serialization (`JsonSerializer.lean`) match
+  powdr's serde exactly (3-tuple `[is_new, "name@id", method]`, externally-tagged `ComputationMethod`,
+  field elements as bare numbers); a missing `derived_columns` key parses to `[]`.
+- **Deferred.** Re-encoding does *not* yet emit `isNew = true` hints for the fresh bit columns it
+  creates (witgen must compute those): the bit value is a function of the eliminated group values,
+  expressible only via Lagrange interpolation over the non-boolean group-value domains (the existing
+  `indicatorExpr` machinery is boolean-only) — a substantial addition left for later. Parser-provided
+  *input* hints are dropped by substitution passes rather than rewritten under substitution (the
+  benchmark inputs carry none); rewriting them is future work.
 
 ## Adding a pass
 
