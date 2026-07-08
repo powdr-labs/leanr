@@ -10,22 +10,26 @@ variable {p : ℕ}
 /-! ## The optimizers
 
     Three optimizers are available:
-    - `optimizerWithBusFacts facts iters`: This is the most general optimizer. It consumes a `BusFacts` instance
+    - `optimizerWithBusFacts facts`: This is the most general optimizer. It consumes a `BusFacts` instance
       with *proven* properties of the bus semantics.
     - `simpleOptimizer bs`: A specialization with `BusFacts.trivial bs` (no bus knowledge). This is the optimizer for
       a new VM with no proven bus facts. It will likely be less effective than the fact-aware optimizer.
-    - `openVmOptimizer busMap iters`: A specialization for the OpenVM semantics. -/
+    - `openVmOptimizer busMap`: A specialization for the OpenVM semantics.
+
+    None of them takes an iteration count: the cleanup loop (`iterateToFixpoint`) runs until it stops
+    strictly shrinking the lexicographic size key `(vars, bus, constraints)`, provably terminating on
+    that well-founded measure, so it can never be cut off short. -/
 
 /-- Optimizer which does not use any bus facts. Works with any VM, but is less effective. -/
-def simpleOptimizer (bs : BusSemantics p) (iters : Nat := 32) : ConstraintSystem p → ConstraintSystem p :=
-  optimizerWithBusFacts (BusFacts.trivial bs) iters
+def simpleOptimizer (bs : BusSemantics p) : ConstraintSystem p → ConstraintSystem p :=
+  optimizerWithBusFacts (BusFacts.trivial bs)
 
 namespace Leanr.OpenVM
 
 /-- Optimizer specialized for the OpenVM semantics. -/
-def openVmOptimizer (busMap : BusMap := defaultBusMap) (iters : Nat := 32) :
+def openVmOptimizer (busMap : BusMap := defaultBusMap) :
     ConstraintSystem babyBear → ConstraintSystem babyBear :=
-  optimizerWithBusFacts (openVmFacts babyBear busMap) iters
+  optimizerWithBusFacts (openVmFacts babyBear busMap)
 
 end Leanr.OpenVM
 
@@ -33,22 +37,21 @@ end Leanr.OpenVM
 
     In the following theorems, we establish that the optimizers maintain correctness. -/
 
-theorem optimizerWithBusFacts_maintainsCorrectness (bs : BusSemantics p) (facts : BusFacts p bs)
-    (iters : Nat) :
-    optimizerMaintainsCorrectness bs (optimizerWithBusFacts facts iters) :=
-  ⟨fun cs => optimizerWithBusFacts_correct facts iters cs,
-   fun cs => optimizerWithBusFacts_respectsDegree facts iters cs⟩
+theorem optimizerWithBusFacts_maintainsCorrectness (bs : BusSemantics p) (facts : BusFacts p bs) :
+    optimizerMaintainsCorrectness bs (optimizerWithBusFacts facts) :=
+  ⟨fun cs => optimizerWithBusFacts_correct facts cs,
+   fun cs => optimizerWithBusFacts_respectsDegree facts cs⟩
 
-theorem simpleOptimizer_maintainsCorrectness (bs : BusSemantics p) (iters : Nat) :
-    optimizerMaintainsCorrectness bs (simpleOptimizer bs iters) :=
-  optimizerWithBusFacts_maintainsCorrectness bs (BusFacts.trivial bs) iters
+theorem simpleOptimizer_maintainsCorrectness (bs : BusSemantics p) :
+    optimizerMaintainsCorrectness bs (simpleOptimizer bs) :=
+  optimizerWithBusFacts_maintainsCorrectness bs (BusFacts.trivial bs)
 
 namespace Leanr.OpenVM
 
-theorem openVmOptimizer_maintainsCorrectness (busMap : BusMap) (iters : Nat) :
+theorem openVmOptimizer_maintainsCorrectness (busMap : BusMap) :
     optimizerMaintainsCorrectness (openVmBusSemantics babyBear busMap)
-      (openVmOptimizer busMap iters) :=
+      (openVmOptimizer busMap) :=
   optimizerWithBusFacts_maintainsCorrectness (openVmBusSemantics babyBear busMap)
-    (openVmFacts babyBear busMap) iters
+    (openVmFacts babyBear busMap)
 
 end Leanr.OpenVM
