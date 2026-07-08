@@ -274,8 +274,8 @@ def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
 def optimizerMaintainsCorrectness (busSemantics : BusSemantics p)
     (optimizer : ConstraintSystem p → ConstraintSystem p × Derivations p) : Prop :=
   (∀ constraintSystem : ConstraintSystem p,
-    ((optimizer constraintSystem).1.refines constraintSystem busSemantics
-        (optimizer constraintSystem).2) ∧
+    let (optimized, derivations) := optimizer constraintSystem
+    (optimized.refines constraintSystem busSemantics derivations) ∧
     (constraintSystem.guaranteesInvariants busSemantics →
-      (optimizer constraintSystem).1.guaranteesInvariants busSemantics))
+      optimized.guaranteesInvariants busSemantics))
   ∧ optimizerRespectsDegreeBound busSemantics (fun cs => (optimizer cs).1)
