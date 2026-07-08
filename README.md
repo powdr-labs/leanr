@@ -8,7 +8,7 @@ Leanr is designed to have a small auditing surface. The audited files live direc
 [`Leanr/`](./Leanr); everything under [`Leanr/Implementation/`](./Leanr/Implementation) needs **no** audit — its correctness is guaranteed by
 the theorems below and. To audit
 Leanr, it should be sufficient to review:
-1. [`Leanr/Spec.lean`](./Leanr/Spec.lean): Defining the notion of circuit equivalence and optimizer correctness, including the `ComputationMethod`s (the extra `Derivations` output) by which witness generation computes the optimizer's newly-introduced (derived) variables from the input columns (`refines` / `derivesWitness`).
+1. [`Leanr/Spec.lean`](./Leanr/Spec.lean): Defining the notion of circuit equivalence and optimizer correctness.
 2. [`Leanr/OpenVmSemantics.lean`](./Leanr/OpenVmSemantics.lean): The OpenVM-specific semantics. These are needed for our OpenVM-specific optimizations. If you are instead interested in a different VM, you can skip this file, but must provide semantics for your VM in order to use Leanr.
 3. [`Leanr/MemoryBus.lean`](./Leanr/MemoryBus.lean): Utility used in the OpenVM semantics above (and likely useful for other VMs as well).
 4. The correctness theorems in [`Leanr/Optimizer.lean`](./Leanr/Optimizer.lean): `optimizerWithBusFacts_maintainsCorrectness` — the master statement that the optimizer maintains correctness for *any* proven bus facts — together with its two instances, `simpleOptimizer_maintainsCorrectness` (the fact-free optimizer) and `openVmOptimizer_maintainsCorrectness` (the `openVmOptimizer` the CLI actually runs). Audit the statements and check that the proofs are correct by running `lake build`.
