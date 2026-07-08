@@ -1,5 +1,17 @@
 # Ideas for future optimization passes
 
+## Consider dropping `reencode` in favour of `domainFoldPass` alone (entry-47 option B)
+
+`domainFoldPass` (`DomainFold.lean`, log entry 48) is now landed **alongside** `reencode` (option A) —
+effectiveness-neutral but the general, powdr-style mechanism made explicit. The remaining open decision
+is entry-47 **option B**: drop `reencode` and keep only the fold pass. Measured trade-off on the
+apc_005 load/store class: fold-only reaches **1939** vars (keeping all flags, close to powdr's 1808),
+vs **1683** with `reencode` — i.e. option B is more principled / powdr-aligned but gives up the ~13%
+flag binary-compression (512 ternary flags → 256 bits) that currently makes leanr *beat* powdr there.
+Only worth it if the flag-compression edge is judged not worth `reencode`'s complexity/runtime; the fold
+pass would then also want a `bits ≥ vars` / large-group path (groups `reencode` skips) to claw some of
+it back. Left for Georg to decide.
+
 ## Drop never-violating stateless lookups (close the residual pc-lookup bus gap)
 
 After memory/exec send↔receive pair cancellation (log entry 46), leanr is at near-parity with powdr

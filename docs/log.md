@@ -1074,3 +1074,76 @@ pass, powdr 85). Across a sample (apc_001–008; the small cases re-confirmed id
 bus interactions total 5839 → **leanr 1894** (3.08×) vs **powdr 1637** (3.57×), with variables
 unchanged (leanr keeps ≤ powdr's on every sampled case). The remaining leanr-vs-powdr bus gap is the PC lookups (bus 2),
 which powdr removes and leanr keeps (never-violating model) — a separate follow-up (`docs/ideas.md`).
+
+### 47. Investigation (Georg): where does `reencode`'s effectiveness actually come from? (no code change)
+Georg asked why `reencode` drives so much effectiveness when powdr has no such pass, and whether a
+powdr-inspired pass could get there without it. Measured with two binaries (reencode on/off in
+`cleanupCycle`), diffed variable families, and compared against powdr's serialized output.
+
+**Finding 1 — concentrated, not broad.** reencode is *identity* on register-only blocks (apc_003
+133=133, apc_069/056/092/093/007/011/018/032/039/090/091 all byte-identical with/without) and huge on
+load/store-heavy blocks (apc_005/009 **3619 → 1683**, apc_006 1781→889, apc_012 1497→749, apc_020
+1411→818, apc_010 844→480). Over the first 22 cases (a load/store-rich slice) it removes **6826/15624 =
+44% of the vars that survive every other pass** (1.78×), and nearly halves bus interactions
+(10353→5490, via the `busPairCancel` it unblocks).
+
+**Finding 2 — the win is ~87% *indirect*.** On apc_005 the family diff is: `flags` 512 → 0 (replaced by
+256 `rnc` bits) = **−256 direct** binary-compression of the ternary load/store variant selector; and
+`rs1_data` 516→8, the `…lower_decomp` timestamp limbs 770→276, `write/read/prev_data` collapses =
+**≈ −1680 indirect** register/memory chaining. Only the −256 is what reencode is nominally "for".
+
+**Finding 3 — the indirect part is a constant-fold that powdr also does, keeping the flags.** OpenVM's
+memory address is `addressFields = [0,1]` = (space, offset). The destination-register write is
+`[1, 52 − flag_poly, …]` — same address space as the source reads `[1, 40, …]`, offset a degree-2 flag
+polynomial that is **identically 52 on the flags' constrained domain**. `busUnify`/`addrConstsNeq` can
+only prove two accesses differ when *both* offsets are syntactic constants, so the symbolic offset blocks
+chaining the source reads across it. reencode folds `52 − flag_poly → 52` as a *side effect* (entry 37's
+constant emission), which unblocks the chain. **powdr reaches 1808 on apc_005 with all 512 flags intact
+and 20/20 register offsets folded to constants (0 symbolic; heap offsets stay symbolic in both)** — i.e.
+powdr gets the same collapse by ordinary range/domain simplification, no re-encoding.
+
+**Answer.** Yes, a powdr-inspired pass recovers most of it: **domain-constant subexpression folding** —
+over the small enumerable group `reencode`/`domainBatch` already build, replace any subexpression that is
+constant on every domain survivor by that constant, *keeping* the group (no bits). Sound as a pure rewrite
+(`e − c = 0` entailed by the group-local constraints, which must stay in the output to pin the domain —
+so fold in bus interactions / non-covered constraints), env'=env, no derivations; strictly simpler than
+`reencode` and a strict generalization of `domainBatch`/`ConstantFold`. It would recover the ~87% chaining
+collapse (powdr's 1808 is the rough target; leanr's chaining is if anything stronger) but not the ~13%
+flag compression, which is genuinely reencode-only (it's why leanr *beats* powdr here: 1683 < 1808). Full
+proposal + the keep-both-vs-replace decision in `docs/ideas.md`. No optimizer/spec change in this entry.
+
+### 48. Domain-constant subexpression folding (`DomainFold.lean`) — the entry-47 pass, kept alongside `reencode`
+Implemented the entry-47 proposal (Georg chose "keep both"): a new `domainFoldPass`, placed **before**
+`busUnifyPass` in `cleanupCycle`. For each constraint's small variable group (2–8 vars, same targets as
+`reencode`), enumerate the surviving joint values over the group's constraint-derived domains
+(`groupDoms`/`groupSurvivors`, shared with `reencode`) and replace every *maximal wholly-in-group*
+**compound** subexpression that is constant on all survivors by that constant — **keeping** the group's
+variables (no bits, no group substitution). This folds the flag-polynomial memory offsets
+(`52 − flag_poly → 52`) that block `busUnify`'s `addrConstsNeq`, so the register/timestamp chains
+collapse in the *same* cleanup cycle — exactly powdr's range/domain simplification, made explicit.
+
+Correctness is a pure rewrite via `PassCorrect.ofEnvEq` (`env' = env`, no new variables, no derivations):
+the folded subexpression's defining equation `e − c = 0` is entailed by the group's covered constraints,
+which are kept **verbatim** in the output, so any assignment satisfying the output pins the group to a
+survivor under which `foldRewrite` agrees with the identity (`foldRewrite_agree_covered`). Soundness,
+completeness, admissible/side-effect preservation and `out.vars ⊆ cs.vars` all follow from that one
+agreement. Strictly simpler than `reencode` (no witness transport / backward direction); a `systemHasFoldable`
+Bool gate keeps it identity when nothing folds. Folding only lowers degree, so the guard never bites.
+
+`lake build` green; `optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`,
+`openVmOptimizer_maintainsCorrectness` all still `{propext, Classical.choice, Quot.sound}`-only; no
+`sorry`/`admit`/`axiom`/`native_decide` (`check-proof-integrity.sh` passes).
+
+**Measured (apc_005, the 5406-var load/store class).** Isolating the pass by toggling `reencode`:
+- other passes only (no reencode, no fold): **3619** vars, 1801 constr, 1951 bus.
+- **fold only (no reencode): 1939** vars, 1481 constr, **831** bus.
+- reencode only, and fold+reencode (kept config): **1683** vars, 841 constr, 831 bus (byte-identical).
+- powdr: 1808 vars.
+
+So the fold pass **alone** recovers 3619 → 1939 (−1680, the full chaining collapse — bus already down to
+831, matching reencode) and the residual 1939 → 1683 (−256) is exactly the flag compression only
+`reencode` does. This confirms entry 47's 87%/13% split almost to the variable. With **both** passes the
+result is byte-identical to reencode-only on every case sampled (apc_002/003/004/008/010/014/023/025/028/030/069),
+i.e. effectiveness-neutral but more general (and slightly fewer fixpoint cycles: apc_005 62.3 s → 58.4 s).
+The pass stands on its own if `reencode` is ever dropped (entry-47 option B → ~1939 on this class, keeping
+all flags, close to powdr's 1808).
