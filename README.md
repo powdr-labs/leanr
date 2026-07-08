@@ -38,7 +38,7 @@ lake exe leanr powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
 lake exe leanr compare <unopt>.json.gz <unopt>.powdr_opt.json.gz
 ```
 
-The optimizer takes no iteration count. Its cleanup-cycle loop (`iterateToFixpoint`) runs until a cycle no longer strictly shrinks the circuit's lexicographic size key `(distinct variables, bus interactions, algebraic constraints)` — variables most significant, matching the effectiveness priority. That key is well-founded, so the loop is *proven to terminate* with no budget to set and no cap a large basic block could exceed; and it can only ever shrink the circuit (`iterateToFixpoint_monotone`). The benchmark sets live in [`OpenVmBenchmarks/`](./OpenVmBenchmarks/) (see its README); the main one, used for optimization, is the top-100 `openvm-eth` set in [`OpenVmBenchmarks/openvm-eth/`](./OpenVmBenchmarks/openvm-eth/).
+The benchmark sets live in [`OpenVmBenchmarks/`](./OpenVmBenchmarks/) (see its README); the main one, used for optimization, is the top-100 `openvm-eth` set in [`OpenVmBenchmarks/openvm-eth/`](./OpenVmBenchmarks/openvm-eth/).
 
 ## Benchmark
 
