@@ -32,13 +32,6 @@ variable {p : ℕ}
 
 /-! ## Collecting variables -/
 
-/-- All variable names occurring in an expression (with multiplicity / duplicates). -/
-def Expression.vars : Expression p → List Variable
-  | .const _ => []
-  | .var x => [x]
-  | .add a b => a.vars ++ b.vars
-  | .mul a b => a.vars ++ b.vars
-
 /-- All variable names occurring in a bus interaction (multiplicity and payload). -/
 def BusInteraction.vars (bi : BusInteraction (Expression p)) : List Variable :=
   bi.multiplicity.vars ++ bi.payload.flatMap Expression.vars

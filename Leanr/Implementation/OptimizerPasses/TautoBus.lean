@@ -104,7 +104,7 @@ theorem ConstraintSystem.filterBusStateless_correct (cs : ConstraintSystem p)
       bs.isStateful bi.busId = false)
     (hok : ∀ bi ∈ cs.busInteractions, keep bi = false → ∀ env,
       bs.violatesConstraint (bi.eval env) = false) :
-    PassCorrect cs (cs.filterBus keep) bs := by
+    PassCorrect cs (cs.filterBus keep) [] bs := by
   have hiff : ∀ env, (cs.filterBus keep).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     simp only [ConstraintSystem.satisfies]
@@ -141,18 +141,18 @@ theorem ConstraintSystem.filterBusStateless_correct (cs : ConstraintSystem p)
     intro env
     simp only [ConstraintSystem.sideEffects, ConstraintSystem.filterBus]
     rw [hfilter cs.busInteractions hstateless]
-  refine ⟨⟨?_, ?_⟩, ?_⟩
+  refine PassCorrect.ofEnvEq ?_ ?_ (cs.filterBus_vars_subset keep) ?_
   · intro env hsat
     exact ⟨env, (hiff env).1 hsat, by rw [hside]; exact BusState.equiv_refl _⟩
-  · intro env hint hsat
-    exact ⟨env, (hiff env).2 hsat,
-      (cs.admissible_filterBus bs keep env
-        (fun bi hbi hkf => Or.inr (hstateless bi hbi hkf))).2 hint,
-      by rw [hside]; exact BusState.equiv_refl _⟩
   · intro hinv env hsat bi hbi
     have hbimem : bi ∈ cs.busInteractions :=
       (List.mem_filter.1 (by simpa only [ConstraintSystem.filterBus] using hbi)).1
     exact hinv env ((hiff env).1 hsat) bi hbimem
+  · intro env hadm hsat
+    exact ⟨(hiff env).2 hsat,
+      (cs.admissible_filterBus bs keep env
+        (fun bi hbi hkf => Or.inr (hstateless bi hbi hkf))).2 hadm,
+      by rw [hside]; exact BusState.equiv_refl _⟩
 
 /-! ## The pass -/
 
@@ -166,7 +166,7 @@ def isTautoLookup (bs : BusSemantics p) (bi : BusInteraction (Expression p)) : B
 /-- The tautology-lookup removal pass: drop stateless interactions whose constant message is
     accepted by the bus's table. -/
 def tautoBusDropPass : VerifiedPass p := fun cs bs =>
-  ⟨cs.filterBus (fun bi => !isTautoLookup bs bi),
+  ⟨cs.filterBus (fun bi => !isTautoLookup bs bi), [],
    cs.filterBusStateless_correct bs _
      (by
        intro bi _ hkf

@@ -139,27 +139,66 @@ theorem ConstraintSystem.sideEffects_subst (cs : ConstraintSystem p) (x : Variab
       · simp only [if_pos hstate, List.map_cons, ih, BusInteraction.eval_subst]
       · simp only [if_neg hstate, ih]
 
-/-- **Substitution correctness.** If every satisfying assignment of `cs` forces `x = t`, then
-    substituting `x := t` everywhere produces a `PassCorrect` system: equivalent to `cs` and
-    invariant-preserving. This is the workhorse behind all variable-elimination passes. -/
+/-- Substitution introduces no variable outside `e` and `t`. -/
+theorem Expression.subst_vars (e : Expression p) (x : Variable) (t : Expression p) :
+    ∀ z ∈ (e.subst x t).vars, z ∈ e.vars ∨ z ∈ t.vars := by
+  induction e with
+  | const n => intro z hz; simp [Expression.subst, Expression.vars] at hz
+  | var y =>
+      intro z hz
+      simp only [Expression.subst] at hz
+      by_cases h : y = x
+      · rw [if_pos h] at hz; exact Or.inr hz
+      · rw [if_neg h] at hz; exact Or.inl hz
+  | add a b iha ihb =>
+      intro z hz
+      simp only [Expression.subst, Expression.vars, List.mem_append] at hz
+      rcases hz with hz | hz
+      · exact (iha z hz).imp (List.mem_append.2 <| Or.inl ·) id
+      · exact (ihb z hz).imp (List.mem_append.2 <| Or.inr ·) id
+  | mul a b iha ihb =>
+      intro z hz
+      simp only [Expression.subst, Expression.vars, List.mem_append] at hz
+      rcases hz with hz | hz
+      · exact (iha z hz).imp (List.mem_append.2 <| Or.inl ·) id
+      · exact (ihb z hz).imp (List.mem_append.2 <| Or.inr ·) id
+
+/-- If `t`'s variables are all in `cs`, substitution introduces no new variable. -/
+theorem ConstraintSystem.subst_vars_subset (cs : ConstraintSystem p) (x : Variable)
+    (t : Expression p) (htv : ∀ y ∈ t.vars, y ∈ cs.vars) :
+    ∀ z ∈ (cs.subst x t).vars, z ∈ cs.vars := by
+  intro z hz
+  rw [ConstraintSystem.mem_vars] at hz
+  rcases hz with ⟨c, hc, hzc⟩ | ⟨bi, hbi, hzbi⟩
+  · simp only [ConstraintSystem.subst, List.mem_map] at hc
+    obtain ⟨c0, hc0, rfl⟩ := hc
+    exact (Expression.subst_vars c0 x t z hzc).elim
+      (ConstraintSystem.mem_vars_of_constraint hc0) (htv z)
+  · simp only [ConstraintSystem.subst, List.mem_map] at hbi
+    obtain ⟨bi0, hbi0, rfl⟩ := hbi
+    rcases hzbi with hm | ⟨e, he, hze⟩
+    · simp only [BusInteraction.subst] at hm
+      exact (Expression.subst_vars bi0.multiplicity x t z hm).elim
+        (ConstraintSystem.mem_vars_of_mult hbi0) (htv z)
+    · simp only [BusInteraction.subst, List.mem_map] at he
+      obtain ⟨e0, he0, rfl⟩ := he
+      exact (Expression.subst_vars e0 x t z hze).elim
+        (ConstraintSystem.mem_vars_of_payload hbi0 he0) (htv z)
+
+/-- **Substitution correctness.** If every satisfying assignment of `cs` forces `x = t` and `t`
+    mentions only `cs`'s variables, then substituting `x := t` everywhere produces a `PassCorrect`
+    system: equivalent to `cs`, invariant-preserving, and introducing no new column. This is the
+    workhorse behind all variable-elimination passes. -/
 theorem ConstraintSystem.subst_correct (cs : ConstraintSystem p) (x : Variable) (t : Expression p)
-    (bs : BusSemantics p) (H : ∀ env, cs.satisfies bs env → env x = t.eval env) :
-    PassCorrect cs (cs.subst x t) bs := by
-  refine ⟨⟨?_, ?_⟩, ?_⟩
+    (bs : BusSemantics p) (H : ∀ env, cs.satisfies bs env → env x = t.eval env)
+    (htv : ∀ y ∈ t.vars, y ∈ cs.vars) :
+    PassCorrect cs (cs.subst x t) [] bs := by
+  refine PassCorrect.ofEnvEq ?_ ?_ (cs.subst_vars_subset x t htv) ?_
   · -- soundness: (cs.subst x t) implies cs
     intro env hsat
     refine ⟨Function.update env x (t.eval env), (cs.satisfies_subst x t bs env).1 hsat, ?_⟩
     rw [cs.sideEffects_subst]
     exact BusState.equiv_refl _
-  · -- completeness: cs intended-implies (cs.subst x t)
-    intro env hint hsat
-    have hx : env x = t.eval env := H env hsat
-    have hupd : Function.update env x (t.eval env) = env := by
-      rw [← hx]; exact Function.update_eq_self x env
-    refine ⟨env, ?_, ?_, ?_⟩
-    · rw [cs.satisfies_subst, hupd]; exact hsat
-    · rw [cs.admissible_subst, hupd]; exact hint
-    · rw [cs.sideEffects_subst, hupd]; exact BusState.equiv_refl _
   · -- invariant preservation
     intro hinv env hsat bi hbi
     have hsatcs : cs.satisfies bs (Function.update env x (t.eval env)) :=
@@ -168,6 +207,15 @@ theorem ConstraintSystem.subst_correct (cs : ConstraintSystem p) (x : Variable) 
     obtain ⟨bi0, hbi0, rfl⟩ := hbi
     simp only [bi0.eval_subst x t env]
     exact hinv (Function.update env x (t.eval env)) hsatcs bi0 hbi0
+  · -- completeness: cs intended-implies (cs.subst x t), witness `env`
+    intro env hadm hsat
+    have hx : env x = t.eval env := H env hsat
+    have hupd : Function.update env x (t.eval env) = env := by
+      rw [← hx]; exact Function.update_eq_self x env
+    refine ⟨?_, ?_, ?_⟩
+    · rw [cs.satisfies_subst, hupd]; exact hsat
+    · rw [cs.admissible_subst, hupd]; exact hadm
+    · rw [cs.sideEffects_subst, hupd]; exact BusState.equiv_refl _
 
 /-! ## Building substitution passes from a constraint solver
 
@@ -184,14 +232,17 @@ and its soundness lemma. -/
     entails `x = t`. -/
 def substFromConstraint (solve : Expression p → Option (Variable × Expression p))
     (hsolve : ∀ (c : Expression p) (x : Variable) (t : Expression p), solve c = some (x, t) →
-      ∀ env, c.eval env = 0 → env x = t.eval env) :
+      ∀ env, c.eval env = 0 → env x = t.eval env)
+    (hsolveV : ∀ (c : Expression p) (x : Variable) (t : Expression p), solve c = some (x, t) →
+      ∀ y ∈ t.vars, y ∈ c.vars) :
     VerifiedPass p := fun cs bs =>
   match hfound : cs.algebraicConstraints.find? (fun c => (solve c).isSome) with
-  | none => ⟨cs, cs.refines_refl bs, _root_.id⟩
+  | none => ⟨cs, [], PassCorrect.refl cs bs⟩
   | some c =>
       have hmem : c ∈ cs.algebraicConstraints := List.mem_of_find?_eq_some hfound
       match hc : solve c with
       | some (x, t) =>
-          ⟨cs.subst x t, cs.subst_correct x t bs
-            (fun env hsat => hsolve c x t hc env (hsat.1 c hmem))⟩
+          ⟨cs.subst x t, [], cs.subst_correct x t bs
+            (fun env hsat => hsolve c x t hc env (hsat.1 c hmem))
+            (fun y hy => ConstraintSystem.mem_vars_of_constraint hmem (hsolveV c x t hc y hy))⟩
       | none => by have hsome := List.find?_some hfound; simp [hc] at hsome

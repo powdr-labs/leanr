@@ -16,25 +16,22 @@ variable {p : ℕ}
 
 /-- A proof-carrying pass that may consult proven facts about the bus semantics. -/
 abbrev VerifiedPassW (p : ℕ) :=
-  (cs : ConstraintSystem p) → (bs : BusSemantics p) → (facts : BusFacts p bs) →
-    { out : ConstraintSystem p // PassCorrect cs out bs }
+  (cs : ConstraintSystem p) → (bs : BusSemantics p) → (facts : BusFacts p bs) → PassResult cs bs
 
 /-- Any fact-free pass is a fact-aware pass that ignores the facts. -/
 def VerifiedPass.withFacts (f : VerifiedPass p) : VerifiedPassW p :=
   fun cs bs _ => f cs bs
 
-/-- Sequential composition (same proof shape as `VerifiedPass.andThen`). -/
+/-- Sequential composition (same proof shape as `VerifiedPass.andThen`): derivations concatenate. -/
 def VerifiedPassW.andThen (f g : VerifiedPassW p) : VerifiedPassW p :=
   fun cs bs facts =>
     let r1 := f cs bs facts
-    let r2 := g r1.val bs facts
-    ⟨r2.val,
-     ConstraintSystem.refines_trans r2.property.1 r1.property.1,
-     fun h => r2.property.2 (r1.property.2 h)⟩
+    let r2 := g r1.out bs facts
+    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
 
 /-- Iterate a fact-aware pass `n` times. -/
 def VerifiedPassW.iterate (f : VerifiedPassW p) : Nat → VerifiedPassW p
-  | 0 => fun cs bs _ => ⟨cs, cs.refines_refl bs, _root_.id⟩
+  | 0 => fun cs bs _ => ⟨cs, [], PassCorrect.refl cs bs⟩
   | n + 1 => (f.iterate n).andThen f
 
 deriving instance DecidableEq for Expression
@@ -50,7 +47,8 @@ significant — exactly the optimizer's effectiveness priority. Each cleanup cyc
 lowers this key (so we recurse) or does not (so we stop, keeping the pre-cycle system). The
 recursion is guarded by precisely the strict-decrease it needs, so `decreasing_by` is immediate and
 no `iters` parameter is required. As a bonus the loop is size-monotone by construction: its output
-never has a larger key than its input (`iterateToFixpoint_monotone`).
+never has a larger key than its input (`iterateToFixpoint_monotone`). Derivations accumulate across
+the kept steps exactly as in `andThen`.
 
 The distinct-variable count uses a `HashSet` (not `ConstraintSystem.size`'s `dedup`, which is
 quadratic) so the per-cycle measure stays cheap on large circuits. -/
@@ -71,18 +69,16 @@ def ConstraintSystem.sizeKey (cs : ConstraintSystem p) : Nat ×ₗ Nat ×ₗ Nat
 /-- Iterate a fact-aware pass to a fixpoint, with **no** iteration budget: apply `f`; if the result
     is strictly smaller (lexicographically in `sizeKey`), recurse from it; otherwise stop and return
     the input unchanged. Terminates because every recursive step strictly decreases the well-founded
-    `sizeKey`. Correct by construction (each kept step is `PassCorrect`; stopping returns the input,
-    correct by reflexivity). -/
+    `sizeKey`. Correct by construction (each kept step is `PassCorrect`, derivations concatenating;
+    stopping returns the input, correct by reflexivity). -/
 def iterateToFixpoint (f : VerifiedPassW p) (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) : { out : ConstraintSystem p // PassCorrect cs out bs } :=
+    (facts : BusFacts p bs) : PassResult cs bs :=
   let r := f cs bs facts
-  if _h : r.val.sizeKey < cs.sizeKey then
-    let r2 := iterateToFixpoint f r.val bs facts
-    ⟨r2.val,
-     ConstraintSystem.refines_trans r2.property.1 r.property.1,
-     fun hg => r2.property.2 (r.property.2 hg)⟩
+  if _h : r.out.sizeKey < cs.sizeKey then
+    let r2 := iterateToFixpoint f r.out bs facts
+    ⟨r2.out, r.derivs ++ r2.derivs, r.correct.andThen r2.correct⟩
   else
-    ⟨cs, cs.refines_refl bs, _root_.id⟩
+    ⟨cs, [], PassCorrect.refl cs bs⟩
   termination_by cs.sizeKey
   decreasing_by exact _h
 
@@ -96,19 +92,19 @@ composition and iteration. -/
 /-- A pass never pushes a within-bound system past the semantics' degree bound. -/
 def RespectsDeg (f : VerifiedPassW p) : Prop :=
   ∀ (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs),
-    cs.withinDegree bs.degreeBound → (f cs bs facts).val.withinDegree bs.degreeBound
+    cs.withinDegree bs.degreeBound → (f cs bs facts).out.withinDegree bs.degreeBound
 
 /-- Wrap a pass with a degree guard: if the output would exceed the bound, keep the input. -/
 def VerifiedPassW.guardDegree (f : VerifiedPassW p) : VerifiedPassW p :=
   fun cs bs facts =>
     let r := f cs bs facts
-    if r.val.withinDegreeB bs.degreeBound then r
-    else ⟨cs, cs.refines_refl bs, _root_.id⟩
+    if r.out.withinDegreeB bs.degreeBound then r
+    else ⟨cs, [], PassCorrect.refl cs bs⟩
 
 theorem VerifiedPassW.guardDegree_respectsDeg (f : VerifiedPassW p) :
     RespectsDeg f.guardDegree := by
   intro cs bs facts h
-  by_cases hok : (f cs bs facts).val.withinDegreeB bs.degreeBound = true
+  by_cases hok : (f cs bs facts).out.withinDegreeB bs.degreeBound = true
   · simp only [VerifiedPassW.guardDegree, hok, if_true]
     exact (ConstraintSystem.withinDegreeB_iff _ _).1 hok
   · simp only [VerifiedPassW.guardDegree, hok]
@@ -150,7 +146,7 @@ theorem iterateToFixpoint_respectsDeg {f : VerifiedPassW p} (hf : RespectsDeg f)
     input: every recursive step strictly lowers the key, and the stopping case returns the input. -/
 theorem iterateToFixpoint_monotone {f : VerifiedPassW p}
     (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs) :
-    (iterateToFixpoint f cs bs facts).val.sizeKey ≤ cs.sizeKey := by
+    (iterateToFixpoint f cs bs facts).out.sizeKey ≤ cs.sizeKey := by
   induction cs using sizeKey_wf.induction with
   | _ cs ih =>
     rw [iterateToFixpoint]

@@ -310,7 +310,11 @@ def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p}
           (by
             intro env hsat yt hyt
             obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hyt
-            exact f.2.property env hsat))
+            exact f.2.property env hsat)
+          (by
+            intro yt hyt z hz
+            obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hyt
+            simp [Expression.vars] at hz))
 
 /-! ## The pass -/
 
@@ -327,7 +331,8 @@ def domainBatchPass : VerifiedPassW p := fun cs bs facts =>
     let targets := cs.algebraicConstraints.map (fun e => e.vars.dedup) ++
       cs.busInteractions.map (fun bi => bi.vars.dedup)
     let σ := collectForced T targets ∅ Solved.empty
-    if σ.map.isEmpty then ⟨cs, cs.refines_refl bs, _root_.id⟩
-    else ⟨cs.substF σ.fn,
-      cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)⟩
-  else ⟨cs, cs.refines_refl bs, _root_.id⟩
+    if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
+    else ⟨cs.substF σ.fn, [],
+      cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)
+        (fun y t hyt => σ.varsIn y t hyt)⟩
+  else ⟨cs, [], PassCorrect.refl cs bs⟩

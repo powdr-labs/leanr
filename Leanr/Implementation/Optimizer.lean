@@ -81,30 +81,31 @@ theorem pipeline_respectsDeg : RespectsDeg (pipeline (p := p)) := by
   · exact VerifiedPassW.guardDegree_respectsDeg _
   · exact VerifiedPassW.guardDegree_respectsDeg _
 
-/-- The fact-aware circuit optimizer, as a circuit-to-circuit map: given proven `BusFacts` about a
-    bus semantics (which fixes the implicit `bs`), run the pipeline and project out the resulting
-    constraint system. The cleanup loop (`iterateToFixpoint`) takes no iteration count: it runs the
-    cleanup cycle until it stops strictly shrinking the lexicographic size key `(vars, bus,
-    constraints)`, provably terminating on that well-founded measure — no budget to set, and no cap a
-    large basic block could exceed. -/
+/-- The fact-aware circuit optimizer: given proven `BusFacts` about a bus semantics (which fixes the
+    implicit `bs`), run the pipeline and return the resulting constraint system together with the
+    `Derivations` for its newly-introduced variables. The cleanup loop (`iterateToFixpoint`) takes no
+    iteration count: it runs the cleanup cycle until it stops strictly shrinking the lexicographic
+    size key `(vars, bus, constraints)`, provably terminating on that well-founded measure — no
+    budget to set, and no cap a large basic block could exceed. -/
 def optimizerWithBusFacts {bs : BusSemantics p} (facts : BusFacts p bs)
-    (cs : ConstraintSystem p) : ConstraintSystem p :=
-  (pipeline cs bs facts).val
+    (cs : ConstraintSystem p) : ConstraintSystem p × Derivations p :=
+  let r := pipeline cs bs facts
+  (r.out, r.derivs)
 
 /-- The fact-aware optimizer is correct: its output `refines` its input (sound, and complete for
-    the input's intended executions) and preserves invariants — the same two clauses
-    `optimizerMaintainsCorrectness` demands, stated per instance because nontrivial facts are tied
-    to one semantics. -/
+    the input's intended executions with the returned witness-reconstruction data) and preserves
+    invariants — the same clauses `optimizerMaintainsCorrectness` demands, stated per instance
+    because nontrivial facts are tied to one semantics. -/
 theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p bs)
     (cs : ConstraintSystem p) :
-    ((optimizerWithBusFacts facts cs).refines cs bs) ∧
-      (cs.guaranteesInvariants bs → (optimizerWithBusFacts facts cs).guaranteesInvariants bs) :=
-  (pipeline cs bs facts).property
+    ((optimizerWithBusFacts facts cs).1.refines cs bs (optimizerWithBusFacts facts cs).2) ∧
+      (cs.guaranteesInvariants bs → (optimizerWithBusFacts facts cs).1.guaranteesInvariants bs) :=
+  ⟨(pipeline cs bs facts).correct.toRefines, (pipeline cs bs facts).correct.2.1⟩
 
 /-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree
     bound (every pass is degree-guarded). -/
 theorem optimizerWithBusFacts_respectsDegree {bs : BusSemantics p} (facts : BusFacts p bs)
     (cs : ConstraintSystem p)
     (h : cs.withinDegree bs.degreeBound) :
-    (optimizerWithBusFacts facts cs).withinDegree bs.degreeBound :=
+    (optimizerWithBusFacts facts cs).1.withinDegree bs.degreeBound :=
   pipeline_respectsDeg cs bs facts h

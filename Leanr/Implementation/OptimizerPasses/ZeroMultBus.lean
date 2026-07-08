@@ -21,9 +21,9 @@ variable {p : ℕ}
     `0`. Correct via `filterBus_correct`, discharging the multiplicity-is-zero obligation through
     `fold_eval` and `isConstZero_sound`. -/
 def zeroMultBusDropPass : VerifiedPass p := fun cs bs =>
-  if hp1 : (1 : ZMod p) = 0 then ⟨cs, cs.refines_refl bs, _root_.id⟩
+  if hp1 : (1 : ZMod p) = 0 then ⟨cs, [], PassCorrect.refl cs bs⟩
   else
-    ⟨cs.filterBus (fun bi => !bi.multiplicity.fold.isConstZero),
+    ⟨cs.filterBus (fun bi => !bi.multiplicity.fold.isConstZero), [],
      cs.filterBus_correct bs (fun bi => !bi.multiplicity.fold.isConstZero) hp1 (by
        intro bi _ hkf env
        have hz : bi.multiplicity.fold.isConstZero = true := by simpa using hkf

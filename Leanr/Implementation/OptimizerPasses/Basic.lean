@@ -54,34 +54,6 @@ theorem ConstraintSystem.implies_trans {a b c : ConstraintSystem p} {busSemantic
     let ⟨env'', hc, hbc⟩ := h2 env' hb
     ⟨env'', hc, BusState.equiv_trans hab hbc⟩
 
-/-- Any constraint system admissibly-implies itself: the same admissible assignment works. -/
-theorem ConstraintSystem.impliesAdmissible_refl (cs : ConstraintSystem p)
-    (busSemantics : BusSemantics p) : cs.impliesAdmissible cs busSemantics :=
-  fun env hadm hsat => ⟨env, hsat, hadm, BusState.equiv_refl _⟩
-
-/-- `impliesAdmissible` is transitive: chain the admissible witnesses and the side-effect
-    equalities. The middle witness is admissible (delivered by the first step), so the second
-    step applies. -/
-theorem ConstraintSystem.impliesAdmissible_trans {a b c : ConstraintSystem p}
-    {busSemantics : BusSemantics p} (h1 : a.impliesAdmissible b busSemantics)
-    (h2 : b.impliesAdmissible c busSemantics) : a.impliesAdmissible c busSemantics :=
-  fun env hadm hsat =>
-    let ⟨env', hb, hbadm, hab⟩ := h1 env hadm hsat
-    let ⟨env'', hc, hcadm, hbc⟩ := h2 env' hbadm hb
-    ⟨env'', hc, hcadm, BusState.equiv_trans hab hbc⟩
-
-/-- Any constraint system refines itself. -/
-theorem ConstraintSystem.refines_refl (cs : ConstraintSystem p) (busSemantics : BusSemantics p) :
-    cs.refines cs busSemantics :=
-  ⟨cs.implies_refl busSemantics, cs.impliesAdmissible_refl busSemantics⟩
-
-/-- `refines` is transitive: soundness chains through `implies_trans`, completeness through
-    `impliesAdmissible_trans`. (It is *not* symmetric — see `ConstraintSystem.refines`.) -/
-theorem ConstraintSystem.refines_trans {a b c : ConstraintSystem p} {busSemantics : BusSemantics p}
-    (h1 : a.refines b busSemantics) (h2 : b.refines c busSemantics) :
-    a.refines c busSemantics :=
-  ⟨ConstraintSystem.implies_trans h1.1 h2.1, ConstraintSystem.impliesAdmissible_trans h2.2 h1.2⟩
-
 /-! ## Verified passes
 
 A single optimization step, packaged with its correctness proof. `VerifiedPass` is a function
@@ -91,40 +63,107 @@ proof is part of the return value, there is no separate theorem to weaken: a pas
 be written down without discharging its obligations.
 
 Passes compose with `VerifiedPass.andThen` (run one, then the next), which threads the two proofs
-through `refines_trans` and the composition of invariant-preservation.
+through `PassCorrect.andThen` (soundness via `implies_trans`, reconstruction by concatenating
+derivations) and the composition of invariant-preservation.
 
 **To add an optimization:** create a `VerifiedPass` for it in a new file under
 `Leanr/Implementation/OptimizerPasses/`, then `.andThen` it into `pipeline` in
 `Leanr/Implementation/Optimizer.lean`. Prove `PassCorrect` for your transformation; do not change
 `Spec.lean` or the glue above. -/
 
-/-- The per-pass correctness obligation: `out` `refines` the input `cs` (sound, and complete for
-    `cs`'s intended executions), and if `cs` guarantees the system's invariants then so does
-    `out`. This is exactly the two-part contract of `optimizerMaintainsCorrectness`, stated for a
-    single step. -/
-def PassCorrect (cs out : ConstraintSystem p) (busSemantics : BusSemantics p) : Prop :=
-  out.refines cs busSemantics ∧
-    (cs.guaranteesInvariants busSemantics → out.guaranteesInvariants busSemantics)
+/-- The per-pass correctness obligation. `out` is sound (`implies cs`), preserves invariants, adds
+    no new powdr-ID column, and satisfies the completeness direction: every admissible satisfying
+    assignment of `cs` extends to one of `out` with equal side effects that keeps every input-column
+    value and reconstructs `out`'s derived variables from the input columns. `dsLocal` are the
+    derivations this step introduces; reconstruction is threaded through any incoming `dsIn`, so
+    passes compose simply by concatenating derivations. -/
+def PassCorrect (cs out : ConstraintSystem p) (dsLocal : Derivations p) (bs : BusSemantics p) :
+    Prop :=
+  out.implies cs bs ∧
+  (cs.guaranteesInvariants bs → out.guaranteesInvariants bs) ∧
+  (∀ v ∈ out.vars, v.powdrId?.isSome → v ∈ cs.vars) ∧
+  (∀ env, cs.admissible bs env → cs.satisfies bs env →
+    ∃ env', out.satisfies bs env' ∧ out.admissible bs env' ∧
+      cs.sideEffects bs env ≈ out.sideEffects bs env' ∧
+      (∀ v, v.powdrId?.isSome → env' v = env v) ∧
+      (∀ dsIn, cs.reconstructs dsIn env → out.reconstructs (dsIn ++ dsLocal) env'))
 
-/-- A proof-carrying optimization pass: maps a constraint system to a new one, bundled with a
-    proof that the step is correct (`PassCorrect`). -/
+/-- Reflexivity: the unchanged system with no new derivations is correct. -/
+theorem PassCorrect.refl (cs : ConstraintSystem p) (bs : BusSemantics p) :
+    PassCorrect cs cs [] bs :=
+  ⟨cs.implies_refl bs, _root_.id, fun _ hv _ => hv,
+   fun env hadm hsat =>
+     ⟨env, hsat, hadm, BusState.equiv_refl _, fun _ _ => rfl,
+      fun dsIn hrec => by rwa [List.append_nil]⟩⟩
+
+/-- Sequential composition: derivations concatenate, soundness/invariants compose, and the threaded
+    reconstruction chains (`dsIn ↦ dsIn ++ df ↦ (dsIn ++ df) ++ dg = dsIn ++ (df ++ dg)`). -/
+theorem PassCorrect.andThen {cs mid out : ConstraintSystem p} {bs : BusSemantics p}
+    {df dg : Derivations p} (hf : PassCorrect cs mid df bs) (hg : PassCorrect mid out dg bs) :
+    PassCorrect cs out (df ++ dg) bs := by
+  obtain ⟨hf1, hf2, hf3, hf4⟩ := hf
+  obtain ⟨hg1, hg2, hg3, hg4⟩ := hg
+  refine ⟨ConstraintSystem.implies_trans hg1 hf1, fun h => hg2 (hf2 h),
+    fun v hv hpw => hf3 v (hg3 v hv hpw) hpw, fun env hadm hsat => ?_⟩
+  obtain ⟨env1, hs1, ha1, he1, hpw1, hr1⟩ := hf4 env hadm hsat
+  obtain ⟨env2, hs2, ha2, he2, hpw2, hr2⟩ := hg4 env1 ha1 hs1
+  refine ⟨env2, hs2, ha2, BusState.equiv_trans he1 he2,
+    fun v hpw => by rw [hpw2 v hpw, hpw1 v hpw], fun dsIn hrec => ?_⟩
+  have := hr2 (dsIn ++ df) (hr1 dsIn hrec)
+  rwa [List.append_assoc] at this
+
+/-- Build `PassCorrect` for a pass whose completeness witness is the input assignment itself and
+    which introduces no new variables (`out.vars ⊆ cs.vars`) — the shape of every pass except the
+    column-introducing re-encoder. It emits no derivations. -/
+theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
+    (hsound : out.implies cs bs)
+    (hinv : cs.guaranteesInvariants bs → out.guaranteesInvariants bs)
+    (hsub : ∀ v ∈ out.vars, v ∈ cs.vars)
+    (hcomp : ∀ env, cs.admissible bs env → cs.satisfies bs env →
+      out.satisfies bs env ∧ out.admissible bs env ∧
+        cs.sideEffects bs env ≈ out.sideEffects bs env) :
+    PassCorrect cs out [] bs := by
+  refine ⟨hsound, hinv, fun v hv _ => hsub v hv, fun env hadm hsat => ?_⟩
+  obtain ⟨ho1, ho2, ho3⟩ := hcomp env hadm hsat
+  refine ⟨env, ho1, ho2, ho3, fun _ _ => rfl, fun dsIn hrec => ?_⟩
+  rw [List.append_nil]
+  exact fun v hvout hvnone => hrec v (hsub v hvout) hvnone
+
+/-- Bridge to the audited spec: a threaded `PassCorrect` (with incoming derivations `[]`) gives the
+    spec's `refines` — soundness, plus completeness whose witness `derivesWitness` (when the input's
+    columns all carry powdr IDs, so it has no unaccounted derived variables). -/
+theorem PassCorrect.toRefines {cs out : ConstraintSystem p} {ds : Derivations p}
+    {bs : BusSemantics p} (h : PassCorrect cs out ds bs) : out.refines cs bs ds := by
+  obtain ⟨himpl, _hinv, hS, hcomp⟩ := h
+  refine ⟨himpl, fun env hadm hsat => ?_⟩
+  obtain ⟨env', hsat', hadm', hse, hA, hR⟩ := hcomp env hadm hsat
+  refine ⟨env', hsat', hadm', hse, fun hpow => ⟨fun v hvout hvpow => ⟨hS v hvout hvpow, hA v hvpow⟩, ?_⟩⟩
+  have hrec0 : cs.reconstructs [] env :=
+    fun v hv hvnone => absurd (hpow v hv) (by simp [hvnone])
+  simpa using hR [] hrec0
+
+/-- The result of a verified pass: the transformed system, the derivations it introduces, and the
+    correctness proof. -/
+structure PassResult {p : ℕ} (cs : ConstraintSystem p) (bs : BusSemantics p) where
+  out : ConstraintSystem p
+  derivs : Derivations p
+  correct : PassCorrect cs out derivs bs
+
+/-- A proof-carrying optimization pass: maps a constraint system to a new one and the derivations it
+    introduces, bundled with a `PassCorrect` proof. -/
 abbrev VerifiedPass (p : ℕ) :=
-  (cs : ConstraintSystem p) → (busSemantics : BusSemantics p) →
-    { out : ConstraintSystem p // PassCorrect cs out busSemantics }
+  (cs : ConstraintSystem p) → (bs : BusSemantics p) → PassResult cs bs
 
 /-- The identity pass: returns the system unchanged, correct by reflexivity. -/
 def VerifiedPass.id : VerifiedPass p :=
-  fun cs busSemantics => ⟨cs, cs.refines_refl busSemantics, _root_.id⟩
+  fun cs bs => ⟨cs, [], PassCorrect.refl cs bs⟩
 
-/-- Sequential composition: run `f`, then run `g` on its output. The result is correct by
-    transitivity of `refines` and composition of the invariant-preservation implications. -/
+/-- Sequential composition: run `f`, then run `g` on its output; concatenate derivations. -/
 def VerifiedPass.andThen (f g : VerifiedPass p) : VerifiedPass p :=
-  fun cs busSemantics =>
-    let r1 := f cs busSemantics
-    let r2 := g r1.val busSemantics
-    ⟨r2.val,
-     ConstraintSystem.refines_trans r2.property.1 r1.property.1,
-     fun h => r2.property.2 (r1.property.2 h)⟩
+  fun cs bs =>
+    let r1 := f cs bs
+    let r2 := g r1.out bs
+    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
 
 /-- Iterate a pass `n` times. Used to run local, one-step passes (e.g. "substitute one variable")
     to a fixpoint: each application is a `VerifiedPass`, so the composite is correct by construction.
@@ -132,6 +171,33 @@ def VerifiedPass.andThen (f g : VerifiedPass p) : VerifiedPass p :=
 def VerifiedPass.iterate (f : VerifiedPass p) : Nat → VerifiedPass p
   | 0 => VerifiedPass.id
   | n + 1 => (f.iterate n).andThen f
+
+/-! ## Variable-set membership
+
+Helpers for discharging the `out.vars ⊆ cs.vars` obligation of `PassCorrect.ofEnvEq`: a variable of
+a sub-expression is a variable of the whole system, and vice versa. -/
+
+/-- Membership in `cs.vars`: a variable occurs in some constraint, some multiplicity, or some
+    payload expression. -/
+theorem ConstraintSystem.mem_vars {cs : ConstraintSystem p} {x : Variable} :
+    x ∈ cs.vars ↔
+      (∃ c ∈ cs.algebraicConstraints, x ∈ c.vars) ∨
+      (∃ bi ∈ cs.busInteractions, x ∈ bi.multiplicity.vars ∨ ∃ e ∈ bi.payload, x ∈ e.vars) := by
+  simp only [ConstraintSystem.vars, List.mem_append, List.mem_flatMap]
+
+theorem ConstraintSystem.mem_vars_of_constraint {cs : ConstraintSystem p} {c : Expression p}
+    {x : Variable} (hc : c ∈ cs.algebraicConstraints) (hx : x ∈ c.vars) : x ∈ cs.vars :=
+  ConstraintSystem.mem_vars.2 (Or.inl ⟨c, hc, hx⟩)
+
+theorem ConstraintSystem.mem_vars_of_mult {cs : ConstraintSystem p}
+    {bi : BusInteraction (Expression p)} {x : Variable} (hbi : bi ∈ cs.busInteractions)
+    (hx : x ∈ bi.multiplicity.vars) : x ∈ cs.vars :=
+  ConstraintSystem.mem_vars.2 (Or.inr ⟨bi, hbi, Or.inl hx⟩)
+
+theorem ConstraintSystem.mem_vars_of_payload {cs : ConstraintSystem p}
+    {bi : BusInteraction (Expression p)} {e : Expression p} {x : Variable}
+    (hbi : bi ∈ cs.busInteractions) (he : e ∈ bi.payload) (hx : x ∈ e.vars) : x ∈ cs.vars :=
+  ConstraintSystem.mem_vars.2 (Or.inr ⟨bi, hbi, Or.inr ⟨e, he, hx⟩⟩)
 
 /-! ## Decidable degree-bound check
 

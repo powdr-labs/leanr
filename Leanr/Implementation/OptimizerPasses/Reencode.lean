@@ -91,11 +91,25 @@ theorem mentions_false_not_mem_vars (x : Variable) (e : Expression p)
 
 /-! ## The transport core -/
 
+/-- The soundness + completeness + invariant obligations of the re-encoder, *without* the
+    derived-variable reconstruction (and input-column frame) that the threaded `PassCorrect`
+    additionally requires. This is the pre-derivations refinement, spelled out (`implies` + a plain
+    admissible-completeness witness + invariant preservation) rather than via the audited
+    `refines`, which now also carries the derivations. The transport proofs below establish this;
+    wiring the fresh bits' `ComputationMethod`s into a full `PassCorrect` (so the re-encoder can
+    rejoin the pipeline) is the remaining work — see the note on `reencodePass`. -/
+def ConstraintSystem.reencCorrect (cs out : ConstraintSystem p) (bs : BusSemantics p) : Prop :=
+  (out.implies cs bs ∧
+    (∀ env, cs.admissible bs env → cs.satisfies bs env →
+      ∃ env', out.satisfies bs env' ∧ out.admissible bs env' ∧
+        cs.sideEffects bs env ≈ out.sideEffects bs env')) ∧
+  (cs.guaranteesInvariants bs → out.guaranteesInvariants bs)
+
 /-- **Re-encoding correctness.** `out` replaces every expression `e` by `e.substF σ`, keeps
     only the constraints selected by `keep`, and appends `newCs`. If satisfying assignments
     transport in both directions such that every original expression *evaluates identically*
     (forward additionally establishing `newCs`, backward additionally the dropped
-    constraints), the step is `PassCorrect`. Nothing here mentions bits or groups — it is a
+    constraints), the step is `reencCorrect`. Nothing here mentions bits or groups — it is a
     generic witness-transport principle. -/
 theorem ConstraintSystem.reencode_correct (cs : ConstraintSystem p) (bsem : BusSemantics p)
     (rw : Expression p → Expression p) (keep : Expression p → Bool)
@@ -112,10 +126,11 @@ theorem ConstraintSystem.reencode_correct (cs : ConstraintSystem p) (bsem : BusS
       (∀ c ∈ cs.algebraicConstraints, (rw c).eval env' = c.eval env) ∧
       (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) ∧
       (∀ c ∈ cs.algebraicConstraints, keep c = false → c.eval env = 0)) :
-    PassCorrect cs
+    ConstraintSystem.reencCorrect cs
       { algebraicConstraints :=
           ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
         busInteractions := cs.busInteractions.map (·.mapExpr rw) } bsem := by
+  unfold ConstraintSystem.reencCorrect
   set out : ConstraintSystem p :=
     { algebraicConstraints :=
         ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
@@ -220,6 +235,85 @@ theorem ConstraintSystem.reencode_correct (cs : ConstraintSystem p) (bsem : BusS
     obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
     rw [hB bi0 hbi0]
     exact hinv env hsatcs bi0 hbi0
+
+/-- The threaded (derived-variable) version of `reencode_correct`: the same transport, but the forward
+    additionally keeps every input column's value (`hpow`) and reconstructs the output's derived
+    columns from the input columns via `deriv` (`hrecon`), and no new powdr-ID column is introduced
+    (`hS`). Produces the full `PassCorrect` the pipeline consumes. -/
+theorem ConstraintSystem.reencode_correct_D (cs : ConstraintSystem p) (bsem : BusSemantics p)
+    (rw : Expression p → Expression p) (keep : Expression p → Bool)
+    (newCs : List (Expression p)) (deriv : Derivations p)
+    (hfwd : ∀ env, cs.satisfies bsem env → ∃ env',
+      (∀ c ∈ cs.algebraicConstraints, (rw c).eval env' = c.eval env) ∧
+      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) ∧
+      (∀ c ∈ newCs, c.eval env' = 0) ∧
+      (∀ v : Variable, v.powdrId?.isSome → env' v = env v) ∧
+      (∀ dsIn : Derivations p, cs.reconstructs dsIn env →
+        ({ algebraicConstraints := ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
+           busInteractions := cs.busInteractions.map (·.mapExpr rw) } :
+             ConstraintSystem p).reconstructs (dsIn ++ deriv) env'))
+    (hbwd : ∀ env',
+      (ConstraintSystem.satisfies
+        { algebraicConstraints :=
+            ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
+          busInteractions := cs.busInteractions.map (·.mapExpr rw) } bsem env') → ∃ env,
+      (∀ c ∈ cs.algebraicConstraints, (rw c).eval env' = c.eval env) ∧
+      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) ∧
+      (∀ c ∈ cs.algebraicConstraints, keep c = false → c.eval env = 0))
+    (hS : ∀ v ∈ ({ algebraicConstraints := ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
+                    busInteractions := cs.busInteractions.map (·.mapExpr rw) } :
+                    ConstraintSystem p).vars, v.powdrId?.isSome → v ∈ cs.vars) :
+    PassCorrect cs
+      { algebraicConstraints :=
+          ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
+        busInteractions := cs.busInteractions.map (·.mapExpr rw) } deriv bsem := by
+  set out : ConstraintSystem p :=
+    { algebraicConstraints :=
+        ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
+      busInteractions := cs.busInteractions.map (·.mapExpr rw) } with hout
+  have hside : ∀ (env env' : Variable → ZMod p),
+      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
+      out.sideEffects bsem env' = cs.sideEffects bsem env := by
+    intro env env' hB
+    show ((cs.busInteractions.map (·.mapExpr rw)).filter
+        (fun bi => bsem.isStateful bi.busId)).map _ = _
+    rw [List.filter_map]
+    rw [List.filter_congr (fun bi _ => (rfl :
+      ((fun b : BusInteraction (Expression p) => bsem.isStateful b.busId) ∘
+        (fun b => b.mapExpr rw)) bi = bsem.isStateful bi.busId))]
+    rw [List.map_map]
+    exact List.map_congr_left (fun bi hbi => by
+      simp only [Function.comp_apply, hB bi (List.mem_of_mem_filter hbi)])
+  have hdisc : ∀ (env env' : Variable → ZMod p),
+      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
+      (out.admissible bsem env' ↔ cs.admissible bsem env) := by
+    intro env env' hB
+    unfold ConstraintSystem.admissible
+    have hmap : (out.busInteractions.map (fun bi => bi.eval env'))
+        = cs.busInteractions.map (fun bi => bi.eval env) := by
+      show ((cs.busInteractions.map (·.mapExpr rw)).map (fun bi => bi.eval env')) = _
+      rw [List.map_map]
+      exact List.map_congr_left (fun bi hbi => hB bi hbi)
+    rw [hmap]
+  -- soundness and invariant come from the plain transport
+  have hplain := cs.reencode_correct bsem rw keep newCs
+    (fun env hsat => let ⟨env', hA, hB, hnew, _, _⟩ := hfwd env hsat; ⟨env', hA, hB, hnew⟩) hbwd
+  rw [ConstraintSystem.reencCorrect] at hplain
+  refine ⟨hplain.1.1, hplain.2, hS, ?_⟩
+  intro env hadm hsat
+  obtain ⟨env', hA, hB, hnew, hpow, hrecon⟩ := hfwd env hsat
+  refine ⟨env', ⟨?_, ?_⟩, (hdisc env env' hB).2 hadm, ?_, hpow, hrecon⟩
+  · intro c hc
+    rcases List.mem_append.1 hc with h | h
+    · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 h
+      rw [hA c0 (List.mem_of_mem_filter hc0)]
+      exact hsat.1 c0 (List.mem_of_mem_filter hc0)
+    · exact hnew c h
+  · intro bi hbi
+    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi
+    rw [hB bi0 hbi0]
+    exact hsat.2 bi0 hbi0
+  · rw [hside env env' hB]; exact BusState.equiv_refl _
 
 /-! ## Structure of enumerated assignments -/
 
@@ -652,10 +746,277 @@ def checkReencode (cs : ConstraintSystem p) (xs bits : List Variable)
     (assignments (bitBox bits)).all (fun aβ => (coveredCsOf cs xs).all (fun c =>
       decide ((c.substF (groupSubst xs hm)).eval (envOf aβ) = 0)))
 
-theorem checkReencode_sound [Fact p.Prime] (cs : ConstraintSystem p) (bsem : BusSemantics p)
+/-! ## Derived-variable methods for the fresh bits
+
+Each bit is recovered from the group by a decision tree over the bit patterns: at the first pattern
+whose interpolation image equals the group's values, output that pattern's bit. This inverts
+`group = poly(bits)` for witness generation, and — crucially — the pattern the forward direction
+selects (`find?` below) is exactly this first match, so the method computes the witness's bit. -/
+
+/-- A computation method reads only its variables. -/
+theorem ComputationMethod.eval_congr (cm : ComputationMethod p) (e1 e2 : Variable → ZMod p) :
+    (∀ v ∈ cm.vars, e1 v = e2 v) → cm.eval e1 = cm.eval e2 := by
+  induction cm with
+  | const c => intro _; rfl
+  | quotientOrZero num den =>
+      intro h
+      have hn : num.eval e1 = num.eval e2 :=
+        Expression.eval_congr num _ _ (fun v hv => h v (List.mem_append_left _ hv))
+      have hd : den.eval e1 = den.eval e2 :=
+        Expression.eval_congr den _ _ (fun v hv => h v (List.mem_append_right _ hv))
+      show (if den.eval e1 = 0 then 0 else (den.eval e1)⁻¹ * num.eval e1)
+         = (if den.eval e2 = 0 then 0 else (den.eval e2)⁻¹ * num.eval e2)
+      rw [hn, hd]
+  | ifEqZero cond thenM elseM iht ihe =>
+      intro h
+      have hc : cond.eval e1 = cond.eval e2 :=
+        Expression.eval_congr cond _ _ (fun v hv =>
+          h v (List.mem_append_left _ (List.mem_append_left _ hv)))
+      have ht := iht (fun v hv => h v (List.mem_append_left _ (List.mem_append_right _ hv)))
+      have he := ihe (fun v hv => h v (List.mem_append_right _ hv))
+      show (if cond.eval e1 = 0 then thenM.eval e1 else elseM.eval e1)
+         = (if cond.eval e2 = 0 then thenM.eval e2 else elseM.eval e2)
+      rw [hc, ht, he]
+
+/-- The interpolation image of group variable `x` at pattern `aβ` (a field constant). -/
+def imgVal (xs : List Variable) (hm : Std.HashMap Variable (Expression p))
+    (aβ : List (Variable × ZMod p)) (x : Variable) : ZMod p :=
+  ((Expression.var x).substF (groupSubst xs hm)).eval (envOf aβ)
+
+/-- `thenM` if every `x ∈ xs` has `imgFn x = env x`, else `elseM`, as nested `ifEqZero`. -/
+def matchCM (xs : List Variable) (imgFn : Variable → ZMod p)
+    (thenM elseM : ComputationMethod p) : ComputationMethod p :=
+  match xs with
+  | [] => thenM
+  | x :: rest =>
+      .ifEqZero (.add (.var x) (.const (-(imgFn x)))) (matchCM rest imgFn thenM elseM) elseM
+
+theorem matchCM_eval (xs : List Variable) (imgFn : Variable → ZMod p)
+    (thenM elseM : ComputationMethod p) (env : Variable → ZMod p) :
+    (matchCM xs imgFn thenM elseM).eval env
+    = if xs.all (fun x => decide (imgFn x = env x)) then thenM.eval env else elseM.eval env := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+      show (ComputationMethod.ifEqZero _ (matchCM rest imgFn thenM elseM) elseM).eval env = _
+      rw [ComputationMethod.eval]
+      by_cases hx : imgFn x = env x
+      · rw [if_pos (show (Expression.add (.var x) (.const (-(imgFn x)))).eval env = 0 by
+              show env x + -(imgFn x) = 0; rw [hx]; ring), ih, List.all_cons]
+        simp [hx]
+      · rw [if_neg (show (Expression.add (.var x) (.const (-(imgFn x)))).eval env ≠ 0 by
+              show env x + -(imgFn x) ≠ 0; intro h; exact hx (by linear_combination -h)),
+            List.all_cons]
+        simp [hx]
+
+/-- Variables of `matchCM` lie in `xs` together with those of the branches. -/
+theorem matchCM_vars (xs : List Variable) (imgFn : Variable → ZMod p)
+    (thenM elseM : ComputationMethod p) :
+    ∀ v ∈ (matchCM xs imgFn thenM elseM).vars, v ∈ xs ∨ v ∈ thenM.vars ∨ v ∈ elseM.vars := by
+  induction xs with
+  | nil => intro v hv; exact Or.inr (Or.inl hv)
+  | cons x rest ih =>
+      intro v hv
+      simp only [matchCM, ComputationMethod.vars, Expression.vars, List.nil_append,
+        List.append_assoc, List.mem_append, List.mem_singleton] at hv
+      rcases hv with rfl | hv | hv
+      · exact Or.inl (List.mem_cons_self ..)
+      · rcases ih v hv with h | h | h
+        · exact Or.inl (List.mem_cons_of_mem _ h)
+        · exact Or.inr (Or.inl h)
+        · exact Or.inr (Or.inr h)
+      · exact Or.inr (Or.inr hv)
+
+/-- The derivation of bit `b`: scan the patterns, output the first matching pattern's `b`-bit. -/
+def bitCM (patts : List (List (Variable × ZMod p))) (xs : List Variable)
+    (hm : Std.HashMap Variable (Expression p)) (b : Variable) : ComputationMethod p :=
+  match patts with
+  | [] => .const 0
+  | aβ :: rest => matchCM xs (imgVal xs hm aβ) (.const (envOf aβ b)) (bitCM rest xs hm b)
+
+theorem bitCM_eval (patts : List (List (Variable × ZMod p))) (xs : List Variable)
+    (hm : Std.HashMap Variable (Expression p)) (b : Variable) (env : Variable → ZMod p) :
+    (bitCM patts xs hm b).eval env
+    = match patts.find? (fun aβ => xs.all (fun x => decide (imgVal xs hm aβ x = env x))) with
+      | some aβ => envOf aβ b
+      | none => 0 := by
+  induction patts with
+  | nil => rfl
+  | cons aβ rest ih =>
+      show (matchCM xs (imgVal xs hm aβ) (.const (envOf aβ b)) (bitCM rest xs hm b)).eval env = _
+      rw [matchCM_eval, List.find?_cons]
+      by_cases hmatch : xs.all (fun x => decide (imgVal xs hm aβ x = env x)) = true
+      · rw [if_pos hmatch, hmatch]; rfl
+      · rw [if_neg hmatch]
+        simp only [hmatch, ih]
+
+/-- The derivation of bit `b` reads only group variables. -/
+theorem bitCM_vars (patts : List (List (Variable × ZMod p))) (xs : List Variable)
+    (hm : Std.HashMap Variable (Expression p)) (b : Variable) :
+    ∀ v ∈ (bitCM patts xs hm b).vars, v ∈ xs := by
+  induction patts with
+  | nil => intro v hv; simp [bitCM, ComputationMethod.vars] at hv
+  | cons aβ rest ih =>
+      intro v hv
+      rcases matchCM_vars xs (imgVal xs hm aβ) (.const (envOf aβ b)) (bitCM rest xs hm b) v hv
+        with h | h | h
+      · exact h
+      · simp [ComputationMethod.vars] at h
+      · exact ih v h
+
+/-- Substituting a wholly-in-group expression (whose group variables `σfn` maps into the bits)
+    yields an expression over the bits only. -/
+theorem Expression.substF_varsIn_bits (xs bits : List Variable)
+    (σfn : Variable → Option (Expression p))
+    (hσ : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
+    (e : Expression p) (hin : e.varsIn xs = true) :
+    ∀ v ∈ (e.substF σfn).vars, v ∈ bits := by
+  induction e with
+  | const n => intro v hv; simp [Expression.substF, Expression.vars] at hv
+  | var y =>
+      intro v hv
+      exact hσ y (List.contains_iff_mem.mp (by simpa [Expression.varsIn] using hin)) v hv
+  | add a b iha ihb =>
+      rw [Expression.varsIn, Bool.and_eq_true] at hin
+      intro v hv
+      simp only [Expression.substF, Expression.vars, List.mem_append] at hv
+      rcases hv with hv | hv
+      · exact iha hin.1 v hv
+      · exact ihb hin.2 v hv
+  | mul a b iha ihb =>
+      rw [Expression.varsIn, Bool.and_eq_true] at hin
+      intro v hv
+      simp only [Expression.substF, Expression.vars, List.mem_append] at hv
+      rcases hv with hv | hv
+      · exact iha hin.1 v hv
+      · exact ihb hin.2 v hv
+
+/-- A rewritten wholly-in-group expression is over the bits only. -/
+theorem groupRewriteCand_vars (xs bits : List Variable)
+    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
+    (hσ : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
+    (e : Expression p) (hin : e.varsIn xs = true) :
+    ∀ v ∈ (groupRewriteCand bits σfn patts e).vars, v ∈ bits := by
+  intro v hv
+  unfold groupRewriteCand at hv
+  split at hv
+  · next hchk =>
+      rw [Bool.and_eq_true] at hchk
+      exact Expression.varsIn_sound bits _ hchk.1 v hv
+  · exact Expression.substF_varsIn_bits xs bits σfn hσ e hin v hv
+
+/-- Every variable of a group-rewritten expression is either an original variable of `e` or a
+    fresh bit. -/
+theorem groupRewrite_vars (xs bits : List Variable)
+    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
+    (hσ : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
+    (e : Expression p) :
+    ∀ v ∈ (groupRewrite xs bits σfn patts e).vars, v ∈ e.vars ∨ v ∈ bits := by
+  induction e with
+  | const n => simp [groupRewrite, Expression.vars]
+  | var y =>
+      simp only [groupRewrite]
+      by_cases hyx : xs.contains y
+      · rw [if_pos hyx]; intro v hv
+        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.var y)
+          (by simpa [Expression.varsIn] using hyx) v hv)
+      · rw [if_neg hyx]; intro v hv; exact Or.inl hv
+  | add a b iha ihb =>
+      simp only [groupRewrite]
+      by_cases hin : (Expression.add a b).varsIn xs = true
+      · rw [if_pos hin]; intro v hv
+        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.add a b) hin v hv)
+      · rw [if_neg hin]; intro v hv
+        simp only [Expression.vars, List.mem_append] at hv ⊢
+        rcases hv with hv | hv
+        · rcases iha v hv with h | h
+          · exact Or.inl (Or.inl h)
+          · exact Or.inr h
+        · rcases ihb v hv with h | h
+          · exact Or.inl (Or.inr h)
+          · exact Or.inr h
+  | mul a b iha ihb =>
+      simp only [groupRewrite]
+      by_cases hin : (Expression.mul a b).varsIn xs = true
+      · rw [if_pos hin]; intro v hv
+        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.mul a b) hin v hv)
+      · rw [if_neg hin]; intro v hv
+        simp only [Expression.vars, List.mem_append] at hv ⊢
+        rcases hv with hv | hv
+        · rcases iha v hv with h | h
+          · exact Or.inl (Or.inl h)
+          · exact Or.inr h
+        · rcases ihb v hv with h | h
+          · exact Or.inl (Or.inr h)
+          · exact Or.inr h
+
+/-- Every variable of the re-encoded system is either an original variable of `cs` or a fresh
+    bit — proven by construction from the certified substitution, so the pass needs no scan. -/
+theorem reencodeOut_vars_subset (cs : ConstraintSystem p) (xs bits : List Variable)
+    (hm : Std.HashMap Variable (Expression p))
+    (hσ : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF (groupSubst xs hm)).vars, v ∈ bits) :
+    ∀ v ∈ (reencodeOut cs xs bits hm).vars, v ∈ cs.vars ∨ v ∈ bits := by
+  intro v hv
+  have gr := groupRewrite_vars xs bits (groupSubst xs hm) (assignments (bitBox bits)) hσ
+  rcases ConstraintSystem.mem_vars.1 hv with ⟨c, hc, hcv⟩ | ⟨bi, hbi, hbiv⟩
+  · simp only [reencodeOut, List.mem_append] at hc
+    rcases hc with hc | hc
+    · rcases List.mem_map.1 hc with ⟨c0, hc0, rfl⟩
+      rcases gr c0 v hcv with h | h
+      · exact Or.inl (ConstraintSystem.mem_vars_of_constraint (List.mem_of_mem_filter hc0) h)
+      · exact Or.inr h
+    · rcases List.mem_map.1 hc with ⟨b, hb, rfl⟩
+      right
+      have hvb : v = b := by simpa [boolConstraint, Expression.vars] using hcv
+      exact hvb ▸ hb
+  · simp only [reencodeOut, List.mem_map] at hbi
+    rcases hbi with ⟨bi0, hbi0, rfl⟩
+    rcases hbiv with hmv | ⟨e, he, hev⟩
+    · simp only [BusInteraction.mapExpr] at hmv
+      rcases gr bi0.multiplicity v hmv with h | h
+      · exact Or.inl (ConstraintSystem.mem_vars_of_mult hbi0 h)
+      · exact Or.inr h
+    · simp only [BusInteraction.mapExpr] at he
+      rcases List.mem_map.1 he with ⟨e0, he0, rfl⟩
+      rcases gr e0 v hev with h | h
+      · exact Or.inl (ConstraintSystem.mem_vars_of_payload hbi0 he0 h)
+      · exact Or.inr h
+
+/-- Appending derivations: the later list `B` takes precedence, so a fresh variable's method there
+    overrides any earlier entry for it (this is what makes the reconstruction robust to duplicates). -/
+theorem Derivations.methodFor_append (A B : Derivations p) (v : Variable) :
+    Derivations.methodFor (A ++ B) v
+      = (Derivations.methodFor B v).orElse (fun _ => Derivations.methodFor A v) := by
+  induction A with
+  | nil => simp [Derivations.methodFor]
+  | cons pcm rest ih =>
+      obtain ⟨u, cm⟩ := pcm
+      simp only [List.cons_append, Derivations.methodFor, ih]
+      cases Derivations.methodFor B v <;> simp [Option.orElse]
+
+/-- The method list built for the fresh bits supplies `g w` for a bit `w`, nothing otherwise. -/
+theorem Derivations.methodFor_map (bits : List Variable) (g : Variable → ComputationMethod p)
+    (w : Variable) :
+    Derivations.methodFor (bits.map (fun b => (b, g b))) w
+      = if w ∈ bits then some (g w) else none := by
+  induction bits with
+  | nil => simp [Derivations.methodFor]
+  | cons b rest ih =>
+      simp only [List.map_cons, Derivations.methodFor, ih, List.mem_cons]
+      by_cases hw : w ∈ rest
+      · simp [hw]
+      · by_cases hbw : b = w
+        · subst hbw; simp [hw]
+        · have hwb : w ≠ b := fun h => hbw h.symm
+          simp [hw, hbw, hwb, Option.orElse]
+
+theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : BusSemantics p)
     (xs bits : List Variable) (hm : Std.HashMap Variable (Expression p))
+    (hxs : ∀ x ∈ xs, x.powdrId?.isSome) (hxsB : ∀ x ∈ xs, x ∉ bits)
+    (hbn : ∀ b ∈ bits, b.powdrId? = none)
     (hchk : checkReencode cs xs bits hm = true) :
-    PassCorrect cs (reencodeOut cs xs bits hm) bsem := by
+    PassCorrect cs (reencodeOut cs xs bits hm)
+      (bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b))) bsem := by
   unfold checkReencode at hchk
   split at hchk
   · exact absurd hchk (by simp)
@@ -694,6 +1055,9 @@ theorem checkReencode_sound [Fact p.Prime] (cs : ConstraintSystem p) (bsem : Bus
     intro y hy v hv
     exact List.contains_iff_mem.mp
       (List.all_eq_true.mp (List.all_eq_true.mp hvarsB y hy) v hv)
+  -- output variables are original `cs` variables or fresh bits (by construction, no scan)
+  have hvars : ∀ v ∈ (reencodeOut cs xs bits hm).vars, v ∈ cs.vars ∨ v ∈ bits :=
+    reencodeOut_vars_subset cs xs bits hm hpolyVars
   have hσnone : ∀ y, y ∉ xs → groupSubst xs hm y = none := by
     intro y hy
     simp [groupSubst, hy]
@@ -718,13 +1082,28 @@ theorem checkReencode_sound [Fact p.Prime] (cs : ConstraintSystem p) (bsem : Bus
     have h2 := List.all_eq_true.mp h1.2 bi hbi
     rw [Bool.and_eq_true] at h2
     simpa using List.all_eq_true.mp h2.2 e he
-  -- FORWARD
-  have hfwd : ∀ env, cs.satisfies bsem env → ∃ env',
+  -- bits are fresh: none of them occurs in `cs`
+  have hbitsCs : ∀ b ∈ bits, b ∉ cs.vars := by
+    intro b hb hmem
+    rw [ConstraintSystem.mem_vars] at hmem
+    rcases hmem with ⟨c, hc, hcv⟩ | ⟨bi, hbi, hbiv⟩
+    · exact hfreshC b hb c hc hcv
+    · refine hfreshBi b hb bi hbi ?_
+      unfold BusInteraction.vars
+      rcases hbiv with h | ⟨e, he, hev⟩
+      · exact List.mem_append_left _ h
+      · exact List.mem_append_right _ (List.mem_flatMap.2 ⟨e, he, hev⟩)
+  -- FORWARD (with the frame and derived-variable reconstruction)
+  have hfwd_D : ∀ env, cs.satisfies bsem env → ∃ env',
       (∀ c ∈ cs.algebraicConstraints,
         ((groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits))) c).eval env' = c.eval env) ∧
       (∀ bi ∈ cs.busInteractions,
         (bi.mapExpr (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))).eval env' = bi.eval env) ∧
-      (∀ c ∈ bits.map boolConstraint, c.eval env' = 0) := by
+      (∀ c ∈ bits.map boolConstraint, c.eval env' = 0) ∧
+      (∀ v : Variable, v.powdrId?.isSome → env' v = env v) ∧
+      (∀ dsIn : Derivations p, cs.reconstructs dsIn env →
+        (reencodeOut cs xs bits hm).reconstructs
+          (dsIn ++ bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b))) env') := by
     intro env hsat
     have hallES : ∀ c ∈ coveredCsOf cs xs, c.eval env = 0 := fun c hc =>
       hsat.1 c (List.mem_of_mem_filter hc)
@@ -745,48 +1124,102 @@ theorem checkReencode_sound [Fact p.Prime] (cs : ConstraintSystem p) (bsem : Bus
         Expression.eval_congr c _ _ (fun v hv => envOf_map doms env v (hcvars v hv))
       rw [heq]
       exact hallES c hc
-    obtain ⟨aβ, haβ, hβval⟩ := List.any_eq_true.1 (List.all_eq_true.mp hC5 _ hasurv)
-    have hkeysβ : aβ.map Prod.fst = bits := by
-      rw [assignments_keys (bitBox bits) aβ haβ, hbitKeys]
-    -- pointwise agreement off the bits
-    have hpoint : ∀ y, y ∉ bits → envF (groupSubst xs hm) (envExt aβ env) y = env y := by
-      intro y hyb
-      by_cases hyx : y ∈ xs
-      · rw [envF_eq_varSubst]
-        have hagree : ((Expression.var y).substF (groupSubst xs hm)).eval (envExt aβ env)
-            = ((Expression.var y).substF (groupSubst xs hm)).eval (envOf aβ) := by
-          apply Expression.eval_congr
-          intro v hv
-          exact envExt_eq_envOf_of_mem aβ env v (hkeysβ ▸ hpolyVars y hyx v hv)
-        rw [hagree]
-        have hval := List.all_eq_true.mp hβval y hyx
-        rw [decide_eq_true_iff] at hval
-        rw [hval]
-        exact envOf_map doms env y (hkeys ▸ hyx)
-      · have hnone : groupSubst xs hm y = none := by
-          simp [groupSubst, hyx]
-        unfold envF
-        rw [hnone]
-        exact envExt_eq_env_of_notmem aβ env y (hkeysβ ▸ hyb)
-    have hbitsagree : ∀ b ∈ bits, envExt aβ env b = envOf aβ b := fun b hb =>
-      envExt_eq_envOf_of_mem aβ env b (hkeysβ ▸ hb)
-    refine ⟨envExt aβ env, ?_, ?_, ?_⟩
-    · intro c hc
-      exact groupRewrite_agree xs bits (groupSubst xs hm) (assignments (bitBox bits))
-        hσnone (envExt aβ env) env aβ haβ hbitsagree hpolyVars hpoint c (hfreshCm c hc)
-    · intro bi hbi
-      exact groupRewrite_bi_agree xs bits (groupSubst xs hm) (assignments (bitBox bits))
-        hσnone (envExt aβ env) env aβ haβ hbitsagree hpolyVars hpoint bi
-        (hfreshMm bi hbi) (hfreshPm bi hbi)
-    · intro c hc
-      obtain ⟨b, hb, rfl⟩ := List.mem_map.1 hc
-      apply boolConstraint_eval_of_bool
-      have hbk : b ∈ aβ.map Prod.fst := hkeysβ ▸ hb
-      rw [envExt_eq_envOf_of_mem aβ env b hbk]
-      have hmem := envOf_mem_of_assignments (bitBox bits)
-        (by rw [hbitKeys]; exact hnodup') aβ haβ
-        (b, ([0, 1] : List (ZMod p))) (List.mem_map.2 ⟨b, hb, rfl⟩)
-      simpa using hmem
+    -- select the first pattern whose interpolation image matches the group (deterministic, so it
+    -- coincides with what `bitCM` computes); it exists by the `hC5` completeness check
+    have hC5' : (assignments (bitBox bits)).any
+        (fun aβ => xs.all (fun x => decide (imgVal xs hm aβ x = env x))) = true := by
+      rw [List.any_eq_true]
+      obtain ⟨aβ, ha, hp⟩ := List.any_eq_true.1 (List.all_eq_true.mp hC5 _ hasurv)
+      refine ⟨aβ, ha, ?_⟩
+      rw [List.all_eq_true] at hp ⊢
+      intro x hx
+      have hsx : envOf (doms.map (fun yd => (yd.1, env yd.1))) x = env x :=
+        envOf_map doms env x (hkeys ▸ hx)
+      have := hp x hx
+      rwa [hsx] at this
+    cases hfindEnv : (assignments (bitBox bits)).find?
+        (fun aβ => xs.all (fun x => decide (imgVal xs hm aβ x = env x))) with
+    | none =>
+        exfalso
+        rw [List.find?_eq_none] at hfindEnv
+        obtain ⟨aβ0, ha0, hp0⟩ := List.any_eq_true.1 hC5'
+        exact absurd hp0 (by simpa using hfindEnv aβ0 ha0)
+    | some aβ =>
+      have haβ : aβ ∈ assignments (bitBox bits) := List.mem_of_find?_eq_some hfindEnv
+      have hβpred : xs.all (fun x => decide (imgVal xs hm aβ x = env x)) = true := by
+        simpa using List.find?_some hfindEnv
+      have hkeysβ : aβ.map Prod.fst = bits := by
+        rw [assignments_keys (bitBox bits) aβ haβ, hbitKeys]
+      have hxbits : ∀ x ∈ xs, x ∉ bits := hxsB
+      have henvxs : ∀ x ∈ xs, envExt aβ env x = env x := fun x hx =>
+        envExt_eq_env_of_notmem aβ env x (by rw [hkeysβ]; exact hxbits x hx)
+      -- pointwise agreement off the bits
+      have hpoint : ∀ y, y ∉ bits → envF (groupSubst xs hm) (envExt aβ env) y = env y := by
+        intro y hyb
+        by_cases hyx : y ∈ xs
+        · rw [envF_eq_varSubst]
+          have hagree : ((Expression.var y).substF (groupSubst xs hm)).eval (envExt aβ env)
+              = ((Expression.var y).substF (groupSubst xs hm)).eval (envOf aβ) := by
+            apply Expression.eval_congr
+            intro v hv
+            exact envExt_eq_envOf_of_mem aβ env v (hkeysβ ▸ hpolyVars y hyx v hv)
+          rw [hagree]
+          exact of_decide_eq_true (List.all_eq_true.mp hβpred y hyx)
+        · have hnone : groupSubst xs hm y = none := by
+            simp [groupSubst, hyx]
+          unfold envF
+          rw [hnone]
+          exact envExt_eq_env_of_notmem aβ env y (hkeysβ ▸ hyb)
+      have hbitsagree : ∀ b ∈ bits, envExt aβ env b = envOf aβ b := fun b hb =>
+        envExt_eq_envOf_of_mem aβ env b (hkeysβ ▸ hb)
+      refine ⟨envExt aβ env, ?_, ?_, ?_, ?_, ?_⟩
+      · intro c hc
+        exact groupRewrite_agree xs bits (groupSubst xs hm) (assignments (bitBox bits))
+          hσnone (envExt aβ env) env aβ haβ hbitsagree hpolyVars hpoint c (hfreshCm c hc)
+      · intro bi hbi
+        exact groupRewrite_bi_agree xs bits (groupSubst xs hm) (assignments (bitBox bits))
+          hσnone (envExt aβ env) env aβ haβ hbitsagree hpolyVars hpoint bi
+          (hfreshMm bi hbi) (hfreshPm bi hbi)
+      · intro c hc
+        obtain ⟨b, hb, rfl⟩ := List.mem_map.1 hc
+        apply boolConstraint_eval_of_bool
+        have hbk : b ∈ aβ.map Prod.fst := hkeysβ ▸ hb
+        rw [envExt_eq_envOf_of_mem aβ env b hbk]
+        have hmem := envOf_mem_of_assignments (bitBox bits)
+          (by rw [hbitKeys]; exact hnodup') aβ haβ
+          (b, ([0, 1] : List (ZMod p))) (List.mem_map.2 ⟨b, hb, rfl⟩)
+        simpa using hmem
+      · -- frame: input columns keep their value (only fresh bits change)
+        intro v hvpow
+        refine envExt_eq_env_of_notmem aβ env v ?_
+        rw [hkeysβ]
+        intro hvb
+        rw [hbn v hvb] at hvpow
+        simp at hvpow
+      · -- reconstruction (later derivations win, so a fresh bit's method overrides any dsIn entry)
+        intro dsIn hdsIn w hwout hwnone
+        rcases hvars w hwout with hwcs | hwb
+        · -- a surviving input column of `cs`: not a fresh bit, so `dsIn`'s method is the one used
+          have hwnb : w ∉ bits := fun h => hbitsCs w h hwcs
+          obtain ⟨cm, hcm, hcmv, hcmeval⟩ := hdsIn w hwcs hwnone
+          refine ⟨cm, ?_, hcmv, ?_⟩
+          · simp [Derivations.methodFor_append, Derivations.methodFor_map, hwnb, hcm]
+          · rw [ComputationMethod.eval_congr cm (envExt aβ env) env (fun v hv => by
+              refine envExt_eq_env_of_notmem aβ env v ?_
+              rw [hkeysβ]
+              intro hvb
+              have hp := hcmv v hv
+              rw [hbn v hvb] at hp
+              simp at hp), hcmeval]
+            exact (envExt_eq_env_of_notmem aβ env w (by
+              rw [hkeysβ]; intro hwb; exact hbitsCs w hwb hwcs)).symm
+        · -- a fresh bit: its `bitCM` method (the last listed for `w`) computes it
+          refine ⟨bitCM (assignments (bitBox bits)) xs hm w, ?_,
+            fun v hv => hxs v (bitCM_vars _ xs hm w v hv), ?_⟩
+          · simp [Derivations.methodFor_append, Derivations.methodFor_map, hwb]
+          · rw [ComputationMethod.eval_congr (bitCM (assignments (bitBox bits)) xs hm w)
+              (envExt aβ env) env (fun v hv => henvxs v (bitCM_vars _ xs hm w v hv)),
+              bitCM_eval, hfindEnv, envExt_eq_envOf_of_mem aβ env w (hkeysβ ▸ hwb)]
   -- BACKWARD
   have hbwd : ∀ env',
       (ConstraintSystem.satisfies
@@ -875,10 +1308,19 @@ theorem checkReencode_sound [Fact p.Prime] (cs : ConstraintSystem p) (bsem : Bus
         exact hβenv v (hpolyVars y (hcvars y hy) v hv)
       rw [← hexpr c, ← hagree]
       exact h6
-  show PassCorrect cs (reencodeOut cs xs bits hm) bsem
+  -- no new powdr-ID column: every output variable is a `cs` variable or a (no-ID) bit
+  have hS : ∀ v ∈ (reencodeOut cs xs bits hm).vars, v.powdrId?.isSome → v ∈ cs.vars := by
+    intro v hv hvpow
+    rcases hvars v hv with h | h
+    · exact h
+    · rw [hbn v h] at hvpow; simp at hvpow
+  show PassCorrect cs (reencodeOut cs xs bits hm)
+    (bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b))) bsem
   unfold reencodeOut
-  exact cs.reencode_correct bsem (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits))) (fun c => !coveredBy xs c)
-    (bits.map boolConstraint) hfwd hbwd
+  exact cs.reencode_correct_D bsem
+    (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits))) (fun c => !coveredBy xs c)
+    (bits.map boolConstraint) (bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b)))
+    hfwd_D hbwd hS
 
 /-! ## Building the interpolation (proof-free) and the pass -/
 
@@ -909,37 +1351,47 @@ def buildReencode (cs : ConstraintSystem p) (xs : List Variable) (freshBase : St
       else none
     else none
 
-/-- One checked re-encoding step (identity if construction or certificate fails). -/
+/-- One checked re-encoding step (identity if construction or certificate fails). The expensive
+    filter — `buildReencode` — runs first, so the remaining side conditions (all cheap: the group
+    is all input columns and disjoint from the fresh bits, the bits carry no powdr ID) are only
+    checked for the few groups that are actually re-encodable. The output-variable frame is proven
+    by construction (`reencodeOut_vars_subset`), so no per-variable scan is needed. -/
 def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p)
-    (xs : List Variable) (freshBase : String) :
-    { out : ConstraintSystem p // PassCorrect cs out bsem } :=
-  match buildReencode cs xs freshBase with
-  | none => ⟨cs, cs.refines_refl bsem, _root_.id⟩
+    (xs : List Variable) (freshBase : String) : PassResult cs bsem :=
+  if hxs : xs.all (fun x => x.powdrId?.isSome) = true then
+  match hb : buildReencode cs xs freshBase with
+  | none => ⟨cs, [], PassCorrect.refl cs bsem⟩
   | some (bits, hm) =>
+    if hxsB : xs.all (fun x => decide (x ∉ bits)) = true then
+    if hbn : bits.all (fun b => decide (b.powdrId? = none)) = true then
     if hchk : checkReencode cs xs bits hm = true then
-      -- degree guard: interpolation polynomials have degree `bits.length`; skip the group
-      -- if any substitution site would exceed the zkVM's bound
       if (reencodeOut cs xs bits hm).withinDegreeB bsem.degreeBound then
-        ⟨reencodeOut cs xs bits hm, checkReencode_sound cs bsem xs bits hm hchk⟩
-      else ⟨cs, cs.refines_refl bsem, _root_.id⟩
-    else ⟨cs, cs.refines_refl bsem, _root_.id⟩
+        ⟨reencodeOut cs xs bits hm,
+         bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b)),
+         checkReencode_sound_D cs bsem xs bits hm
+           (fun x hx => by simpa using List.all_eq_true.mp hxs x hx)
+           (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsB x hx))
+           (fun b hbm => of_decide_eq_true (List.all_eq_true.mp hbn b hbm))
+           hchk⟩
+      else ⟨cs, [], PassCorrect.refl cs bsem⟩
+    else ⟨cs, [], PassCorrect.refl cs bsem⟩
+    else ⟨cs, [], PassCorrect.refl cs bsem⟩
+    else ⟨cs, [], PassCorrect.refl cs bsem⟩
+  else ⟨cs, [], PassCorrect.refl cs bsem⟩
 
-/-- Process the candidate groups sequentially (correctness composes by transitivity). -/
+/-- Process the candidate groups sequentially (correctness composes; derivations concatenate). -/
 def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) :
-    List (List Variable) → Nat → (cs : ConstraintSystem p) →
-    { out : ConstraintSystem p // PassCorrect cs out bsem }
-  | [], _, cs => ⟨cs, cs.refines_refl bsem, _root_.id⟩
+    List (List Variable) → Nat → (cs : ConstraintSystem p) → PassResult cs bsem
+  | [], _, cs => ⟨cs, [], PassCorrect.refl cs bsem⟩
   | xs :: rest, idx, cs =>
     let r1 := reencodeStep bsem cs xs
       (s!"rnc{cs.algebraicConstraints.length}_{cs.busInteractions.length}_{idx}")
-    let r2 := reencodeLoop bsem rest (idx + 1) r1.val
-    ⟨r2.val,
-     ConstraintSystem.refines_trans r2.property.1 r1.property.1,
-     fun h => r2.property.2 (r1.property.2 h)⟩
+    let r2 := reencodeLoop bsem rest (idx + 1) r1.out
+    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
 
-/-- The witness re-encoding pass: for every constraint's (small) variable group whose covered
-    constraints allow only a few joint values, re-encode the group with `⌈log₂ m⌉` fresh booleans.
-    Prime `p` only (booleanity needs an integral domain); identity otherwise. -/
+/-- The witness re-encoding pass: for every constraint's (small) all-input-column variable group
+    whose covered constraints allow only a few joint values, re-encode the group with `⌈log₂ m⌉`
+    fresh booleans and ship each bit's derived-variable method. Prime `p` only; identity otherwise. -/
 def reencodePass : VerifiedPass p := fun cs bsem =>
   if hpr : p.Prime then
     haveI : Fact p.Prime := ⟨hpr⟩
@@ -947,4 +1399,4 @@ def reencodePass : VerifiedPass p := fun cs bsem =>
       let vs := c.vars.dedup
       if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt)) else none)).dedup
     reencodeLoop bsem targets 0 cs
-  else ⟨cs, cs.refines_refl bsem, _root_.id⟩
+  else ⟨cs, [], PassCorrect.refl cs bsem⟩
