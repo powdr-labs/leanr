@@ -172,13 +172,13 @@ def Derivations.methodFor : Derivations p → Variable → Option (ComputationMe
 
     ASSUMPTION: all variables in the input circuit have a powdr ID. -/
 def ConstraintSystem.witnessDerivableFrom (outputCS inputCS : ConstraintSystem p) (ds : Derivations p)
-    (outputEnv inputEnv : Variable → ZMod p) : Prop :=
+    (inputEnv outputEnv : Variable → ZMod p) : Prop :=
   (∀ v ∈ inputCS.vars, v.powdrId?.isSome) →
   ∀ v ∈ outputCS.vars,
     match v.powdrId? with
-    | some _ => v ∈ inputCS.vars ∧ inputEnv v = outputEnv v
+    | some _ => v ∈ inputCS.vars ∧ outputEnv v = inputEnv v
     | none => ∃ cm, Derivations.methodFor ds v = some cm ∧
-        (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval inputEnv = inputEnv v
+        (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval outputEnv = outputEnv v
 
 --------- Constraint system implications ---------
 
