@@ -3,18 +3,22 @@
 # requires-python = ">=3.9"
 # dependencies = ["tqdm"]
 # ///
-"""Benchmark the leanr optimizer against powdr over the openvm-eth set.
+"""Benchmark the leanr optimizer against powdr over a named benchmark set.
 
-For each apc_<rank>_pc<pc>.json.gz under data/, run `leanr compare` (the same
-optimizer run as the autoopt loop; --iters 32 by default) and aggregate
-effectiveness -- distinct variables before / after -- for leanr vs powdr. Cases
-run in parallel with a progress bar.
+Each benchmark is a subdirectory of OpenVmBenchmarks/ holding apc_<rank>_pc<pc>.json.gz
+case pairs (plus manifest.json / apc_candidates.json). The default and main benchmark
+used for optimization is `openvm-eth`. For each case, run `leanr compare` (the same
+optimizer run as the autoopt loop; --iters 32 by default) and aggregate effectiveness
+-- distinct variables before / after -- for leanr vs powdr. Cases run in parallel with
+a progress bar.
 
-Run it directly (uv installs tqdm automatically):
+Run it directly (uv installs tqdm automatically); the optional positional argument
+selects the benchmark by name (default: openvm-eth):
 
-    OpenVmBenchmark/benchmark.py                 # all cases
-    OpenVmBenchmark/benchmark.py --n 20          # top 20 by cost rank
-    OpenVmBenchmark/benchmark.py --n 10 --report report.html
+    OpenVmBenchmarks/benchmark.py                 # all openvm-eth cases
+    OpenVmBenchmarks/benchmark.py openvm-eth      # same, named explicitly
+    OpenVmBenchmarks/benchmark.py --n 20          # top 20 by cost rank
+    OpenVmBenchmarks/benchmark.py --n 10 --report report.html
 
 With --report, writes a self-contained interactive HTML page to click through
 each block and compare its assembly, original circuit, and the powdr / leanr
@@ -41,8 +45,10 @@ except ModuleNotFoundError:  # allow plain `python3 benchmark.py` without uv
     def tqdm(iterable, **_kwargs):
         return iterable
 
-HERE = Path(__file__).resolve().parent       # OpenVmBenchmark
-REPO = Path(__file__).resolve().parents[1]    # OpenVmBenchmark -> repo root
+HERE = Path(__file__).resolve().parent       # OpenVmBenchmarks
+REPO = Path(__file__).resolve().parents[1]    # OpenVmBenchmarks -> repo root
+# Each benchmark is a subdirectory of HERE; `openvm-eth` is the main one used for optimization.
+DEFAULT_BENCHMARK = "openvm-eth"
 NAME_RE = re.compile(r"apc_(\d+)_pc(.+)\.json\.gz$")
 # `leanr compare` stat lines, e.g. "  before: 62 vars, 55 constraints, 12 bus interactions".
 # Capture all three measures per role (variables, constraints, bus interactions).
@@ -139,11 +145,18 @@ def load_asm(bench_dir):
             for e in man.get("entries", [])}
 
 
+def available_benchmarks():
+    """Benchmark names available: subdirectories of HERE that hold apc_*_pc*.json.gz cases."""
+    return sorted(d.name for d in HERE.iterdir()
+                  if d.is_dir() and any(d.glob("apc_*_pc*.json.gz")))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("dir", nargs="?", default=str(HERE / "data"),
-                    help="benchmark data directory (default: ./data next to this script)")
+    ap.add_argument("benchmark", nargs="?", default=DEFAULT_BENCHMARK,
+                    help=f"benchmark name -- a subdirectory of OpenVmBenchmarks/ "
+                         f"(default: {DEFAULT_BENCHMARK})")
     ap.add_argument("--iters", type=int, default=32, help="optimizer cleanup-cycle cap (default: 32)")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4,
                     help="cases to run in parallel (default: number of cores)")
@@ -153,6 +166,11 @@ def main():
                     help="also write a self-contained interactive HTML report to this path")
     args = ap.parse_args()
 
+    bench_dir = HERE / args.benchmark
+    if not bench_dir.is_dir():
+        avail = ", ".join(available_benchmarks()) or "(none found)"
+        sys.exit(f"error: no benchmark {args.benchmark!r} under {HERE} (available: {avail})")
+
     os.chdir(REPO)
     print("building leanr...", file=sys.stderr)
     subprocess.run(["lake", "build"], check=True)
@@ -160,10 +178,10 @@ def main():
     if not binary.exists():
         sys.exit(f"error: {binary} missing after build")
 
-    cases = sorted(f for f in Path(args.dir).glob("apc_*_pc*.json.gz")
+    cases = sorted(f for f in bench_dir.glob("apc_*_pc*.json.gz")
                    if not f.name.endswith(".powdr_opt.json.gz"))
     if not cases:
-        sys.exit(f"no benchmark cases in {args.dir}")
+        sys.exit(f"no benchmark cases in {bench_dir}")
     if args.n is not None:
         cases = cases[: args.n]
 
@@ -206,7 +224,7 @@ def main():
             summary[f"{role}_{mt}_agg"] = agg(role, mt)
             summary[f"{role}_{mt}_geo"] = geo(role, mt)
 
-    print(f"\n=== leanr vs powdr over {n} cases (--iters {args.iters}) ===")
+    print(f"\n=== {args.benchmark}: leanr vs powdr over {n} cases (--iters {args.iters}) ===")
     print("effectiveness = size before / size after (larger is better); "
           "priority: variables > bus interactions > constraints")
     print(f"  {'measure':<18}{'leanr (agg / geo)':<26}{'powdr (agg / geo)':<26}diff (agg)")
@@ -223,7 +241,7 @@ def main():
             print(f"  {name}: {err}", file=sys.stderr)
 
     if want_report:
-        asm = load_asm(Path(args.dir))
+        asm = load_asm(bench_dir)
         html_cases = []
         for name, _metrics in sorted(results, key=lambda r: r[0]):
             m = NAME_RE.search(name)
@@ -231,12 +249,13 @@ def main():
             r = reports[name]
             html_cases.append({"rank": rank, "pc": pc, "asm": asm.get(name, ""),
                                "original": r["original"], "powdr": r["powdr"], "leanr": r["leanr"]})
-        args.report.write_text(build_html(html_cases, args.iters, summary))
+        args.report.write_text(build_html(html_cases, args.benchmark, args.iters, summary))
         print(f"\nwrote report ({len(html_cases)} cases) to {args.report}", file=sys.stderr)
 
 
-def build_html(cases, iters, summary):
+def build_html(cases, benchmark, iters, summary):
     return (HTML_TEMPLATE
+            .replace("__BENCH__", benchmark)
             .replace("__N__", str(len(cases)))
             .replace("__ITERS__", str(iters))
             .replace("__SUMMARY__", json.dumps(summary))
@@ -326,7 +345,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   <aside id="side">
     <div id="sidehead">
       <div class="title">leanr benchmark report</div>
-      <div class="meta">__N__ cases · --iters __ITERS__</div>
+      <div class="meta">__BENCH__ · __N__ cases · --iters __ITERS__</div>
       <div id="summary"></div>
     </div>
     <div id="cases"></div>
