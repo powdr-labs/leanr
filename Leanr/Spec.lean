@@ -46,7 +46,9 @@ def Expression.vars : Expression p → List Variable
 --------- Computation Methods ---------
 
 /-- A method for computing a *derived* variable's value from other variables, mirroring powdr's
-    `ComputationMethod`. `quotientOrZero num den` is `num / den` in the field, or `0` when
+    `ComputationMethod`. For newly introduced variables, this is interpreted by powdr's witness
+    generator.
+    `quotientOrZero num den` is `num / den` in the field, or `0` when
     `den = 0`; `ifEqZero cond thenM elseM` picks `thenM` when `cond` evaluates to `0`, else `elseM`. -/
 inductive ComputationMethod (p : ℕ) where
   | const (c : ZMod p)
@@ -154,6 +156,34 @@ def ConstraintSystem.sideEffects (cs : ConstraintSystem p)
       let m := bi.eval env
       ((m.busId, m.payload), m.multiplicity))
 
+--------- Derived variables ---------
+
+/-- The `ComputationMethod` witness generation uses for `v`: the **last** one `ds` lists for it
+    (later derivations override earlier ones), or `none` if `v` is not derived. -/
+def Derivations.methodFor : Derivations p → Variable → Option (ComputationMethod p)
+  | [], _ => none
+  | (u, cm) :: rest, v =>
+      (Derivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
+
+/-- Derived-variable reconstruction under `e`: every no-powdr-ID variable of `cs` is computed by
+    the method `ds` uses for it, reading only input (powdr-ID) columns. -/
+def ConstraintSystem.reconstructs (cs : ConstraintSystem p) (ds : Derivations p)
+    (e : Variable → ZMod p) : Prop :=
+  ∀ v ∈ cs.vars, v.powdrId? = none →
+    ∃ cm, Derivations.methodFor ds v = some cm ∧ (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval e = e v
+
+/-- How the completeness witness `env'` of an output `out` is obtained from an assignment `env` of
+    the input `inp`, via derivations `ds`: every variable of `out` that carries a powdr ID is an
+    input column, present in `inp` with an unchanged value; every derived variable (no powdr ID) is
+    computed by a method in `ds` reading only input columns. This is exactly the data witness
+    generation needs to extend an input trace to an output trace. -/
+def ConstraintSystem.derivesWitness (out inp : ConstraintSystem p) (ds : Derivations p)
+    (env env' : Variable → ZMod p) : Prop :=
+  (∀ v ∈ out.vars, v.powdrId?.isSome → v ∈ inp.vars ∧ env' v = env v) ∧
+  out.reconstructs ds env'
+
+--------- Constraint system implications ---------
+
 /-- Whether a given assignment is admissible under the bus semantics. -/
 def ConstraintSystem.admissible (s : ConstraintSystem p) (busSemantics : BusSemantics p)
     (env : Variable → ZMod p) : Prop :=
@@ -187,34 +217,6 @@ def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : B
     ∃ env', other.satisfies busSemantics env' ∧
       self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
 
---------- Derived variables ---------
-
-/-- The `ComputationMethod` witness generation uses for `v`: the **last** one `ds` lists for it
-    (later derivations override earlier ones), or `none` if `v` is not derived. The tail (later
-    entries) takes precedence over the head. -/
-def Derivations.methodFor : Derivations p → Variable → Option (ComputationMethod p)
-  | [], _ => none
-  | (u, cm) :: rest, v =>
-      (Derivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
-
-/-- Derived-variable reconstruction under `e`: every no-powdr-ID variable of `cs` is computed by
-    the method `ds` uses for it (`methodFor`, i.e. its last entry — duplicates are allowed, the
-    later one wins), reading only input (powdr-ID) columns. -/
-def ConstraintSystem.reconstructs (cs : ConstraintSystem p) (ds : Derivations p)
-    (e : Variable → ZMod p) : Prop :=
-  ∀ v ∈ cs.vars, v.powdrId? = none →
-    ∃ cm, Derivations.methodFor ds v = some cm ∧ (∀ x ∈ cm.vars, x.powdrId?.isSome) ∧ cm.eval e = e v
-
-/-- How the completeness witness `env'` of an output `out` is obtained from an assignment `env` of
-    the input `inp`, via derivations `ds`: every variable of `out` that carries a powdr ID is an
-    input column, present in `inp` with an unchanged value; every derived variable (no powdr ID) is
-    computed by a method in `ds` reading only input columns. This is exactly the data witness
-    generation needs to extend an input trace to an output trace. -/
-def ConstraintSystem.derivesWitness (out inp : ConstraintSystem p) (ds : Derivations p)
-    (env env' : Variable → ZMod p) : Prop :=
-  (∀ v ∈ out.vars, v.powdrId?.isSome → v ∈ inp.vars ∧ env' v = env v) ∧
-  out.reconstructs ds env'
-
 /-- Like `implies`, but the obligation is only required for `self`'s **admissible** (real-trace)
     assignments, the produced witness is itself admissible, and — when `self`'s variables are all
     genuine input columns — that witness additionally `derivesWitness`: it is reconstructible from
@@ -242,6 +244,8 @@ def ConstraintSystem.refines (self other : ConstraintSystem p) (busSemantics : B
     (ds : Derivations p) : Prop :=
   self.implies other busSemantics ∧ other.impliesAdmissible self busSemantics ds
 
+--------- Degree bound ---------
+
 /-- Whether a constraint system stays within a degree bound. -/
 def ConstraintSystem.withinDegree (s : ConstraintSystem p) (b : DegreeBound) : Prop :=
   (∀ c ∈ s.algebraicConstraints, c.degree ≤ b.identities) ∧
@@ -255,6 +259,8 @@ def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
   ∀ constraintSystem : ConstraintSystem p,
     constraintSystem.withinDegree busSemantics.degreeBound →
     (optimizer constraintSystem).withinDegree busSemantics.degreeBound
+
+--------- Optimizer correctness ---------
 
 /-- Whether an optimizer maintains correctness *with respect to a given `busSemantics`*. This
     means that, for all constraint systems:
