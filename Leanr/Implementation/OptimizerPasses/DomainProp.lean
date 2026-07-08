@@ -68,6 +68,58 @@ theorem BusInteraction.eval_congr (bi : BusInteraction (Expression p))
         exact Or.inr ⟨e, he, hx⟩))
   simp only [BusInteraction.eval, hmult, hpay]
 
+/-! ## Allocation-free "all variables lie in a set" checks
+
+`Expression.vars` materializes a fresh list on every call; predicates like "are all of `c`'s
+variables in `xs`?" that are probed once *per target* (the covered-item scans in `DomainBatch`,
+the group scans in `Reencode`) then rebuild that list for every (target, item) pair — an
+allocation storm on large machines. `Expression.varsIn` / `BusInteraction.varsIn` decide the same
+predicate by recursion, allocating nothing. Their soundness (`… = true → every variable is in
+`xs`) is all the enumeration proofs consume. -/
+
+/-- Do all the expression's variables lie in `xs`? (No allocation — recurses over the tree.) -/
+def Expression.varsIn (xs : List Variable) : Expression p → Bool
+  | .const _ => true
+  | .var y => xs.contains y
+  | .add a b => a.varsIn xs && b.varsIn xs
+  | .mul a b => a.varsIn xs && b.varsIn xs
+
+theorem Expression.varsIn_sound (xs : List Variable) (e : Expression p)
+    (h : e.varsIn xs = true) : ∀ v ∈ e.vars, v ∈ xs := by
+  induction e with
+  | const n => simp [Expression.vars]
+  | var y =>
+      intro v hv
+      simp only [Expression.vars, List.mem_singleton] at hv
+      subst hv
+      exact List.contains_iff_mem.mp (by simpa [Expression.varsIn] using h)
+  | add a b iha ihb =>
+      rw [Expression.varsIn, Bool.and_eq_true] at h
+      intro v hv
+      rcases List.mem_append.1 hv with hv | hv
+      · exact iha h.1 v hv
+      · exact ihb h.2 v hv
+  | mul a b iha ihb =>
+      rw [Expression.varsIn, Bool.and_eq_true] at h
+      intro v hv
+      rcases List.mem_append.1 hv with hv | hv
+      · exact iha h.1 v hv
+      · exact ihb h.2 v hv
+
+/-- Do all a bus interaction's variables (multiplicity and payload) lie in `xs`? (No allocation.) -/
+def BusInteraction.varsIn (xs : List Variable) (bi : BusInteraction (Expression p)) : Bool :=
+  bi.multiplicity.varsIn xs && bi.payload.all (fun e => e.varsIn xs)
+
+theorem BusInteraction.varsIn_sound (xs : List Variable) (bi : BusInteraction (Expression p))
+    (h : bi.varsIn xs = true) : ∀ v ∈ bi.vars, v ∈ xs := by
+  rw [BusInteraction.varsIn, Bool.and_eq_true] at h
+  intro v hv
+  rw [BusInteraction.vars, List.mem_append] at hv
+  rcases hv with hv | hv
+  · exact Expression.varsIn_sound xs bi.multiplicity h.1 v hv
+  · obtain ⟨e, he, hev⟩ := List.mem_flatMap.1 hv
+    exact Expression.varsIn_sound xs e (List.all_eq_true.mp h.2 e he) v hev
+
 /-! ## Deriving a finite domain for a variable from one constraint -/
 
 /-- Root list for the equation `c + Σ terms = 0`: `[]` for a nonzero constant (never zero),

@@ -176,46 +176,52 @@ def survivesAllM (bs : BusSemantics p) (es : List (Expression p))
   es.all (fun e => decide (e.eval (envOf a) = 0)) &&
     bis.all (fun bi => interactionSurvives bs bi a)
 
-/-- The checked certificate: every surviving assignment gives `x = c`. -/
-def checkForcedM (bs : BusSemantics p) (doms : List (Variable × List (ZMod p)))
-    (es : List (Expression p)) (bis : List (BusInteraction (Expression p)))
-    (x : Variable) (c : ZMod p) : Bool :=
-  (assignments doms).all
-    (fun a => !survivesAllM bs es bis a || decide (envOf a x = c))
-
-/-- Candidate search (proof-free; `checkForcedM` re-verifies): all variables on which the
-    surviving assignments agree, with the agreed value. -/
-def pickForcedM (bs : BusSemantics p) (doms : List (Variable × List (ZMod p)))
-    (es : List (Expression p)) (bis : List (BusInteraction (Expression p))) :
-    List (Variable × ZMod p) :=
-  match (assignments doms).filter (survivesAllM bs es bis) with
-  | [] => (doms.map Prod.fst).map (fun x => (x, 0))
-  | a₀ :: survivors =>
-    (doms.map Prod.fst).filterMap (fun x =>
-      if survivors.all (fun a => decide (envOf a x = envOf a₀ x)) then some (x, envOf a₀ x)
-      else none)
-
-/-- The constraints of the system whose variables all lie in `xs`. -/
+/-- The constraints of the system whose variables all lie in `xs`. Uses the allocation-free
+    `Expression.varsIn` (equivalent to `c.vars.all (· ∈ xs)`) so the per-target covered-item scan
+    does not rebuild every constraint's variable list. -/
 def coveredCs (cs : ConstraintSystem p) (xs : List Variable) : List (Expression p) :=
-  cs.algebraicConstraints.filter (fun c => c.vars.all (fun v => xs.contains v))
+  cs.algebraicConstraints.filter (fun c => c.varsIn xs)
 
-/-- The interactions of the system whose variables all lie in `xs`. -/
+/-- The interactions of the system whose variables all lie in `xs` (allocation-free, as `coveredCs`). -/
 def coveredBis (cs : ConstraintSystem p) (xs : List Variable) :
     List (BusInteraction (Expression p)) :=
-  cs.busInteractions.filter (fun bi => bi.vars.all (fun v => xs.contains v))
+  cs.busInteractions.filter (fun bi => bi.varsIn xs)
 
-theorem checkForcedM_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
+/-- Work cap for one joint enumeration: box size × number of covered targets. -/
+def maxEnumWork : Nat := 524288
+
+/-- Candidate forced values read off a **precomputed** survivor list (the enumerated assignments
+    that satisfy every covered constraint/obligation): the variables on which all survivors agree,
+    with the agreed value; when there are no survivors, every domain variable is (vacuously) forced
+    to `0`. Taking the survivor list as input (rather than recomputing it) is what lets `forcedOver`
+    enumerate + filter the box **once** per target rather than once per candidate variable. -/
+def forcedFromSurvivors (doms : List (Variable × List (ZMod p)))
+    (survivors : List (List (Variable × ZMod p))) : List (Variable × ZMod p) :=
+  match survivors with
+  | [] => (doms.map Prod.fst).map (fun x => (x, 0))
+  | a₀ :: rest =>
+    (doms.map Prod.fst).filterMap (fun x =>
+      if rest.all (fun a => decide (envOf a x = envOf a₀ x)) then some (x, envOf a₀ x) else none)
+
+/-- Soundness of the survivor-based certificate: if every surviving assignment (an enumerated
+    assignment that passes all covered constraints/obligations) assigns `c` to `x`, then `x = c` is
+    entailed. The restriction of a satisfying `env` to the domains is an enumerated assignment that
+    survives, so it is one of the `survivors`; the certificate ranges only over the (precomputed)
+    survivors, so `forcedOver` does not re-enumerate per candidate. -/
+theorem forcedFromSurvivors_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
     (T : DomainTable p cs bs) (xs : List Variable) (doms : List (Variable × List (ZMod p)))
-    (hdoms : T.doms xs = some doms) (x : Variable) (c : ZMod p)
-    (hx : x ∈ doms.map Prod.fst)
-    (hchk : checkForcedM bs doms (coveredCs cs xs) (coveredBis cs xs) x c = true)
+    (hdoms : T.doms xs = some doms)
+    (es : List (Expression p)) (bis : List (BusInteraction (Expression p)))
+    (hes : es = coveredCs cs xs) (hbis : bis = coveredBis cs xs)
+    (x : Variable) (c : ZMod p) (hx : x ∈ doms.map Prod.fst)
+    (hforced : ((assignments doms).filter (survivesAllM bs es bis)).all
+        (fun a => decide (envOf a x = c)) = true)
     (env : Variable → ZMod p) (hsat : cs.satisfies bs env) : env x = c := by
+  subst hes; subst hbis
   have hkeys : doms.map Prod.fst = xs := T.doms_fst xs doms hdoms
-  -- the restriction of `env` to the domains is an enumerated assignment
   have hmem : doms.map (fun yd => (yd.1, env yd.1)) ∈ assignments doms :=
     mem_assignments doms env (T.doms_sound xs doms hdoms env hsat)
   set a₀ := doms.map (fun yd => (yd.1, env yd.1)) with ha₀
-  -- it survives every covered constraint and obligation
   have hsurv : survivesAllM bs (coveredCs cs xs) (coveredBis cs xs) a₀ = true := by
     unfold survivesAllM
     rw [Bool.and_eq_true]
@@ -226,8 +232,7 @@ theorem checkForcedM_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
       obtain ⟨hein, hall⟩ := hemem
       have hevars : ∀ v ∈ e.vars, v ∈ doms.map Prod.fst := by
         rw [hkeys]
-        intro v hv
-        exact List.contains_iff_mem.mp (List.all_eq_true.mp hall v hv)
+        exact Expression.varsIn_sound xs e hall
       have : e.eval (envOf a₀) = e.eval env :=
         Expression.eval_congr e _ _ (fun y hy => envOf_map doms env y (hevars y hy))
       rw [decide_eq_true_iff, this]
@@ -238,8 +243,7 @@ theorem checkForcedM_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
       obtain ⟨hbiin, hbiall⟩ := hbimem
       have hbivars : ∀ v ∈ bi.vars, v ∈ doms.map Prod.fst := by
         rw [hkeys]
-        intro v hv
-        exact List.contains_iff_mem.mp (List.all_eq_true.mp hbiall v hv)
+        exact BusInteraction.varsIn_sound xs bi hbiall
       have heval : bi.eval (envOf a₀) = bi.eval env :=
         BusInteraction.eval_congr bi _ _ (fun y hy => envOf_map doms env y (hbivars y hy))
       unfold interactionSurvives
@@ -247,18 +251,11 @@ theorem checkForcedM_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
       by_cases hm : (bi.eval env).multiplicity = 0
       · simp [hm]
       · simp [hm, hsat.2 bi hbiin hm]
-  -- consume the certificate at the restriction
-  have hcert := List.all_eq_true.mp hchk a₀ hmem
-  rcases (Bool.or_eq_true _ _).mp hcert with hbad | hgood
-  · rw [Bool.not_eq_true'] at hbad
-    rw [hsurv] at hbad
-    exact absurd hbad (by simp)
-  · have hxc := of_decide_eq_true hgood
-    rw [envOf_map doms env _ hx] at hxc
-    exact hxc
-
-/-- Work cap for one joint enumeration: box size × number of covered targets. -/
-def maxEnumWork : Nat := 524288
+  have ha0mem : a₀ ∈ (assignments doms).filter
+      (survivesAllM bs (coveredCs cs xs) (coveredBis cs xs)) := List.mem_filter.2 ⟨hmem, hsurv⟩
+  have hxc := of_decide_eq_true (List.all_eq_true.mp hforced a₀ ha0mem)
+  rw [envOf_map doms env _ hx] at hxc
+  exact hxc
 
 /-- All checked forced constants over the variable set `xs` (the vars of one target
     constraint or interaction): enumerate the domain box once against everything the set
@@ -278,11 +275,15 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable 
       let informative := !es.isEmpty ||
         bis.any (fun bi => bi.payload.any (fun e => !(e.isVar || e.constValue?.isSome)))
       if informative && boxSize * (es.length + bis.length) ≤ maxEnumWork then
-        (pickForcedM bs doms es bis).filterMap (fun xc =>
+        -- Enumerate the box and filter to survivors **once**, then read off each candidate and
+        -- re-check it against that survivor list — rather than re-enumerating the whole box once
+        -- per candidate variable.
+        let survivors := (assignments doms).filter (survivesAllM bs es bis)
+        (forcedFromSurvivors doms survivors).filterMap (fun xc =>
           if hx : xc.1 ∈ doms.map Prod.fst then
-            if hchk : checkForcedM bs doms es bis xc.1 xc.2 = true then
+            if hchk : survivors.all (fun a => decide (envOf a xc.1 = xc.2)) = true then
               some ⟨xc.1, xc.2, fun env hsat =>
-                checkForcedM_sound T xs doms hdoms xc.1 xc.2 hx hchk env hsat⟩
+                forcedFromSurvivors_sound T xs doms hdoms es bis rfl rfl xc.1 xc.2 hx hchk env hsat⟩
             else none
           else none)
       else []
