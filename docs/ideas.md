@@ -1,5 +1,24 @@
 # Ideas for future optimization passes
 
+## Collapse the multi-limb is-zero inverse hint to one (finish powdr's `seqz`)
+
+After entry 47 (`ZeroRegister.lean`) pins `x0 = 0`, a `beqz`/`bnez` gadget is left as
+`cmp·(cmp−1)=0`, `(cmp−1)·aᵢ=0` (i=0..3), `Σ aᵢ·dimᵢ = cmp`, with **four** `diff_inv_marker` hints
+`dimᵢ`. powdr keeps only **one** inverse hint: `(1−cmp)·(Σaᵢ)=0`, `inv·(Σaᵢ)=cmp`. Collapsing 4 hints
+→ 1 (−3 vars/branch, ≈ the residual 264-var gap) needs **no spec change** — it is sound under the
+current spec:
+- **soundness** (out→in): reconstruct `dimⱼ = 1/aⱼ` for a differing limb (from `cmp=1 ⇒ Σaᵢ≠0 ⇒ some
+  aⱼ≠0`); `cmp=0 ⇒ all aᵢ=0` from the kept `(cmp−1)·aᵢ=0`. No byte facts needed.
+- **completeness** (in→out): introduce `inv = QuotientOrZero(cmp, Σaᵢ)`; the `Σaᵢ=0 ⇒ cmp=0` case
+  needs `aᵢ` **byte-bounded** (so `Σaᵢ=0 ⇒ all aᵢ=0`), available from the range-check bus via
+  `slotBound`/`BoundsMap` (as in `MemoryUnify`), with `n·(B−1) < p`.
+
+Two sub-parts: (a) a gadget *pattern match* (boolean `cmp`; hint vars `dimᵢ` occurring only in the
+one bilinear constraint; the `(cmp−1)·aᵢ` limb constraints), and (b) introducing the derived `inv`
+and dropping `dimᵢ`. The pattern match is the fragile/overfitting risk — phrase it generally
+("witnesses appearing only in a single `Σ aᵢ·xᵢ = target` constraint with byte-bounded `aᵢ`"), not
+tied to `diff_inv_marker`. Effort is comparable to entry 47; deferred to keep that commit small.
+
 ## Drop never-violating stateless lookups (close the residual pc-lookup bus gap)
 
 After memory/exec send↔receive pair cancellation (log entry 46), leanr is at near-parity with powdr

@@ -96,6 +96,22 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
         m.multiplicity ≠ 1) →
       bs.admissible (A ++ S :: B ++ R :: C) →
       bs.admissible (A ++ B ++ C)
+  /-- Real-trace fixed-zero cells (e.g. the hardwired RISC-V `x0` register).
+      `zeroCell busId = some (addrReq, dataSlots)` asserts that on the (stateful) bus `busId`, every
+      *active* message whose payload has `payload[s] = v` for each `(s, v) ∈ addrReq` carries value
+      `0` in every slot of `dataSlots`. Like the memory discipline this is a completeness-only
+      (`admissible`) fact — `trivial` declares none, so it discharges vacuously and a consuming pass
+      degrades to a no-op. -/
+  zeroCell : (busId : Nat) → Option (List (Nat × ZMod p) × List Nat)
+  zeroCell_sound :
+    ∀ (msgs : List (BusInteraction (ZMod p))),
+      bs.admissible (msgs.filter
+        (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId)) →
+      ∀ (busId : Nat) (addrReq : List (Nat × ZMod p)) (dataSlots : List Nat),
+        zeroCell busId = some (addrReq, dataSlots) →
+        ∀ m ∈ msgs, m.busId = busId → m.multiplicity ≠ 0 →
+          (∀ ar ∈ addrReq, m.payload[ar.1]? = some ar.2) →
+          ∀ slot ∈ dataSlots, ∀ v, m.payload[slot]? = some v → v = 0
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
@@ -110,3 +126,5 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   memShape_stateful := by intro _ _ h; exact absurd h (by simp)
   admissible_sound := by intro _ _ _ _ h; exact absurd h (by simp)
   admissible_dropPair := by intro _ _ _ h; exact absurd h (by simp)
+  zeroCell _ := none
+  zeroCell_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)
