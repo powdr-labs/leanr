@@ -1431,3 +1431,12 @@ time; its aggregate numbers are appended in the follow-up commit.
 `optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`,
 `openVmOptimizer_maintainsCorrectness` all still `{propext, Classical.choice, Quot.sound}`-only;
 no `sorry`/`admit`/`axiom`/`native_decide`; degree bounds ok on all sampled outputs.
+
+**Follow-up: full `openvm-eth` sweep (100 cases), with this change included.** Variables
+**4.082× agg / 3.605× geo** (powdr 4.092× / 3.787×) — aggregate now within 0.01× of powdr on the
+top-priority metric (last recorded sweep, entry 51: 4.064× / 3.522×; the delta also includes
+entry 52's hint collapse). Bus interactions **2.946× agg / 2.464× geo** (powdr 3.480× / 2.822×).
+Constraints **8.801× agg / 9.918× geo**, still far ahead of powdr's 5.853× / 10.311× aggregate.
+Per-case on variables: 15 wins / 71 losses / 14 ties — most losses are ≤ a few variables on small
+blocks (the geomean gap); the loaded-byte and range-check ideas in `docs/ideas.md` target the
+remaining bus gap next.
