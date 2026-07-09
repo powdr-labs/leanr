@@ -1344,10 +1344,14 @@ def buildReencode (cs : ConstraintSystem p) (xs : List Variable) (freshBase : St
 def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p)
     (xs : List Variable) (freshBase : String) : PassResult cs bsem :=
   if hxs : xs.all (fun x => x.powdrId?.isSome) = true then
-  if hxsCs : xs.all (fun x => decide (x ∈ cs.vars)) = true then
   match hb : buildReencode cs xs freshBase with
   | none => ⟨cs, [], PassCorrect.refl cs bsem⟩
   | some (bits, hm) =>
+    -- The group-membership scan is checked only for the few groups `buildReencode` accepts, and
+    -- against a `cs.vars` bound once — the occurrence list is ~10⁴ entries, so materializing it
+    -- (×8) for every candidate group dominated this pass's runtime.
+    let csVars := cs.vars
+    if hxsCs : xs.all (fun x => decide (x ∈ csVars)) = true then
     if hxsB : xs.all (fun x => decide (x ∉ bits)) = true then
     if hbn : bits.all (fun b => decide (b.powdrId? = none)) = true then
     if hchk : checkReencode cs xs bits hm = true then

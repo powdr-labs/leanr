@@ -1331,3 +1331,50 @@ removing the 3 surplus inverse-hint witnesses there; it is a **sound no-op** on 
 are byte-bounded only through the memory invariant (no in-block range check). Verified on top of
 entry 51: apc_001 38→35, apc_047 94→91; no change on apc_010/apc_028/apc_056/apc_069. The
 full-benchmark aggregate is left to the maintainer's run.
+
+### 53. Optimizer runtime: kill the per-constraint full-system rescans in `hintCollapse` and `reencode` (effectiveness unchanged)
+
+Pure **performance** work in the entry-45 style — every change is output-preserving, so
+effectiveness is untouched and only the optimizer's wall-clock cost drops. Verified by running
+baseline (pre-change) and new binaries on 13 benchmark cases spanning all size classes
+(apc_001/003/005/006/008/010/014/028/047/056/069/092/100): `vars/constraints/bus` are **identical
+on every case**. Nothing in the audited surface or `Basic.lean` changed; correctness axioms stay
+`{propext, Classical.choice, Quot.sound}`; `lake build` green, `check-proof-integrity.sh` passes.
+
+Re-profiled per-pass at HEAD (the `leanr profile` pass list was stale — it predated
+`zeroRegister`/`hintCollapse`/`domainFold`/`busPairCancel`/`bytePack`; synced it to the current
+`cleanupCycle` in `Main.lean`). The entry-52 `hintCollapse` dominated everything: 183 s of
+apc_005's 280 s (65%), 129 s of apc_100's 347 s (37%), with `reencode` second (38 s / 106 s).
+Both were paying for *recomputation inside the per-candidate scan*:
+
+1. **`hintCollapse` (`HintCollapse.lean`)** — `tryOne` runs once per constraint, and each call (a) rebuilt
+   `BoundsMap.build facts` (a full bus-interaction sweep), (b) decided `occursOnlyInTarget` per
+   variable by materializing every expression's `.vars` list (a full-system allocation storm per
+   `(E, d)` pair), and (c) eagerly evaluated the whole `Decidable` certificate conjunction —
+   including an `inv ∉ cs.vars` membership scan that rebuilds the ~10⁵-entry occurrence list —
+   even when the very first conjunct `2 ≤ D.length` already failed (it fails on essentially every
+   constraint). Fixes, each output-preserving: hoist `BoundsMap.build` and a new `busVars` hash set
+   (all variables occurring in any bus interaction) to the pass level, built once per invocation;
+   gate `occursOnlyInTarget` behind `!busVars.contains v` (a variable in any bus interaction can
+   never pass it, so the gate never changes the filter's value — it only skips the scan); decide
+   `occursOnlyInTarget` with the allocation-free `Expression.mentions` instead of `d ∉ ·.vars`;
+   and turn the certificate into one short-circuiting `&&` chain (`decide`d conjuncts) so nothing
+   after `2 ≤ D.length` is evaluated on unsuitable constraints. The proof consumes the same
+   certificates (`Bool.and_eq_true`/`decide_eq_true_eq` split them back into the six hypotheses).
+2. **`reencode` (`Reencode.lean`)** — `reencodeStep` checked `xs.all (· ∈ cs.vars)` *before*
+   `buildReencode`, so every candidate group (hundreds per invocation, ×8 variables each)
+   materialized the full occurrence list; `buildReencode` rejects almost all of them anyway.
+   Moved the check after `buildReencode` succeeds (all failure branches return the same identity
+   `PassResult`, so this is a pure branch reorder) and bound `cs.vars` once with a `let`.
+
+**Impact (solo runs, same machine, output identical):** apc_005 **280.5 s → 75.3 s (3.7×)**,
+apc_100 **320.0 s → 155.7 s (2.1×)**, apc_010 14.6 s → 8.8 s (1.7×), apc_008 17.2 s → 16.5 s;
+small register-only cases unchanged (they never hit the hot paths). Per-pass on apc_005
+(profiler): `hintCollapse` **182.9 s → 0.2 s (~900×)**, `reencode` **37.7 s → 5.2 s (7.3×)**.
+
+Remaining bottlenecks (documented for future work): `domainBatch` (24.7 s on apc_005) — the
+entry-45 note still applies (enumerate only the non-pinned variables of the domain box, needs
+`forcedFromSurvivors_sound` reproven against the reduced box); and `busPairCancel` (23.6 s) —
+it drops one send/receive pair per invocation and rescans the system per drop, so a chain of
+`k` cancellations costs `k` full `findCancel` sweeps (a batched variant would cancel a whole
+chain per sweep).
