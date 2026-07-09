@@ -63,10 +63,11 @@ The semantics exposes bus tables only through the opaque `violatesConstraint`. T
 passes usable knowledge:
 
 - **`BusFacts` (`Leanr/Implementation/BusFacts.lean`) — proven, zero audit surface.** Each field (`slotBound`,
-  `slotFun`, `neverViolates`, `memShape`) carries a soundness proof against the semantics, so a
-  wrong fact simply will not compile. `BusFacts.trivial` claims nothing and recovers fact-free
-  behavior. Example: the XOR functional dependence of the bitwise bus, or byte bounds on its
-  operands.
+  `slotFun`, `neverViolates`, `recvByteSlots`, `byteCheck`, `memShape`) carries a soundness proof
+  against the semantics, so a wrong fact simply will not compile. `BusFacts.trivial` claims nothing
+  and recovers fact-free behavior. Examples: the XOR functional dependence of the bitwise bus,
+  byte bounds on its operands, or the byte bounds on the data limbs of a memory *receive*
+  (`slotBound` is multiplicity-aware for exactly this).
 - **`admissible` / `Leanr/MemoryBus.lean` — audited assumption.** The last-write-wins memory
   discipline: `admissibleMemoryBus` states that a send followed by a same-address receive (with no
   active same-address message between, **in list order**) carry equal payloads. This is a

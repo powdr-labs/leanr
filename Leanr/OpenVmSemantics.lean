@@ -59,7 +59,7 @@ def OpenVmBusType.isStateful : OpenVmBusType → Bool
   | .tupleRangeChecker _ _ => false
 
 /-- Whether a field element is a byte (`0 ≤ x < 256`). -/
-private def isByte (x : ZMod p) : Bool := decide (x.val < 256)
+def isByte (x : ZMod p) : Bool := decide (x.val < 256)
 
 /-- Whether a message conflicts with the lookup table of the bus it is sent on. -/
 def violates (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
@@ -102,10 +102,14 @@ def violates (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
   | some (.tupleRangeChecker _ _), _ => true
 
   -- Stateful buses.
-  -- TODO: Some of these *might* actually enforce constraints. For example, under the
-  -- invariant that all *sent* memory values are range-checked, *received* memory values
-  -- can be assumed to be range-checked.
   | some .executionBridge, _ => false
+
+  -- In OpenVM, the invariant is that only range-checked values are sent to
+  -- the register & memory address spaces.
+  | some .memory, addressSpace :: _pointer :: b0 :: b1 :: b2 :: b3 :: _timeStamp =>
+    decide (msg.multiplicity = -1) &&
+      (addressSpace.val == 1 || addressSpace.val == 2) &&
+      !([b0, b1, b2, b3].all isByte)
   | some .memory, _ => false
 
   -- Invalid bus ID. Won't have a matching receive.

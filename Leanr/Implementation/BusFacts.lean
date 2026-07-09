@@ -27,13 +27,16 @@ def Matches (payload : List (ZMod p)) (pattern : List (Option (ZMod p))) : Prop 
 /-- Proven, pass-consumable knowledge about the bus semantics `bs`. -/
 structure BusFacts (p : ℕ) (bs : BusSemantics p) where
   /-- Accepted-value bound for one payload slot of messages matching a pattern:
-      `slotBound busId pattern slot = some bound` means every *accepted* message on `busId`
-      matching `pattern` has `payload[slot].val < bound`. -/
-  slotBound : (busId : Nat) → (pattern : List (Option (ZMod p))) → (slot : Nat) → Option Nat
+      `slotBound busId mult pattern slot = some bound` means every *accepted* message on `busId`
+      with multiplicity `mult` matching `pattern` has `payload[slot].val < bound`. The
+      multiplicity lets a fact distinguish sends from receives (e.g. only memory *receives*
+      carry the byte guarantee); multiplicity-blind facts simply ignore it. -/
+  slotBound : (busId : Nat) → (mult : ZMod p) → (pattern : List (Option (ZMod p))) →
+    (slot : Nat) → Option Nat
   slotBound_sound :
     ∀ (m : BusInteraction (ZMod p)) (pattern : List (Option (ZMod p))) (slot bound : Nat)
       (x : ZMod p),
-      slotBound m.busId pattern slot = some bound →
+      slotBound m.busId m.multiplicity pattern slot = some bound →
       Matches m.payload pattern →
       bs.violatesConstraint m = false →
       m.payload[slot]? = some x →
@@ -57,6 +60,20 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
   neverViolates_sound :
     ∀ (m : BusInteraction (ZMod p)),
       neverViolates m.busId = true → bs.violatesConstraint m = false
+  /-- Send/receive table obligations of a memory-style stateful bus, for pair cancellation:
+      `recvByteSlots busId = some slots` asserts that a *send* (multiplicity `1`) on `busId`
+      never violates a constraint, and a *receive* (multiplicity `-1`) does not violate provided
+      every payload slot listed in `slots` (where present) holds a value `< 256`. `some []` is
+      "sends and receives never violate" — the right instance for a stateful bus with no table
+      at all (e.g. an execution bridge); `none` claims nothing. -/
+  recvByteSlots : (busId : Nat) → Option (List Nat)
+  recvByteSlots_sound :
+    ∀ (busId : Nat) (slots : List Nat), recvByteSlots busId = some slots →
+      ∀ (m : BusInteraction (ZMod p)), m.busId = busId →
+        (m.multiplicity = 1 → bs.violatesConstraint m = false) ∧
+        (m.multiplicity = -1 →
+          (∀ slot ∈ slots, ∀ x : ZMod p, m.payload[slot]? = some x → x.val < 256) →
+          bs.violatesConstraint m = false)
   /-- The last-write-wins shape declared for a bus, or `none`. Passes read `addressFields` to
       group same-address accesses; this is the VM-side memory knowledge (`Leanr/MemoryBus.lean`)
       the spec's abstract `admissible` predicate deliberately omits. -/
@@ -116,19 +133,38 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
               = false ∧
             bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [y, y, 0, 1] }
               = false)
+  /-- Byte-check *emission* on a stateless bitwise-style bus: the self-check `[x, x, 0, 1]`
+      (multiplicity 1) never breaks an invariant and is accepted **iff** `x` is a byte. This is
+      the absolute counterpart of `bytePairBus`'s relative pairing law: it lets a pass
+      materialize a proven byte obligation as an explicit check — e.g. when cancelling a memory
+      send/receive pair whose receive carried the only byte guarantee for a data limb.
+      `trivial` sets it `false`. -/
+  byteCheck : (busId : Nat) → Bool
+  byteCheck_sound :
+    ∀ (busId : Nat), byteCheck busId = true →
+      bs.isStateful busId = false ∧
+      (∀ (x : ZMod p),
+        bs.breaksInvariant { busId := busId, multiplicity := 1, payload := [x, x, 0, 1] } = false) ∧
+      ∀ (x mult : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, x, 0, 1] }
+            = false ↔ x.val < 256
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
 def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
-  slotBound _ _ _ := none
+  slotBound _ _ _ _ := none
   slotBound_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)
   slotFun _ _ _ := none
   slotFun_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)
   neverViolates _ := false
   neverViolates_sound := by intro _ h; exact absurd h (by simp)
+  recvByteSlots _ := none
+  recvByteSlots_sound := by intro _ _ h; exact absurd h (by simp)
   memShape _ := none
   memShape_stateful := by intro _ _ h; exact absurd h (by simp)
   admissible_sound := by intro _ _ _ _ h; exact absurd h (by simp)
   admissible_dropPair := by intro _ _ _ h; exact absurd h (by simp)
   bytePairBus _ := false
   bytePairBus_sound := by intro _ h; exact absurd h (by simp)
+  byteCheck _ := false
+  byteCheck_sound := by intro _ h; exact absurd h (by simp)

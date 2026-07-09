@@ -307,7 +307,7 @@ def interactionBound (bs : BusSemantics p) (facts : BusFacts p bs)
     else
       match varSlot x bi.payload with
       | none => none
-      | some slot => facts.slotBound bi.busId (bi.payload.map Expression.constValue?) slot
+      | some slot => facts.slotBound bi.busId mval (bi.payload.map Expression.constValue?) slot
 
 theorem interactionBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) (x : Variable) (bound : Nat)
@@ -333,7 +333,9 @@ theorem interactionBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
         show (bi.payload.map (fun e => e.eval env))[slot]? = some (env x)
         rw [List.getElem?_map, hgete]
         rfl
-      -- apply the proven fact
+      -- apply the proven fact (the fact was looked up at the constant multiplicity `mval`,
+      -- which is the evaluated message's multiplicity)
+      rw [← hmeval] at h
       exact facts.slotBound_sound (bi.eval env)
         (bi.payload.map Expression.constValue?) slot bound (env x) h
         (matches_evalPattern bi.payload env) hviol hget

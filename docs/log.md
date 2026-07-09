@@ -1189,3 +1189,56 @@ recogniser skips; the remaining bus gap is otherwise the tuple-range packing and
 13-bit checks (see `docs/ideas.md`). Note: variables are ~tied with powdr on this sample (leanr wins
 the aggregate, powdr the geomean and 7/12 cases), so bus interactions are the systematic gap this
 targets.
+
+### 50. Spec change (Georg's request): received memory words are byte-range-checked — plus the optimizations it enables
+
+**The spec change (audited surface — needs human review).** Fixed the long-standing TODO in
+`Leanr/OpenVmSemantics.lean`: `violates` now rejects a memory-bus *receive* (multiplicity `-1`)
+from the register / main-memory address spaces (1 and 2) whose data limbs are not all bytes. The
+justification (documented at the `violates` arm and as a new README assumption): the bus must
+balance, a receive's tuple can only be matched by a send of the same tuple, and every send into
+these address spaces — from any chip of the deployed system, including the initial-memory
+boundary — carries byte-range data limbs (the invariant `breaksInvariant` demands). So a non-byte
+receive conflicts with the rest of the system exactly like a failing lookup, and the optimizer may
+*assume* received words are bytes. This also makes `guaranteesInvariants` genuinely hold for
+load-type circuits (a LOADW's register write is byte-range *because* its heap read is), where
+before the input-side assumption was silently false. The only other audited edits are cosmetic:
+`isByte` lost its `private` (so implementation-layer facts can be proven about it) and the README
+assumption bullet.
+
+**The framework caught a real soundness subtlety.** Under the new semantics the memory bus is no
+longer `neverViolates`, and `busPairCancelPass`'s old justification broke — *correctly so*:
+dropping a matched send/receive pair whose receive was the **only** byte guarantee for a data limb
+would widen the satisfying set (e.g. a loaded byte written to a register and re-read; nothing else
+bounds it). powdr cancels these pairs unconditionally while also assuming receive-byte ranges —
+leanr's `refines` proof obligation is what surfaced the tension.
+
+**Adaptation + enabled optimizations (all in `Leanr/Implementation/`, zero new audit surface):**
+- `BusFacts.slotBound` is now **multiplicity-aware**, and the OpenVM instance proves byte bounds
+  for slots 2–5 of a memory *receive* with a constant address space 1/2 — so `domainPropPass`
+  picks up `[0,256)` domains for received limbs with no further changes.
+- New proven facts: `recvByteSlots` (sends on a memory-style bus never violate; receives don't
+  provided the declared byte slots hold bytes) and `byteCheck` (a bitwise-bus self-check
+  `[x,x,0,1]` is accepted **iff** `x` is a byte, and never breaks an invariant).
+- `busPairCancelPass` justifies the dropped receive's byte obligation from the remaining system:
+  a payload entry is a constant `< 256`, a variable with a bus-fact bound `≤ 256` from a remaining
+  interaction (`byteJustified` — e.g. the chain's surviving first receive, or an explicit byte
+  check), or — the **deep** case, prime `p` only — a variable whose defining constraint pins it to
+  a byte on every point of its selector flags' proven finite domains (`deepBoundOk`: enumerate
+  `findDomain` domains, substitute + fold + linearize, each branch must yield a re-checked byte
+  root or `x = y` with `y` byte-bounded). This resolves the one-hot byte-*selection* shape
+  `x = Σ flagpoly·yⱼ` that unaligned sub-word loads leave behind. If justification still fails,
+  the pass **materializes** the obligation as one explicit `[e,e,0,1]` self-check on the
+  `byteCheck` bus while dropping the pair (net −1 bus interaction, re-verified by `emitOk`;
+  later `bytePackPass` packs such singles pairwise) — with deep justification on, no benchmark
+  case currently needs the fallback.
+
+**Measured (vs. the pre-change baseline).** apc_001 (42/18/24), apc_003 (133/45/90) and the
+load/store-heavy apc_005 (1683 vars / 841 constr / 829 bus, ~74s vs ~58s — the deep-justification
+cost) are byte-for-byte identical; apc_008 improves on **all three axes**: 128→**121** vars,
+79→**78** constraints, 77→**75** bus (the new receive-limb domains let `domainProp` force more
+values). The full `benchmark.py` sweep was still running at commit time; its aggregate numbers
+are reported in the follow-up entry. `lake build` green;
+`optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`,
+`openVmOptimizer_maintainsCorrectness` still `{propext, Classical.choice, Quot.sound}`-only; no
+`sorry`/`admit`/`axiom`/`native_decide`.

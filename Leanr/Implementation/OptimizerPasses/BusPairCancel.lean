@@ -1,4 +1,6 @@
 import Leanr.Implementation.OptimizerPasses.BusUnify
+import Leanr.Implementation.OptimizerPasses.DomainProp
+import Leanr.Implementation.OptimizerPasses.SubstMap
 import Leanr.Implementation.MemoryBusDrop
 
 set_option autoImplicit false
@@ -12,16 +14,393 @@ messages have opposite multiplicity on the same tuple, so they contribute `0` to
 net multiplicity: dropping **both** leaves the bus state (`≈`) unchanged and shrinks the circuit.
 It is exactly powdr's memory-interaction cancellation.
 
-Under the frozen spec this is sound because:
+Under the spec this is sound because:
 
-* **soundness** (`out.implies cs`): the dropped pair is on a `neverViolates` bus, so re-adding it to
-  reach a witness of `cs` imposes no obligation, and the pair's net side-effect contribution is `0`;
+* **soundness** (`out.implies cs`): re-adding the pair to reach a witness of `cs` imposes no
+  obligation — the send never violates (the `recvByteSlots` contract), and the receive's only
+  obligation is that its declared byte slots are bytes, which the pass *justifies from the
+  remaining system*: each dropped byte-slot entry is a constant `< 256`, a variable whose proven
+  bus-fact bound from a remaining interaction is `≤ 256` (`byteJustified`), or — on prime `p` — a
+  variable whose defining constraint pins it to a byte on every point of its selector flags'
+  proven finite domains (`deepBoundOk`, the one-hot byte-selection shape). When even that fails,
+  the pass *materializes* the obligation as an explicit self-check on a `byteCheck` bus
+  (`emitOk`), still a net bus win. The pair's net side-effect contribution is `0`;
 * **completeness** (`cs.impliesAdmissible out`): removing the pair preserves the VM's `admissible`
   predicate (`admissible_dropPair`), provided `S` is the *earliest* active send to its address —
   otherwise the removal could expose a fresh consecutive send→receive pair with mismatched payloads.
-  This side condition holds for the standard receive-before-send access discipline. -/
+  This side condition holds for the standard receive-before-send access discipline. Any emitted
+  check is *implied* by the dropped receive's own accepted message, so real traces satisfy it. -/
 
 variable {p : ℕ}
+
+/-! ## Byte justification for the dropped receive's obligation
+
+Under semantics where a memory *receive* of a non-byte word violates (see the OpenVM `violates`),
+re-adding a dropped receive is only free when its data limbs are provably bytes under every
+assignment satisfying the remaining system. The pass justifies each declared byte slot of the
+dropped pair's payload from the *remaining* interactions, so no justification can cite the pair
+being dropped. -/
+
+/-- Cap on the number of enumerated flag assignments per deep-justification attempt. -/
+def maxDeepPoints : Nat := 64
+
+/-- Cap on a single enumerated variable's domain size in the deep justification. -/
+def maxDeepDomain : Nat := 4
+
+/-- Cap on the number of candidate defining constraints tried per deep justification. -/
+def maxDeepConstraints : Nat := 4
+
+/-- Cap on a candidate constraint's number of distinct other variables (wider constraints
+    cannot collapse to the ≤2-term linear shapes `pointByteOk` accepts anyway). -/
+def maxDeepVars : Nat := 8
+
+/-- Does the expression mention `x`? (No allocation — `Expression.vars` would materialize a
+    fresh list per constraint on every deep-justification scan.) -/
+def Expression.containsVar (x : Variable) : Expression p → Bool
+  | .const _ => false
+  | .var y => y == x
+  | .add a b => a.containsVar x || b.containsVar x
+  | .mul a b => a.containsVar x || b.containsVar x
+
+/-- The expression's single distinct variable: `some (some v)` when exactly `v` occurs,
+    `some none` when no variable occurs, `none` when several distinct variables occur.
+    Cheap pre-filter for the constraints `findDomainAlg` can actually derive a domain from. -/
+def Expression.singleVarAux : Expression p → Option (Option Variable)
+  | .const _ => some none
+  | .var y => some (some y)
+  | .add a b | .mul a b =>
+    match a.singleVarAux, b.singleVarAux with
+    | some none, r => r
+    | r, some none => r
+    | some (some u), some (some v) => if u == v then some (some u) else none
+    | _, _ => none
+
+/-- Is the expression a single-variable expression (exactly one distinct variable)? -/
+def Expression.isSingleVar (e : Expression p) : Bool :=
+  match e.singleVarAux with
+  | some (some _) => true
+  | _ => false
+
+/-- Per-point core of the deep justification. The point `pt` fixes the enumerable variables
+    `keys` of the constraint `c`; after substituting and folding, the constraint must be linear
+    and — once normalized — either pin `x` to a re-checked byte constant, or equate `x`
+    (coefficient-for-coefficient, no constant) to a single variable in `byteVars` (the
+    precomputed byte-bounded variables — so the per-point work is allocation-light and scans
+    nothing). -/
+def pointByteOk (x : Variable) (c : Expression p) (byteVars : List Variable)
+    (keys : List Variable) (pt : List (Variable × ZMod p)) : Bool :=
+  match linearize ((c.substF (fun v =>
+      if keys.contains v then some (.const (envOf pt v)) else none)).fold) with
+  | none => false
+  | some l =>
+    match (LinExpr.norm l).terms with
+    | [(v, a)] =>
+      -- `x` is pinned to the (re-checked) root; it must be a byte
+      decide (v = x) && decide (a ≠ 0) &&
+        decide (a * (-(a⁻¹ * (LinExpr.norm l).const)) + (LinExpr.norm l).const = 0) &&
+        decide ((-(a⁻¹ * (LinExpr.norm l).const) : ZMod p).val < 256)
+    | [(v1, a1), (v2, a2)] =>
+      -- `x = other` (opposite coefficients, no constant); the other side is byte-bounded
+      decide ((LinExpr.norm l).const = 0) &&
+      (if v1 = x then
+        decide (a2 = -a1) && decide (a1 ≠ 0) && byteVars.contains v2
+       else if v2 = x then
+        decide (a1 = -a2) && decide (a2 ≠ 0) && byteVars.contains v1
+       else false)
+    | _ => false
+
+/-- The variables of `c` (other than `x`) with a proven byte bound from the remaining
+    interactions — computed once per candidate, not once per enumeration point. -/
+def deepByteVars (bs : BusSemantics p) (facts : BusFacts p bs)
+    (rest : List (BusInteraction (Expression p))) (x : Variable) (c : Expression p) :
+    List Variable :=
+  (c.vars.dedup.filter (fun v => v ≠ x)).filter (fun v =>
+    match findVarBound bs facts rest v with
+    | some b => decide (b ≤ 256)
+    | none => false)
+
+/-- The variables of `c` other than `x` that carry a small proven *constraint-derived* finite
+    domain (selector flags) — the candidates for enumeration in the deep justification.
+    `domCs` is the pre-filtered single-variable constraint list (the only constraints
+    `findDomainAlg` can use); bus-fact domains are deliberately not consulted: they are
+    byte/range-sized (never ≤ `maxDeepDomain`), and materializing them just to discard them
+    dominated the pass's runtime — the range-checked variables stay symbolic, which is what
+    `pointByteOk` wants. -/
+def deepEnumDoms (domCs : List (Expression p)) (x : Variable) (c : Expression p) :
+    List (Variable × List (ZMod p)) :=
+  (c.vars.dedup.filter (fun v => v ≠ x)).filterMap (fun v =>
+    match findDomainAlg domCs v with
+    | some d => if d.length ≤ maxDeepDomain then some (v, d) else none
+    | none => none)
+
+/-- Deep byte bound for `x` from one constraint `c`: enumerate the small proven finite domains
+    of `c`'s other variables (e.g. one-hot selector flags) and require `pointByteOk` at every
+    point. This resolves byte *selections* `x = Σ (flag polynomial)·yⱼ` over byte-bounded `yⱼ` —
+    the shape a memory receive of an unaligned sub-word load leaves behind. -/
+def deepBoundOk (domCs : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (rest : List (BusInteraction (Expression p))) (x : Variable) (c : Expression p) : Bool :=
+  if (c.vars.dedup.filter (fun v => v ≠ x)).length ≤ maxDeepVars &&
+      ((deepEnumDoms domCs x c).map (fun vd => vd.2.length)).prod ≤ maxDeepPoints then
+    (assignments (deepEnumDoms domCs x c)).all
+      (pointByteOk x c (deepByteVars bs facts rest x c) ((deepEnumDoms domCs x c).map Prod.fst))
+  else false
+
+/-- Deep byte justification for `x`: one of the first `maxDeepConstraints` constraints
+    mentioning `x` pins it via `deepBoundOk`. Domains are looked up only in the
+    single-variable constraints (the only ones `findDomainAlg` can use). -/
+def deepByteJustified (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (rest : List (BusInteraction (Expression p))) (x : Variable) : Bool :=
+  ((all.filter (Expression.containsVar x)).take maxDeepConstraints).any
+    (fun c => deepBoundOk (all.filter Expression.isSingleVar) bs facts rest x c)
+
+theorem pointByteOk_sound [Fact p.Prime] (x : Variable) (c : Expression p)
+    (byteVars : List Variable)
+    (keys : List Variable) (pt : List (Variable × ZMod p))
+    (h : pointByteOk x c byteVars keys pt = true) (env : Variable → ZMod p)
+    (hpt : ∀ y, keys.contains y = true → envOf pt y = env y)
+    (hc0 : c.eval env = 0)
+    (hbyteVars : ∀ v ∈ byteVars, (env v).val < 256) :
+    (env x).val < 256 := by
+  unfold pointByteOk at h
+  -- the substitution is transparent under `env`
+  have hsub : ((c.substF (fun v =>
+      if keys.contains v then some (.const (envOf pt v)) else none)).fold).eval env = 0 := by
+    rw [Expression.fold_eval, Expression.eval_substF, envF_eq_self]
+    · exact hc0
+    · intro y t hy
+      split_ifs at hy with hk
+      · simp only [Option.some.injEq] at hy
+        subst hy
+        exact (hpt y hk).symm
+  cases hl : linearize ((c.substF (fun v =>
+      if keys.contains v then some (.const (envOf pt v)) else none)).fold) with
+  | none => rw [hl] at h; simp at h
+  | some l =>
+    rw [hl] at h
+    dsimp only at h
+    have hleval : (LinExpr.norm l).const
+        + ((LinExpr.norm l).terms.map (fun t => t.2 * env t.1)).sum = 0 := by
+      have h1 : (LinExpr.norm l).eval env = 0 := by
+        rw [LinExpr.norm_eval, ← linearize_eval _ l hl]
+        exact hsub
+      simpa [LinExpr.eval] using h1
+    cases hterms : (LinExpr.norm l).terms with
+    | nil => rw [hterms] at h; simp at h
+    | cons t1 tail =>
+      cases t1 with
+      | mk v a =>
+        cases tail with
+        | nil =>
+          -- single pinned term: `x = r`, a byte
+          rw [hterms] at h hleval
+          simp only [List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, add_zero] at hleval
+          rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h
+          obtain ⟨⟨⟨hvx, ha⟩, hroot⟩, hbyte⟩ := h
+          have hvx' := of_decide_eq_true hvx
+          have ha' := of_decide_eq_true ha
+          have hroot' := of_decide_eq_true hroot
+          rw [← hvx']
+          have hcancel : a * env v = a * (-(a⁻¹ * (LinExpr.norm l).const)) := by
+            have h1 : a * env v = -(LinExpr.norm l).const := by linear_combination hleval
+            have h2 : a * (-(a⁻¹ * (LinExpr.norm l).const)) = -(LinExpr.norm l).const := by
+              linear_combination hroot'
+            rw [h1, h2]
+          rw [mul_left_cancel₀ ha' hcancel]
+          exact of_decide_eq_true hbyte
+        | cons t2 tail2 =>
+          cases t2 with
+          | mk v2 a2 =>
+            cases tail2 with
+            | nil =>
+              -- `x = other`: opposite coefficients, no constant
+              rw [hterms] at h hleval
+              simp only [List.map_cons, List.map_nil, List.sum_cons, List.sum_nil,
+                add_zero] at hleval
+              rw [Bool.and_eq_true] at h
+              obtain ⟨hconst, hbr⟩ := h
+              have hconst' := of_decide_eq_true hconst
+              rw [hconst', zero_add] at hleval
+              split_ifs at hbr with hv1 hv2
+              · -- v = x, bound v2
+                rw [← hv1]
+                rw [Bool.and_eq_true, Bool.and_eq_true] at hbr
+                obtain ⟨⟨hopp, hne⟩, hbound⟩ := hbr
+                have hopp' := of_decide_eq_true hopp
+                have hne' := of_decide_eq_true hne
+                have heqv : env v = env v2 := by
+                  have : a * (env v - env v2) = 0 := by
+                    rw [hopp'] at hleval; linear_combination hleval
+                  rcases mul_eq_zero.mp this with h' | h'
+                  · exact absurd h' hne'
+                  · exact sub_eq_zero.mp h'
+                rw [heqv]
+                exact hbyteVars v2 (List.contains_iff_mem.mp hbound)
+              · -- v2 = x, bound v
+                rw [← hv2]
+                rw [Bool.and_eq_true, Bool.and_eq_true] at hbr
+                obtain ⟨⟨hopp, hne⟩, hbound⟩ := hbr
+                have hopp' := of_decide_eq_true hopp
+                have hne' := of_decide_eq_true hne
+                have heqv : env v2 = env v := by
+                  have : a2 * (env v2 - env v) = 0 := by
+                    rw [hopp'] at hleval; linear_combination hleval
+                  rcases mul_eq_zero.mp this with h' | h'
+                  · exact absurd h' hne'
+                  · exact sub_eq_zero.mp h'
+                rw [heqv]
+                exact hbyteVars v (List.contains_iff_mem.mp hbound)
+            | cons t3 tail3 =>
+              rw [hterms] at h; simp at h
+
+theorem deepBoundOk_sound [Fact p.Prime] (domCs : List (Expression p))
+    (bs : BusSemantics p) (facts : BusFacts p bs)
+    (rest : List (BusInteraction (Expression p))) (x : Variable) (c : Expression p)
+    (h : deepBoundOk domCs bs facts rest x c = true) (env : Variable → ZMod p)
+    (hdom : ∀ c' ∈ domCs, c'.eval env = 0) (hc0 : c.eval env = 0)
+    (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) :
+    (env x).val < 256 := by
+  unfold deepBoundOk at h
+  split_ifs at h with hcap
+  -- every enumerated variable's value lies in its domain
+  have hdomsound : ∀ vd ∈ deepEnumDoms domCs x c, env vd.1 ∈ vd.2 := by
+    intro vd hvd
+    unfold deepEnumDoms at hvd
+    obtain ⟨v, _, hfn⟩ := List.mem_filterMap.mp hvd
+    cases hfd : findDomainAlg domCs v with
+    | none => rw [hfd] at hfn; exact absurd hfn (by simp)
+    | some d =>
+      rw [hfd] at hfn
+      dsimp only at hfn
+      split_ifs at hfn
+      simp only [Option.some.injEq] at hfn
+      subst hfn
+      exact findDomainAlg_sound domCs v d hfd env hdom
+  -- the precomputed byte-bounded variables really are bytes under `env`
+  have hbyteVars : ∀ v ∈ deepByteVars bs facts rest x c, (env v).val < 256 := by
+    intro v hv
+    unfold deepByteVars at hv
+    obtain ⟨hv1, hv2⟩ := List.mem_filter.mp hv
+    cases hb : findVarBound bs facts rest v with
+    | none => rw [hb] at hv2; simp at hv2
+    | some b =>
+      rw [hb] at hv2
+      dsimp only at hv2
+      exact lt_of_lt_of_le (findVarBound_sound bs facts rest v b hb env hbus)
+        (of_decide_eq_true hv2)
+  -- `env`'s restriction to the enumerated domains is one of the checked points
+  have hmem : (deepEnumDoms domCs x c).map (fun vd => (vd.1, env vd.1))
+      ∈ assignments (deepEnumDoms domCs x c) :=
+    mem_assignments _ env hdomsound
+  have hpoint := List.all_eq_true.mp h _ hmem
+  refine pointByteOk_sound x c (deepByteVars bs facts rest x c)
+    ((deepEnumDoms domCs x c).map Prod.fst)
+    ((deepEnumDoms domCs x c).map (fun vd => (vd.1, env vd.1))) hpoint env ?_
+    hc0 hbyteVars
+  intro y hy
+  exact envOf_map (deepEnumDoms domCs x c) env y (List.contains_iff_mem.mp hy)
+
+theorem deepByteJustified_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
+    (bs : BusSemantics p) (facts : BusFacts p bs)
+    (rest : List (BusInteraction (Expression p))) (x : Variable)
+    (h : deepByteJustified all bs facts rest x = true) (env : Variable → ZMod p)
+    (hall : ∀ c' ∈ all, c'.eval env = 0)
+    (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) :
+    (env x).val < 256 := by
+  obtain ⟨c, hc, hck⟩ := List.any_eq_true.1 h
+  have hc' : c ∈ all := List.mem_of_mem_filter (List.mem_of_mem_take hc)
+  exact deepBoundOk_sound (all.filter Expression.isSingleVar) bs facts rest x c hck env
+    (fun c' hc'' => hall c' (List.mem_of_mem_filter hc'')) (hall c hc') hbus
+
+/-- Is `e` provably a byte under every assignment satisfying the remaining system? Either a
+    constant `< 256`, a variable with a proven bus-fact bound `≤ 256` derived from the remaining
+    interactions `rest` (e.g. another receive of the same word, or an explicit byte-check
+    lookup), or — when `deep` is set (prime `p` only) — a variable a constraint pins to a byte
+    on every point of its selector flags' finite domains (`deepBoundOk`). -/
+def byteJustified (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
+    (e : Expression p) : Bool :=
+  match e.constValue? with
+  | some c => decide (c.val < 256)
+  | none =>
+    match e with
+    | .var x =>
+      (match findVarBound bs facts rest x with
+       | some bound => decide (bound ≤ 256)
+       | none => false) ||
+      (deep && deepByteJustified all bs facts rest x)
+    | _ => false
+
+theorem byteJustified_sound (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p))) (e : Expression p)
+    (hdeep : deep = true → p.Prime)
+    (h : byteJustified deep all bs facts rest e = true) (env : Variable → ZMod p)
+    (hall : ∀ c' ∈ all, c'.eval env = 0)
+    (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) :
+    (e.eval env).val < 256 := by
+  unfold byteJustified at h
+  cases hc : e.constValue? with
+  | some c =>
+    rw [hc] at h
+    dsimp only at h
+    rw [e.constValue?_sound c hc env]
+    exact of_decide_eq_true h
+  | none =>
+    rw [hc] at h
+    dsimp only at h
+    cases e with
+    | var x =>
+      dsimp only at h
+      show (env x).val < 256
+      rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
+      · cases hb : findVarBound bs facts rest x with
+        | some bound =>
+          rw [hb] at h'
+          dsimp only at h'
+          exact lt_of_lt_of_le (findVarBound_sound bs facts rest x bound hb env hbus)
+            (of_decide_eq_true h')
+        | none => rw [hb] at h'; simp at h'
+      · rw [Bool.and_eq_true] at h'
+        haveI : Fact p.Prime := ⟨hdeep h'.1⟩
+        haveI : NeZero p := ⟨(hdeep h'.1).ne_zero⟩
+        exact deepByteJustified_sound all bs facts rest x h'.2 env hall hbus
+    | const n => simp at h
+    | add a b => simp at h
+    | mul a b => simp at h
+
+/-- Are all of `R`'s payload entries at the declared byte slots justified from `rest`? -/
+def recvSlotsJustified (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p))) (slots : List Nat)
+    (R : BusInteraction (Expression p)) : Bool :=
+  slots.all (fun slot =>
+    match R.payload[slot]? with
+    | some e => byteJustified deep all bs facts rest e
+    | none => true)
+
+theorem recvSlotsJustified_sound (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p))) (slots : List Nat)
+    (R : BusInteraction (Expression p)) (hdeep : deep = true → p.Prime)
+    (h : recvSlotsJustified deep all bs facts rest slots R = true)
+    (env : Variable → ZMod p)
+    (hall : ∀ c' ∈ all, c'.eval env = 0)
+    (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) :
+    ∀ slot ∈ slots, ∀ x : ZMod p, (R.eval env).payload[slot]? = some x → x.val < 256 := by
+  intro slot hslot x hget
+  have hcheck := List.all_eq_true.mp h slot hslot
+  -- the evaluated payload entry is the evaluation of the syntactic entry
+  have hget' : (R.payload[slot]?).map (fun e => e.eval env) = some x := by
+    rw [← List.getElem?_map]
+    exact hget
+  cases he : R.payload[slot]? with
+  | none => rw [he] at hget'; exact absurd hget' (by simp)
+  | some e =>
+    rw [he] at hget' hcheck
+    simp only [Option.map_some, Option.some.injEq] at hget'
+    subst hget'
+    exact byteJustified_sound deep all bs facts rest e hdeep hcheck env hall hbus
 
 /-! ## Net-multiplicity bookkeeping -/
 
@@ -108,17 +487,54 @@ theorem mem_activeStatefulMsgs (bs : BusSemantics p) (env : Variable → ZMod p)
   obtain ⟨m0, hm0, hev⟩ := List.mem_map.mp hmem
   exact ⟨m0, hm0, hev⟩
 
+/-- A list of stateless interactions contributes nothing to the bus state. -/
+theorem toBusState_stateless (bs : BusSemantics p) (env : Variable → ZMod p)
+    (L : List (BusInteraction (Expression p)))
+    (h : ∀ bi ∈ L, bs.isStateful bi.busId = false) :
+    toBusState bs env L = [] := by
+  unfold toBusState
+  rw [List.filter_eq_nil_iff.mpr (fun bi hbi => by simp [h bi hbi])]
+  rfl
+
+/-- A list of stateless interactions contributes nothing to the active∧stateful messages. -/
+theorem activeStatefulMsgs_stateless (bs : BusSemantics p) (env : Variable → ZMod p)
+    (L : List (BusInteraction (Expression p)))
+    (h : ∀ bi ∈ L, bs.isStateful bi.busId = false) :
+    activeStatefulMsgs bs env L = [] := by
+  unfold activeStatefulMsgs
+  apply List.filter_eq_nil_iff.mpr
+  intro m hm
+  obtain ⟨m0, hm0, rfl⟩ := List.mem_map.mp hm
+  simp [BusInteraction.eval, h m0 hm0]
+
 /-! ## The core correctness of dropping a matched pair -/
 
-/-- **Correctness of dropping one matched consecutive send/receive pair.** `S` (a send) and `R`
-    (a later receive) carry the same payload (`hpay`), are on a `neverViolates` bus `busId` with a
-    declared `shape`, with no active same-address message between them (`hmidEval`) and no active
-    same-address send before `S` (`hpreEval`). Dropping both is `PassCorrect`. -/
+/-- **Correctness of dropping one matched consecutive send/receive pair, optionally emitting
+    replacement byte checks.** `S` (a send) and `R` (a later receive) carry the same payload
+    (`hpay`), are on a bus `busId` with a declared `shape` and a `recvByteSlots` contract whose
+    byte obligation for `R` is justified by the remaining interactions *including the emitted
+    checks* (`hbyte`), with no active same-address message between them (`hmidEval`) and no
+    active same-address send before `S` (`hpreEval`). Each emitted check is stateless, implied
+    by `R`'s own accepted receive, invariant-free, and adds no variables (`hchecks`) — when
+    the remaining system already justifies `R`'s byte slots, `checks` is simply `[]`. Dropping
+    the pair and appending the checks is `PassCorrect`. -/
 theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0)
     (A B C : List (BusInteraction (Expression p))) (S R : BusInteraction (Expression p))
     (busId : Nat) (shape : MemoryBusShape) (hshape : facts.memShape busId = some shape)
-    (hnv : facts.neverViolates busId = true)
+    (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
+    (checks : List (BusInteraction (Expression p)))
+    (hchecks : ∀ ck ∈ checks,
+      bs.isStateful ck.busId = false ∧
+      (∀ env, bs.violatesConstraint (R.eval env) = false →
+        bs.violatesConstraint (ck.eval env) = false) ∧
+      (∀ env, bs.breaksInvariant (ck.eval env) = false) ∧
+      (∀ v ∈ ck.vars, v ∈ R.vars))
+    (hbyte : ∀ (env : Variable → ZMod p),
+      (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
+      (∀ bi ∈ A ++ B ++ C ++ checks, (bi.eval env).multiplicity ≠ 0 →
+        bs.violatesConstraint (bi.eval env) = false) →
+      ∀ slot ∈ slots, ∀ x : ZMod p, (R.eval env).payload[slot]? = some x → x.val < 256)
     (hsplit : cs.busInteractions = A ++ S :: B ++ R :: C)
     (hSbus : S.busId = busId) (hRbus : R.busId = busId)
     (hSm : S.multiplicity.constValue? = some 1) (hRm : R.multiplicity.constValue? = some (-1))
@@ -129,9 +545,14 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     (hpreEval : ∀ (env : Variable → ZMod p), ∀ m0 ∈ A, (m0.eval env).busId = busId →
         (m0.eval env).multiplicity ≠ 0 →
         shape.address (m0.eval env) = shape.address (S.eval env) → (m0.eval env).multiplicity ≠ 1) :
-    PassCorrect cs { cs with busInteractions := A ++ B ++ C } [] bs := by
-  set out : ConstraintSystem p := { cs with busInteractions := A ++ B ++ C } with hout
-  have houtb : out.busInteractions = A ++ B ++ C := rfl
+    PassCorrect cs { cs with busInteractions := A ++ B ++ C ++ checks } [] bs := by
+  set out : ConstraintSystem p := { cs with busInteractions := A ++ B ++ C ++ checks } with hout
+  have houtb : out.busInteractions = A ++ B ++ C ++ checks := rfl
+  have hchecksStateless : ∀ bi ∈ checks, bs.isStateful bi.busId = false :=
+    fun bi hbi => (hchecks bi hbi).1
+  have hRmem : R ∈ cs.busInteractions := by
+    rw [hsplit]
+    exact List.mem_append.2 (Or.inr (List.mem_cons_self ..))
   -- Common facts.
   have hStateful : bs.isStateful busId = true := facts.memShape_stateful busId shape hshape
   have hSstate : bs.isStateful S.busId = true := hSbus ▸ hStateful
@@ -147,32 +568,48 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     show S.payload.map (fun e => e.eval env) = R.payload.map (fun e => e.eval env); rw [hpay]
   have haddrEv : ∀ env, shape.address (S.eval env) = shape.address (R.eval env) := fun env => by
     simp only [MemoryBusShape.address, hpayEv env]
-  -- Membership: `out`'s interactions are among `cs`'s.
-  have hmem_out_cs : ∀ bi, bi ∈ out.busInteractions → bi ∈ cs.busInteractions := by
+  -- Membership: the kept core `A ++ B ++ C` is among `cs`'s interactions.
+  have hmem_core : ∀ bi, bi ∈ A ++ B ++ C → bi ∈ cs.busInteractions := by
     intro bi hbi
-    rw [houtb] at hbi
     rw [hsplit]
     simp only [List.mem_append, List.mem_cons] at hbi ⊢; tauto
-  -- The dropped pair never violates.
+  -- Re-adding the dropped pair imposes no obligation: the send never violates (the
+  -- `recvByteSlots` contract), and the receive's byte slots are justified from the remaining
+  -- interactions, whose obligations hold under any `out`-satisfying assignment.
   have hnvS : ∀ env, bs.violatesConstraint (S.eval env) = false := fun env =>
-    facts.neverViolates_sound (S.eval env) (by show facts.neverViolates S.busId = true; rw [hSbus]; exact hnv)
-  have hnvR : ∀ env, bs.violatesConstraint (R.eval env) = false := fun env =>
-    facts.neverViolates_sound (R.eval env) (by show facts.neverViolates R.busId = true; rw [hRbus]; exact hnv)
-  -- Side effects are `≈`-equal (the pair contributes `0` net).
+    (facts.recvByteSlots_sound busId slots hslots (S.eval env)
+      (show (S.eval env).busId = busId from hSbus)).1 (hSmEv env)
+  have hnvR : ∀ env, out.satisfies bs env → bs.violatesConstraint (R.eval env) = false := by
+    intro env hsat
+    refine (facts.recvByteSlots_sound busId slots hslots (R.eval env)
+      (show (R.eval env).busId = busId from hRbus)).2 (hRmEv env)
+      (hbyte env (fun c hc => hsat.1 c hc) ?_)
+    intro bi hbi hne
+    exact hsat.2 bi (by rw [houtb]; exact hbi) hne
+  -- Side effects are `≈`-equal (the pair contributes `0` net; the checks are stateless).
   have hSE : ∀ env, cs.sideEffects bs env ≈ out.sideEffects bs env := by
     intro env
     have e1 : cs.sideEffects bs env = toBusState bs env (A ++ S :: B ++ R :: C) := by
       show toBusState bs env cs.busInteractions = toBusState bs env (A ++ S :: B ++ R :: C)
       rw [hsplit]
-    have e2 : out.sideEffects bs env = toBusState bs env (A ++ B ++ C) := rfl
+    have e2 : out.sideEffects bs env = toBusState bs env (A ++ B ++ C) := by
+      show toBusState bs env (A ++ B ++ C ++ checks) = toBusState bs env (A ++ B ++ C)
+      rw [toBusState_append, toBusState_stateless bs env checks hchecksStateless,
+        List.append_nil]
     rw [e1, e2]
     exact sideEffects_dropPair_equiv bs env A B C S R hSstate hRstate (hSmEv env) (hRmEv env)
       (by rw [show (S.eval env).busId = busId from hSbus, show (R.eval env).busId = busId from hRbus])
       (hpayEv env)
-  -- `cs.satisfies` implies `out.satisfies` (out has fewer obligations).
+  -- `cs.satisfies` implies `out.satisfies` (the kept core has fewer obligations; each emitted
+  -- check is implied by `R`'s own obligation, which `cs.satisfies` includes).
   have hsat_cs_out : ∀ env, cs.satisfies bs env → out.satisfies bs env := by
     intro env hsat
-    refine ⟨hsat.1, fun bi hbi => hsat.2 bi (hmem_out_cs bi hbi)⟩
+    refine ⟨hsat.1, ?_⟩
+    intro bi hbi
+    rw [houtb] at hbi
+    rcases List.mem_append.1 hbi with hbi | hbi
+    · exact hsat.2 bi (hmem_core bi hbi)
+    · exact fun _ => (hchecks bi hbi).2.1 env (hsat.2 R hRmem (hRactive env))
   -- `out.satisfies` implies `cs.satisfies` (the extra pair never violates).
   have hsat_out_cs : ∀ env, out.satisfies bs env → cs.satisfies bs env := by
     intro env hsat
@@ -184,7 +621,7 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     · exact hsat.2 bi (by rw [houtb]; simp only [List.mem_append]; tauto)
     · exact fun _ => hnvS env
     · exact hsat.2 bi (by rw [houtb]; simp only [List.mem_append]; tauto)
-    · exact fun _ => hnvR env
+    · exact fun _ => hnvR env hsat
     · exact hsat.2 bi (by rw [houtb]; simp only [List.mem_append]; tauto)
   -- `admissible` is preserved (completeness).
   have hadm_cs_out : ∀ env, cs.admissible bs env → out.admissible bs env := by
@@ -206,9 +643,9 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     have hasmOut : activeStatefulMsgs bs env out.busInteractions
         = activeStatefulMsgs bs env A ++ activeStatefulMsgs bs env B
           ++ activeStatefulMsgs bs env C := by
-      show activeStatefulMsgs bs env (A ++ B ++ C) = _
-      rw [show A ++ B ++ C = (A ++ B) ++ C from rfl, activeStatefulMsgs_append,
-        activeStatefulMsgs_append]
+      show activeStatefulMsgs bs env (A ++ B ++ C ++ checks) = _
+      rw [activeStatefulMsgs_append, activeStatefulMsgs_stateless bs env checks hchecksStateless,
+        List.append_nil, activeStatefulMsgs_append, activeStatefulMsgs_append]
     have hadm' : bs.admissible (activeStatefulMsgs bs env A ++ (S.eval env)
         :: activeStatefulMsgs bs env B ++ (R.eval env) :: activeStatefulMsgs bs env C) := by
       have : bs.admissible (activeStatefulMsgs bs env cs.busInteractions) := hadm
@@ -223,17 +660,34 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     · intro m hm hbid hmne hmaddr
       obtain ⟨m0, hm0, rfl⟩ := mem_activeStatefulMsgs bs env A m hm
       exact hpreEval env m0 hm0 hbid hmne hmaddr
-  -- Variables only shrink (the pair is dropped, no new variables introduced).
+  -- Variables only shrink (the pair is dropped; each emitted check's variables come from `R`).
   have hsub : ∀ v ∈ out.vars, v ∈ cs.vars := by
     intro v hv
     rw [ConstraintSystem.mem_vars] at hv ⊢
     rcases hv with ⟨c, hc, hvc⟩ | ⟨bi, hbi, hbiv⟩
     · exact Or.inl ⟨c, hc, hvc⟩
-    · exact Or.inr ⟨bi, hmem_out_cs bi hbi, hbiv⟩
+    · rcases List.mem_append.1 (by rw [houtb] at hbi; exact hbi) with hbi' | hbi'
+      · exact Or.inr ⟨bi, hmem_core bi hbi', hbiv⟩
+      · -- `bi` is an emitted check: its variables are among `R`'s
+        have hv' : v ∈ bi.vars := by
+          rw [BusInteraction.vars, List.mem_append]
+          rcases hbiv with hm | ⟨e, he, hve⟩
+          · exact Or.inl hm
+          · exact Or.inr (List.mem_flatMap.2 ⟨e, he, hve⟩)
+        have hvR : v ∈ R.vars := (hchecks bi hbi').2.2.2 v hv'
+        rw [BusInteraction.vars, List.mem_append] at hvR
+        refine Or.inr ⟨R, hRmem, ?_⟩
+        rcases hvR with h | h
+        · exact Or.inl h
+        · obtain ⟨e, he, hve⟩ := List.mem_flatMap.1 h
+          exact Or.inr ⟨e, he, hve⟩
   -- Assemble via `ofEnvEq` (completeness witness is the input assignment; no derivations).
   exact PassCorrect.ofEnvEq
     (fun env hsat => ⟨env, hsat_out_cs env hsat, BusState.equiv_symm (hSE env)⟩)
-    (fun hinv env hsat bi hbi => hinv env (hsat_out_cs env hsat) bi (hmem_out_cs bi hbi))
+    (fun hinv env hsat bi hbi => by
+      rcases List.mem_append.1 (by rw [houtb] at hbi; exact hbi) with hbi' | hbi'
+      · exact hinv env (hsat_out_cs env hsat) bi (hmem_core bi hbi')
+      · exact fun _ => (hchecks bi hbi').2.2.1 env)
     hsub
     (fun env hadm hsat => ⟨hsat_cs_out env hsat, hadm_cs_out env hadm, hSE env⟩)
 
@@ -290,33 +744,172 @@ theorem preRefuted_sound (shape : MemoryBusShape) (busId : Nat) (S m : BusIntera
       rw [heval]
       exact of_decide_eq_true h
 
-/-- The per-candidate check (address/multiplicity/payload of the pair, plus the between/before
-    region tests). The split equation `cs.busInteractions = A ++ S :: B ++ R :: C` is *not* checked
+/-! ## Emitted byte checks
+
+When the remaining system does not justify a byte slot of the dropped receive, the receive was
+that limb's *only* byte guarantee — silently dropping it would widen the satisfying set (a real
+soundness issue, not a proof artifact). The pass then *materializes* the obligation as an
+explicit self-check `[e, e, 0, 1]` (multiplicity 1) on a `byteCheck` bus: still a net
+bus-interaction win (2 dropped, 1 added), and later cancellations of the same chain are
+justified by the emitted check. -/
+
+/-- Certificate that an emitted check is a faithful carrier of `R`'s byte obligation: it sits on
+    a `byteCheck` bus, has multiplicity 1 and self-check payload `[e, e, 0, 1]` where `e` is one
+    of `R`'s declared byte-slot entries whose byte-ness `R`'s own accepted receive implies (a
+    `slotBound` of at most 256 at that slot, at multiplicity `-1`, against `R`'s own constant
+    pattern). -/
+def emitOk (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) (slots : List Nat)
+    (R ck : BusInteraction (Expression p)) : Bool :=
+  facts.byteCheck ck.busId &&
+  decide (ck.multiplicity = (.const 1 : Expression p)) &&
+  (match ck.payload with
+   | [e1, e2, z, o] =>
+     decide (e1 = e2) && decide (z = (.const 0 : Expression p)) &&
+     decide (o = (.const 1 : Expression p)) &&
+     slots.any (fun slot =>
+       decide (R.payload[slot]? = some e1) &&
+       (match facts.slotBound busId (-1) (R.payload.map Expression.constValue?) slot with
+        | some b => decide (b ≤ 256)
+        | none => false))
+   | _ => false)
+
+theorem emitOk_sound (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat)
+    (slots : List Nat) (R ck : BusInteraction (Expression p))
+    (h : emitOk bs facts busId slots R ck = true)
+    (hRbus : R.busId = busId) (hRmEv : ∀ env, (R.eval env).multiplicity = -1) :
+    bs.isStateful ck.busId = false ∧
+    (∀ env, bs.violatesConstraint (R.eval env) = false →
+      bs.violatesConstraint (ck.eval env) = false) ∧
+    (∀ env, bs.breaksInvariant (ck.eval env) = false) ∧
+    (∀ v ∈ ck.vars, v ∈ R.vars) := by
+  unfold emitOk at h
+  rw [Bool.and_eq_true, Bool.and_eq_true] at h
+  obtain ⟨⟨hbc, hmultd⟩, hrest⟩ := h
+  have hmult := of_decide_eq_true hmultd
+  obtain ⟨hstateless, hbreak, hviol⟩ := facts.byteCheck_sound ck.busId hbc
+  split at hrest
+  · rename_i e1 e2 z o heq
+    rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hrest
+    obtain ⟨⟨⟨he12d, hzd⟩, hod⟩, hany⟩ := hrest
+    have he12 := of_decide_eq_true he12d
+    have hz := of_decide_eq_true hzd
+    have ho := of_decide_eq_true hod
+    obtain ⟨slot, hslotmem, hslot⟩ := List.any_eq_true.1 hany
+    rw [Bool.and_eq_true] at hslot
+    obtain ⟨hgetd, hbnd⟩ := hslot
+    have hget := of_decide_eq_true hgetd
+    -- the evaluated check is a literal self-check on `e1`'s value
+    have hev : ∀ env, ck.eval env =
+        { busId := ck.busId, multiplicity := (1 : ZMod p),
+          payload := [e1.eval env, e1.eval env, (0 : ZMod p), (1 : ZMod p)] } := by
+      intro env
+      simp only [BusInteraction.eval, heq, hmult, hz, ho, List.map_cons, List.map_nil,
+        Expression.eval, ← he12]
+    -- `e1` sits in `R`'s payload
+    have he1mem : e1 ∈ R.payload := by
+      have := List.getElem?_eq_some_iff.mp hget
+      obtain ⟨hlt, hgetE⟩ := this
+      exact hgetE ▸ List.getElem_mem hlt
+    refine ⟨hstateless, ?_, ?_, ?_⟩
+    · -- the check is implied by `R`'s own accepted receive
+      intro env hRok
+      cases hb : facts.slotBound busId (-1) (R.payload.map Expression.constValue?) slot with
+      | none => rw [hb] at hbnd; simp at hbnd
+      | some b =>
+        rw [hb] at hbnd
+        dsimp only at hbnd
+        have hgetEv : (R.eval env).payload[slot]? = some (e1.eval env) := by
+          show (R.payload.map (fun e => e.eval env))[slot]? = some (e1.eval env)
+          rw [List.getElem?_map, hget]; rfl
+        have hfact : facts.slotBound (R.eval env).busId (R.eval env).multiplicity
+            (R.payload.map Expression.constValue?) slot = some b := by
+          rw [hRmEv env, show (R.eval env).busId = busId from hRbus]
+          exact hb
+        have hbyteE : (e1.eval env).val < 256 :=
+          lt_of_lt_of_le
+            (facts.slotBound_sound (R.eval env) (R.payload.map Expression.constValue?)
+              slot b (e1.eval env) hfact (matches_evalPattern R.payload env) hRok hgetEv)
+            (of_decide_eq_true hbnd)
+        rw [hev env]
+        exact (hviol (e1.eval env) 1).mpr hbyteE
+    · -- the check breaks no invariant
+      intro env
+      rw [hev env]
+      exact hbreak (e1.eval env)
+    · -- the check's variables are `e1`'s, which are `R`'s
+      intro v hv
+      rw [BusInteraction.vars, List.mem_append] at hv
+      have hvE : v ∈ e1.vars := by
+        rcases hv with hm | hm
+        · rw [hmult] at hm; simp [Expression.vars] at hm
+        · rw [heq] at hm
+          obtain ⟨e, he, hve⟩ := List.mem_flatMap.1 hm
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at he
+          rcases he with rfl | rfl | rfl | rfl
+          · exact hve
+          · rw [← he12] at hve; exact hve
+          · rw [hz] at hve; simp [Expression.vars] at hve
+          · rw [ho] at hve; simp [Expression.vars] at hve
+      rw [BusInteraction.vars, List.mem_append]
+      exact Or.inr (List.mem_flatMap.2 ⟨e1, he1mem, hvE⟩)
+  · exact absurd hrest (by simp)
+
+/-- The declared byte slots of `R` whose payload entries `rest` does not justify. -/
+def unjustifiedSlots (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p))) (slots : List Nat)
+    (R : BusInteraction (Expression p)) : List Nat :=
+  slots.filter (fun slot =>
+    match R.payload[slot]? with
+    | some e => !byteJustified deep all bs facts rest e
+    | none => false)
+
+/-- The per-candidate check (address/multiplicity/payload of the pair, the between/before
+    region tests, the emitted checks' certificates, plus the byte justification of the dropped
+    receive's declared byte slots from the remaining interactions *including* the emitted
+    checks). The split equation `cs.busInteractions = A ++ S :: B ++ R :: C` is *not* checked
     here — it is supplied separately (decided once for the chosen candidate) to avoid an O(n)
-    whole-list comparison per candidate. -/
-def checkCancel (shape : MemoryBusShape) (busId : Nat)
+    whole-list comparison per candidate. The justification scans are the last conjuncts, so
+    they only run for candidates that already match. -/
+def checkCancel (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (shape : MemoryBusShape)
+    (busId : Nat) (slots : List Nat)
     (A : List (BusInteraction (Expression p))) (S : BusInteraction (Expression p))
-    (B : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p)) : Bool :=
+    (B : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p))
+    (C : List (BusInteraction (Expression p)))
+    (checks : List (BusInteraction (Expression p))) : Bool :=
   decide (S.busId = busId) && decide (R.busId = busId) &&
   decide (multConst S = some 1) && decide (multConst R = some (-1)) &&
   decide (S.payload = R.payload) &&
   B.all (midRefuted shape busId S) &&
-  A.all (preRefuted shape busId S)
+  A.all (preRefuted shape busId S) &&
+  checks.all (emitOk bs facts busId slots R) &&
+  recvSlotsJustified deep all bs facts (A ++ B ++ C ++ checks) slots R
 
 /-- A passing `checkCancel` (with the split equation) yields `PassCorrect` via `dropPair_correct`. -/
 theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (hp1 : (1 : ZMod p) ≠ 0) (busId : Nat) (shape : MemoryBusShape)
-    (hshape : facts.memShape busId = some shape) (hnv : facts.neverViolates busId = true)
+    (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (busId : Nat) (shape : MemoryBusShape)
+    (hshape : facts.memShape busId = some shape)
+    (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
     (A : List (BusInteraction (Expression p))) (S : BusInteraction (Expression p))
     (B : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p))
     (C : List (BusInteraction (Expression p)))
+    (checks : List (BusInteraction (Expression p)))
     (hsplit : cs.busInteractions = A ++ S :: B ++ R :: C)
-    (h : checkCancel shape busId A S B R = true) :
-    PassCorrect cs { cs with busInteractions := A ++ B ++ C } [] bs := by
+    (h : checkCancel deep cs.algebraicConstraints bs facts shape busId slots A S B R C checks
+      = true) :
+    PassCorrect cs { cs with busInteractions := A ++ B ++ C ++ checks } [] bs := by
   unfold checkCancel at h
   simp only [Bool.and_eq_true] at h
-  obtain ⟨⟨⟨⟨⟨⟨hSb, hRb⟩, hSm⟩, hRm⟩, hpay⟩, hmid⟩, hpre⟩ := h
-  refine dropPair_correct cs bs facts hp1 A B C S R busId shape hshape hnv hsplit
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨hSb, hRb⟩, hSm⟩, hRm⟩, hpay⟩, hmid⟩, hpre⟩, hemit⟩, hjust⟩ := h
+  have hRmEv : ∀ env, (R.eval env).multiplicity = -1 :=
+    fun env => R.multiplicity.constValue?_sound (-1) (of_decide_eq_true hRm) env
+  refine dropPair_correct cs bs facts hp1 A B C S R busId shape hshape slots hslots checks
+    (fun ck hck => emitOk_sound bs facts busId slots R ck
+      (List.all_eq_true.mp hemit ck hck) (of_decide_eq_true hRb) hRmEv)
+    (fun env hall hbus => recvSlotsJustified_sound deep cs.algebraicConstraints bs facts
+      (A ++ B ++ C ++ checks) slots R hdeep hjust env hall hbus)
+    hsplit
     (of_decide_eq_true hSb) (of_decide_eq_true hRb)
     (of_decide_eq_true hSm) (of_decide_eq_true hRm) (of_decide_eq_true hpay) ?_ ?_
   · intro env m0 hm0 hbid hmne hmaddr
@@ -329,8 +922,11 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     split-equation decide runs only when `checkCancel` passes. Stops at the first hit, so each pass
     invocation is linear (no eager materialization of all candidates). -/
 def findCancelGo (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (hp1 : (1 : ZMod p) ≠ 0) (busId : Nat) (shape : MemoryBusShape)
-    (hshape : facts.memShape busId = some shape) (hnv : facts.neverViolates busId = true)
+    (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (busId : Nat) (shape : MemoryBusShape)
+    (hshape : facts.memShape busId = some shape)
+    (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
+    (bcBus? : Option Nat)
     (revA : List (BusInteraction (Expression p))) :
     List (BusInteraction (Expression p)) →
     Option (PassResult cs bs)
@@ -339,43 +935,83 @@ def findCancelGo (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFac
     if decide (multConst S = some 1) && decide (S.busId = busId) then
       match findMatchRecv busId S [] rest with
       | some (B, R, C) =>
-        if hchk : checkCancel shape busId revA.reverse S B R = true then
-          if hsplit : cs.busInteractions = revA.reverse ++ S :: B ++ R :: C then
-            some ⟨{ cs with busInteractions := revA.reverse ++ B ++ C }, [],
-                  checkCancel_sound cs bs facts hp1 busId shape hshape hnv revA.reverse S B R C
-                    hsplit hchk⟩
-          else findCancelGo cs bs facts hp1 busId shape hshape hnv (S :: revA) rest
-        else findCancelGo cs bs facts hp1 busId shape hshape hnv (S :: revA) rest
-      | none => findCancelGo cs bs facts hp1 busId shape hshape hnv (S :: revA) rest
-    else findCancelGo cs bs facts hp1 busId shape hshape hnv (S :: revA) rest
+        let A := revA.reverse
+        -- Cheap region tests first: only an otherwise-valid candidate pays the byte
+        -- justification scan (`checkCancel` re-verifies everything).
+        if B.all (midRefuted shape busId S) && A.all (preRefuted shape busId S) then
+        -- Byte slots the remaining system does not justify are materialized as a single
+        -- explicit self-check on the byte-check bus (more than one would not shrink the bus
+        -- count and would stall the cancellation loop); when the justification cannot pass
+        -- (≥ 2 unjustified slots, or no byte-check bus), skip the certificate re-check —
+        -- the justification scan is the expensive part.
+        let unjust := unjustifiedSlots deep cs.algebraicConstraints bs facts (A ++ B ++ C)
+          slots R
+        let checks : List (BusInteraction (Expression p)) :=
+          match unjust, bcBus? with
+          | [slot], some bcBus => (R.payload[slot]?).elim [] (fun e =>
+              [{ busId := bcBus, multiplicity := .const 1,
+                 payload := [e, e, .const 0, .const 1] }])
+          | _, _ => []
+        if unjust.isEmpty || !checks.isEmpty then
+        if hchk : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
+            A S B R C checks = true then
+          if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
+            some ⟨{ cs with busInteractions := A ++ B ++ C ++ checks }, [],
+                  checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
+                    A S B R C checks hsplit hchk⟩
+          else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
+            (S :: revA) rest
+        else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
+          (S :: revA) rest
+        else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
+          (S :: revA) rest
+        else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
+          (S :: revA) rest
+      | none => findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
+          (S :: revA) rest
+    else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
+        (S :: revA) rest
 
 /-- Search one declared bus for a droppable pair. -/
 def findCancelForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (hp1 : (1 : ZMod p) ≠ 0) (busId : Nat) (shape : MemoryBusShape)
-    (hshape : facts.memShape busId = some shape) (hnv : facts.neverViolates busId = true) :
+    (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (busId : Nat) (shape : MemoryBusShape)
+    (hshape : facts.memShape busId = some shape)
+    (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
+    (bcBus? : Option Nat) :
     Option (PassResult cs bs) :=
-  findCancelGo cs bs facts hp1 busId shape hshape hnv [] cs.busInteractions
+  findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus? []
+    cs.busInteractions
 
 /-- Search all declared buses. -/
 def findCancel (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (hp1 : (1 : ZMod p) ≠ 0) :
+    (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (bcBus? : Option Nat) :
     List Nat → Option (PassResult cs bs)
   | [] => none
   | busId :: rest =>
     match hshape : facts.memShape busId with
     | some shape =>
-      if hnv : facts.neverViolates busId = true then
-        match findCancelForBus cs bs facts hp1 busId shape hshape hnv with
+      match hslots : facts.recvByteSlots busId with
+      | some slots =>
+        match findCancelForBus cs bs facts hp1 deep hdeep busId shape hshape slots hslots
+            bcBus? with
         | some r => some r
-        | none => findCancel cs bs facts hp1 rest
-      else findCancel cs bs facts hp1 rest
-    | none => findCancel cs bs facts hp1 rest
+        | none => findCancel cs bs facts hp1 deep hdeep bcBus? rest
+      | none => findCancel cs bs facts hp1 deep hdeep bcBus? rest
+    | none => findCancel cs bs facts hp1 deep hdeep bcBus? rest
 
-/-- Drop one matched consecutive send/receive pair on a declared, `neverViolates` memory bus. The
-    cleanup loop iterates it to cancel a whole access chain. -/
+/-- Drop one matched consecutive send/receive pair on a declared memory bus with a
+    `recvByteSlots` contract — justifying the dropped receive's byte obligation from the
+    remaining interactions (shallow bus-fact bounds, or the deep one-hot-selection analysis on
+    prime `p`), or materializing it as one explicit byte check on a `byteCheck` bus already
+    present in the system. The cleanup loop iterates it to cancel a whole access chain. -/
 def busPairCancelPass : VerifiedPassW p := fun cs bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then
-    match findCancel cs bs facts hp1 ((cs.busInteractions.map (fun bi => bi.busId)).dedup) with
+    let busIds := (cs.busInteractions.map (fun bi => bi.busId)).dedup
+    let deep : Bool := decide p.Prime
+    match findCancel cs bs facts hp1 deep (fun h => of_decide_eq_true h)
+        (busIds.find? facts.byteCheck) busIds with
     | some r => r
     | none => ⟨cs, [], PassCorrect.refl cs bs⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
