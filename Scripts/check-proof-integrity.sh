@@ -7,7 +7,7 @@ set -euo pipefail
 
 echo "==> Checking sources for forbidden tactics/axioms"
 if grep -rnE '\b(sorry|admit|native_decide)\b|^[[:space:]]*axiom[[:space:]]' \
-     Leanr Main.lean Leanr.lean; then
+     ApcOptimizer Main.lean ApcOptimizer.lean; then
   echo "ERROR: found sorry/admit/native_decide/axiom above." >&2
   exit 1
 fi

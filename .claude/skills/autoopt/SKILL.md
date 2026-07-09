@@ -1,6 +1,6 @@
 ---
 name: autoopt
-description: Improve the leanr circuit optimizer — add a verified optimization pass, measure
+description: Improve apc-optimizer, the verified circuit optimizer — add an optimization pass, measure
   effectiveness on the benchmark set, keep the correctness proof intact, and log the result.
   Use when asked to make the optimizer more effective or to run an autoopt iteration.
 ---
@@ -18,11 +18,11 @@ recent `docs/log.md` entries (`tail -100 docs/log.md`; earlier ones describe sup
 and recent commits to see what has already been tried. Run a case with, e.g.:
 
 ```
-lake exe leanr run OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz
+lake exe apc-optimizer run OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz
 ```
 
 It reports before/after counts and three effectiveness factors — **variables**, **bus
-interactions**, and **algebraic constraints** (each `before / after`; see `Leanr/Utils/Size.lean`).
+interactions**, and **algebraic constraints** (each `before / after`; see `ApcOptimizer/Utils/Size.lean`).
 
 **Priority: variable effectiveness > bus-interaction effectiveness > algebraic-constraint
 effectiveness.** Optimize primarily for fewer distinct variables. When candidate passes are
@@ -31,18 +31,18 @@ removes more bus interactions, and then the one that removes more constraints. A
 bus interactions or constraints without regressing variables is still an improvement worth
 landing. Report all three factors in the log.
 
-Optimization is slow; sampling a few of the 100 cases per iteration is fine. You can use the `*.powdr_opt.*` files for inspiration of new ideas that are possible. For the full picture, `OpenVmBenchmarks/benchmark.py` runs `leanr
+Optimization is slow; sampling a few of the 100 cases per iteration is fine. You can use the `*.powdr_opt.*` files for inspiration of new ideas that are possible. For the full picture, `OpenVmBenchmarks/benchmark.py` runs `apc-optimizer
 compare` over all 100 cases in parallel (or `--n N` for the top N by cost; `--report out.html` for a
-click-through comparison of the original / powdr / leanr circuits) and reports aggregate/geomean
+click-through comparison of the original / powdr / apc-optimizer circuits) and reports aggregate/geomean
 effectiveness against powdr — this is the final evaluation. It runs the main `openvm-eth` benchmark
 by default; a positional argument selects another set under `OpenVmBenchmarks/`. Report the result
 in the log.
 
 ## Rules
 
-- **Do not change the audited surface** — `Leanr/Spec.lean`, `Leanr/OpenVmSemantics.lean`,
-  `Leanr/MemoryBus.lean`, or the correctness theorems in `Leanr/Optimizer.lean`. All passes and
-  the pipeline they compose into live under `Leanr/Implementation/`, which needs no audit.
+- **Do not change the audited surface** — `ApcOptimizer/Spec.lean`, `ApcOptimizer/OpenVmSemantics.lean`,
+  `ApcOptimizer/MemoryBus.lean`, or the correctness theorems in `ApcOptimizer/Optimizer.lean`. All passes and
+  the pipeline they compose into live under `ApcOptimizer/Implementation/`, which needs no audit.
 - **No `sorry` / `admit` / `axiom` / `native_decide`** — enforced by CI
   (`Scripts/check-proof-integrity.sh`, runnable locally). If you cannot prove something, break it
   down or pick a simpler idea.
@@ -51,8 +51,8 @@ in the log.
 
 ## How to add a pass
 
-Write a `VerifiedPass` in a new `Leanr/Implementation/OptimizerPasses/` file, import it in
-`Leanr/Implementation/Optimizer.lean`, and `.andThen … |>.guardDegree` it into `cleanupCycle`. See `CLAUDE.md` and
+Write a `VerifiedPass` in a new `ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
+`ApcOptimizer/Implementation/Optimizer.lean`, and `.andThen … |>.guardDegree` it into `cleanupCycle`. See `CLAUDE.md` and
 `docs/design/architecture.md` for the architecture; correctness follows from the pass's own
 `PassCorrect`.
 

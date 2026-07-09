@@ -7,14 +7,14 @@ effectiveness-neutral but the general, powdr-style mechanism made explicit. The 
 is entry-47 **option B**: drop `reencode` and keep only the fold pass. Measured trade-off on the
 apc_005 load/store class: fold-only reaches **1939** vars (keeping all flags, close to powdr's 1808),
 vs **1683** with `reencode` — i.e. option B is more principled / powdr-aligned but gives up the ~13%
-flag binary-compression (512 ternary flags → 256 bits) that currently makes leanr *beat* powdr there.
+flag binary-compression (512 ternary flags → 256 bits) that currently makes apc-optimizer *beat* powdr there.
 Only worth it if the flag-compression edge is judged not worth `reencode`'s complexity/runtime; the fold
 pass would then also want a `bits ≥ vars` / large-group path (groups `reencode` skips) to claw some of
 it back. Left for Georg to decide.
 
 Effectiveness priority: **variables > bus interactions > constraints**. As of the byte-check
-packing pass (log entry 49), on the top-12 `openvm-eth` sample leanr and powdr are ~tied on
-variables (leanr wins the aggregate, powdr the geomean) and leanr leads on constraints; the
+packing pass (log entry 49), on the top-12 `openvm-eth` sample apc-optimizer and powdr are ~tied on
+variables (apc-optimizer wins the aggregate, powdr the geomean) and apc-optimizer leads on constraints; the
 remaining *systematic* gap is bus interactions. The bus gap now decomposes as: (a) range-check
 packing via the tuple range checker, (b) memory-pointer-limb 13-bit checks on memory-heavy blocks,
 (c) residual bitwise checks that are not self-XOR byte checks, (d) occasional missed memory
@@ -22,9 +22,9 @@ send↔receive cancellations. See the `docs/log.md` entry 42/46/49 discussion fo
 
 ## Drop never-violating stateless lookups (close the residual pc-lookup bus gap)
 
-After memory/exec send↔receive pair cancellation (log entry 46), leanr is at near-parity with powdr
+After memory/exec send↔receive pair cancellation (log entry 46), apc-optimizer is at near-parity with powdr
 on bus interactions; the residual gap is essentially the **PC lookups** (bus 2): powdr removes them,
-leanr keeps them (never-violating model), so they inflate the bus count without affecting variables.
+apc-optimizer keeps them (never-violating model), so they inflate the bus count without affecting variables.
 
 A `VerifiedPass` that drops a stateless bus interaction whose multiplicity is provably `0`, or that
 is proven never-violating via `BusFacts.neverViolates`, would be sound (removing a
@@ -36,7 +36,7 @@ effectiveness without regressing variables — a clean win under the priority or
 ## Range-check packing via the tuple range checker (bus interactions)
 
 powdr merges a byte check and an N-bit range check into a single `TupleRangeChecker` interaction
-`[x, y]` (checking `x < s1 ∧ y < s2`); leanr keeps them as two separate `variableRangeChecker`
+`[x, y]` (checking `x < s1 ∧ y < s2`); apc-optimizer keeps them as two separate `variableRangeChecker`
 lookups. This is the same shape as the byte-check packing already landed (entry 49): add a
 `BusFacts` fact that a tuple-range message `[x, y]` is accepted iff the two single range checks
 `[x, bits1]`, `[y, bits2]` are, then a pass that pairs a byte check with a matching-width range
@@ -54,8 +54,8 @@ variable-neutral bus win.
 
 ## Eliminate memory-pointer-limb decompositions / redundant range checks (bus interactions)
 
-On memory-heavy blocks (e.g. apc_005) leanr keeps ~2× powdr's `mem_ptr_limbs` decompositions and
-their 13-bit range checks (the high/"page" limb is identical across same-base accesses but leanr
+On memory-heavy blocks (e.g. apc_005) apc-optimizer keeps ~2× powdr's `mem_ptr_limbs` decompositions and
+their 13-bit range checks (the high/"page" limb is identical across same-base accesses but apc-optimizer
 re-decomposes and re-checks per access). The limbs are pinned by **degree-2 carry constraints**
 `(L₁)(L₂) = 0` whose roots are `base + offset` (parameterised by the base variable), so no linear
 (`gauss`/`affine`) or finite-*constant*-domain (`domainProp`/`domainBatch`/`reencode`) pass can
@@ -64,7 +64,7 @@ touch them. Closing it needs a **carry-branch-resolution** step: use the proven 
 the linear `Lᵢ=0` so Gauss can unify the shared limb and drop the duplicate check. This is the
 hardest of the current ideas — dropping a range check is sound only if the shared limb is *proven*
 equal (a bounded-no-wrap argument in the style of `MemoryUnify.boundedSumMax`) — and it is a bus
-win on an axis where leanr is already ~tied with powdr on variables, so lower leverage than the
+win on an axis where apc-optimizer is already ~tied with powdr on variables, so lower leverage than the
 packing passes. **Update (log 50):** the base `mem_ptr_limbs` derive from *received* register
 words, whose limbs now carry proven byte bounds (`slotBound` on memory receives, since the
 receive-byte spec change) — the missing input bound for the no-wrap argument now exists.

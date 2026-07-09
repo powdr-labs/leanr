@@ -1,28 +1,28 @@
-import Leanr.Implementation.JsonParser
-import Leanr.Optimizer
-import Leanr.Implementation.Optimizer
-import Leanr.Utils.Size
-import Leanr.Utils.Dsl
-import Leanr.OpenVmSemantics
-import Leanr.Ffi
+import ApcOptimizer.Implementation.JsonParser
+import ApcOptimizer.Optimizer
+import ApcOptimizer.Implementation.Optimizer
+import ApcOptimizer.Utils.Size
+import ApcOptimizer.Utils.Dsl
+import ApcOptimizer.OpenVmSemantics
+import ApcOptimizer.Ffi
 
 /-!
-# The leanr CLI
+# The apc-optimizer CLI
 
 Benchmark harness for the optimizer on powdr `SymbolicMachine` exports
-(`OpenVmBenchmarks/openvm-eth/*.json.gz`, or any file in the same format — see `Leanr/Implementation/JsonParser.lean`):
+(`OpenVmBenchmarks/openvm-eth/*.json.gz`, or any file in the same format — see `ApcOptimizer/Implementation/JsonParser.lean`):
 
-- `leanr run <file.json[.gz]>` — parse, run the leanr optimizer with the file's
+- `apc-optimizer run <file.json[.gz]>` — parse, run the apc-optimizer with the file's
   own bus map, report sizes and effectiveness.
-- `leanr powdr <unopt.json[.gz]> <opt.json[.gz]>` — report powdr's effectiveness from its
-  serialized optimizer output (no leanr optimizer run).
-- `leanr compare <unopt.json[.gz]> <opt.json[.gz]>` — both, side by side.
+- `apc-optimizer powdr <unopt.json[.gz]> <opt.json[.gz]>` — report powdr's effectiveness from its
+  serialized optimizer output (no apc-optimizer run).
+- `apc-optimizer compare <unopt.json[.gz]> <opt.json[.gz]>` — both, side by side.
 
 The optimizer takes no iteration count: its cleanup loop (`iterateToFixpoint`) runs to a fixpoint,
 provably terminating on the lexicographic size key `(vars, bus, constraints)`.
 -/
 
-open Leanr.OpenVM
+open ApcOptimizer.OpenVM
 
 /-- Read a benchmark file: `.json.gz` via `gunzip -c` (like the powdr test fixtures),
     `.json` directly. -/
@@ -100,7 +100,7 @@ def printRatio (label : String) (before after : Nat) : IO Unit :=
 
 /-- Effectiveness of an optimization: the factor by which each size measure shrinks
     (`before / after`), for the three measures in priority order — variables first, then bus
-    interactions, then algebraic constraints (the `Leanr/Utils/Size.lean` metrics). -/
+    interactions, then algebraic constraints (the `ApcOptimizer/Utils/Size.lean` metrics). -/
 def printEffectiveness (label : String) (before after : Stats) : IO Unit := do
   IO.println s!"{label} effectiveness (before → after):"
   printRatio (label := "variables       ") (before := before.vars) (after := after.vars)
@@ -119,9 +119,9 @@ def cmdRun (fileName : String) : IO Unit := do
   let optimized ← IO.lazyPure (fun _ => (openVmOptimizer busMap.toBusMap cs).1)
   let after ← IO.lazyPure (fun _ => statsOf optimized)
   let t1 ← IO.monoMsNow
-  printStats (label := "before") (stats := before)
-  printStats (label := "leanr ") (stats := after)
-  printEffectiveness (label := "leanr") (before := before) (after := after)
+  printStats (label := "before       ") (stats := before)
+  printStats (label := "apc-optimizer") (stats := after)
+  printEffectiveness (label := "apc-optimizer") (before := before) (after := after)
   let bound := (openVmBusSemantics babyBear busMap.toBusMap).degreeBound
   IO.println s!"  degree bound (identities {bound.identities}, bus {bound.busInteractions}): \
     input {if cs.withinDegreeB bound then "ok" else "EXCEEDED"}, \
@@ -143,22 +143,22 @@ def cmdVars (fileName : String) : IO Unit := do
 def cmdRender (fileName : String) : IO Unit := do
   let (cs, busMap) ← parseFile fileName
   let optimized ← IO.lazyPure (fun _ => (openVmOptimizer busMap.toBusMap cs).1)
-  IO.println (Leanr.Spec.Dsl.render optimized)
+  IO.println (ApcOptimizer.Spec.Dsl.render optimized)
 
 def cmdPowdr (unoptFile : String) (optFile : String) : IO Unit := do
   let (csBefore, _) ← parseFile unoptFile
   let (csAfter, _) ← parseFile optFile
   let before := statsOf csBefore
   let after := statsOf csAfter
-  printStats (label := "before") (stats := before)
-  printStats (label := "powdr ") (stats := after)
+  printStats (label := "before       ") (stats := before)
+  printStats (label := "powdr        ") (stats := after)
   printEffectiveness (label := "powdr") (before := before) (after := after)
 
 def cmdCompare (unoptFile : String) (optFile : String) : IO Unit := do
   cmdRun (fileName := unoptFile)
   let (csBefore, _) ← parseFile unoptFile
   let (csAfter, _) ← parseFile optFile
-  printStats (label := "powdr ") (stats := statsOf csAfter)
+  printStats (label := "powdr        ") (stats := statsOf csAfter)
   printEffectiveness (label := "powdr") (before := statsOf csBefore) (after := statsOf csAfter)
 
 /-- Escape a string for embedding inside a JSON string literal. -/
@@ -177,10 +177,10 @@ def circuitJson (cs : ConstraintSystem babyBear) : String :=
     ",\"constraints\":" ++ toString st.constraints ++
     ",\"bus\":" ++ toString st.busInteractions ++
     ",\"vars_list\":[" ++ vs ++ "]" ++
-    ",\"render\":\"" ++ jsonEscape (Leanr.Spec.Dsl.render cs) ++ "\"}"
+    ",\"render\":\"" ++ jsonEscape (ApcOptimizer.Spec.Dsl.render cs) ++ "\"}"
 
 /-- `report <unopt> <opt>`: emit one JSON object with the original, powdr-optimized and
-    leanr-optimized circuits (each: vars/constraints/bus + DSL render). Consumed by the
+    apc-optimizer-optimized circuits (each: vars/constraints/bus + DSL render). Consumed by the
     benchmark HTML report (`OpenVmBenchmarks/benchmark.py --report`). -/
 def cmdReport (unoptFile optFile : String) : IO Unit := do
   let (cs, busMap) ← parseFile unoptFile
@@ -188,9 +188,9 @@ def cmdReport (unoptFile optFile : String) : IO Unit := do
   let optimized := (openVmOptimizer busMap.toBusMap cs).1
   IO.println ("{\"original\":" ++ circuitJson cs ++
     ",\"powdr\":" ++ circuitJson csPowdr ++
-    ",\"leanr\":" ++ circuitJson optimized ++ "}")
+    ",\"apc-optimizer\":" ++ circuitJson optimized ++ "}")
 
-open Leanr.OpenVM in
+open ApcOptimizer.OpenVM in
 /-- Profiling helper: apply one fact-aware pass, forcing full evaluation, and return the new
     system plus the elapsed milliseconds. -/
 def applyTimed (pass : VerifiedPassW babyBear) (cs : ConstraintSystem babyBear)
@@ -204,7 +204,7 @@ def applyTimed (pass : VerifiedPassW babyBear) (cs : ConstraintSystem babyBear)
   let t1 ← IO.monoMsNow
   pure (out, t1 - t0)
 
-open Leanr.OpenVM in
+open ApcOptimizer.OpenVM in
 /-- Run one cleanup cycle's passes in order, accumulating per-pass elapsed time. -/
 partial def runCycleTimed (passes : List (String × VerifiedPassW babyBear))
     (cs : ConstraintSystem babyBear) (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs)
@@ -217,7 +217,7 @@ partial def runCycleTimed (passes : List (String × VerifiedPassW babyBear))
     a := a.insert name (a.getD name 0 + dt)
   pure (c, a)
 
-open Leanr.OpenVM in
+open ApcOptimizer.OpenVM in
 /-- Iterate the cleanup cycle to a fixpoint (mirroring `iterateToFixpoint`), accumulating per-pass
     time and counting iterations. -/
 partial def profileLoop (passes : List (String × VerifiedPassW babyBear))
@@ -230,7 +230,7 @@ partial def profileLoop (passes : List (String × VerifiedPassW babyBear))
   else
     pure (cs, acc', iter)
 
-open Leanr.OpenVM in
+open ApcOptimizer.OpenVM in
 /-- `profile <file>`: run the OpenVM pipeline with per-pass timing, reporting the cumulative time
     spent in each pass across all fixpoint iterations. -/
 def cmdProfile (fileName : String) : IO Unit := do
@@ -270,11 +270,11 @@ def cmdProfile (fileName : String) : IO Unit := do
     IO.println s!"  {name}: {ms} ms"
 
 def usage : String :=
-  "usage: leanr run <file.json[.gz]>\n" ++
-  "       leanr profile <file.json[.gz]>  (per-pass optimizer timing)\n" ++
-  "       leanr powdr <unopt.json[.gz]> <opt.json[.gz]>\n" ++
-  "       leanr compare <unopt.json[.gz]> <opt.json[.gz]>\n" ++
-  "       leanr report  <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n\n" ++
+  "usage: apc-optimizer run <file.json[.gz]>\n" ++
+  "       apc-optimizer profile <file.json[.gz]>  (per-pass optimizer timing)\n" ++
+  "       apc-optimizer powdr <unopt.json[.gz]> <opt.json[.gz]>\n" ++
+  "       apc-optimizer compare <unopt.json[.gz]> <opt.json[.gz]>\n" ++
+  "       apc-optimizer report  <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n\n" ++
   "Files are powdr SymbolicMachine exports (ApcWithBusMap), e.g. OpenVmBenchmarks/openvm-eth/*.json.gz.\n" ++
   "The optimizer runs its cleanup loop to a fixpoint (provably terminating); there is no\n" ++
   "iteration count to set."

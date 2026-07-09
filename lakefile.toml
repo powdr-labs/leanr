@@ -1,6 +1,6 @@
-name = "leanr"
+name = "apc-optimizer"
 version = "0.1.0"
-defaultTargets = ["Leanr", "leanr"]
+defaultTargets = ["ApcOptimizer", "apc-optimizer"]
 
 [[require]]
 name = "mathlib"
@@ -8,8 +8,8 @@ git = "https://github.com/leanprover-community/mathlib4"
 rev = "master"
 
 [[lean_lib]]
-name = "Leanr"
+name = "ApcOptimizer"
 
 [[lean_exe]]
-name = "leanr"
+name = "apc-optimizer"
 root = "Main"

@@ -91,6 +91,6 @@
    "inputRev": "v4.30.0-rc1",
    "inherited": true,
    "configFile": "lakefile.toml"}],
- "name": "leanr",
+ "name": "«apc-optimizer»",
  "lakeDir": ".lake",
  "fixedToolchain": false}

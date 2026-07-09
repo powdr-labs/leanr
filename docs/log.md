@@ -349,7 +349,7 @@ effects except the read-decomposition limbs, which encode genuine witness freedo
 previous access belongs to the context).
 
 ### 19. Batch linear elimination — `SubstMap.lean` + `Gauss.lean` (new benchmark focus)
-The focus shifts from the snapshot to the real benchmark set (`Leanr/OpenVm/Benchmark/`,
+The focus shifts from the snapshot to the real benchmark set (`ApcOptimizer/OpenVm/Benchmark/`,
 top-100 openvm-eth APCs; measured effectiveness below is on those). Diagnosis: the pipeline
 eliminated ~2 variables per cleanup cycle (one `affineSubstPass` pivot + one `domainPropPass`
 substitution), each cycle costing a full-system rescan — case 1 (511 vars) needed 400 cycles
@@ -405,7 +405,7 @@ and the CLI gains `vars`/`render` diagnostic subcommands.
 Worked: yes. Case 2: 69 → 57 vars (2.35×; the three ALU instructions have rd = rs1, so the
 register-read send and the same-register write pair up within each instruction — the write's
 `prev_data` and timestamp decomposition all collapse); case 4: 468 → 240 (1.95×). Cases 1/3
-unchanged — diagnosis (via `leanr vars`): their remaining gap vs powdr is dominated by two
+unchanged — diagnosis (via `apc-optimizer vars`): their remaining gap vs powdr is dominated by two
 *frozen-spec* walls, (i) cross-instruction timestamp linkage lives on the execution bridge,
 which has no declared discipline, and pinning `ts_{i+1} = ts_i + 3` is provably not
 equivalence-preserving (entry 14's countermodel: a satisfying assignment exists in which a
@@ -419,7 +419,7 @@ execution bridge as a `MemoryBusShape` with empty address — deliberately not d
 
 ### 22. Joint domain enumeration + wider fact domains (`DomainBatch.lean`)
 Two upgrades found by diffing residual variable classes against powdr's outputs (apc_033:
-shift-heavy block, powdr 7.85× vs leanr 1.76×). (a) **Joint enumeration**: single-constraint
+shift-heavy block, powdr 7.85× vs apc-optimizer 1.76×). (a) **Joint enumeration**: single-constraint
 enumeration cannot resolve coupled systems like one-hot selectors — the booleanity
 constraints, the sum residue, and the weighted-sum residue only force the flags *together*.
 `forcedOver` now enumerates a target's domain box against **all** constraints and bus
@@ -438,10 +438,10 @@ case 1: 284 → 274, case 19: 950 → 934; runtimes back at or below the pre-cha
 effectiveness; full-sweep aggregate re-measured next.**
 
 ### 23. Full-benchmark measurement (top-100 openvm-eth set)
-Complete sweep at default settings (`leanr run`, 32 stable-iterated cycles), all 100 cases,
+Complete sweep at default settings (`apc-optimizer run`, 32 stable-iterated cycles), all 100 cases,
 ~22 minutes total, slowest single case 159 s (apc_095, 7202 vars):
 
-- **leanr: 150323 → 88195 variables, aggregate effectiveness 1.704× (geometric mean of
+- **apc-optimizer: 150323 → 88195 variables, aggregate effectiveness 1.704× (geometric mean of
   per-case ratios 1.773×).** Session start was ≈1.15× on case 1 and structurally unable to
   finish the 5000-var cases.
 - powdr on the same inputs: 150323 → 34766 (4.324× aggregate, 3.943× geomean).
@@ -449,7 +449,7 @@ Complete sweep at default settings (`leanr run`, 32 stable-iterated cycles), all
   (2.38×), largest case apc_034 9563→5230 (1.83×). No case regressed; the optimizer never
   grew a circuit.
 
-The remaining leanr-vs-powdr gap is dominated by knowledge the frozen spec deliberately does
+The remaining apc-optimizer-vs-powdr gap is dominated by knowledge the frozen spec deliberately does
 not license (all analyzed before changing anything, see entries 14/15/21): (i) the execution
 bridge carries the `pc`/`timestamp` chaining between instructions, but has no declared
 discipline, and pinning `ts_{i+1} = ts_i + 3` is provably not equivalence-preserving under
@@ -473,7 +473,7 @@ witnesses — the opcode pin leaves exactly four valid flag encodings (the load'
 amount, a function of the accessed address), and powdr keeps them too (512 on case 5,
 identical to our output). `is_load`, which the constraints do force, has been eliminated
 since entry 22's joint enumeration (the earlier diagnosis cited a stale render). So the
-remaining leanr-vs-powdr gap reduces to essentially **one** spec decision: the
+remaining apc-optimizer-vs-powdr gap reduces to essentially **one** spec decision: the
 execution-bridge discipline (cross-instruction chaining — e.g. case 5 keeps 520 `rsN_data`
 vs powdr's 8). Proposal left uncommitted for review in `SPEC-PROPOSAL-chaining.md`; the
 pc-lookup-table idea is withdrawn there with the evidence.
@@ -617,7 +617,7 @@ we keep 4 bits), case 1: 511 → 167 (3.06×), case 5: 5406 → 3338 (was 3530).
 verified within `{identities := 3, busInteractions := 2}`.
 
 ### 32. Full sweep at degree-bound state; JALR/order-freedom is the dominant remaining gap
-Full 100-case sweep at the degree-aware commit: **leanr 150323 → 59241 vars = 2.537×
+Full 100-case sweep at the degree-aware commit: **apc-optimizer 150323 → 59241 vars = 2.537×
 aggregate (2.667 geomean)**, all outputs within `{identities := 3, busInteractions := 2}`;
 powdr 4.324×. (Session start was 1.15× on case 1 with the 5000-var cases unreachable.)
 
@@ -657,7 +657,7 @@ pairwise (the top-digit argument, carried out over ℕ with a `ZMod.val` bridge;
 `digitCheck_sound`). Sound and VM-general. Measured impact on the sampled OpenVM cases
 (12/33/41): **none** — the two accesses' pointer-limb decompositions are not linked by such a
 constraint in these circuits (the heap-chaining blocker is the timestamp/JALR issue above,
-not decomposition matching). Kept in the tree (imported by `Leanr.lean`, so `lake build`
+not decomposition matching). Kept in the tree (imported by `ApcOptimizer.lean`, so `lake build`
 verifies it) but **not** in the pipeline, since it fires on no benchmark case and would only
 add per-cycle cost. Available if a VM emits the matching constraint shape.
 
@@ -666,7 +666,7 @@ Added clause 5 to `MemoryBusShape.disciplineOn`: active messages on a declared b
 in non-decreasing timestamp order (`msgs.Pairwise (fun a b => a.mult ≠ 0 → b.mult ≠ 0 →
 tsVal a ≤ tsVal b)`). This is the audited assumption from `SPEC-PROPOSAL-order-monotonicity.md`
 — powdr's de-facto ordering, and (per the concrete `EXEC` walk-through with Georg) exactly
-what rules out the phantom out-of-time-order countermodel that currently forces leanr to keep
+what rules out the phantom out-of-time-order countermodel that currently forces apc-optimizer to keep
 `t2` when a block ends in a computed jump. It **reverses** the entry-17 order-freedom choice
 for the optimizations it enables, hence Georg's explicit sign-off.
 Threading: the substitution / `mapExpr` discipline-transfer lemmas rewrite the whole evaluated
@@ -743,7 +743,7 @@ these by solving the less-than gadget for the limb instead of the timestamp; mat
 without regressing timestamp collapse is the next lever.
 
 ### 37. Re-encode emits a constant when the interpolated value is pattern-independent
-Root-caused the residual register/data gap (leanr keeps per-instruction copies of `a_`/`b_`/
+Root-caused the residual register/data gap (apc-optimizer keeps per-instruction copies of `a_`/`b_`/
 `rs1_data`/`read_data` that powdr forwards across instructions). The blocker was **self-
 inflicted**: the re-encoding pass (`Reencode.interpOf`) replaces a maximal in-group
 subexpression by its one-hot interpolation `Σ indicator(β)·value(β)` over the flag bit
@@ -816,7 +816,7 @@ consecutive-match statement, name `admissible`.
 (the pre-filter is what makes every transfer lemma generic). `isIntended→admissible`,
 `impliesIntended→impliesAdmissible`; `refines` unchanged in shape.
 
-**New `Leanr/MemoryBus.lean`:** the concrete last-write-wins discipline (shared, not in the spec):
+**New `ApcOptimizer/MemoryBus.lean`:** the concrete last-write-wins discipline (shared, not in the spec):
 `MemoryBusShape := {addressFields}`, `admissibleBus` = *consecutive same-address send→receive
 pairs match* (split form), and `admissibleBus.consecutive` — the consumption helper that lifts a
 raw per-bus split to the active sublist. Timestamps are gone from the predicate entirely.
@@ -842,7 +842,7 @@ Consequence of entry 39's uniform `admissibleBus` predicate (Georg: "check wheth
 in one pass"). The three former passes — `memoryUnifyBatchPass` (memory pairs), `execChainPass`
 (exec bridge), `chainUnifyPass` (whole chains) — were all doing the *same* thing under the new
 predicate: pair each active send with the next active same-address receive and emit the slot
-equalities. They collapse into a single `Leanr/OptimizerPasses/BusUnify.lean`:
+equalities. They collapse into a single `ApcOptimizer/OptimizerPasses/BusUnify.lean`:
 
 - `admissibleBus.consecutive` (in `MemoryBus.lean`) turns a raw per-bus split `pre ++ S :: mid ++
   R :: post` (S a send, R a receive, same address, no active same-address message in `mid`) into
@@ -868,12 +868,12 @@ still `{propext, Classical.choice, Quot.sound}`-only. Net: the spec refactor (en
 this pass unification remove ~1500 lines while preserving effectiveness and the 3-axiom proof.
 
 ### 41. Full top-100 sweep after the unification refactor — near-parity with powdr
-Full 100-case openvm-eth sweep (same set as entry 32), leanr vs powdr's serialized output:
+Full 100-case openvm-eth sweep (same set as entry 32), apc-optimizer vs powdr's serialized output:
 
-- **leanr: 150323 → 36233 vars = 4.149× aggregate (3.650× geomean)**
+- **apc-optimizer: 150323 → 36233 vars = 4.149× aggregate (3.650× geomean)**
 - **powdr: 150323 → 34766 vars = 4.324× aggregate (3.943× geomean)**
-- Per-case: leanr keeps fewer vars on **13**, powdr fewer on **87**, no ties. But the aggregate gap
-  is only 1467 vars (leanr 4.2% above powdr).
+- Per-case: apc-optimizer keeps fewer vars on **13**, powdr fewer on **87**, no ties. But the aggregate gap
+  is only 1467 vars (apc-optimizer 4.2% above powdr).
 
 This is the payoff of entries 38–40: from **2.537×/2.667× (entry 32) to 4.149×/3.650×**. The
 single anchor-free `busUnifyPass` (consecutive same-address match) chains cross-instruction
@@ -881,8 +881,8 @@ timestamps/pc *everywhere* — the symbolic-jump blocker that entry 32 identifie
 gap is gone (a terminal computed jump just has no consecutive receive, so the straight-line links
 still resolve), and that cascades into register/heap/decomposition chaining.
 
-**Where leanr beats powdr:** the large load/store-heavy repeated blocks (the 5406-var class:
-leanr 1683 vs powdr 1809, ×6 such blocks). The uniform consecutive-match chains these more
+**Where apc-optimizer beats powdr:** the large load/store-heavy repeated blocks (the 5406-var class:
+apc-optimizer 1683 vs powdr 1809, ×6 such blocks). The uniform consecutive-match chains these more
 completely than powdr's `optimize_exec_bus` + memory handling.
 
 **Where powdr still wins (the 87 small losses, typically +8…+24 vars; apc_095 7202-var: +129):**
@@ -902,7 +902,7 @@ attributable to powdr passes we don't have (`autoprecompiles/src/optimizer.rs`):
 
 > *Note (added later): the claim that these benchmark exports include `optimistic_constraints` is
 > unverified and, per Georg, incorrect — they are produced without the optimistic pass. The
-> leanr-vs-powdr var gap is accounted for by the sound items (1)–(3) above.*
+> apc-optimizer-vs-powdr var gap is accounted for by the sound items (1)–(3) above.*
 
 **What closing the remaining sound gap would take:** a degree-aware inlining pass (subst-like, but
 inlining any below-degree-bound column, not just pinned vars) + a dead-column sweep (a `filterBus`/
@@ -913,22 +913,22 @@ metric-neutral or out of scope. No spec changes needed for the sound items.
 ### 42. Bus-interaction and algebraic-constraint effectiveness metrics (measurement only)
 Tooling, not a pass. Added two effectiveness measures alongside the existing variable one, so the
 CLI and benchmark now report the shrink factor (`count before / count after`) for **variables**,
-**bus interactions**, and **algebraic constraints** — for both leanr and powdr. Formalized as
+**bus interactions**, and **algebraic constraints** — for both apc-optimizer and powdr. Formalized as
 `busInteractionEffectiveness` / `constraintEffectiveness` (via a shared `effectivenessBy` over a
-size measure) in `Leanr/Utils/Size.lean`; surfaced in `leanr run`/`compare`, the
+size measure) in `ApcOptimizer/Utils/Size.lean`; surfaced in `apc-optimizer run`/`compare`, the
 `OpenVmBenchmark/benchmark.py` terminal summary (agg + geomean per measure), and the HTML report.
 The priority order **variables > bus interactions > constraints** is documented in `CLAUDE.md` and
 the `autoopt` skill.
 
-The new bus metric immediately makes entry 41's item (4) quantitative. On a 4-case sample: leanr
+The new bus metric immediately makes entry 41's item (4) quantitative. On a 4-case sample: apc-optimizer
 bus effectiveness **1.43× agg** vs powdr **2.52×** — powdr's PC-lookup removal (and broader
-interaction cleanup) is a large, previously-invisible gap. leanr already leads on constraints
+interaction cleanup) is a large, previously-invisible gap. apc-optimizer already leads on constraints
 (**8.63×** vs **7.47×**). This suggests a sound, variable-neutral win is available: dropping
 never-violating stateless lookups (e.g. pinned PC lookups) would raise bus effectiveness toward
 powdr without regressing variables. Added to `docs/ideas.md`.
 
 ### 43. Disconnected-component removal (`disconnectedComponentPass`)
-New pass `Leanr/Implementation/OptimizerPasses/DisconnectedComponent.lean`: drop a *disconnected
+New pass `ApcOptimizer/Implementation/OptimizerPasses/DisconnectedComponent.lean`: drop a *disconnected
 component* — a set of constraints and stateless interactions whose variables never reach a
 **stateful** bus interaction — **provided the subcircuit is satisfiable**. Soundness must
 reconstruct a full satisfying assignment of the input from one of the output, so it needs a witness
@@ -949,7 +949,7 @@ component never blocks the others); the induced partition is re-checked, so corr
 depends on the (`partial`) search.
 
 Correctness axioms unchanged (`{propext, Classical.choice, Quot.sound}`); snapshot intact. Measured
-on the pre-rename benchmark data (before the #48 variable-rename refactor this rebased onto): leanr
+on the pre-rename benchmark data (before the #48 variable-rename refactor this rebased onto): apc-optimizer
 **4.016× → 4.023× aggregate**, monotonic (the pass only removes variables, so no case regresses;
 ~65 vars over several cases). Largest single case apc_100 (dead range-checked `bit_shift_carry`
 shift-limbs): 1027 → 1003 vars. The dominant *unremoved* pattern is the orphaned register read
@@ -973,7 +973,7 @@ generalized to the lexicographic priority order. Distinct-var count uses a `Hash
 Two corollaries, by strong induction on `sizeKey`: `iterateToFixpoint_respectsDeg` (degree bound
 preserved) and **`iterateToFixpoint_monotone`** — the loop's output never has a larger size key than
 its input, i.e. the optimizer can only shrink the circuit ("passes only improve"). Removed the
-now-dead `iterateStable`; the audited correctness theorems in `Leanr/Optimizer.lean` lose their
+now-dead `iterateStable`; the audited correctness theorems in `ApcOptimizer/Optimizer.lean` lose their
 `iters` argument (they were already `∀ iters`, so this is a one-line change).
 
 Correctness axioms unchanged (`{propext, Classical.choice, Quot.sound}`); no `sorry`/`native_decide`.
@@ -982,7 +982,7 @@ Validated the count-based stop against the old structural no-op by tracing per-c
 cycle strictly lex-decreases, and the first non-decreasing cycle *is* the structural fixpoint — the
 two stops coincide, so zero effectiveness change (outputs reproduce exactly, e.g. apc_069 28/6/22,
 apc_001 42/18/38, apc_100 1003/601/1866). Also removed the `iters`/`--iters` CLI flag and updated
-`benchmark.py`, the READMEs, the architecture doc, and CLAUDE.md. The FFI entry point `Leanr/Ffi.lean`
+`benchmark.py`, the READMEs, the architecture doc, and CLAUDE.md. The FFI entry point `ApcOptimizer/Ffi.lean`
 drops its now-stale `openVmOptimizer … 32 …` iters argument (the serializer's own `Variable`-struct
 reconciliation landed separately on `main`).
 
@@ -995,7 +995,7 @@ and only the wall-clock cost of running the optimizer drops. Nothing in the audi
 `Basic.lean`, or the spec changed; correctness axioms stay `{propext, Classical.choice, Quot.sound}`;
 `lake build` green, no `sorry`/`native_decide`.
 
-Profiled per-pass on the slowest cases (added a `leanr profile <file>` CLI command that times each
+Profiled per-pass on the slowest cases (added a `apc-optimizer profile <file>` CLI command that times each
 pass across the fixpoint loop). Three passes dominated — `domainBatch`, `reencode`, `busUnify` — and
 each turned out to be paying for a *recomputation inside a loop* rather than doing irreducible work.
 Fixes, each preserving the exact output:
@@ -1022,7 +1022,7 @@ Fixes, each preserving the exact output:
    `cs.vars` rebuilds the whole ~10⁵-entry occurrence list on every reference. Bound `cs.vars` once
    with a `let` (zeta-transparent in the proof) — the single biggest per-pass win.
 
-**Impact (openvm-eth, all 100 cases, optimizer time only, `leanr run`):**
+**Impact (openvm-eth, all 100 cases, optimizer time only, `apc-optimizer run`):**
 total **3,393,648 ms → 1,978,903 ms (1.72×, −41.7%)**; geometric-mean per-case speedup **1.64×**;
 slowest case apc_037 **258,362 ms → 165,964 ms (1.56×, −35.8%)** (apc_100 229,950 → 171,924). Per-pass
 on apc_100 (profiler): domainBatch 135.7s→94.0s, reencode 78.3s→59.1s, busUnify 18.3s→3.4s.
@@ -1071,9 +1071,9 @@ all outputs within the degree bound.
 
 **Impact (bus interactions; variables unchanged):** apc_003 209 → **96** (2.18×; was 150 before this
 pass, powdr 85). Across a sample (apc_001–008; the small cases re-confirmed identical post-rebase),
-bus interactions total 5839 → **leanr 1894** (3.08×) vs **powdr 1637** (3.57×), with variables
-unchanged (leanr keeps ≤ powdr's on every sampled case). The remaining leanr-vs-powdr bus gap is the PC lookups (bus 2),
-which powdr removes and leanr keeps (never-violating model) — a separate follow-up (`docs/ideas.md`).
+bus interactions total 5839 → **apc-optimizer 1894** (3.08×) vs **powdr 1637** (3.57×), with variables
+unchanged (apc-optimizer keeps ≤ powdr's on every sampled case). The remaining apc-optimizer-vs-powdr bus gap is the PC lookups (bus 2),
+which powdr removes and apc-optimizer keeps (never-violating model) — a separate follow-up (`docs/ideas.md`).
 
 ### 47. Investigation (Georg): where does `reencode`'s effectiveness actually come from? (no code change)
 Georg asked why `reencode` drives so much effectiveness when powdr has no such pass, and whether a
@@ -1108,8 +1108,8 @@ constant on every domain survivor by that constant, *keeping* the group (no bits
 (`e − c = 0` entailed by the group-local constraints, which must stay in the output to pin the domain —
 so fold in bus interactions / non-covered constraints), env'=env, no derivations; strictly simpler than
 `reencode` and a strict generalization of `domainBatch`/`ConstantFold`. It would recover the ~87% chaining
-collapse (powdr's 1808 is the rough target; leanr's chaining is if anything stronger) but not the ~13%
-flag compression, which is genuinely reencode-only (it's why leanr *beats* powdr here: 1683 < 1808). Full
+collapse (powdr's 1808 is the rough target; apc-optimizer's chaining is if anything stronger) but not the ~13%
+flag compression, which is genuinely reencode-only (it's why apc-optimizer *beats* powdr here: 1683 < 1808). Full
 proposal + the keep-both-vs-replace decision in `docs/ideas.md`. No optimizer/spec change in this entry.
 
 ### 48. Domain-constant subexpression folding (`DomainFold.lean`) — the entry-47 pass, kept alongside `reencode`
@@ -1153,12 +1153,12 @@ all flags, close to powdr's 1808).
 Closes most of the bitwise-lookup bus gap identified in entry 42/46. On OpenVM's `BitwiseLookup`
 bus a single value `e` is byte-range-checked by the self-XOR message `[e, e, 0, 1]` (op 1: asserts
 `e ⊕ e = 0`, forcing `e` to be a byte). powdr packs **two** such checks into one pair check
-`[e₁, e₂, 0, 0]` (op 0: range-check both operands), checking two bytes per interaction where leanr
-kept one per limb — so leanr carried ~2× powdr's bitwise interactions (e.g. apc_001 12 vs 6,
+`[e₁, e₂, 0, 0]` (op 0: range-check both operands), checking two bytes per interaction where apc-optimizer
+kept one per limb — so apc-optimizer carried ~2× powdr's bitwise interactions (e.g. apc_001 12 vs 6,
 apc_008 36 vs 10). `bytePackPass` performs the same packing.
 
 Why it is sound (no audited-surface change — `Spec.lean`, `OpenVmSemantics.lean`, `MemoryBus.lean`,
-`Leanr/Optimizer.lean` untouched):
+`ApcOptimizer/Optimizer.lean` untouched):
 - The two single checks and the packed check impose the **identical** obligation ("both operands
   are bytes"), so the satisfying set is unchanged. This table equivalence — `violates [x,y,0,0] =
   false ↔ violates [x,x,0,1] = false ∧ violates [y,y,0,1] = false` — is a new **proven `BusFacts`
@@ -1186,14 +1186,14 @@ effectiveness **3.056× → 3.109× aggregate**, **2.406× → 2.559× geomean**
 **30 → 24**, reaching **full parity with powdr (24)**; apc_003 96 → 90; apc_008 89 → 77 (bitwise
 36 → 24). The residual bitwise gap on some blocks (apc_008) is non-self-XOR byte checks the
 recogniser skips; the remaining bus gap is otherwise the tuple-range packing and the memory-pointer
-13-bit checks (see `docs/ideas.md`). Note: variables are ~tied with powdr on this sample (leanr wins
+13-bit checks (see `docs/ideas.md`). Note: variables are ~tied with powdr on this sample (apc-optimizer wins
 the aggregate, powdr the geomean and 7/12 cases), so bus interactions are the systematic gap this
 targets.
 
 ### 50. Spec change (Georg's request): received memory words are byte-range-checked — plus the optimizations it enables
 
 **The spec change (audited surface — needs human review).** Fixed the long-standing TODO in
-`Leanr/OpenVmSemantics.lean`: `violates` now rejects a memory-bus *receive* (multiplicity `-1`)
+`ApcOptimizer/OpenVmSemantics.lean`: `violates` now rejects a memory-bus *receive* (multiplicity `-1`)
 from the register / main-memory address spaces (1 and 2) whose data limbs are not all bytes. The
 justification (documented at the `violates` arm and as a new README assumption): the bus must
 balance, a receive's tuple can only be matched by a send of the same tuple, and every send into
@@ -1211,9 +1211,9 @@ longer `neverViolates`, and `busPairCancelPass`'s old justification broke — *c
 dropping a matched send/receive pair whose receive was the **only** byte guarantee for a data limb
 would widen the satisfying set (e.g. a loaded byte written to a register and re-read; nothing else
 bounds it). powdr cancels these pairs unconditionally while also assuming receive-byte ranges —
-leanr's `refines` proof obligation is what surfaced the tension.
+apc-optimizer's `refines` proof obligation is what surfaced the tension.
 
-**Adaptation + enabled optimizations (all in `Leanr/Implementation/`, zero new audit surface):**
+**Adaptation + enabled optimizations (all in `ApcOptimizer/Implementation/`, zero new audit surface):**
 - `BusFacts.slotBound` is now **multiplicity-aware**, and the OpenVM instance proves byte bounds
   for slots 2–5 of a memory *receive* with a constant address space 1/2 — so `domainPropPass`
   picks up `[0,256)` domains for received limbs with no further changes.
@@ -1258,7 +1258,7 @@ limbs to one (`Σaᵢ = 0 ⟺ a = 0` for bytes). Both hinge on `x0 = 0` — a *g
 single chip cannot see, and pinning it locally would change a stateful memory payload, which the
 spec's side-effect soundness (`≈`) forbids. So the frozen spec genuinely cannot license it.
 
-**Minimal spec change (`Leanr/OpenVmSemantics.lean`).** Add `zeroRegisterReads` — a
+**Minimal spec change (`ApcOptimizer/OpenVmSemantics.lean`).** Add `zeroRegisterReads` — a
 **completeness-only** `admissible` conjunct, same flavor as the memory discipline: every *active*
 memory message at address `(as, ptr) = (1, 0)` carries zero in its four data limbs. Faithful (real
 RISC-V traces never read a nonzero `x0`), and it constrains **only** which inputs completeness must
@@ -1286,7 +1286,7 @@ constant-fold; the existing Gauss/subst passes then propagate `b → 0`, elimina
 still `{propext, Classical.choice, Quot.sound}`-only; no `sorry`/`admit`/`axiom`/`native_decide`; all
 outputs within the degree bound.
 
-**Impact (variables).** On the 37 branch-bearing (`diff_inv_marker`) benchmark files, leanr drops
+**Impact (variables).** On the 37 branch-bearing (`diff_inv_marker`) benchmark files, apc-optimizer drops
 **5206 → 5083 vars** (−123), shrinking the variable gap to powdr from **387 → 264**. Examples:
 apc_001 42→38, apc_028 35→28 (now beats powdr 30), apc_056 28→24, apc_010 480→476 (beats powdr 498),
 apc_014 272→268 (beats powdr 274). Full `openvm-eth` aggregate variable effectiveness is now
@@ -1321,7 +1321,7 @@ Wired into `cleanupCycle` right after `zeroRegisterPass`; the fresh `inv` and th
 propagate through the following Gauss/fold passes.
 
 `lake build` green; `optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`
-and `Leanr.OpenVM.openVmOptimizer_maintainsCorrectness` all still
+and `ApcOptimizer.OpenVM.openVmOptimizer_maintainsCorrectness` all still
 `{propext, Classical.choice, Quot.sound}`-only; no `sorry`/`admit`/`axiom`/`native_decide`; all
 sampled outputs within the degree bound.
 
@@ -1341,7 +1341,7 @@ baseline (pre-change) and new binaries on 13 benchmark cases spanning all size c
 on every case**. Nothing in the audited surface or `Basic.lean` changed; correctness axioms stay
 `{propext, Classical.choice, Quot.sound}`; `lake build` green, `check-proof-integrity.sh` passes.
 
-Re-profiled per-pass at HEAD (the `leanr profile` pass list was stale — it predated
+Re-profiled per-pass at HEAD (the `apc-optimizer profile` pass list was stale — it predated
 `zeroRegister`/`hintCollapse`/`domainFold`/`busPairCancel`/`bytePack`; synced it to the current
 `cleanupCycle` in `Main.lean`). The entry-52 `hintCollapse` dominated everything: 183 s of
 apc_005's 280 s (65%), 129 s of apc_100's 347 s (37%), with `reencode` second (38 s / 106 s).
