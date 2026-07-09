@@ -140,28 +140,98 @@ def addConstraintDoms [Fact p.Prime] {cs : ConstraintSystem p} {bs : BusSemantic
 def payloadRawVars (bi : BusInteraction (Expression p)) : List Variable :=
   bi.payload.filterMap (fun e => match e with | .var x => some x | _ => none)
 
+/-! ### A cache for materialized range domains
+
+`interactionDomain` materializes `(List.range bound).map Nat.cast` — a `bound`-element list
+with a `% p` per element — for **every** `(interaction, variable)` hit, though only a handful
+of distinct bounds (`2^16`, `2^8`, …) ever occur. The cache shares one materialization per
+bound; its entries provably equal the uncached list, so the built table is identical. -/
+
+/-- Proof-carrying cache of materialized `[0, bound)` domains, keyed by bound. -/
+structure RangeCache (p : ℕ) where
+  map : Std.HashMap Nat (List (ZMod p))
+  sound : ∀ b l, map[b]? = some l → l = (List.range b).map (Nat.cast : Nat → ZMod p)
+
+def RangeCache.empty : RangeCache p where
+  map := ∅
+  sound := by
+    intro _ _ h
+    rw [Std.HashMap.getElem?_empty] at h
+    exact absurd h (by simp)
+
+/-- The materialized `[0, b)` domain, from the cache when present. -/
+def RangeCache.get (C : RangeCache p) (b : Nat) :
+    { l : List (ZMod p) // l = (List.range b).map (Nat.cast : Nat → ZMod p) } × RangeCache p :=
+  match h : C.map[b]? with
+  | some l => (⟨l, C.sound b l h⟩, C)
+  | none =>
+    let l := (List.range b).map (Nat.cast : Nat → ZMod p)
+    (⟨l, rfl⟩,
+     { map := C.map.insert b l,
+       sound := by
+         intro b' l' h'
+         rw [Std.HashMap.getElem?_insert] at h'
+         by_cases hb : (b == b') = true
+         · rw [if_pos hb] at h'
+           have hbb : b = b' := by simpa using hb
+           have hll : l = l' := by simpa using h'
+           subst hbb; subst hll
+           rfl
+         · rw [if_neg hb] at h'
+           exact C.sound b' l' h' })
+
+/-- `interactionDomain` through the cache: the same domain (`interactionDomainC_fst`), one
+    materialization per distinct bound. -/
+def interactionDomainC (bs : BusSemantics p) (facts : BusFacts p bs) (C : RangeCache p)
+    (bi : BusInteraction (Expression p)) (x : Variable) :
+    Option (List (ZMod p)) × RangeCache p :=
+  match interactionBound bs facts bi x with
+  | none => (none, C)
+  | some bound =>
+    if bound ≤ maxDomainBound then
+      let r := C.get bound
+      (some r.1.val, r.2)
+    else (none, C)
+
+theorem interactionDomainC_fst (bs : BusSemantics p) (facts : BusFacts p bs) (C : RangeCache p)
+    (bi : BusInteraction (Expression p)) (x : Variable) :
+    (interactionDomainC bs facts C bi x).1 = interactionDomain bs facts bi x := by
+  cases hb : interactionBound bs facts bi x with
+  | none => simp only [interactionDomainC, interactionDomain, hb]
+  | some bound =>
+    simp only [interactionDomainC, interactionDomain, hb]
+    by_cases hcap : bound ≤ maxDomainBound
+    · rw [if_pos hcap, if_pos hcap]
+      exact congrArg some (C.get bound).1.property
+    · rw [if_neg hcap, if_neg hcap]
+
 /-- Bus-sourced domains: proven slot bounds on raw variable slots of interactions with
-    constant nonzero multiplicity (mirrors `interactionDomain`). -/
+    constant nonzero multiplicity (mirrors `interactionDomain`). The range cache is threaded
+    through; by `interactionDomainC_fst` the resulting table equals the uncached one. -/
 def addBusDoms [NeZero p] {cs : ConstraintSystem p} {bs : BusSemantics p}
     (facts : BusFacts p bs) :
     (pending : List (BusInteraction (Expression p))) →
     (∀ bi ∈ pending, bi ∈ cs.busInteractions) →
-    DomainTable p cs bs → DomainTable p cs bs
-  | [], _, T => T
-  | bi :: rest, hmem, T =>
+    RangeCache p → DomainTable p cs bs → DomainTable p cs bs
+  | [], _, _, T => T
+  | bi :: rest, hmem, C, T =>
     let hbi := hmem bi (List.mem_cons_self ..)
     let hrest := fun bi' h => hmem bi' (List.mem_cons_of_mem _ h)
-    let rec addVars (xs : List Variable) (T : DomainTable p cs bs) : DomainTable p cs bs :=
+    let rec addVars (xs : List Variable) (C : RangeCache p) (T : DomainTable p cs bs) :
+        RangeCache p × DomainTable p cs bs :=
       match xs with
-      | [] => T
+      | [] => (C, T)
       | x :: xs =>
-        match hr : interactionDomain bs facts bi x with
+        let rC := interactionDomainC bs facts C bi x
+        match hr : rC.1 with
         | some d =>
-            addVars xs (T.insertEntry x d
-              (fun env hsat => interactionDomain_sound bs facts bi x d hr env
+            addVars xs rC.2 (T.insertEntry x d
+              (fun env hsat => interactionDomain_sound bs facts bi x d
+                (by rw [← interactionDomainC_fst bs facts C bi x]; exact hr) env
                 (hsat.2 bi hbi)))
-        | none => addVars xs T
-    addBusDoms facts rest hrest (addVars (payloadRawVars bi).dedup T)
+        | none => addVars xs rC.2 T
+    let r := addVars (payloadRawVars bi).dedup C T
+    addBusDoms facts rest hrest r.1 r.2
 
 /-! ## Joint enumeration against the table
 
@@ -552,7 +622,7 @@ def domainBatchPass : VerifiedPassW p := fun cs bs facts =>
     haveI : Fact p.Prime := ⟨hp⟩
     haveI : NeZero p := ⟨hp.ne_zero⟩
     let T : DomainTable p cs bs :=
-      addBusDoms facts cs.busInteractions (fun _ h => h)
+      addBusDoms facts cs.busInteractions (fun _ h => h) RangeCache.empty
         (addConstraintDoms cs.algebraicConstraints (fun _ h => h) DomainTable.empty)
     let targets := cs.algebraicConstraints.map (fun e => e.vars.dedup) ++
       cs.busInteractions.map (fun bi => bi.vars.dedup)
