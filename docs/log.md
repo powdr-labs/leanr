@@ -1147,3 +1147,29 @@ result is byte-identical to reencode-only on every case sampled (apc_002/003/004
 i.e. effectiveness-neutral but more general (and slightly fewer fixpoint cycles: apc_005 62.3 s → 58.4 s).
 The pass stands on its own if `reencode` is ever dropped (entry-47 option B → ~1939 on this class, keeping
 all flags, close to powdr's 1808).
+
+### 49. Brainstorm-only iteration: residual-gap decomposition + ranked ideas file rewrite (no optimizer change)
+Georg asked for a broad brainstorm (including beyond-powdr), a detailed ranked ideas file with
+pseudocode and impact estimates (spec-change ideas flagged for review), and no implementation.
+Fanned out analysis over 12 sampled cases (renders/reports vs powdr). Key measurements, correcting
+stale beliefs:
+- **leanr now beats powdr on variables AND constraints on nearly every sampled case** (apc_010
+  480v/258c vs 498/331; apc_020 818/317 vs 850/501; apc_014 272/138 vs 274/171); the residual gap
+  is bus interactions, plus small per-case variable gaps with exact decompositions.
+- **The pc-lookup (bus 2) idea was stale**: current outputs contain zero bus-2 interactions
+  (domainFold pins payloads/mults constant, tautoBusDrop removes them) — removed from the ideas
+  file. (Static count for the record: the 100 unopt circuits carry 1,941 pc lookups; powdr drops
+  all; so does leanr, now.)
+- Variable gaps decompose exactly into: x0-read data vars (47/100 powdr outputs bake in
+  `[1,0,0,0,0,0]`; ~188 endpoint vars + cascades), XOR-with-zero forced slots (19 instances/12
+  cases), range-excluded two-root constraints (mv limbs, imm=0 mem_ptr), dead byte-decomposition
+  clusters, duplicate address limbs, and bits=0 range checks.
+- Bus gaps decompose into: loadb/loadh write pairs whose cancellation is blocked by *syntactic*
+  payload mismatch though the equality is a kept constraint (apc_010 bus 1: 144 vs powdr 78), the
+  earliest-send blocking cascade, and unpacked byte checks (powdr packs pairs into `[x,y,0,0]` and
+  uses the TupleRangeChecker bus). Symbolic heap-address chaining measured as a dead end.
+`docs/ideas.md` rewritten: 10 ranked, detailed ideas (pseudocode + quantified estimates + proof
+difficulty). Two require a slight completeness-only `admissible` extension (x0 zeroing; received-
+data byte bounds) and are **flagged for Georg's review**; the top no-spec-change starters are the
+bitwise `slotEq` forced-equation pass (~100–160 vars, easy proof) and payload-modulo-constraints
+pair cancellation (~1000–1500 bus). No optimizer code changed in this entry.
