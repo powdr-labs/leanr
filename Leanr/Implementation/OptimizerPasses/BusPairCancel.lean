@@ -47,13 +47,47 @@ def maxDeepPoints : Nat := 64
 /-- Cap on a single enumerated variable's domain size in the deep justification. -/
 def maxDeepDomain : Nat := 4
 
+/-- Cap on the number of candidate defining constraints tried per deep justification. -/
+def maxDeepConstraints : Nat := 4
+
+/-- Cap on a candidate constraint's number of distinct other variables (wider constraints
+    cannot collapse to the ≤2-term linear shapes `pointByteOk` accepts anyway). -/
+def maxDeepVars : Nat := 8
+
+/-- Does the expression mention `x`? (No allocation — `Expression.vars` would materialize a
+    fresh list per constraint on every deep-justification scan.) -/
+def Expression.containsVar (x : Variable) : Expression p → Bool
+  | .const _ => false
+  | .var y => y == x
+  | .add a b => a.containsVar x || b.containsVar x
+  | .mul a b => a.containsVar x || b.containsVar x
+
+/-- The expression's single distinct variable: `some (some v)` when exactly `v` occurs,
+    `some none` when no variable occurs, `none` when several distinct variables occur.
+    Cheap pre-filter for the constraints `findDomainAlg` can actually derive a domain from. -/
+def Expression.singleVarAux : Expression p → Option (Option Variable)
+  | .const _ => some none
+  | .var y => some (some y)
+  | .add a b | .mul a b =>
+    match a.singleVarAux, b.singleVarAux with
+    | some none, r => r
+    | r, some none => r
+    | some (some u), some (some v) => if u == v then some (some u) else none
+    | _, _ => none
+
+/-- Is the expression a single-variable expression (exactly one distinct variable)? -/
+def Expression.isSingleVar (e : Expression p) : Bool :=
+  match e.singleVarAux with
+  | some (some _) => true
+  | _ => false
+
 /-- Per-point core of the deep justification. The point `pt` fixes the enumerable variables
     `keys` of the constraint `c`; after substituting and folding, the constraint must be linear
     and — once normalized — either pin `x` to a re-checked byte constant, or equate `x`
-    (coefficient-for-coefficient, no constant) to a single variable with a proven byte bound
-    from `rest`. -/
-def pointByteOk (bs : BusSemantics p) (facts : BusFacts p bs)
-    (rest : List (BusInteraction (Expression p))) (x : Variable) (c : Expression p)
+    (coefficient-for-coefficient, no constant) to a single variable in `byteVars` (the
+    precomputed byte-bounded variables — so the per-point work is allocation-light and scans
+    nothing). -/
+def pointByteOk (x : Variable) (c : Expression p) (byteVars : List Variable)
     (keys : List Variable) (pt : List (Variable × ZMod p)) : Bool :=
   match linearize ((c.substF (fun v =>
       if keys.contains v then some (.const (envOf pt v)) else none)).fold) with
@@ -69,25 +103,33 @@ def pointByteOk (bs : BusSemantics p) (facts : BusFacts p bs)
       -- `x = other` (opposite coefficients, no constant); the other side is byte-bounded
       decide ((LinExpr.norm l).const = 0) &&
       (if v1 = x then
-        decide (a2 = -a1) && decide (a1 ≠ 0) &&
-          (match findVarBound bs facts rest v2 with
-           | some b => decide (b ≤ 256)
-           | none => false)
+        decide (a2 = -a1) && decide (a1 ≠ 0) && byteVars.contains v2
        else if v2 = x then
-        decide (a1 = -a2) && decide (a2 ≠ 0) &&
-          (match findVarBound bs facts rest v1 with
-           | some b => decide (b ≤ 256)
-           | none => false)
+        decide (a1 = -a2) && decide (a2 ≠ 0) && byteVars.contains v1
        else false)
     | _ => false
 
-/-- The variables of `c` other than `x` that carry a small proven finite domain (from a
-    constraint or a bus fact) — the candidates for enumeration in the deep justification. -/
-def deepEnumDoms (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
+/-- The variables of `c` (other than `x`) with a proven byte bound from the remaining
+    interactions — computed once per candidate, not once per enumeration point. -/
+def deepByteVars (bs : BusSemantics p) (facts : BusFacts p bs)
     (rest : List (BusInteraction (Expression p))) (x : Variable) (c : Expression p) :
+    List Variable :=
+  (c.vars.dedup.filter (fun v => v ≠ x)).filter (fun v =>
+    match findVarBound bs facts rest v with
+    | some b => decide (b ≤ 256)
+    | none => false)
+
+/-- The variables of `c` other than `x` that carry a small proven *constraint-derived* finite
+    domain (selector flags) — the candidates for enumeration in the deep justification.
+    `domCs` is the pre-filtered single-variable constraint list (the only constraints
+    `findDomainAlg` can use); bus-fact domains are deliberately not consulted: they are
+    byte/range-sized (never ≤ `maxDeepDomain`), and materializing them just to discard them
+    dominated the pass's runtime — the range-checked variables stay symbolic, which is what
+    `pointByteOk` wants. -/
+def deepEnumDoms (domCs : List (Expression p)) (x : Variable) (c : Expression p) :
     List (Variable × List (ZMod p)) :=
   (c.vars.dedup.filter (fun v => v ≠ x)).filterMap (fun v =>
-    match findDomain all bs facts rest v with
+    match findDomainAlg domCs v with
     | some d => if d.length ≤ maxDeepDomain then some (v, d) else none
     | none => none)
 
@@ -95,26 +137,29 @@ def deepEnumDoms (all : List (Expression p)) (bs : BusSemantics p) (facts : BusF
     of `c`'s other variables (e.g. one-hot selector flags) and require `pointByteOk` at every
     point. This resolves byte *selections* `x = Σ (flag polynomial)·yⱼ` over byte-bounded `yⱼ` —
     the shape a memory receive of an unaligned sub-word load leaves behind. -/
-def deepBoundOk (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
+def deepBoundOk (domCs : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
     (rest : List (BusInteraction (Expression p))) (x : Variable) (c : Expression p) : Bool :=
-  if ((deepEnumDoms all bs facts rest x c).map (fun vd => vd.2.length)).prod ≤ maxDeepPoints then
-    (assignments (deepEnumDoms all bs facts rest x c)).all
-      (pointByteOk bs facts rest x c ((deepEnumDoms all bs facts rest x c).map Prod.fst))
+  if (c.vars.dedup.filter (fun v => v ≠ x)).length ≤ maxDeepVars &&
+      ((deepEnumDoms domCs x c).map (fun vd => vd.2.length)).prod ≤ maxDeepPoints then
+    (assignments (deepEnumDoms domCs x c)).all
+      (pointByteOk x c (deepByteVars bs facts rest x c) ((deepEnumDoms domCs x c).map Prod.fst))
   else false
 
-/-- Deep byte justification for `x`: some constraint of the system pins it via `deepBoundOk`. -/
+/-- Deep byte justification for `x`: one of the first `maxDeepConstraints` constraints
+    mentioning `x` pins it via `deepBoundOk`. Domains are looked up only in the
+    single-variable constraints (the only ones `findDomainAlg` can use). -/
 def deepByteJustified (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
     (rest : List (BusInteraction (Expression p))) (x : Variable) : Bool :=
-  all.any (fun c => c.vars.contains x && deepBoundOk all bs facts rest x c)
+  ((all.filter (Expression.containsVar x)).take maxDeepConstraints).any
+    (fun c => deepBoundOk (all.filter Expression.isSingleVar) bs facts rest x c)
 
-theorem pointByteOk_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFacts p bs)
-    (rest : List (BusInteraction (Expression p))) (x : Variable) (c : Expression p)
+theorem pointByteOk_sound [Fact p.Prime] (x : Variable) (c : Expression p)
+    (byteVars : List Variable)
     (keys : List Variable) (pt : List (Variable × ZMod p))
-    (h : pointByteOk bs facts rest x c keys pt = true) (env : Variable → ZMod p)
+    (h : pointByteOk x c byteVars keys pt = true) (env : Variable → ZMod p)
     (hpt : ∀ y, keys.contains y = true → envOf pt y = env y)
     (hc0 : c.eval env = 0)
-    (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
-      bs.violatesConstraint (bi.eval env) = false) :
+    (hbyteVars : ∀ v ∈ byteVars, (env v).val < 256) :
     (env x).val < 256 := by
   unfold pointByteOk at h
   -- the substitution is transparent under `env`
@@ -189,13 +234,7 @@ theorem pointByteOk_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFacts
                   · exact absurd h' hne'
                   · exact sub_eq_zero.mp h'
                 rw [heqv]
-                cases hb : findVarBound bs facts rest v2 with
-                | none => rw [hb] at hbound; simp at hbound
-                | some b =>
-                  rw [hb] at hbound
-                  dsimp only at hbound
-                  exact lt_of_lt_of_le (findVarBound_sound bs facts rest v2 b hb env hbus)
-                    (of_decide_eq_true hbound)
+                exact hbyteVars v2 (List.contains_iff_mem.mp hbound)
               · -- v2 = x, bound v
                 rw [← hv2]
                 rw [Bool.and_eq_true, Bool.and_eq_true] at hbr
@@ -209,32 +248,26 @@ theorem pointByteOk_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFacts
                   · exact absurd h' hne'
                   · exact sub_eq_zero.mp h'
                 rw [heqv]
-                cases hb : findVarBound bs facts rest v with
-                | none => rw [hb] at hbound; simp at hbound
-                | some b =>
-                  rw [hb] at hbound
-                  dsimp only at hbound
-                  exact lt_of_lt_of_le (findVarBound_sound bs facts rest v b hb env hbus)
-                    (of_decide_eq_true hbound)
+                exact hbyteVars v (List.contains_iff_mem.mp hbound)
             | cons t3 tail3 =>
               rw [hterms] at h; simp at h
 
-theorem deepBoundOk_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
+theorem deepBoundOk_sound [Fact p.Prime] (domCs : List (Expression p))
     (bs : BusSemantics p) (facts : BusFacts p bs)
     (rest : List (BusInteraction (Expression p))) (x : Variable) (c : Expression p)
-    (h : deepBoundOk all bs facts rest x c = true) (env : Variable → ZMod p)
-    (hall : ∀ c' ∈ all, c'.eval env = 0) (hc : c ∈ all)
+    (h : deepBoundOk domCs bs facts rest x c = true) (env : Variable → ZMod p)
+    (hdom : ∀ c' ∈ domCs, c'.eval env = 0) (hc0 : c.eval env = 0)
     (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) :
     (env x).val < 256 := by
   unfold deepBoundOk at h
   split_ifs at h with hcap
   -- every enumerated variable's value lies in its domain
-  have hdomsound : ∀ vd ∈ deepEnumDoms all bs facts rest x c, env vd.1 ∈ vd.2 := by
+  have hdomsound : ∀ vd ∈ deepEnumDoms domCs x c, env vd.1 ∈ vd.2 := by
     intro vd hvd
     unfold deepEnumDoms at hvd
     obtain ⟨v, _, hfn⟩ := List.mem_filterMap.mp hvd
-    cases hfd : findDomain all bs facts rest v with
+    cases hfd : findDomainAlg domCs v with
     | none => rw [hfd] at hfn; exact absurd hfn (by simp)
     | some d =>
       rw [hfd] at hfn
@@ -242,17 +275,30 @@ theorem deepBoundOk_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
       split_ifs at hfn
       simp only [Option.some.injEq] at hfn
       subst hfn
-      exact findDomain_sound all bs facts rest v d hfd env hall hbus
+      exact findDomainAlg_sound domCs v d hfd env hdom
+  -- the precomputed byte-bounded variables really are bytes under `env`
+  have hbyteVars : ∀ v ∈ deepByteVars bs facts rest x c, (env v).val < 256 := by
+    intro v hv
+    unfold deepByteVars at hv
+    obtain ⟨hv1, hv2⟩ := List.mem_filter.mp hv
+    cases hb : findVarBound bs facts rest v with
+    | none => rw [hb] at hv2; simp at hv2
+    | some b =>
+      rw [hb] at hv2
+      dsimp only at hv2
+      exact lt_of_lt_of_le (findVarBound_sound bs facts rest v b hb env hbus)
+        (of_decide_eq_true hv2)
   -- `env`'s restriction to the enumerated domains is one of the checked points
-  have hmem : (deepEnumDoms all bs facts rest x c).map (fun vd => (vd.1, env vd.1))
-      ∈ assignments (deepEnumDoms all bs facts rest x c) :=
+  have hmem : (deepEnumDoms domCs x c).map (fun vd => (vd.1, env vd.1))
+      ∈ assignments (deepEnumDoms domCs x c) :=
     mem_assignments _ env hdomsound
   have hpoint := List.all_eq_true.mp h _ hmem
-  refine pointByteOk_sound bs facts rest x c ((deepEnumDoms all bs facts rest x c).map Prod.fst)
-    ((deepEnumDoms all bs facts rest x c).map (fun vd => (vd.1, env vd.1))) hpoint env ?_
-    (hall c hc) hbus
+  refine pointByteOk_sound x c (deepByteVars bs facts rest x c)
+    ((deepEnumDoms domCs x c).map Prod.fst)
+    ((deepEnumDoms domCs x c).map (fun vd => (vd.1, env vd.1))) hpoint env ?_
+    hc0 hbyteVars
   intro y hy
-  exact envOf_map (deepEnumDoms all bs facts rest x c) env y (List.contains_iff_mem.mp hy)
+  exact envOf_map (deepEnumDoms domCs x c) env y (List.contains_iff_mem.mp hy)
 
 theorem deepByteJustified_sound [Fact p.Prime] [NeZero p] (all : List (Expression p))
     (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -263,8 +309,9 @@ theorem deepByteJustified_sound [Fact p.Prime] [NeZero p] (all : List (Expressio
       bs.violatesConstraint (bi.eval env) = false) :
     (env x).val < 256 := by
   obtain ⟨c, hc, hck⟩ := List.any_eq_true.1 h
-  rw [Bool.and_eq_true] at hck
-  exact deepBoundOk_sound all bs facts rest x c hck.2 env hall hc hbus
+  have hc' : c ∈ all := List.mem_of_mem_filter (List.mem_of_mem_take hc)
+  exact deepBoundOk_sound (all.filter Expression.isSingleVar) bs facts rest x c hck env
+    (fun c' hc'' => hall c' (List.mem_of_mem_filter hc'')) (hall c hc') hbus
 
 /-- Is `e` provably a byte under every assignment satisfying the remaining system? Either a
     constant `< 256`, a variable with a proven bus-fact bound `≤ 256` derived from the remaining
@@ -889,22 +936,23 @@ def findCancelGo (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFac
       match findMatchRecv busId S [] rest with
       | some (B, R, C) =>
         let A := revA.reverse
+        -- Cheap region tests first: only an otherwise-valid candidate pays the byte
+        -- justification scan (`checkCancel` re-verifies everything).
+        if B.all (midRefuted shape busId S) && A.all (preRefuted shape busId S) then
         -- Byte slots the remaining system does not justify are materialized as a single
         -- explicit self-check on the byte-check bus (more than one would not shrink the bus
-        -- count and would stall the cancellation loop). `checkCancel` re-verifies everything.
+        -- count and would stall the cancellation loop); when the justification cannot pass
+        -- (≥ 2 unjustified slots, or no byte-check bus), skip the certificate re-check —
+        -- the justification scan is the expensive part.
+        let unjust := unjustifiedSlots deep cs.algebraicConstraints bs facts (A ++ B ++ C)
+          slots R
         let checks : List (BusInteraction (Expression p)) :=
-          if recvSlotsJustified deep cs.algebraicConstraints bs facts (A ++ B ++ C) slots R
-          then []
-          else
-            match bcBus? with
-            | some bcBus =>
-              match unjustifiedSlots deep cs.algebraicConstraints bs facts (A ++ B ++ C)
-                  slots R with
-              | [slot] => (R.payload[slot]?).elim [] (fun e =>
-                  [{ busId := bcBus, multiplicity := .const 1,
-                     payload := [e, e, .const 0, .const 1] }])
-              | _ => []
-            | none => []
+          match unjust, bcBus? with
+          | [slot], some bcBus => (R.payload[slot]?).elim [] (fun e =>
+              [{ busId := bcBus, multiplicity := .const 1,
+                 payload := [e, e, .const 0, .const 1] }])
+          | _, _ => []
+        if unjust.isEmpty || !checks.isEmpty then
         if hchk : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
             A S B R C checks = true then
           if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
@@ -913,6 +961,10 @@ def findCancelGo (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFac
                     A S B R C checks hsplit hchk⟩
           else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
             (S :: revA) rest
+        else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
+          (S :: revA) rest
+        else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
+          (S :: revA) rest
         else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
           (S :: revA) rest
       | none => findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
