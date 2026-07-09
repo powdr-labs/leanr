@@ -136,17 +136,10 @@ def breaksInvariant (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
   -- Circuits should not send messages to an unknown bus.
   | none => true
 
-/-- The RISC-V hardwired-`x0` discipline — a completeness-only real-trace assumption, of the same
-    flavor as the memory discipline in `Leanr/MemoryBus.lean`. In every genuine OpenVM execution the
-    register `x0` (register address space `1`, pointer `0`) always reads, and writes back, the value
-    `0`. So every *active* memory message whose address is `(1, 0)` carries zero in its four data
-    limbs (payload slots `2..5`; the OpenVM memory payload is `(as, ptr, d0, d1, d2, d3, ts)`).
-
-    This only restricts which inputs *completeness* must reproduce (real traces never read a nonzero
-    `x0`); it places **no** obligation on soundness, which quantifies over all assignments. It lets a
-    pass soundly pin the `x0`-read limbs to `0`, matching powdr's `seqz`/`beqz` handling. -/
-def zeroRegisterReads (busMap : BusMap) (msgs : List (BusInteraction (ZMod p))) : Prop :=
+/-- Assume that x0 always returns 0. This should be enforced globally by all OpenVM chips. -/
+def x0ReturnsZero (busMap : BusMap) (msgs : List (BusInteraction (ZMod p))) : Prop :=
   ∀ m ∈ msgs, busMap m.busId = some .memory →
+    -- If address space is 1 (registers), and address is 0 (x0), then the value must be 0.
     m.payload[0]? = some 1 → m.payload[1]? = some 0 →
       m.payload[2]? = some 0 ∧ m.payload[3]? = some 0 ∧
         m.payload[4]? = some 0 ∧ m.payload[5]? = some 0
@@ -175,7 +168,7 @@ def openVmBusSemantics (p : ℕ) (busMap : BusMap := defaultBusMap) :
   admissible msgs :=
     (∀ (busId : Nat) (shape : MemoryBusShape), memShapeOf busMap busId = some shape →
       admissibleMemoryBus shape (msgs.filter (fun m => m.busId = busId)))
-    ∧ zeroRegisterReads busMap msgs
+    ∧ x0ReturnsZero busMap msgs
   -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`).
   degreeBound := { identities := 3, busInteractions := 2 }
 
