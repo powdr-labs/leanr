@@ -59,7 +59,7 @@ def OpenVmBusType.isStateful : OpenVmBusType → Bool
   | .tupleRangeChecker _ _ => false
 
 /-- Whether a field element is a byte (`0 ≤ x < 256`). -/
-private def isByte (x : ZMod p) : Bool := decide (x.val < 256)
+def isByte (x : ZMod p) : Bool := decide (x.val < 256)
 
 /-- Whether a message conflicts with the lookup table of the bus it is sent on. -/
 def violates (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
@@ -102,10 +102,19 @@ def violates (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
   | some (.tupleRangeChecker _ _), _ => true
 
   -- Stateful buses.
-  -- TODO: Some of these *might* actually enforce constraints. For example, under the
-  -- invariant that all *sent* memory values are range-checked, *received* memory values
-  -- can be assumed to be range-checked.
   | some .executionBridge, _ => false
+
+  -- A memory *receive* (multiplicity -1) is a lookup into the memory state maintained by the
+  -- rest of the system: the bus must balance, so the received tuple has to equal some *sent*
+  -- tuple. Every send into the register / main-memory address spaces (1 and 2) — from any
+  -- chip of the system, including the initial-memory boundary — carries byte-range data limbs
+  -- (the system-wide invariant `breaksInvariant` maintains below). A receive of a word with a
+  -- non-byte limb from these address spaces can therefore never be matched: it conflicts with
+  -- the rest of the system exactly like a failing lookup.
+  | some .memory, addressSpace :: _pointer :: b0 :: b1 :: b2 :: b3 :: _timeStamp =>
+    decide (msg.multiplicity = -1) &&
+      (addressSpace.val == 1 || addressSpace.val == 2) &&
+      !([b0, b1, b2, b3].all (fun d => decide (d.val < 256)))
   | some .memory, _ => false
 
   -- Invalid bus ID. Won't have a matching receive.

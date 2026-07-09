@@ -65,7 +65,9 @@ the linear `Lᵢ=0` so Gauss can unify the shared limb and drop the duplicate ch
 hardest of the current ideas — dropping a range check is sound only if the shared limb is *proven*
 equal (a bounded-no-wrap argument in the style of `MemoryUnify.boundedSumMax`) — and it is a bus
 win on an axis where leanr is already ~tied with powdr on variables, so lower leverage than the
-packing passes.
+packing passes. **Update (log 50):** the base `mem_ptr_limbs` derive from *received* register
+words, whose limbs now carry proven byte bounds (`slotBound` on memory receives, since the
+receive-byte spec change) — the missing input bound for the no-wrap argument now exists.
 
 ## Is-zero / is-equal witness reduction (variables)
 
@@ -77,7 +79,22 @@ sum can't wrap). Reduces `k−1` variables per comparison. Sound but byte-bound-
 `boundedSumMax`-style no-wrap argument and a transport via `reencode_correct_D`). Note: `cmp` itself
 must become a derived column (powdr's `QuotientOrZero`/`IfEqZero`, already in `ComputationMethod`),
 since a free `cmp` with the certificate dropped would be under-constrained. Small per case, and
-variables are ~tied overall — do the cheaper bus wins first.
+variables are ~tied overall — do the cheaper bus wins first. **Update (log 50):** the `a_i` limbs
+are typically *received* register/memory words, which now carry proven byte bounds
+(multiplicity-aware `slotBound`); `byteJustified`/`deepBoundOk` in `BusPairCancel.lean` are
+reusable justification building blocks.
+
+## Reuse the deep byte justification beyond pair cancellation
+
+`deepBoundOk` (log 50) proves `x < 256` by enumerating the finite domains of a defining
+constraint's selector flags and checking each branch pins `x` to a byte constant or a
+byte-bounded variable. Today only `busPairCancelPass` consumes it. It could also power (a) a
+redundant-range-check dropper (a stateless byte check whose operands are deep-justified from the
+*rest* of the system is removable — same `filterBus` shape as `tautoBusDropPass` but with an
+env-dependent justification), and (b) wider domains for `domainProp` (a deep-justified byte var
+gets a `[0,256)` domain even when no interaction carries it raw). Generalising the two-term
+branch to `x = c₀ + Σ cᵢ·yᵢ` with a no-wrap interval bound would subsume the is-zero and
+mem-ptr-limb ideas' bound side.
 
 ## Smarter witnesses for `disconnectedComponentPass`
 
