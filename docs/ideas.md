@@ -12,26 +12,31 @@ Only worth it if the flag-compression edge is judged not worth `reencode`'s comp
 pass would then also want a `bits ≥ vars` / large-group path (groups `reencode` skips) to claw some of
 it back. Left for Georg to decide.
 
-Effectiveness priority: **variables > bus interactions > constraints**. As of the byte-check
-packing pass (log entry 49), on the top-12 `openvm-eth` sample leanr and powdr are ~tied on
-variables (leanr wins the aggregate, powdr the geomean) and leanr leads on constraints; the
-remaining *systematic* gap is bus interactions. The bus gap now decomposes as: (a) range-check
-packing via the tuple range checker, (b) memory-pointer-limb 13-bit checks on memory-heavy blocks,
-(c) residual bitwise checks that are not self-XOR byte checks, (d) occasional missed memory
-send↔receive cancellations. See the `docs/log.md` entry 42/46/49 discussion for measurements.
+Effectiveness priority: **variables > bus interactions > constraints**. On the top-12
+`openvm-eth` sample leanr and powdr are ~tied on variables (leanr wins the aggregate, powdr the
+geomean) and leanr leads on constraints; the remaining *systematic* gap is bus interactions. After
+log entry 54 closed the missed memory send↔receive cancellations (same-register access chains),
+the bus gap decomposes as: (a) range-check packing via the tuple range checker,
+(b) memory-pointer-limb 13-bit checks on memory-heavy blocks, (c) residual bitwise checks that are
+not self-XOR byte checks — now including the self-checks entry 54's cancellations emit (see the
+loaded-byte idea below). The stale "drop never-violating PC lookups" idea is gone: all sampled
+outputs already carry **zero** bus-2 interactions (constant folding pins the lookup fields and
+`tautoBusDropPass` removes them).
 
-## Drop never-violating stateless lookups (close the residual pc-lookup bus gap)
+## Justify the loaded-byte columns to kill the emitted self-checks (bus interactions)
 
-After memory/exec send↔receive pair cancellation (log entry 46), leanr is at near-parity with powdr
-on bus interactions; the residual gap is essentially the **PC lookups** (bus 2): powdr removes them,
-leanr keeps them (never-violating model), so they inflate the bus count without affecting variables.
-
-A `VerifiedPass` that drops a stateless bus interaction whose multiplicity is provably `0`, or that
-is proven never-violating via `BusFacts.neverViolates`, would be sound (removing a
-never-violating, non-stateful interaction changes no stateful side effect) and would raise bus
-effectiveness without regressing variables — a clean win under the priority order
-(variables > bus interactions > constraints). Check the existing zero-multiplicity drop in
-`cleanupCycle` first; this may be an extension of it rather than a new pass.
+After the payload-canonicalization + chain-cancellation work (log entry 54), leanr matches powdr
+exactly on the memory bus for register access chains, but each cancelled pair whose loaded-byte
+column (`read_data__0_i`, the value a `loadb` writes) has no shallow/domain/deep justification
+costs one *emitted* self-check `[e, e, 0, 1]` — on apc_010 that leaves bitwise bus 19 vs powdr's 1.
+The columns are genuinely bytes (selected from byte-bounded words via one-hot shift flags), but the
+selection is **two** levels deep: `read_data = (1-f)·s₀ + f·s₁` with `sᵢ = shifted_read_data`
+columns that are themselves flag-selections of memory-word limbs. `deepBoundOk` follows one level
+("byte constant or byte-bounded variable" per branch); making it recurse once (or seeding
+`BoundsMap` with domain-derived bounds so the `sᵢ` become "byte-bounded variables") would justify
+them, drop the emissions, and close most of the residual bitwise gap. Note `byteJustified` (log 54)
+already accepts domain-derived all-byte variables (`findDomainAlg`) — it is the `shifted_*`
+intermediates that lack bounds.
 
 ## Range-check packing via the tuple range checker (bus interactions)
 

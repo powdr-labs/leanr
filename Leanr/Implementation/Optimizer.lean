@@ -20,6 +20,7 @@ import Leanr.Implementation.OptimizerPasses.Reencode
 import Leanr.Implementation.OptimizerPasses.DomainFold
 import Leanr.Implementation.OptimizerPasses.ZeroRegister
 import Leanr.Implementation.OptimizerPasses.HintCollapse
+import Leanr.Implementation.OptimizerPasses.PayloadCanon
 
 set_option autoImplicit false
 
@@ -68,6 +69,7 @@ def cleanupCycle : VerifiedPassW p :=
     |>.andThen tautoBusDropPass.withFacts.guardDegree
     |>.andThen domainFoldPass.withFacts.guardDegree
     |>.andThen busUnifyPass.guardDegree
+    |>.andThen payloadCanonPass.withFacts.guardDegree
     |>.andThen (VerifiedPassW.guardDegree (iterateToFixpoint busPairCancelPass))
     |>.andThen (VerifiedPassW.guardDegree (iterateToFixpoint bytePackPass))
     |>.andThen disconnectedComponentPass.withFacts.guardDegree

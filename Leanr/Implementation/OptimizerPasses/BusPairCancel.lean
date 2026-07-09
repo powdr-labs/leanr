@@ -316,21 +316,32 @@ theorem deepByteJustified_sound [Fact p.Prime] [NeZero p] (all : List (Expressio
 /-- Is `e` provably a byte under every assignment satisfying the remaining system? Either a
     constant `< 256`, a variable with a proven bus-fact bound `≤ 256` derived from the remaining
     interactions `rest` (e.g. another receive of the same word, or an explicit byte-check
-    lookup), or — when `deep` is set (prime `p` only) — a variable a constraint pins to a byte
-    on every point of its selector flags' finite domains (`deepBoundOk`). -/
+    lookup), or — when `deep` is set (prime `p` only) — a variable whose constraint-derived
+    finite domain (`findDomainAlg`, e.g. `x·(x−255) = 0`) contains only bytes, a variable a
+    constraint pins to a byte on every point of its selector flags' proven finite domains
+    (`deepBoundOk`), or (any expression) an explicit self-check `[e, e, 0, 1]` on a `byteCheck`
+    bus among the remaining interactions — the carrier the pass itself emits for
+    otherwise-unjustified slots, matched syntactically. -/
 def byteJustified (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
     (e : Expression p) : Bool :=
   match e.constValue? with
   | some c => decide (c.val < 256)
   | none =>
-    match e with
-    | .var x =>
-      (match findVarBound bs facts rest x with
-       | some bound => decide (bound ≤ 256)
-       | none => false) ||
-      (deep && deepByteJustified all bs facts rest x)
-    | _ => false
+    (match e with
+     | .var x =>
+       (match findVarBound bs facts rest x with
+        | some bound => decide (bound ≤ 256)
+        | none => false) ||
+       (deep && ((match findDomainAlg all x with
+                  | some dom => dom.all (fun v => decide (v.val < 256))
+                  | none => false) ||
+                 deepByteJustified all bs facts rest x))
+     | _ => false) ||
+    (deep && rest.any (fun bi =>
+      facts.byteCheck bi.busId &&
+      decide (bi.multiplicity = (.const 1 : Expression p)) &&
+      decide (bi.payload = [e, e, (.const 0 : Expression p), (.const 1 : Expression p)])))
 
 theorem byteJustified_sound (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p))) (e : Expression p)
@@ -350,25 +361,54 @@ theorem byteJustified_sound (deep : Bool) (all : List (Expression p)) (bs : BusS
   | none =>
     rw [hc] at h
     dsimp only at h
-    cases e with
-    | var x =>
-      dsimp only at h
-      show (env x).val < 256
-      rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
-      · cases hb : findVarBound bs facts rest x with
-        | some bound =>
-          rw [hb] at h'
-          dsimp only at h'
-          exact lt_of_lt_of_le (findVarBound_sound bs facts rest x bound hb env hbus)
-            (of_decide_eq_true h')
-        | none => rw [hb] at h'; simp at h'
-      · rw [Bool.and_eq_true] at h'
-        haveI : Fact p.Prime := ⟨hdeep h'.1⟩
-        haveI : NeZero p := ⟨(hdeep h'.1).ne_zero⟩
-        exact deepByteJustified_sound all bs facts rest x h'.2 env hall hbus
-    | const n => simp at h
-    | add a b => simp at h
-    | mul a b => simp at h
+    rcases Bool.or_eq_true _ _ |>.mp h with h | hcarrier
+    · cases e with
+      | var x =>
+        dsimp only at h
+        show (env x).val < 256
+        rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
+        · cases hb : findVarBound bs facts rest x with
+          | some bound =>
+            rw [hb] at h'
+            dsimp only at h'
+            exact lt_of_lt_of_le (findVarBound_sound bs facts rest x bound hb env hbus)
+              (of_decide_eq_true h')
+          | none => rw [hb] at h'; simp at h'
+        · rw [Bool.and_eq_true] at h'
+          haveI : Fact p.Prime := ⟨hdeep h'.1⟩
+          haveI : NeZero p := ⟨(hdeep h'.1).ne_zero⟩
+          rcases Bool.or_eq_true _ _ |>.mp h'.2 with hdom | hdeepb
+          · cases hd : findDomainAlg all x with
+            | some dom =>
+              rw [hd] at hdom
+              dsimp only at hdom
+              have hmem := findDomainAlg_sound all x dom hd env hall
+              exact of_decide_eq_true (List.all_eq_true.mp hdom _ hmem)
+            | none => rw [hd] at hdom; simp at hdom
+          · exact deepByteJustified_sound all bs facts rest x hdeepb env hall hbus
+      | const n => simp at h
+      | add a b => simp at h
+      | mul a b => simp at h
+    · -- an explicit self-check on a `byteCheck` bus among `rest` carries `e`'s byte obligation
+      rw [Bool.and_eq_true] at hcarrier
+      haveI : Fact (1 < p) := ⟨(hdeep hcarrier.1).one_lt⟩
+      obtain ⟨bi, hbi, hform⟩ := List.any_eq_true.1 hcarrier.2
+      rw [Bool.and_eq_true, Bool.and_eq_true] at hform
+      obtain ⟨⟨hbc, hmd⟩, hpayd⟩ := hform
+      have hmult : bi.multiplicity = (.const 1 : Expression p) := of_decide_eq_true hmd
+      have hpayload : bi.payload
+          = [e, e, (.const 0 : Expression p), (.const 1 : Expression p)] :=
+        of_decide_eq_true hpayd
+      obtain ⟨_, _, hviol⟩ := facts.byteCheck_sound bi.busId hbc
+      have hEv : bi.eval env
+          = { busId := bi.busId, multiplicity := (1 : ZMod p),
+              payload := [e.eval env, e.eval env, (0 : ZMod p), (1 : ZMod p)] } := by
+        unfold BusInteraction.eval
+        rw [hmult, hpayload]
+        rfl
+      have hok := hbus bi hbi (by rw [hEv]; exact one_ne_zero)
+      rw [hEv] at hok
+      exact (hviol (e.eval env) 1).mp hok
 
 /-- Are all of `R`'s payload entries at the declared byte slots justified from `rest`? -/
 def recvSlotsJustified (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
@@ -941,16 +981,19 @@ def findCancelGo (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFac
         if B.all (midRefuted shape busId S) && A.all (preRefuted shape busId S) then
         -- Byte slots the remaining system does not justify are materialized as a single
         -- explicit self-check on the byte-check bus (more than one would not shrink the bus
-        -- count and would stall the cancellation loop); when the justification cannot pass
-        -- (≥ 2 unjustified slots, or no byte-check bus), skip the certificate re-check —
-        -- the justification scan is the expensive part.
+        -- count and would stall the cancellation loop). One check suffices whenever all the
+        -- unjustified slots carry the *same* expression (`byteJustified`'s carrier branch then
+        -- justifies each of them); when they don't, or there is no byte-check bus, skip the
+        -- certificate re-check — the justification scan is the expensive part.
         let unjust := unjustifiedSlots deep cs.algebraicConstraints bs facts (A ++ B ++ C)
           slots R
         let checks : List (BusInteraction (Expression p)) :=
-          match unjust, bcBus? with
-          | [slot], some bcBus => (R.payload[slot]?).elim [] (fun e =>
-              [{ busId := bcBus, multiplicity := .const 1,
-                 payload := [e, e, .const 0, .const 1] }])
+          match bcBus?, unjust.filterMap (fun slot => R.payload[slot]?) with
+          | some bcBus, e :: es =>
+              if es.all (fun e' => e' == e) then
+                [{ busId := bcBus, multiplicity := .const 1,
+                   payload := [e, e, .const 0, .const 1] }]
+              else []
           | _, _ => []
         if unjust.isEmpty || !checks.isEmpty then
         if hchk : checkCancel deep cs.algebraicConstraints bs facts shape busId slots

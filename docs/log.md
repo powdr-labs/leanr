@@ -1378,3 +1378,56 @@ entry-45 note still applies (enumerate only the non-pinned variables of the doma
 it drops one send/receive pair per invocation and rescans the system per drop, so a chain of
 `k` cancellations costs `k` full `findCancel` sweeps (a batched variant would cancel a whole
 chain per sweep).
+
+### 54. Cancel same-register access chains: payload canonicalization (`PayloadCanon.lean`) + richer byte justification — memory-bus parity with powdr on chain-heavy blocks
+
+**The gap.** Per-bus comparison against powdr showed the largest single bus-interaction gap in
+missed memory send↔receive cancellations on same-register access chains: on apc_010, registers
+x44/x60/x64 are accessed 16/12/8 times and leanr kept every intermediate pair (memory bus 144 vs
+powdr's 78, +66). Two independent blockers, neither of which is the two-send unification (that
+worked — `busUnifyPass` had already added and propagated the slot equalities):
+
+1. **Syntactic payload mismatch.** A `loadb`-style write sends the degree-2 blend
+   `(1−f)·s₀ + f·s₁` while the next access's receive carries the fresh column `read_data__0_i`.
+   The linking constraint `read_data__0_i − blend = 0` is in the system (added by `busUnify`),
+   but it cannot be inlined (degree), and `busPairCancelPass` compares payloads syntactically —
+   so the pair never matches.
+2. **Byte-slot justification too weak.** Even syntactically equal pairs were skipped:
+   `byteJustified` handled only constants and variables with bus-fact bounds or one-level deep
+   selector analysis, so data limbs like `read_data__1_i` — pinned to `{0, 255}` by their own
+   domain constraint `x·(x−255) = 0` — and the genuinely-unbounded loaded-byte column made
+   **≥ 2** unjustified slots, and the emit fallback only covered exactly one.
+
+**Fix 1 — `payloadCanonPass` (new `VerifiedPass`, `PayloadCanon.lean`).** For every algebraic
+constraint of the syntactic shape `eqExpr` builds (`x − e` or `e − x`, `e` non-atomic), rewrite
+payload entries equal to `e` to the variable `x` — top-level entry rewrite only, constraints
+untouched, multiplicities untouched. Under any assignment satisfying the (unchanged) constraints
+every message evaluates identically, so `PassCorrect.ofEnvEq` applies with the *same* environment
+in both directions; the checked certificate (`defWitnessed`, the defining constraint is literally
+present) is all the proof consumes. Rewrites strictly shrink payload AST size (keys are
+non-atomic), so the pass cannot oscillate under the pipeline fixpoint. Wired between
+`busUnifyPass` and the `busPairCancelPass` drain, so enabled cancellations fire in the same
+cleanup cycle. Generic: nothing memory- or OpenVM-specific.
+
+**Fix 2 — byte justification (`BusPairCancel.lean`).** `byteJustified` gains two proven paths:
+(a) a variable whose constraint-derived finite domain (`findDomainAlg`, e.g. `x·(x−255) = 0`)
+contains only byte values, and (b) any expression carried by an explicit self-check
+`[e, e, 0, 1]` (constant multiplicity 1) on a `byteCheck` bus among the remaining interactions —
+the carrier the pass itself emits. With (b), the (proof-free) emit gate generalizes from
+"exactly one unjustified slot" to "all unjustified slots hold the same expression" — one emitted
+check then justifies them all, and a chain cancellation stays a strict bus win (−2 memory, ≤ +1
+bitwise, later halved by `bytePackPass`).
+
+**Measured.** apc_010: bus **314 → 257** (effectiveness 2.11× → **2.53×**, powdr 2.72×); the
+memory bus itself hits exact parity with powdr (78 = 78); vars 470 and constraints 255 unchanged
+(both still beat powdr's 498/331). apc_008: bus 74 → 69. apc_001, apc_003, apc_005, apc_028,
+apc_056: byte-for-byte unchanged. Top-12 sample: bus effectiveness **3.01× → 3.06×** aggregate
+(**2.53× → 2.59×** geomean), variables/constraints identical — a pure bus win under the priority
+order. The residual apc_010 gap is the emitted self-checks (bitwise 19 vs 1; see the new
+loaded-byte idea in `docs/ideas.md`) and the range-check class. The full 100-case sweep was still running at commit
+time; its aggregate numbers are appended in the follow-up commit.
+
+`lake build` green; `Scripts/check-proof-integrity.sh` passes —
+`optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`,
+`openVmOptimizer_maintainsCorrectness` all still `{propext, Classical.choice, Quot.sound}`-only;
+no `sorry`/`admit`/`axiom`/`native_decide`; degree bounds ok on all sampled outputs.
