@@ -66,6 +66,15 @@ private def neverViolatesImpl (busMap : Nat → Option OpenVmBusType) (busId : N
   -- length is not 9, so it can violate and is not unconditionally sound.
   | _ => false
 
+/-- The fixed-zero cell of the OpenVM memory bus: register `x0` = address `(as, ptr) = (1, 0)`,
+    with the four data limbs at payload slots `2..5`. Backs the `zeroRegisterReads` admissibility
+    clause; `none` for every non-memory bus. -/
+private def zeroCellImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat) :
+    Option (List (Nat × ZMod p) × List Nat) :=
+  match busMap busId with
+  | some .memory => some ([(0, 1), (1, 0)], [2, 3, 4, 5])
+  | _ => none
+
 /-- A payload matching a 4-entry pattern is a 4-entry list. -/
 private theorem payload_four {payload : List (ZMod p)} {p0 p1 p2 p3 : Option (ZMod p)}
     (h : Matches payload [p0, p1, p2, p3]) :
@@ -379,8 +388,8 @@ def openVmFacts (p : ℕ) [NeZero p]
     intro msgs hadm busId shape hshape
     have hstateful : (openVmBusSemantics p busMap).isStateful busId = true :=
       openVm_isStateful_of_memShape busMap busId shape hshape
-    -- `openVmBusSemantics.admissible` is the per-bus `admissibleMemoryBus` conjunction
-    have hd := hadm busId shape hshape
+    -- `openVmBusSemantics.admissible` is the per-bus `admissibleMemoryBus` conjunction, `.1`
+    have hd := hadm.1 busId shape hshape
     -- the active∧stateful-then-busId list equals the busId-then-active list (busId is stateful)
     have hlist : (msgs.filter (fun m => decide (m.multiplicity ≠ 0) &&
           (openVmBusSemantics p busMap).isStateful m.busId)).filter (fun m => m.busId = busId)
@@ -394,38 +403,47 @@ def openVmFacts (p : ℕ) [NeZero p]
       · simp [hb]
     rwa [hlist] at hd
   admissible_dropPair := by
-    -- `openVmBusSemantics.admissible` is the per-declared-bus `admissibleMemoryBus` conjunction.
+    -- `openVmBusSemantics.admissible` is the per-declared-bus `admissibleMemoryBus` conjunction
+    -- (`.1`) together with the `zeroRegisterReads` clause (`.2`).
     intro hp1 busId shape hshape A B C S R hSbus hRbus hSm hRm haddrEq hcons hearliest hadm_full
-      busId' shape' hshape'
-    by_cases hbb : busId' = busId
-    · subst busId'
-      obtain rfl : shape = shape' := Option.some.inj (hshape.symm.trans hshape')
-      have hgoal : (A ++ B ++ C).filter (fun m => m.busId = busId)
-          = A.filter (fun m => m.busId = busId) ++ B.filter (fun m => m.busId = busId)
-            ++ C.filter (fun m => m.busId = busId) := by
-        simp only [List.filter_append]
-      rw [hgoal]
-      have hfull := hadm_full busId shape hshape
-      have hfiltFull : (A ++ S :: B ++ R :: C).filter (fun m => m.busId = busId)
-          = A.filter (fun m => m.busId = busId) ++ S :: B.filter (fun m => m.busId = busId)
-            ++ R :: C.filter (fun m => m.busId = busId) := by
-        simp only [List.filter_append, List.filter_cons, hSbus, hRbus, decide_true, if_true]
-      rw [hfiltFull] at hfull
-      refine admissibleMemoryBus_dropPair shape hp1 _ _ _ S R hfull ?_ ?_ haddrEq
-      · intro m hm hmne hmaddr
-        rw [List.mem_filter] at hm
-        exact hcons m hm.1 (of_decide_eq_true hm.2) hmne hmaddr
-      · intro m hm hmne hmaddr
-        rw [List.mem_filter] at hm
-        exact hearliest m hm.1 (of_decide_eq_true hm.2) hmne hmaddr
-    · -- `busId' ≠ busId`: `S`, `R` are on `busId`, so they drop out and the filter is unchanged.
-      have hne : busId ≠ busId' := fun h => hbb h.symm
-      have heq : (A ++ B ++ C).filter (fun m => m.busId = busId')
-          = (A ++ S :: B ++ R :: C).filter (fun m => m.busId = busId') := by
-        simp only [List.filter_append, List.filter_cons, hSbus, hRbus,
-          decide_eq_false hne, Bool.false_eq_true, if_false]
-      rw [heq]
-      exact hadm_full busId' shape' hshape'
+    obtain ⟨hdisc, hzero⟩ := hadm_full
+    refine ⟨fun busId' shape' hshape' => ?_, ?_⟩
+    · -- memory discipline conjunct
+      by_cases hbb : busId' = busId
+      · subst busId'
+        obtain rfl : shape = shape' := Option.some.inj (hshape.symm.trans hshape')
+        have hgoal : (A ++ B ++ C).filter (fun m => m.busId = busId)
+            = A.filter (fun m => m.busId = busId) ++ B.filter (fun m => m.busId = busId)
+              ++ C.filter (fun m => m.busId = busId) := by
+          simp only [List.filter_append]
+        rw [hgoal]
+        have hfull := hdisc busId shape hshape
+        have hfiltFull : (A ++ S :: B ++ R :: C).filter (fun m => m.busId = busId)
+            = A.filter (fun m => m.busId = busId) ++ S :: B.filter (fun m => m.busId = busId)
+              ++ R :: C.filter (fun m => m.busId = busId) := by
+          simp only [List.filter_append, List.filter_cons, hSbus, hRbus, decide_true, if_true]
+        rw [hfiltFull] at hfull
+        refine admissibleMemoryBus_dropPair shape hp1 _ _ _ S R hfull ?_ ?_ haddrEq
+        · intro m hm hmne hmaddr
+          rw [List.mem_filter] at hm
+          exact hcons m hm.1 (of_decide_eq_true hm.2) hmne hmaddr
+        · intro m hm hmne hmaddr
+          rw [List.mem_filter] at hm
+          exact hearliest m hm.1 (of_decide_eq_true hm.2) hmne hmaddr
+      · -- `busId' ≠ busId`: `S`, `R` are on `busId`, so they drop out and the filter is unchanged.
+        have hne : busId ≠ busId' := fun h => hbb h.symm
+        have heq : (A ++ B ++ C).filter (fun m => m.busId = busId')
+            = (A ++ S :: B ++ R :: C).filter (fun m => m.busId = busId') := by
+          simp only [List.filter_append, List.filter_cons, hSbus, hRbus,
+            decide_eq_false hne, Bool.false_eq_true, if_false]
+        rw [heq]
+        exact hdisc busId' shape' hshape'
+    · -- `zeroRegisterReads` conjunct: `A ++ B ++ C`'s members are all members of the full list.
+      intro m hm hbus h0 h1
+      have hmem : m ∈ A ++ S :: B ++ R :: C := by
+        simp only [List.mem_append, List.mem_cons] at hm ⊢
+        tauto
+      exact hzero m hmem hbus h0 h1
   bytePairBus busId := match busMap busId with
     | some .bitwiseLookup => true
     | _ => false
@@ -487,5 +505,34 @@ def openVmFacts (p : ℕ) [NeZero p]
       unfold violates; rw [hbus]
       rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1 <;>
         simp [h1, hv0, isByte, Nat.xor_self]
+  zeroCell := zeroCellImpl busMap
+  zeroCell_sound := by
+    intro msgs hadm busId addrReq dataSlots hfact m hm hbusId hmne haddr slot hslot v hget
+    -- `zeroCell` is `some` only on memory buses; extract the fixed shape.
+    unfold zeroCellImpl at hfact
+    split at hfact
+    · rename_i hbus
+      simp only [Option.some.injEq, Prod.mk.injEq] at hfact
+      obtain ⟨rfl, rfl⟩ := hfact
+      -- `m` survives the active∧stateful filter, so the `zeroRegisterReads` clause applies to it.
+      have hstateful : (openVmBusSemantics p busMap).isStateful m.busId = true := by
+        show (match busMap m.busId with | some t => t.isStateful | none => false) = true
+        rw [hbusId, hbus]; rfl
+      have hmemBus : busMap m.busId = some .memory := by rw [hbusId]; exact hbus
+      have hmfilt : m ∈ msgs.filter
+          (fun m => decide (m.multiplicity ≠ 0) && (openVmBusSemantics p busMap).isStateful m.busId) := by
+        rw [List.mem_filter]
+        exact ⟨hm, by rw [hstateful, decide_eq_true hmne]; rfl⟩
+      have h0 : m.payload[0]? = some 1 := haddr (0, 1) (by simp)
+      have h1 : m.payload[1]? = some 0 := haddr (1, 0) (by simp)
+      have hz := hadm.2 m hmfilt hmemBus h0 h1
+      -- `slot ∈ [2,3,4,5]`; match it to the corresponding zero component and cancel with `hget`.
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hslot
+      rcases hslot with rfl | rfl | rfl | rfl
+      · rw [hget] at hz; exact Option.some.inj hz.1
+      · rw [hget] at hz; exact Option.some.inj hz.2.1
+      · rw [hget] at hz; exact Option.some.inj hz.2.2.1
+      · rw [hget] at hz; exact Option.some.inj hz.2.2.2
+    · exact absurd hfact (by simp)
 
 end Leanr.OpenVM

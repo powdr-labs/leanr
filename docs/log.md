@@ -1242,3 +1242,54 @@ are reported in the follow-up entry. `lake build` green;
 `optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`,
 `openVmOptimizer_maintainsCorrectness` still `{propext, Classical.choice, Quot.sound}`-only; no
 `sorry`/`admit`/`axiom`/`native_decide`.
+
+### 51. seqz/beqz: hardwired-`x0` admissibility + fixed-zero-register pinning (`ZeroRegister.lean`) — closes ~⅓ of the variable gap to powdr on branch blocks
+
+**⚠ Audited spec change (flagged for review).** This is the first entry that edits the audited
+surface. An earlier session correctly found that powdr's `seqz`/`beqz` reduction is **impossible
+under the frozen spec**, and this entry adds the minimal spec change that unblocks it.
+
+**The obstruction (re-verified).** An OpenVM `beqz`/`bnez` compares register `a` against `x0`. `x0`
+is read and written back on the memory bus with a *free* value `b` at two different timestamps, so
+`b` is observable in stateful side effects; the last-write-wins discipline cannot pin it (both
+accesses dangle within the block). powdr sets `b = 0` (RISC-V hardwires `x0 = 0`) and thereby (i)
+drops the four operand limbs `b₀..b₃` and (ii) collapses the four `diff_inv_marker` inverse-hint
+limbs to one (`Σaᵢ = 0 ⟺ a = 0` for bytes). Both hinge on `x0 = 0` — a *global* register-file fact a
+single chip cannot see, and pinning it locally would change a stateful memory payload, which the
+spec's side-effect soundness (`≈`) forbids. So the frozen spec genuinely cannot license it.
+
+**Minimal spec change (`Leanr/OpenVmSemantics.lean`).** Add `zeroRegisterReads` — a
+**completeness-only** `admissible` conjunct, same flavor as the memory discipline: every *active*
+memory message at address `(as, ptr) = (1, 0)` carries zero in its four data limbs. Faithful (real
+RISC-V traces never read a nonzero `x0`), and it constrains **only** which inputs completeness must
+reproduce — soundness (all assignments) is untouched. The whole audited delta is one `def` plus one
+`∧`-conjunct.
+
+**Why passes don't need re-proving.** Generic passes preserve `admissible` by preserving the
+evaluated message list (`admissible_subst`/`admissible_mapExpr`/…), so they transfer *any*
+`admissible`. Only `Implementation/OpenVmFacts.lean` unpacks the concrete predicate: `admissible_sound`
+projects the discipline conjunct (`.1`); `admissible_dropPair` rebuilds the `∧` (discipline as before;
+`zeroRegisterReads` survives dropping a pair because `A++B++C ⊆ A++S::B++R::C`). A new proven `BusFacts`
+field `zeroCell` (+ `zeroCell_sound`) exposes the fact to passes; `trivial` declares none, so the
+fact-free optimizer and `simpleOptimizer_maintainsCorrectness` are unchanged.
+
+**The pass (`Implementation/OptimizerPasses/ZeroRegister.lean`, `VerifiedPassW`).** For every *active*
+memory message (constant nonzero multiplicity) whose address is a declared `zeroCell` matched
+syntactically to constants `(1, 0)`, it **adds** the constraints `dataᵢ = 0`, via
+`addConstraints_correct`: soundness is free (added constraints only shrink the accepted set; buses
+untouched ⇒ side effects unchanged), completeness discharges them from `zeroCell_sound`. It introduces
+no variable (data limbs are existing columns) and skips already-trivial/duplicate equalities, so it
+is idempotent (once `b` folds to literal `0` it fires no more). Wired into `cleanupCycle` after
+constant-fold; the existing Gauss/subst passes then propagate `b → 0`, eliminating the operand limbs.
+
+`lake build` green; `openVmOptimizer_maintainsCorrectness` (+ `simpleOptimizer`/`optimizerWithBusFacts`)
+still `{propext, Classical.choice, Quot.sound}`-only; no `sorry`/`admit`/`axiom`/`native_decide`; all
+outputs within the degree bound.
+
+**Impact (variables).** On the 37 branch-bearing (`diff_inv_marker`) benchmark files, leanr drops
+**5206 → 5083 vars** (−123), shrinking the variable gap to powdr from **387 → 264**. Examples:
+apc_001 42→38, apc_028 35→28 (now beats powdr 30), apc_056 28→24, apc_010 480→476 (beats powdr 498),
+apc_014 272→268 (beats powdr 274). Full `openvm-eth` aggregate variable effectiveness is now
+**4.064× (geo 3.522×)** vs powdr **4.092× (geo 3.787×)** — near parity on the top-priority metric;
+constraints 8.77× stay well ahead of powdr's 5.85×. The residual per-branch gap is the inverse-hint
+collapse (4 hints → 1), which needs **no** further spec change — see `docs/ideas.md`.
