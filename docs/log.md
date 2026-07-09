@@ -1293,3 +1293,41 @@ apc_014 272→268 (beats powdr 274). Full `openvm-eth` aggregate variable effect
 **4.064× (geo 3.522×)** vs powdr **4.092× (geo 3.787×)** — near parity on the top-priority metric;
 constraints 8.77× stay well ahead of powdr's 5.85×. The residual per-branch gap is the inverse-hint
 collapse (4 hints → 1), which needs **no** further spec change — see `docs/ideas.md`.
+
+### 52. Collapse the multi-limb reciprocal-witness group to one hint (`HintCollapse.lean`) — finishes powdr's `seqz`/`beqz`
+
+Entry 51 pinned `x0 = 0`, leaving a `beqz`/`bnez` block with the gadget `cmp·(cmp−1)=0`,
+`(cmp−1)·aᵢ=0`, and one *bilinear* constraint `Σᵢ aᵢ·dimᵢ = cmp` carrying **four** fresh
+inverse-hint witnesses `dimᵢ` (the `diff_inv_marker` limbs). powdr keeps only **one** inverse hint.
+This pass performs that collapse — and it is a *general* transformation, not tied to the gadget.
+
+**The pass (`Implementation/OptimizerPasses/HintCollapse.lean`, `VerifiedPassW`).** Whenever a
+constraint is `Σᵢ aᵢ·dimᵢ + t = 0` with (a) each `dimᵢ` a **distinct variable occurring exactly
+once in the whole system** (a pure witness — `occursOnlyInTarget`), (b) each coefficient `aᵢ` a
+**single byte-bounded variable** (`coeffVar ∘ fold`, bound `≤ 256` from `BusFacts.slotBound` via
+`BoundsMap`, with `n·(B−1) < p` so the sum cannot wrap), and (c) `t` and the `aᵢ` reading only input
+(powdr-ID) columns, it is replaced by `(Σᵢ aᵢ)·inv + t = 0` with a single fresh derived witness
+`inv = QuotientOrZero(−t, Σᵢ aᵢ)`, dropping every `dimᵢ` (−(n−1) variables).
+
+**Correctness (`collapse_correct [Fact p.Prime]`, via the `reencode` rewrite
+`rw = fun x => if x = E then E' else x`).** *Soundness* sets every `dimᵢ := inv`, so
+`Σ aᵢ·dimᵢ = (Σaᵢ)·inv = −t`. *Completeness* computes `inv` by `QuotientOrZero`; the `Σaᵢ = 0`
+branch closes because byte-bounded coefficients summing to `0` are all `0` (`sum_zero_all_zero`),
+forcing `t = 0`. Neither branch touches a bus, so side effects and `admissible` are unchanged. The
+derived `inv`'s method reads only `denom`/`rest` columns, which are powdr-ID inputs, so it satisfies
+the `Derivations.cover`/`reconstructs` obligation. With `BusFacts.trivial` (no `slotBound`) the pass
+never fires, so the fact-free optimizer and `simpleOptimizer_maintainsCorrectness` are unaffected.
+Wired into `cleanupCycle` right after `zeroRegisterPass`; the fresh `inv` and the dropped hints then
+propagate through the following Gauss/fold passes.
+
+`lake build` green; `optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`
+and `Leanr.OpenVM.openVmOptimizer_maintainsCorrectness` all still
+`{propext, Classical.choice, Quot.sound}`-only; no `sorry`/`admit`/`axiom`/`native_decide`; all
+sampled outputs within the degree bound.
+
+**Impact (variables).** The collapse fires on the `seqz`/`beqz` blocks whose operand limbs are
+byte-range-checked *within the block* (so `Σaᵢ = 0 ⇒ all aᵢ = 0` is available from `slotBound`),
+removing the 3 surplus inverse-hint witnesses there; it is a **sound no-op** on blocks whose limbs
+are byte-bounded only through the memory invariant (no in-block range check). Verified on top of
+entry 51: apc_001 38→35, apc_047 94→91; no change on apc_010/apc_028/apc_056/apc_069. The
+full-benchmark aggregate is left to the maintainer's run.

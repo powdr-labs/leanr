@@ -19,6 +19,7 @@ import Leanr.Implementation.OptimizerPasses.DisconnectedComponent
 import Leanr.Implementation.OptimizerPasses.Reencode
 import Leanr.Implementation.OptimizerPasses.DomainFold
 import Leanr.Implementation.OptimizerPasses.ZeroRegister
+import Leanr.Implementation.OptimizerPasses.HintCollapse
 
 set_option autoImplicit false
 
@@ -61,6 +62,7 @@ def cleanupCycle : VerifiedPassW p :=
     |>.andThen normalizePass.withFacts.guardDegree
     |>.andThen constantFoldPass.withFacts.guardDegree
     |>.andThen zeroRegisterPass.guardDegree
+    |>.andThen hintCollapsePass.guardDegree
     |>.andThen trivialConstraintDropPass.withFacts.guardDegree
     |>.andThen zeroMultBusDropPass.withFacts.guardDegree
     |>.andThen tautoBusDropPass.withFacts.guardDegree
