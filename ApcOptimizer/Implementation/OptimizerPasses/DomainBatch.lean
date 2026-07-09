@@ -291,11 +291,62 @@ def survivesAllM (bs : BusSemantics p) (es : List (Expression p))
       let v := bi.eval (envOfFast a)
       decide (v.multiplicity = 0) || !bs.violatesConstraint v)
 
+/-- `xs.contains y`, testing the cheap `powdrId?` discriminator before the name String (the
+    `envOfFast` trick, for the covered-item scans' membership tests). -/
+def containsFast (xs : List Variable) (y : Variable) : Bool :=
+  match xs with
+  | [] => false
+  | x :: rest => (y.powdrId? == x.powdrId? && y.name == x.name) || containsFast rest y
+
+theorem containsFast_eq (xs : List Variable) (y : Variable) :
+    containsFast xs y = xs.contains y := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+    rw [containsFast, ih, List.contains_cons]
+    congr 1
+    by_cases h : y = x
+    · subst h
+      simp
+    · have h1 : (y.powdrId? == x.powdrId? && y.name == x.name) = false := by
+        rw [Bool.eq_false_iff]
+        intro hc
+        exact h ((varFastEq_iff y x).mp hc)
+      have h2 : (y == x) = false := by
+        rw [Bool.eq_false_iff]
+        intro hc
+        exact h (by simpa using hc)
+      rw [h1, h2]
+
+/-- `Expression.varsIn`, through `containsFast` (`varsInF_eq`). -/
+def Expression.varsInF (xs : List Variable) : Expression p → Bool
+  | .const _ => true
+  | .var y => containsFast xs y
+  | .add a b => a.varsInF xs && b.varsInF xs
+  | .mul a b => a.varsInF xs && b.varsInF xs
+
+theorem Expression.varsInF_eq (xs : List Variable) (e : Expression p) :
+    e.varsInF xs = e.varsIn xs := by
+  induction e with
+  | const n => rfl
+  | var y => exact containsFast_eq xs y
+  | add a b iha ihb => rw [Expression.varsInF, Expression.varsIn, iha, ihb]
+  | mul a b iha ihb => rw [Expression.varsInF, Expression.varsIn, iha, ihb]
+
+/-- `BusInteraction.varsIn`, through `containsFast` (`varsInF_eq`). -/
+def BusInteraction.varsInF (xs : List Variable) (bi : BusInteraction (Expression p)) : Bool :=
+  bi.multiplicity.varsInF xs && bi.payload.all (fun e => e.varsInF xs)
+
+theorem BusInteraction.varsInF_eq (xs : List Variable) (bi : BusInteraction (Expression p)) :
+    bi.varsInF xs = bi.varsIn xs := by
+  rw [BusInteraction.varsInF, BusInteraction.varsIn]
+  simp only [Expression.varsInF_eq]
+
 /-- The constraints of the system whose variables all lie in `xs`. Uses the allocation-free
-    `Expression.varsIn` (equivalent to `c.vars.all (· ∈ xs)`) so the per-target covered-item scan
+    `Expression.varsInF` (equivalent to `c.vars.all (· ∈ xs)`) so the per-target covered-item scan
     does not rebuild every constraint's variable list. -/
 def coveredCs (cs : ConstraintSystem p) (xs : List Variable) : List (Expression p) :=
-  cs.algebraicConstraints.filter (fun c => c.varsIn xs)
+  cs.algebraicConstraints.filter (fun c => c.varsInF xs)
 
 /-- The interactions of the system whose variables all lie in `xs` (allocation-free, as `coveredCs`),
     restricted to **stateless** buses. A stateful bus (memory / execution bridge) carries state, and
@@ -308,7 +359,7 @@ def coveredCs (cs : ConstraintSystem p) (xs : List Variable) : List (Expression 
     every box point. -/
 def coveredBis (bs : BusSemantics p) (cs : ConstraintSystem p) (xs : List Variable) :
     List (BusInteraction (Expression p)) :=
-  cs.busInteractions.filter (fun bi => bi.varsIn xs && !bs.isStateful bi.busId)
+  cs.busInteractions.filter (fun bi => bi.varsInF xs && !bs.isStateful bi.busId)
 
 /-- Work cap for one joint enumeration: box size × number of covered targets. -/
 def maxEnumWork : Nat := 524288
@@ -559,18 +610,19 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable 
       -- redundancy costs about what it would save.)
       let esFull := coveredCs cs xs
       let bis := coveredBis bs cs xs
-      let es := activeCs.filter (fun c => c.varsIn xs)
+      let es := activeCs.filter (fun c => c.varsInF xs)
       let informative := !esFull.isEmpty ||
         bis.any (fun bi => bi.payload.any (fun e => !(e.isVar || e.constValue?.isSome)))
       if informative && boxSize * (esFull.length + bis.length) ≤ maxEnumWork then
         have hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true :=
-          fun e he => ⟨hactiveCs e (List.mem_filter.1 he).1, (List.mem_filter.1 he).2⟩
+          fun e he => ⟨hactiveCs e (List.mem_filter.1 he).1,
+            Expression.varsInF_eq xs e ▸ (List.mem_filter.1 he).2⟩
         have hbis : ∀ bi ∈ bis, bi ∈ cs.busInteractions ∧ bi.varsIn xs = true := by
           intro bi hbi
           have hm := List.mem_filter.1 hbi
           have h2 := hm.2
           rw [Bool.and_eq_true] at h2
-          exact ⟨hm.1, h2.1⟩
+          exact ⟨hm.1, BusInteraction.varsInF_eq xs bi ▸ h2.1⟩
         match hscan : scanInit bs es bis (doms.map Prod.fst) (assignments doms) with
         | none =>
           -- no surviving point: the box is empty of solutions, everything is vacuously forced
