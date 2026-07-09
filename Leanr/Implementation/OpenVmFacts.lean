@@ -113,7 +113,7 @@ private theorem memory_recv_bytes (busMap : Nat → Option OpenVmBusType)
     rcases has with h | h <;> simp [h]
   simp only [decide_true, has', Bool.true_and, Bool.not_eq_false', List.all_eq_true,
     List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq,
-    decide_eq_true_eq] at hok
+    isByte, decide_eq_true_eq] at hok
   exact ⟨hok.1, hok.2.1, hok.2.2.1, hok.2.2.2⟩
 
 /-- A memory message that is not a receive (multiplicity ≠ -1) never violates. -/
@@ -147,7 +147,7 @@ private theorem memory_send_ok [NeZero p] (busMap : Nat → Option OpenVmBusType
     unfold violates
     rw [hbus]
     rcases payload with _ | ⟨a0, _ | ⟨a1, _ | ⟨d0, _ | ⟨d1, _ | ⟨d2, _ | ⟨d3, rest⟩⟩⟩⟩⟩⟩ <;>
-      simp [hbyte]
+      simp [isByte, hbyte]
   · exact memory_nonRecv_ok busMap m hbus (by rw [hm]; exact hc)
 
 /-- A memory *receive* (multiplicity -1) with byte data limbs (payload slots 2–5, where
@@ -167,7 +167,7 @@ private theorem memory_recv_ok (busMap : Nat → Option OpenVmBusType)
   have h1 : d1.val < 256 := hslots 3 (by simp) d1 rfl
   have h2 : d2.val < 256 := hslots 4 (by simp) d2 rfl
   have h3 : d3.val < 256 := hslots 5 (by simp) d3 rfl
-  simp [h0, h1, h2, h3]
+  simp [isByte, h0, h1, h2, h3]
 
 /-- A bus with a declared last-write-wins shape (memory or execution bridge) is stateful. -/
 theorem openVm_isStateful_of_memShape {p : ℕ} (busMap : Nat → Option OpenVmBusType)
