@@ -1,4 +1,4 @@
-import Leanr.Optimizer
+import ApcOptimizer.Optimizer
 
 /-! CI helper: print the axiom dependencies of the top-level correctness theorems.
     `Scripts/check-proof-integrity.sh` asserts the output mentions no forbidden axiom
@@ -9,4 +9,4 @@ import Leanr.Optimizer
 #print axioms optimizerWithBusFacts_maintainsCorrectness
 -- Its two instances: the fact-free optimizer, and the concrete OpenVM optimizer the CLI runs.
 #print axioms simpleOptimizer_maintainsCorrectness
-#print axioms Leanr.OpenVM.openVmOptimizer_maintainsCorrectness
+#print axioms ApcOptimizer.OpenVM.openVmOptimizer_maintainsCorrectness

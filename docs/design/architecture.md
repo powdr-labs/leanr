@@ -4,12 +4,12 @@ How the verified optimizer is put together. The audited surface is listed in the
 [README](../../README.md); this document is the rationale behind it and the map for extending the
 optimizer.
 
-Files directly under `Leanr/` are audited (the spec, the OpenVM semantics, the memory-bus utility,
-and the correctness theorems in `Leanr/Optimizer.lean`); everything under `Leanr/Implementation/` —
+Files directly under `ApcOptimizer/` are audited (the spec, the OpenVM semantics, the memory-bus utility,
+and the correctness theorems in `ApcOptimizer/Optimizer.lean`); everything under `ApcOptimizer/Implementation/` —
 the passes, the pipeline that assembles them, the proven `BusFacts`, and the JSON parser — needs no
-audit, and `Leanr/Utils/` is tooling.
+audit, and `ApcOptimizer/Utils/` is tooling.
 
-## The spec (`Leanr/Spec.lean`, audited)
+## The spec (`ApcOptimizer/Spec.lean`, audited)
 
 A `ConstraintSystem` is a list of algebraic constraints plus a list of bus interactions over
 `Expression`s. The correctness relation is **`refines`**, deliberately asymmetric:
@@ -44,7 +44,7 @@ circuit; a variable with no powdr ID cannot be read from the input trace.)
 `bs` (quantify over `bs` for the "correct for every semantics" reading; fixing it lets a
 semantics-specific optimizer be an instance).
 
-## The framework (`Leanr/Implementation/OptimizerPasses/Basic.lean`, `FactPass.lean`)
+## The framework (`ApcOptimizer/Implementation/OptimizerPasses/Basic.lean`, `FactPass.lean`)
 
 A **`VerifiedPass`** maps a system to a new one *bundled with a `PassCorrect` proof* (`refines` +
 invariant preservation) — so a pass cannot be written without discharging its obligations.
@@ -62,13 +62,13 @@ invariant preservation) — so a pass cannot be written without discharging its 
 The semantics exposes bus tables only through the opaque `violatesConstraint`. Two channels give
 passes usable knowledge:
 
-- **`BusFacts` (`Leanr/Implementation/BusFacts.lean`) — proven, zero audit surface.** Each field (`slotBound`,
+- **`BusFacts` (`ApcOptimizer/Implementation/BusFacts.lean`) — proven, zero audit surface.** Each field (`slotBound`,
   `slotFun`, `neverViolates`, `recvByteSlots`, `byteCheck`, `memShape`) carries a soundness proof
   against the semantics, so a wrong fact simply will not compile. `BusFacts.trivial` claims nothing
   and recovers fact-free behavior. Examples: the XOR functional dependence of the bitwise bus,
   byte bounds on its operands, or the byte bounds on the data limbs of a memory *receive*
   (`slotBound` is multiplicity-aware for exactly this).
-- **`admissible` / `Leanr/MemoryBus.lean` — audited assumption.** The last-write-wins memory
+- **`admissible` / `ApcOptimizer/MemoryBus.lean` — audited assumption.** The last-write-wins memory
   discipline: `admissibleMemoryBus` states that a send followed by a same-address receive (with no
   active same-address message between, **in list order**) carry equal payloads. This is a
   completeness-only assumption about real traces — the input must list memory interactions in
@@ -77,12 +77,12 @@ passes usable knowledge:
 
 ## OpenVM instantiation
 
-`openVmBusSemantics` (`Leanr/OpenVmSemantics.lean`, audited) provides `isStateful`,
+`openVmBusSemantics` (`ApcOptimizer/OpenVmSemantics.lean`, audited) provides `isStateful`,
 `violatesConstraint` (per-bus tables: range checkers, bitwise/XOR, PC lookup), `breaksInvariant`,
-`admissible`, and the degree bound. `openVmFacts` (`Leanr/Implementation/OpenVmFacts.lean`) is the
+`admissible`, and the degree bound. `openVmFacts` (`ApcOptimizer/Implementation/OpenVmFacts.lean`) is the
 proven `BusFacts` instance. Both are parameterized by the bus map, defaulting to `defaultBusMap`.
 
-## The pipeline (`Leanr/Implementation/Optimizer.lean`, theorems in `Leanr/Optimizer.lean`)
+## The pipeline (`ApcOptimizer/Implementation/Optimizer.lean`, theorems in `ApcOptimizer/Optimizer.lean`)
 
 `cleanupCycle` chains the passes — Gauss elimination, normalize, constant-fold, finite-domain
 propagation (boolean/one-hot case analysis and bus-fact domains; prime `p` only), trivial /
@@ -98,7 +98,7 @@ decrease `decreasing_by` needs. Two free corollaries: the loop is size-monotone 
 usual `PassCorrect` composition (each kept cycle refines; stopping returns the input). Applied to
 proven facts, `optimizerWithBusFacts` is a
 circuit-to-circuit map; `simpleOptimizer` is the trivial-facts instance (`BusFacts.trivial`). The
-audited `Leanr/Optimizer.lean` proves the master theorem
+audited `ApcOptimizer/Optimizer.lean` proves the master theorem
 `optimizerWithBusFacts_maintainsCorrectness` (correctness for *every* bus semantics and choice of
 proven facts) and derives its instances `simpleOptimizer_maintainsCorrectness`
 and the OpenVM `openVmOptimizer` (with
@@ -106,7 +106,7 @@ and the OpenVM `openVmOptimizer` (with
 
 ## Adding a pass
 
-Write a `VerifiedPass` (or `VerifiedPassW`) in a new `Leanr/Implementation/OptimizerPasses/` file,
-import it in `Leanr/Implementation/Optimizer.lean`, and `.andThen … |>.guardDegree` it into
+Write a `VerifiedPass` (or `VerifiedPassW`) in a new `ApcOptimizer/Implementation/OptimizerPasses/` file,
+import it in `ApcOptimizer/Implementation/Optimizer.lean`, and `.andThen … |>.guardDegree` it into
 `cleanupCycle`. Correctness follows from the pass's own `PassCorrect`; do not touch `Spec.lean`,
-the audited `Leanr/Optimizer.lean`, or the `Basic.lean` glue. Build with `lake build`.
+the audited `ApcOptimizer/Optimizer.lean`, or the `Basic.lean` glue. Build with `lake build`.

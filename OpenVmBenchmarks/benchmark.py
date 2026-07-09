@@ -3,13 +3,13 @@
 # requires-python = ">=3.9"
 # dependencies = ["tqdm"]
 # ///
-"""Benchmark the leanr optimizer against powdr over a named benchmark set.
+"""Benchmark apc-optimizer against powdr over a named benchmark set.
 
 Each benchmark is a subdirectory of OpenVmBenchmarks/ holding apc_<rank>_pc<pc>.json.gz
 case pairs (plus manifest.json / apc_candidates.json). The default and main benchmark
-used for optimization is `openvm-eth`. For each case, run `leanr compare` (the same
+used for optimization is `openvm-eth`. For each case, run `apc-optimizer compare` (the same
 optimizer run as the autoopt loop) and aggregate effectiveness -- distinct variables
-before / after -- for leanr vs powdr. Cases run in parallel with a progress bar. The
+before / after -- for apc-optimizer vs powdr. Cases run in parallel with a progress bar. The
 optimizer takes no iteration count: its cleanup loop runs to a fixpoint on an
 input-derived budget.
 
@@ -22,7 +22,7 @@ selects the benchmark by name (default: openvm-eth):
     OpenVmBenchmarks/benchmark.py --n 10 --report report.html
 
 With --report, writes a self-contained interactive HTML page to click through
-each block and compare its assembly, original circuit, and the powdr / leanr
+each block and compare its assembly, original circuit, and the powdr / apc-optimizer
 optimized circuits.
 """
 from __future__ import annotations
@@ -51,11 +51,11 @@ REPO = Path(__file__).resolve().parents[1]    # OpenVmBenchmarks -> repo root
 # Each benchmark is a subdirectory of HERE; `openvm-eth` is the main one used for optimization.
 DEFAULT_BENCHMARK = "openvm-eth"
 NAME_RE = re.compile(r"apc_(\d+)_pc(.+)\.json\.gz$")
-# `leanr compare` stat lines, e.g. "  before: 62 vars, 55 constraints, 12 bus interactions".
+# `apc-optimizer compare` stat lines, e.g. "  before: 62 vars, 55 constraints, 12 bus interactions".
 # Capture all three measures per role (variables, constraints, bus interactions).
 STAT_RE = {
     role: re.compile(rf"^\s*{role}\s*:\s*(\d+)\s+vars,\s*(\d+)\s+constraints,\s*(\d+)\s+bus")
-    for role in ("before", "leanr", "powdr")
+    for role in ("before", "apc-optimizer", "powdr")
 }
 # Size measures, in priority order (variables > bus interactions > algebraic constraints).
 METRICS = ("vars", "bus", "constraints")
@@ -73,7 +73,7 @@ def _ratio(before, after):
 
 
 def parse_compare(text):
-    """Parse a `leanr compare` run into {role: {vars, constraints, bus}} for the three roles."""
+    """Parse a `apc-optimizer compare` run into {role: {vars, constraints, bus}} for the three roles."""
     got = {}
     for line in text.splitlines():
         for role, rx in STAT_RE.items():
@@ -81,19 +81,19 @@ def parse_compare(text):
             if m:
                 got[role] = {"vars": int(m.group(1)), "constraints": int(m.group(2)),
                              "bus": int(m.group(3))}
-    if {"before", "leanr", "powdr"} <= got.keys():
+    if {"before", "apc-optimizer", "powdr"} <= got.keys():
         return got
     return None
 
 
 def _metrics_from_json(o):
-    """Pull the three size measures out of a `leanr report` circuit object."""
+    """Pull the three size measures out of a `apc-optimizer report` circuit object."""
     return {"vars": o["vars"], "constraints": o["constraints"], "bus": o["bus"]}
 
 
 def run_one(binary, unopt, want_report):
     """Run one case, returning (name, metrics, report_json, err). `metrics` is
-    {role: {vars, constraints, bus}} for role in before/leanr/powdr, or None on failure."""
+    {role: {vars, constraints, bus}} for role in before/apc-optimizer/powdr, or None on failure."""
     name = unopt.name
     opt = unopt.with_name(unopt.name.replace(".json.gz", ".powdr_opt.json.gz"))
     if not opt.exists():
@@ -103,12 +103,12 @@ def run_one(binary, unopt, want_report):
         out = subprocess.run([str(binary), sub, str(unopt), str(opt)],
                              capture_output=True, text=True, check=True).stdout
     except subprocess.CalledProcessError:
-        return name, None, None, "leanr failed"
+        return name, None, None, "apc-optimizer failed"
     if want_report:
         try:
             j = json.loads(out)
             metrics = {"before": _metrics_from_json(j["original"]),
-                       "leanr": _metrics_from_json(j["leanr"]),
+                       "apc-optimizer": _metrics_from_json(j["apc-optimizer"]),
                        "powdr": _metrics_from_json(j["powdr"])}
         except Exception:
             return name, None, None, "report parse failed"
@@ -172,9 +172,9 @@ def main():
         sys.exit(f"error: no benchmark {args.benchmark!r} under {HERE} (available: {avail})")
 
     os.chdir(REPO)
-    print("building leanr...", file=sys.stderr)
+    print("building apc-optimizer...", file=sys.stderr)
     subprocess.run(["lake", "build"], check=True)
-    binary = REPO / ".lake" / "build" / "bin" / "leanr"
+    binary = REPO / ".lake" / "build" / "bin" / "apc-optimizer"
     if not binary.exists():
         sys.exit(f"error: {binary} missing after build")
 
@@ -190,7 +190,7 @@ def main():
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = [pool.submit(run_one, binary, c, want_report) for c in cases]
         for fut in tqdm(as_completed(futures), total=len(futures),
-                        desc="leanr compare", unit="case"):
+                        desc="apc-optimizer compare", unit="case"):
             name, metrics, report, err = fut.result()
             if metrics is None:
                 skipped.append((name, err))
@@ -216,24 +216,24 @@ def main():
     # Wins/losses stay on the primary metric (variables).
     summary = {
         "n": n,
-        "wins": sum(1 for _, m in results if m["leanr"]["vars"] < m["powdr"]["vars"]),
-        "losses": sum(1 for _, m in results if m["leanr"]["vars"] > m["powdr"]["vars"]),
+        "wins": sum(1 for _, m in results if m["apc-optimizer"]["vars"] < m["powdr"]["vars"]),
+        "losses": sum(1 for _, m in results if m["apc-optimizer"]["vars"] > m["powdr"]["vars"]),
     }
-    for role in ("leanr", "powdr"):
+    for role in ("apc-optimizer", "powdr"):
         for mt in METRICS:
             summary[f"{role}_{mt}_agg"] = agg(role, mt)
             summary[f"{role}_{mt}_geo"] = geo(role, mt)
 
-    print(f"\n=== {args.benchmark}: leanr vs powdr over {n} cases ===")
+    print(f"\n=== {args.benchmark}: apc-optimizer vs powdr over {n} cases ===")
     print("effectiveness = size before / size after (larger is better); "
           "priority: variables > bus interactions > constraints")
-    print(f"  {'measure':<18}{'leanr (agg / geo)':<26}{'powdr (agg / geo)':<26}diff (agg)")
+    print(f"  {'measure':<18}{'apc-optimizer (agg / geo)':<26}{'powdr (agg / geo)':<26}diff (agg)")
     for mt in METRICS:
-        la, lg = summary[f"leanr_{mt}_agg"], summary[f"leanr_{mt}_geo"]
+        la, lg = summary[f"apc-optimizer_{mt}_agg"], summary[f"apc-optimizer_{mt}_geo"]
         pa, pg = summary[f"powdr_{mt}_agg"], summary[f"powdr_{mt}_geo"]
         print(f"  {METRIC_LABEL[mt]:<18}{f'{la:.3f}x / {lg:.3f}x':<26}"
               f"{f'{pa:.3f}x / {pg:.3f}x':<26}{la - pa:+.3f}x")
-    print(f"per-case (by variables): leanr wins {summary['wins']}, loses {summary['losses']}, "
+    print(f"per-case (by variables): apc-optimizer wins {summary['wins']}, loses {summary['losses']}, "
           f"ties {n - summary['wins'] - summary['losses']}")
     if skipped:
         print(f"\nskipped {len(skipped)}:", file=sys.stderr)
@@ -248,7 +248,7 @@ def main():
             rank, pc = (m.group(1), m.group(2)) if m else ("?", name)
             r = reports[name]
             html_cases.append({"rank": rank, "pc": pc, "asm": asm.get(name, ""),
-                               "original": r["original"], "powdr": r["powdr"], "leanr": r["leanr"]})
+                               "original": r["original"], "powdr": r["powdr"], "apc-optimizer": r["apc-optimizer"]})
         args.report.write_text(build_html(html_cases, args.benchmark, summary))
         print(f"\nwrote report ({len(html_cases)} cases) to {args.report}", file=sys.stderr)
 
@@ -264,11 +264,11 @@ def build_html(cases, benchmark, summary):
 HTML_TEMPLATE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>leanr benchmark report</title>
+<title>apc-optimizer benchmark report</title>
 <style>
   :root {
     --bg:#ffffff; --bg2:#f6f8fa; --fg:#1f2328; --dim:#656d76; --line:#d0d7de;
-    --accent:#0969da; --accent-bg:#ddf4ff; --powdr:#9a6700; --leanr:#1a7f37;
+    --accent:#0969da; --accent-bg:#ddf4ff; --powdr:#9a6700; --apc-optimizer:#1a7f37;
     --mono:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
   * { box-sizing:border-box; }
@@ -281,7 +281,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   #sidehead .title { font-weight:600; font-size:15px; letter-spacing:-.01em; }
   #sidehead .meta { color:var(--dim); font-size:12px; margin:2px 0 8px; }
   #summary { font-size:12px; line-height:1.7; }
-  #summary .el { color:var(--leanr); font-weight:600; } #summary .ep { color:var(--powdr); font-weight:600; }
+  #summary .el { color:var(--apc-optimizer); font-weight:600; } #summary .ep { color:var(--powdr); font-weight:600; }
   #summary .dim { color:var(--dim); margin-top:3px; }
   #summary .srow { display:flex; gap:6px; align-items:baseline; }
   #summary .srow .slbl { flex:1; color:var(--dim); }
@@ -295,7 +295,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   .crow { display:flex; align-items:baseline; gap:8px; margin-bottom:3px; }
   .crow .rank { font-weight:600; font-size:13px; } .crow .pc { color:var(--dim); font-size:11px; }
   .ceff { font-size:12px; }
-  .ceff .ep { color:var(--powdr); } .ceff .el { color:var(--leanr); } .ceff .win { font-weight:700; }
+  .ceff .ep { color:var(--powdr); } .ceff .el { color:var(--apc-optimizer); } .ceff .win { font-weight:700; }
 
   #main { flex:1; display:flex; flex-direction:column; min-width:0; }
   #bar { flex:none; display:flex; align-items:center; justify-content:space-between; gap:12px;
@@ -322,13 +322,13 @@ HTML_TEMPLATE = r"""<!doctype html>
   .caret::before { content:"\25BE"; } .panel.collapsed .caret::before { content:"\25B8"; }
   .phead .plabel { font-weight:600; font-size:13px; }
   .p-orig .plabel { color:var(--dim); }
-  .p-leanr .plabel { color:var(--leanr); } .p-powdr .plabel { color:var(--powdr); }
+  .p-apc-optimizer .plabel { color:var(--apc-optimizer); } .p-powdr .plabel { color:var(--powdr); }
   .phead .pstats { color:var(--dim); font-size:12px; }
   .panel pre { flex:1; margin:0; padding:12px 14px; overflow:auto; font:var(--mono); white-space:pre; tab-size:2;
                border-radius:0 0 10px 10px; }
 
   .vardiff { position:relative; cursor:default; text-decoration:underline dotted var(--dim); text-underline-offset:3px; }
-  .vardiff .rem { color:#cf222e; } .vardiff .add { color:var(--leanr); }
+  .vardiff .rem { color:#cf222e; } .vardiff .add { color:var(--apc-optimizer); }
   .vardiff .pop { display:none; position:fixed; z-index:20; gap:16px; text-decoration:none;
                   background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px;
                   box-shadow:0 6px 20px rgba(31,35,40,.15); }
@@ -343,7 +343,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <body>
   <aside id="side">
     <div id="sidehead">
-      <div class="title">leanr benchmark report</div>
+      <div class="title">apc-optimizer benchmark report</div>
       <div class="meta">__BENCH__ · __N__ cases</div>
       <div id="summary"></div>
     </div>
@@ -352,13 +352,13 @@ HTML_TEMPLATE = r"""<!doctype html>
   <main id="main">
     <div id="bar">
       <div class="caption" id="caption"></div>
-      <div class="tabs"><button id="tab-leanr">leanr</button><button id="tab-powdr">powdr</button></div>
+      <div class="tabs"><button id="tab-apc-optimizer">apc-optimizer</button><button id="tab-powdr">powdr</button></div>
     </div>
     <div id="content"></div>
   </main>
 <script>
 const DATA = __DATA__, SUM = __SUMMARY__;
-let cur = 0, tab = "leanr";
+let cur = 0, tab = "apc-optimizer";
 const collapsed = { asm: false, orig: true, opt: false };
 
 // Shrink factor of measure `key` (o=original, x=optimized). Guards the zero-denominator case.
@@ -412,29 +412,29 @@ function diffToOtherHTML(opt, other, otherName) {
     col(removed, "rem", "removed vs " + otherName) + '</span></span>';
 }
 
-// Aggregate effectiveness per measure (priority order), leanr vs powdr; geomean in the tooltip.
+// Aggregate effectiveness per measure (priority order), apc-optimizer vs powdr; geomean in the tooltip.
 document.getElementById("summary").innerHTML =
-  '<div class="srow shead"><span class="slbl"></span><span class="el">leanr</span><span class="ep">powdr</span></div>' +
+  '<div class="srow shead"><span class="slbl"></span><span class="el">apc-optimizer</span><span class="ep">powdr</span></div>' +
   METRICS.map(function(mt) {
     var k = mt[0];
-    return '<div class="srow" title="geomean — leanr ' + SUM["leanr_" + k + "_geo"].toFixed(2) +
+    return '<div class="srow" title="geomean — apc-optimizer ' + SUM["apc-optimizer_" + k + "_geo"].toFixed(2) +
       '× · powdr ' + SUM["powdr_" + k + "_geo"].toFixed(2) + '×">' +
       '<span class="slbl">' + mt[1] + '</span>' +
-      '<span class="el">' + SUM["leanr_" + k + "_agg"].toFixed(2) + '×</span>' +
+      '<span class="el">' + SUM["apc-optimizer_" + k + "_agg"].toFixed(2) + '×</span>' +
       '<span class="ep">' + SUM["powdr_" + k + "_agg"].toFixed(2) + '×</span></div>';
   }).join("") +
-  '<div class="dim">agg = Σbefore ⁄ Σafter · leanr wins ' + SUM.wins + ' / loses ' + SUM.losses +
+  '<div class="dim">agg = Σbefore ⁄ Σafter · apc-optimizer wins ' + SUM.wins + ' / loses ' + SUM.losses +
   ' (by vars)</div>';
 
 const casesEl = document.getElementById("cases");
 DATA.forEach(function(c, i) {
-  const le = effOf(c.original, c.leanr), pe = effOf(c.original, c.powdr);
+  const le = effOf(c.original, c["apc-optimizer"]), pe = effOf(c.original, c.powdr);
   const b = document.createElement("button");
   b.id = "case" + i; b.className = "caseb";
   b.innerHTML =
     '<div class="crow"><span class="rank">#' + c.rank + '</span><span class="pc">pc' + c.pc + '</span></div>' +
     '<div class="ceff"><span class="ep' + (pe > le ? " win" : "") + '">powdr ' + pe.toFixed(2) + '×</span> · ' +
-    '<span class="el' + (le > pe ? " win" : "") + '">leanr ' + le.toFixed(2) + '×</span></div>';
+    '<span class="el' + (le > pe ? " win" : "") + '">apc-optimizer ' + le.toFixed(2) + '×</span></div>';
   b.onclick = function() { cur = i; render(); };
   casesEl.appendChild(b);
 });
@@ -453,10 +453,10 @@ function makePanel(kind, cls, label, statsHTML, body) {
 
 function render() {
   document.querySelectorAll(".caseb").forEach(function(b, i) { b.classList.toggle("sel", i === cur); });
-  document.getElementById("tab-leanr").classList.toggle("active", tab === "leanr");
+  document.getElementById("tab-apc-optimizer").classList.toggle("active", tab === "apc-optimizer");
   document.getElementById("tab-powdr").classList.toggle("active", tab === "powdr");
-  const c = DATA[cur], opt = tab === "leanr" ? c.leanr : c.powdr;
-  const other = tab === "leanr" ? c.powdr : c.leanr, otherName = tab === "leanr" ? "powdr" : "leanr";
+  const c = DATA[cur], opt = tab === "apc-optimizer" ? c["apc-optimizer"] : c.powdr;
+  const other = tab === "apc-optimizer" ? c.powdr : c["apc-optimizer"], otherName = tab === "apc-optimizer" ? "powdr" : "apc-optimizer";
   const optSet = new Set(opt.vars_list), origSet = new Set(c.original.vars_list);
   const removedSet = new Set(c.original.vars_list.filter(function(v) { return !optSet.has(v); }));
   const addedSet = new Set(opt.vars_list.filter(function(v) { return !origSet.has(v); }));
@@ -469,13 +469,13 @@ function render() {
   const effHTML = METRICS.map(function(mt) {
     return fmtEff(effBy(c.original, opt, mt[0])) + "× " + mt[1];
   }).join(" · ");
-  content.appendChild(makePanel("opt", "circuit " + (tab === "leanr" ? "p-leanr" : "p-powdr"), tab,
+  content.appendChild(makePanel("opt", "circuit " + (tab === "apc-optimizer" ? "p-apc-optimizer" : "p-powdr"), tab,
     statLine(opt) + "  ·  " + effHTML + " fewer  ·  " +
       varDiffHTML(c.original, opt) + "  ·  " + diffToOtherHTML(opt, other, otherName),
     highlightRender(opt.render, addedSet, "hl-add")));
 }
 
-document.getElementById("tab-leanr").onclick = function() { tab = "leanr"; render(); };
+document.getElementById("tab-apc-optimizer").onclick = function() { tab = "apc-optimizer"; render(); };
 document.getElementById("tab-powdr").onclick = function() { tab = "powdr"; render(); };
 document.addEventListener("keydown", function(e) {
   if (e.key === "ArrowDown" && cur < DATA.length - 1) cur++;
