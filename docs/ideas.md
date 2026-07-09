@@ -110,5 +110,7 @@ base-256, to avoid overfitting to the OpenVM limb structure.
 
 `busPairCancelPass` (entry 46) drops one pair per invocation and is drained via `iterateToFixpoint`;
 `bytePackPass` (entry 49) is the same shape. On the largest blocks this is O(pairs·n). A
-single-traversal multi-drop would be O(n) but needs a multi-drop discipline lemma. Only worth it if
-these passes become a benchmark bottleneck.
+single-traversal multi-drop would be O(n) but needs a multi-drop discipline lemma. As of entry 53
+it **is** a measured bottleneck: with the `hintCollapse`/`reencode` rescans fixed, `busPairCancel`
+is ~24 s of apc_005's 65 s optimizer time (second only to `domainBatch`, whose fix is sketched in
+entry 45's remaining-bottleneck note).

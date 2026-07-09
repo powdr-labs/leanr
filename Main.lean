@@ -244,10 +244,15 @@ def cmdProfile (fileName : String) : IO Unit := do
       ("domainBatch", domainBatchPass.guardDegree),
       ("normalize2", normalizePass.withFacts.guardDegree),
       ("constFold2", constantFoldPass.withFacts.guardDegree),
+      ("zeroRegister", zeroRegisterPass.guardDegree),
+      ("hintCollapse", hintCollapsePass.guardDegree),
       ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree),
       ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree),
       ("tautoBus", tautoBusDropPass.withFacts.guardDegree),
+      ("domainFold", domainFoldPass.withFacts.guardDegree),
       ("busUnify", busUnifyPass.guardDegree),
+      ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint busPairCancelPass)),
+      ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint bytePackPass)),
       ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
       ("reencode", reencodePass.withFacts.guardDegree) ]
   let t0 ← IO.monoMsNow

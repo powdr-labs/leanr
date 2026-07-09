@@ -470,28 +470,33 @@ theorem collapse_correct [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSeman
 
 /-! ## Detection: find a collapsible reciprocal-witness group and discharge the facts -/
 
-/-- A witness variable `d` occurs (in the whole system) only in the target constraint `E`. -/
+/-- A witness variable `d` occurs (in the whole system) only in the target constraint `E`.
+    Decided with the allocation-free `Expression.mentions` (early-exit tree walk) rather than
+    `d ∉ ·.vars`, which would materialize every expression's variable list once per `(E, d)`
+    pair — this check runs inside the per-constraint candidate scan. -/
 def occursOnlyInTarget (cs : ConstraintSystem p) (E : Expression p) (d : Variable) : Bool :=
-  (cs.algebraicConstraints.all (fun c => decide (c = E) || decide (d ∉ c.vars))) &&
+  (cs.algebraicConstraints.all (fun c => decide (c = E) || !(c.mentions d))) &&
   (cs.busInteractions.all (fun bi =>
-    decide (d ∉ bi.multiplicity.vars) && bi.payload.all (fun e => decide (d ∉ e.vars))))
+    !(bi.multiplicity.mentions d) && bi.payload.all (fun e => !(e.mentions d))))
 
 theorem occursOnlyInTarget_constr {cs : ConstraintSystem p} {E : Expression p} {d : Variable}
     (h : occursOnlyInTarget cs E d = true) : ∀ c ∈ cs.algebraicConstraints, d ∈ c.vars → c = E := by
   intro c hc hdc
   simp only [occursOnlyInTarget, Bool.and_eq_true, List.all_eq_true] at h
   have hc' := h.1 c hc
-  simp only [Bool.or_eq_true, decide_eq_true_eq] at hc'
+  simp only [Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc'
   rcases hc' with h1 | h2
   · exact h1
-  · exact absurd hdc h2
+  · exact absurd hdc (mentions_false_not_mem_vars d c h2)
 
 theorem occursOnlyInTarget_bus {cs : ConstraintSystem p} {E : Expression p} {d : Variable}
     (h : occursOnlyInTarget cs E d = true) : ∀ bi ∈ cs.busInteractions,
       d ∉ bi.multiplicity.vars ∧ ∀ e ∈ bi.payload, d ∉ e.vars := by
   intro bi hbi
-  simp only [occursOnlyInTarget, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
-  exact h.2 bi hbi
+  simp only [occursOnlyInTarget, Bool.and_eq_true, List.all_eq_true, Bool.not_eq_true'] at h
+  obtain ⟨hm, hp⟩ := h.2 bi hbi
+  exact ⟨mentions_false_not_mem_vars d bi.multiplicity hm,
+    fun e he => mentions_false_not_mem_vars d e (hp e he)⟩
 
 /-- The single variable a coefficient reduces to: a bare `var a`, or `a·1` / `1·a` (the shape `peel`
     produces from a `aᵢ·dimᵢ` term). Returns `none` for anything else. -/
@@ -556,18 +561,27 @@ theorem coeffsByteOK_sound (B : Std.HashMap Variable Nat) (D : List Variable) :
       · exact ih hrec c hcs
 
 /-- Attempt the collapse with target constraint `E`: compute the once-in-`E` witnesses `D`, peel
-    their coefficients, and — if all checks pass — return the verified `PassResult`. -/
-def tryOne [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    their coefficients, and — if all checks pass — return the verified `PassResult`.
+
+    Runtime shape (this runs once per constraint per pass invocation): the bounds map `Bm` and the
+    bus-occurring variable set `busVars` are built **once** per invocation and passed in. `busVars`
+    only short-circuits `occursOnlyInTarget` — a variable occurring in any bus interaction can
+    never pass it, so consulting the hash set first skips the full-system scan without changing
+    the filter's value. The certificate is one short-circuiting `&&` chain, so on the (vast
+    majority of) constraints with `D.length < 2` nothing else is evaluated. -/
+def tryOne [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (Bm : BoundsMap p cs bs) (busVars : Std.HashSet Variable)
     (E : Expression p) (hE : E ∈ cs.algebraicConstraints) : Option (PassResult cs bs) := by
   classical
-  set Bm : BoundsMap p cs bs := BoundsMap.build facts with hBm
-  set D := E.vars.dedup.filter (fun v => occursOnlyInTarget cs E v) with hD
+  set D := E.vars.dedup.filter (fun v =>
+    !busVars.contains v && occursOnlyInTarget cs E v) with hD
   set inv : Variable := ⟨"hcinv#" ++ (D.headD ⟨"_", none⟩).name, none⟩ with hinvdef
-  by_cases hchk : 2 ≤ D.length ∧ coeffsByteOK Bm.map D (peel D E).1 = true ∧
-      (∀ d ∈ D, d ∉ (peel D E).2.vars) ∧
-      (∀ x ∈ (peel D E).2.vars, x.powdrId?.isSome = true) ∧
-      inv ∉ cs.vars ∧ (peel D E).1.length * 256 ≤ p
-  · obtain ⟨h2len, hbyteOK, hrfree, hrpow, hinvfresh, hfit⟩ := hchk
+  by_cases hchk : (decide (2 ≤ D.length) && (coeffsByteOK Bm.map D (peel D E).1 &&
+      (decide (∀ d ∈ D, d ∉ (peel D E).2.vars) &&
+      (decide (∀ x ∈ (peel D E).2.vars, x.powdrId?.isSome = true) &&
+      (decide (inv ∉ cs.vars) && decide ((peel D E).1.length * 256 ≤ p)))))) = true
+  · simp only [Bool.and_eq_true, decide_eq_true_eq] at hchk
+    obtain ⟨h2len, hbyteOK, hrfree, hrpow, hinvfresh, hfit⟩ := hchk
     have hEvarsub : ∀ x ∈ E.vars, x ∈ cs.vars := fun x hx =>
       ConstraintSystem.mem_vars_of_constraint hE hx
     have hcfree : ∀ c ∈ (peel D E).1, ∀ d ∈ D, d ∉ c.vars := by
@@ -604,11 +618,16 @@ def tryOne [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
         (fun cd hcd => hallz cd.1 (List.of_mem_zip hcd).1)
       rw [peel_eval D E env, hfz, zero_add] at hE0
       exact hE0
+    have hDcert : ∀ d ∈ D, occursOnlyInTarget cs E d = true := by
+      intro d hd
+      have h := (List.mem_filter.1 (hD ▸ hd)).2
+      simp only [Bool.and_eq_true] at h
+      exact h.2
     have hDonce : ∀ d ∈ D, ∀ c ∈ cs.algebraicConstraints, d ∈ c.vars → c = E := fun d hd =>
-      occursOnlyInTarget_constr (List.mem_filter.1 (hD ▸ hd)).2
+      occursOnlyInTarget_constr (hDcert d hd)
     have hDbus : ∀ d ∈ D, ∀ bi ∈ cs.busInteractions,
         d ∉ bi.multiplicity.vars ∧ ∀ e ∈ bi.payload, d ∉ e.vars := fun d hd =>
-      occursOnlyInTarget_bus (List.mem_filter.1 (hD ▸ hd)).2
+      occursOnlyInTarget_bus (hDcert d hd)
     have hden_free : inv ∉ (sumExpr (peel D E).1).vars ∧ ∀ d ∈ D, d ∉ (sumExpr (peel D E).1).vars := by
       refine ⟨fun hx => ?_, fun d hd hx => ?_⟩
       · obtain ⟨c, hc, hxc⟩ := sumExpr_vars hx
@@ -631,20 +650,27 @@ def tryOne [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
   · exact none
 
 /-- Scan a constraint sublist for the first collapsible target. -/
-def tryList [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs) :
+def tryList [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (Bm : BoundsMap p cs bs) (busVars : Std.HashSet Variable) :
     (L : List (Expression p)) → (∀ E ∈ L, E ∈ cs.algebraicConstraints) → Option (PassResult cs bs)
   | [], _ => none
   | E :: rest, hmem =>
-    match tryOne cs bs facts E (hmem E (List.mem_cons_self ..)) with
+    match tryOne cs bs Bm busVars E (hmem E (List.mem_cons_self ..)) with
     | some r => some r
-    | none => tryList cs bs facts rest (fun E' h => hmem E' (List.mem_cons_of_mem _ h))
+    | none => tryList cs bs Bm busVars rest (fun E' h => hmem E' (List.mem_cons_of_mem _ h))
 
 /-- The hint-collapse pass: replace the first bilinear reciprocal-witness constraint by a single
     derived inverse hint (needs prime `p` for the field inverse; identity otherwise, and identity
-    with `BusFacts.trivial` since no coefficient is byte-bounded). -/
+    with `BusFacts.trivial` since no coefficient is byte-bounded). The bounds map and the set of
+    bus-occurring variables are built once here, not once per scanned constraint. -/
 def hintCollapsePass : VerifiedPassW p := fun cs bs facts =>
   if hp : p.Prime then
     haveI : Fact p.Prime := ⟨hp⟩
-    (tryList cs bs facts cs.algebraicConstraints (fun _ h => h)).getD ⟨cs, [], PassCorrect.refl cs bs⟩
+    let Bm : BoundsMap p cs bs := BoundsMap.build facts
+    let busVars : Std.HashSet Variable := cs.busInteractions.foldl (init := ∅) fun s bi =>
+      bi.payload.foldl (fun s e => e.vars.foldl (·.insert ·) s)
+        (bi.multiplicity.vars.foldl (·.insert ·) s)
+    (tryList cs bs Bm busVars cs.algebraicConstraints (fun _ h => h)).getD
+      ⟨cs, [], PassCorrect.refl cs bs⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
 
