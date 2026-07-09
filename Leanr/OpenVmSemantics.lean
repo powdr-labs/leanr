@@ -140,6 +140,14 @@ def breaksInvariant (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
   -- Circuits should not send messages to an unknown bus.
   | none => true
 
+/-- Assume that x0 always returns 0. This should be enforced globally by all OpenVM chips. -/
+def x0ReturnsZero (busMap : BusMap) (msgs : List (BusInteraction (ZMod p))) : Prop :=
+  ∀ m ∈ msgs, busMap m.busId = some .memory →
+    -- If address space is 1 (registers), and address is 0 (x0), then the value must be 0.
+    m.payload[0]? = some 1 → m.payload[1]? = some 0 →
+      m.payload[2]? = some 0 ∧ m.payload[3]? = some 0 ∧
+        m.payload[4]? = some 0 ∧ m.payload[5]? = some 0
+
 /-- Maps a bus ID to its memory bus shape, if applicable. -/
 def memShapeOf (busMap : BusMap) (busId : Nat) : Option MemoryBusShape :=
   match busMap busId with
@@ -162,8 +170,9 @@ def openVmBusSemantics (p : ℕ) (busMap : BusMap := defaultBusMap) :
   violatesConstraint := violates busMap
   breaksInvariant := breaksInvariant busMap
   admissible msgs :=
-    ∀ (busId : Nat) (shape : MemoryBusShape), memShapeOf busMap busId = some shape →
-      admissibleMemoryBus shape (msgs.filter (fun m => m.busId = busId))
+    (∀ (busId : Nat) (shape : MemoryBusShape), memShapeOf busMap busId = some shape →
+      admissibleMemoryBus shape (msgs.filter (fun m => m.busId = busId)))
+    ∧ x0ReturnsZero busMap msgs
   -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`).
   degreeBound := { identities := 3, busInteractions := 2 }
 
