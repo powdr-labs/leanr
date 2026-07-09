@@ -124,6 +124,35 @@ theorem Expression.evalFast_eq (e : Expression p) (env : Variable → ZMod p) :
     e.evalFast env = e.eval env :=
   Expression.evalWith_eq _ _ (fun _ _ => rfl) (fun _ _ => rfl) env e
 
+/-- `Expression.mentions`, testing the cheap `powdrId?` discriminator before the name String
+    (`containsFast`'s trick; the freshness scans probe a no-ID bit against every system
+    variable, so the discriminator almost always decides). -/
+def Expression.mentionsF (x : Variable) : Expression p → Bool
+  | .const _ => false
+  | .var y => y.powdrId? == x.powdrId? && y.name == x.name
+  | .add a b => a.mentionsF x || b.mentionsF x
+  | .mul a b => a.mentionsF x || b.mentionsF x
+
+theorem Expression.mentionsF_eq (x : Variable) (e : Expression p) :
+    e.mentionsF x = e.mentions x := by
+  induction e with
+  | const n => rfl
+  | var y =>
+    show (y.powdrId? == x.powdrId? && y.name == x.name) = (y == x)
+    by_cases h : y = x
+    · subst h
+      simp
+    · have h1 : (y.powdrId? == x.powdrId? && y.name == x.name) = false := by
+        rw [Bool.eq_false_iff]
+        intro hc
+        exact h ((varFastEq_iff y x).mp hc)
+      have h2 : (y == x) = false := by
+        rw [Bool.eq_false_iff]
+        intro hc
+        exact h (by simpa using hc)
+      rw [h1, h2]
+  | add a b iha ihb => rw [Expression.mentionsF, Expression.mentions, iha, ihb]
+  | mul a b iha ihb => rw [Expression.mentionsF, Expression.mentions, iha, ihb]
 
 /-! ## The transport core -/
 
@@ -456,9 +485,10 @@ def Expression.hasVar : Expression p → Bool
   | .add a b => a.hasVar || b.hasVar
   | .mul a b => a.hasVar || b.hasVar
 
-/-- Constraints whose (nonempty) variable set lies inside the group. -/
+/-- Constraints whose (nonempty) variable set lies inside the group (fast membership tests,
+    `varsInF_eq`). -/
 def coveredBy (xs : List Variable) (c : Expression p) : Bool :=
-  c.hasVar && c.varsIn xs
+  c.hasVar && c.varsInF xs
 
 /-- Domains for the group's variables, from the covered constraints only. -/
 def groupDoms (es : List (Expression p)) : List Variable → Option (List (Variable × List (ZMod p)))
@@ -511,7 +541,7 @@ theorem groupDoms_sound [Fact p.Prime] (es : List (Expression p)) (xs : List Var
 /-- The group substitution: defined on the group only, backed by a hash map. -/
 def groupSubst (xs : List Variable) (hm : Std.HashMap Variable (Expression p)) :
     Variable → Option (Expression p) :=
-  fun y => if xs.contains y then hm[y]? else none
+  fun y => if containsFast xs y then hm[y]? else none
 
 /-- The `{0,1}` domain box of the fresh bits. -/
 def bitBox (bits : List Variable) : List (Variable × List (ZMod p)) :=
@@ -588,12 +618,12 @@ def groupRewrite (xs bits : List Variable) (σfn : Variable → Option (Expressi
     (patts : List (List (Variable × ZMod p))) : Expression p → Expression p
   | .const n => .const n
   | .var y =>
-      if xs.contains y then groupRewriteCand bits σfn patts (.var y) else .var y
+      if containsFast xs y then groupRewriteCand bits σfn patts (.var y) else .var y
   | .add a b =>
-      if (Expression.add a b).varsIn xs then groupRewriteCand bits σfn patts (.add a b)
+      if (Expression.add a b).varsInF xs then groupRewriteCand bits σfn patts (.add a b)
       else .add (groupRewrite xs bits σfn patts a) (groupRewrite xs bits σfn patts b)
   | .mul a b =>
-      if (Expression.mul a b).varsIn xs then groupRewriteCand bits σfn patts (.mul a b)
+      if (Expression.mul a b).varsInF xs then groupRewriteCand bits σfn patts (.mul a b)
       else .mul (groupRewrite xs bits σfn patts a) (groupRewrite xs bits σfn patts b)
 
 theorem groupRewriteCand_agree (xs bits : List Variable)
@@ -659,12 +689,16 @@ theorem groupRewrite_agree (xs bits : List Variable)
   | const n => rfl
   | var y =>
       simp only [groupRewrite]
-      by_cases hyx : xs.contains y
+      by_cases hyx : containsFast xs y = true
       · rw [if_pos hyx]
         exact groupRewriteCand_agree xs bits σfn patts env₀ env₁ aβ haβ hbitsagree
-          hpolyvars hpoint (.var y) (by simpa [Expression.varsIn] using hyx) hfresh
+          hpolyvars hpoint (.var y)
+          (by
+            simp only [Expression.varsIn]
+            exact containsFast_eq xs y ▸ hyx) hfresh
       · rw [if_neg hyx]
-        have hyxs : y ∉ xs := fun h => hyx (List.contains_iff_mem.mpr h)
+        have hyxs : y ∉ xs := fun h =>
+          hyx (containsFast_eq xs y ▸ List.contains_iff_mem.mpr h)
         have hynb : y ∉ bits := by
           intro hyb
           have := hfresh y hyb
@@ -685,10 +719,10 @@ theorem groupRewrite_agree (xs bits : List Variable)
         have := hfresh c hc
         simp only [Expression.mentions, Bool.or_eq_false_iff] at this
         exact this.2
-      by_cases hin : (Expression.add a b).varsIn xs = true
+      by_cases hin : (Expression.add a b).varsInF xs = true
       · rw [if_pos hin]
         exact groupRewriteCand_agree xs bits σfn patts env₀ env₁ aβ haβ hbitsagree
-          hpolyvars hpoint (.add a b) hin hfresh
+          hpolyvars hpoint (.add a b) (Expression.varsInF_eq xs _ ▸ hin) hfresh
       · rw [if_neg hin]
         show ((groupRewrite xs bits σfn patts a).eval env₀)
           + ((groupRewrite xs bits σfn patts b).eval env₀) = a.eval env₁ + b.eval env₁
@@ -705,10 +739,10 @@ theorem groupRewrite_agree (xs bits : List Variable)
         have := hfresh c hc
         simp only [Expression.mentions, Bool.or_eq_false_iff] at this
         exact this.2
-      by_cases hin : (Expression.mul a b).varsIn xs = true
+      by_cases hin : (Expression.mul a b).varsInF xs = true
       · rw [if_pos hin]
         exact groupRewriteCand_agree xs bits σfn patts env₀ env₁ aβ haβ hbitsagree
-          hpolyvars hpoint (.mul a b) hin hfresh
+          hpolyvars hpoint (.mul a b) (Expression.varsInF_eq xs _ ▸ hin) hfresh
       · rw [if_neg hin]
         show ((groupRewrite xs bits σfn patts a).eval env₀)
           * ((groupRewrite xs bits σfn patts b).eval env₀) = a.eval env₁ * b.eval env₁
@@ -781,9 +815,9 @@ def checkReencode (cs : ConstraintSystem p) (xs bits : List Variable)
     decide (bits.Nodup) &&
     -- freshness: no bit occurs anywhere in the system
     bits.all (fun b =>
-      cs.algebraicConstraints.all (fun c => !c.mentions b) &&
+      cs.algebraicConstraints.all (fun c => !c.mentionsF b) &&
       cs.busInteractions.all (fun bi =>
-        !bi.multiplicity.mentions b && bi.payload.all (fun e => !e.mentions b))) &&
+        !bi.multiplicity.mentionsF b && bi.payload.all (fun e => !e.mentionsF b))) &&
     -- the substituted group variables only mention bits
     xs.all (fun x =>
       ((Expression.var x).substF (groupSubst xs hm)).vars.all (fun v => bits.contains v)) &&
@@ -966,16 +1000,19 @@ theorem groupRewrite_vars (xs bits : List Variable)
   | const n => simp [groupRewrite, Expression.vars]
   | var y =>
       simp only [groupRewrite]
-      by_cases hyx : xs.contains y
+      by_cases hyx : containsFast xs y = true
       · rw [if_pos hyx]; intro v hv
         exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.var y)
-          (by simpa [Expression.varsIn] using hyx) v hv)
+          (by
+            simp only [Expression.varsIn]
+            exact containsFast_eq xs y ▸ hyx) v hv)
       · rw [if_neg hyx]; intro v hv; exact Or.inl hv
   | add a b iha ihb =>
       simp only [groupRewrite]
-      by_cases hin : (Expression.add a b).varsIn xs = true
+      by_cases hin : (Expression.add a b).varsInF xs = true
       · rw [if_pos hin]; intro v hv
-        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.add a b) hin v hv)
+        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.add a b)
+          (Expression.varsInF_eq xs _ ▸ hin) v hv)
       · rw [if_neg hin]; intro v hv
         simp only [Expression.vars, List.mem_append] at hv ⊢
         rcases hv with hv | hv
@@ -987,9 +1024,10 @@ theorem groupRewrite_vars (xs bits : List Variable)
           · exact Or.inr h
   | mul a b iha ihb =>
       simp only [groupRewrite]
-      by_cases hin : (Expression.mul a b).varsIn xs = true
+      by_cases hin : (Expression.mul a b).varsInF xs = true
       · rw [if_pos hin]; intro v hv
-        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.mul a b) hin v hv)
+        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.mul a b)
+          (Expression.varsInF_eq xs _ ▸ hin) v hv)
       · rw [if_neg hin]; intro v hv
         simp only [Expression.vars, List.mem_append] at hv ⊢
         rcases hv with hv | hv
@@ -1087,7 +1125,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
     rw [Bool.and_eq_true] at h1
     have := List.all_eq_true.mp h1.1 c hc
     exact mentions_false_not_mem_vars b c
-      (by simpa using this)
+      (by simpa [Expression.mentionsF_eq] using this)
   have hfreshBi : ∀ b ∈ bits, ∀ bi ∈ cs.busInteractions, b ∉ bi.vars := by
     intro b hb bi hbi
     have h1 := List.all_eq_true.mp hfreshB b hb
@@ -1098,10 +1136,10 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
     unfold BusInteraction.vars at hmem
     rcases List.mem_append.1 hmem with hmem | hmem
     · exact mentions_false_not_mem_vars b bi.multiplicity
-        (by simpa using h2.1) hmem
+        (by simpa [Expression.mentionsF_eq] using h2.1) hmem
     · obtain ⟨e, he, hbe⟩ := List.mem_flatMap.1 hmem
       exact mentions_false_not_mem_vars b e
-        (by simpa using List.all_eq_true.mp h2.2 e he) hbe
+        (by simpa [Expression.mentionsF_eq] using List.all_eq_true.mp h2.2 e he) hbe
   -- the substituted group variables' expressions live over the bits
   have hpolyVars : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF (groupSubst xs hm)).vars,
       v ∈ bits := by
@@ -1113,12 +1151,12 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
     reencodeOut_vars_subset cs xs bits hm hpolyVars
   have hσnone : ∀ y, y ∉ xs → groupSubst xs hm y = none := by
     intro y hy
-    simp [groupSubst, hy]
+    simp [groupSubst, containsFast_eq, hy]
   have hfreshCm : ∀ c ∈ cs.algebraicConstraints, ∀ b ∈ bits, c.mentions b = false := by
     intro c hc b hb
     have h1 := List.all_eq_true.mp hfreshB b hb
     rw [Bool.and_eq_true] at h1
-    simpa using List.all_eq_true.mp h1.1 c hc
+    simpa [Expression.mentionsF_eq] using List.all_eq_true.mp h1.1 c hc
   have hfreshMm : ∀ bi ∈ cs.busInteractions, ∀ b ∈ bits,
       bi.multiplicity.mentions b = false := by
     intro bi hbi b hb
@@ -1126,7 +1164,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
     rw [Bool.and_eq_true] at h1
     have h2 := List.all_eq_true.mp h1.2 bi hbi
     rw [Bool.and_eq_true] at h2
-    simpa using h2.1
+    simpa [Expression.mentionsF_eq] using h2.1
   have hfreshPm : ∀ bi ∈ cs.busInteractions, ∀ e ∈ bi.payload, ∀ b ∈ bits,
       e.mentions b = false := by
     intro bi hbi e he b hb
@@ -1134,7 +1172,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
     rw [Bool.and_eq_true] at h1
     have h2 := List.all_eq_true.mp h1.2 bi hbi
     rw [Bool.and_eq_true] at h2
-    simpa using List.all_eq_true.mp h2.2 e he
+    simpa [Expression.mentionsF_eq] using List.all_eq_true.mp h2.2 e he
   -- bits are fresh: none of them occurs in `cs`
   have hbitsCs : ∀ b ∈ bits, b ∉ cs.vars := by
     intro b hb hmem
@@ -1173,7 +1211,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
       rw [coveredBy, Bool.and_eq_true] at hcov
       have hcvars : ∀ v ∈ c.vars, v ∈ doms.map Prod.fst := by
         rw [hkeys]
-        exact Expression.varsIn_sound _ c hcov.2
+        exact Expression.varsIn_sound _ c (Expression.varsInF_eq _ c ▸ hcov.2)
       have heq : c.eval (envOf (doms.map (fun yd => (yd.1, env yd.1)))) = c.eval env :=
         Expression.eval_congr c _ _ (fun v hv => envOf_map doms env v (hcvars v hv))
       rw [heq]
@@ -1220,7 +1258,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
           rw [hagree, ← Expression.evalFast_eq]
           exact of_decide_eq_true (List.all_eq_true.mp hβpred y hyx)
         · have hnone : groupSubst xs hm y = none := by
-            simp [groupSubst, hyx]
+            simp [groupSubst, containsFast_eq, hyx]
           unfold envF
           rw [hnone]
           exact envExt_eq_env_of_notmem aβ env y (hkeysβ ▸ hyb)
@@ -1320,7 +1358,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
         rw [envExt_eq_envOf_of_mem _ env' y (by rw [hkeysP]; exact hyx)]
         rw [envOf_zipimg xs _ y hyx]
       · have hnone : groupSubst xs hm y = none := by
-          simp [groupSubst, hyx]
+          simp [groupSubst, containsFast_eq, hyx]
         unfold envF
         rw [hnone, henv]
         rw [envExt_eq_env_of_notmem _ env' y (by rw [hkeysP]; exact hyx)]
@@ -1352,7 +1390,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
       -- transport the pattern-image fact to env
       have hcvars : ∀ v ∈ c.vars, v ∈ xs := by
         rw [coveredBy, Bool.and_eq_true] at hcov
-        exact Expression.varsIn_sound _ c hcov.2
+        exact Expression.varsIn_sound _ c (Expression.varsInF_eq _ c ▸ hcov.2)
       have hagree : (c.substF (groupSubst xs hm)).eval
             (envOf ((bitBox (p := p) bits).map (fun yd => (yd.1, env' yd.1))))
           = (c.substF (groupSubst xs hm)).eval env' := by

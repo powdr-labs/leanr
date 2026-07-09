@@ -217,7 +217,7 @@ theorem foldRewrite_agree_covered [Fact p.Prime] (cs : ConstraintSystem p) (xs :
     have hcvin : c.varsIn xs = true := by
       have hcb : coveredBy xs c = true := (List.mem_filter.mp hc).2
       rw [coveredBy, Bool.and_eq_true] at hcb
-      exact hcb.2
+      exact Expression.varsInF_eq xs c ▸ hcb.2
     have heq : c.eval (envOf s) = c.eval env :=
       Expression.eval_congr c _ _
         (fun x hx => (hagree x (Expression.varsIn_sound xs c hcvin x hx)).symm)
