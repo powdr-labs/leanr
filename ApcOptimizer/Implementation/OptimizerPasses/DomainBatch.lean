@@ -291,6 +291,342 @@ def survivesAllM (bs : BusSemantics p) (es : List (Expression p))
       let v := bi.eval (envOfFast a)
       decide (v.multiplicity = 0) || !bs.violatesConstraint v)
 
+/-! ### Index-compiled evaluation
+
+Even with `envOfFast`, every variable leaf of every covered item pays a linear scan with a
+`powdrId?`/name comparison per entry, at **every** box point. Since the enumerated points all
+share the key order of `doms` (`assignments`), each covered item can be *compiled once per
+target*: variable leaves become positions into the point list (`IExpr.ix`), and the per-point
+evaluation does no comparisons at all. `compiledSurv` packages the compiled predicate with the
+proof that it agrees with `survivesAllM` on every point with the right keys (fallback: the
+uncompiled predicate itself), which is all the scan certificates consume. -/
+
+/-- Positional lookup in an assignment (`0` out of range, like `envOfFast` for a miss). -/
+def lookupIx : List (Variable × ZMod p) → Nat → ZMod p
+  | [], _ => 0
+  | (_, v) :: _, 0 => v
+  | _ :: rest, i + 1 => lookupIx rest i
+
+/-- An expression with variable leaves compiled to positions. -/
+inductive IExpr (p : ℕ) where
+  | const (n : ZMod p)
+  | ix (i : Nat)
+  | add (a b : IExpr p)
+  | mul (a b : IExpr p)
+
+def IExpr.eval (pt : List (Variable × ZMod p)) : IExpr p → ZMod p
+  | .const n => n
+  | .ix i => lookupIx pt i
+  | .add a b => a.eval pt + b.eval pt
+  | .mul a b => a.eval pt * b.eval pt
+
+/-- `IExpr.eval` with the ring operations passed in. `+`/`*` on `ZMod p` with a *runtime* `p`
+    re-derive the whole `CommRing (ZMod p)` instance chain at every node — the dominant cost of
+    the entire box scan. Hoisting the two operations to the caller (extracted from the instance
+    once per target, `compiledSurv`) makes each node a direct closure call. -/
+def IExpr.evalWith (add mul : ZMod p → ZMod p → ZMod p) (pt : List (Variable × ZMod p)) :
+    IExpr p → ZMod p
+  | .const n => n
+  | .ix i => lookupIx pt i
+  | .add a b => add (a.evalWith add mul pt) (b.evalWith add mul pt)
+  | .mul a b => mul (a.evalWith add mul pt) (b.evalWith add mul pt)
+
+theorem IExpr.evalWith_eq (add mul : ZMod p → ZMod p → ZMod p)
+    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
+    (pt : List (Variable × ZMod p)) (e : IExpr p) : e.evalWith add mul pt = e.eval pt := by
+  induction e with
+  | const n => rfl
+  | ix i => rfl
+  | add a b iha ihb => simp only [evalWith, eval, hadd, iha, ihb]
+  | mul a b iha ihb => simp only [evalWith, eval, hmul, iha, ihb]
+
+/-- First position of `y` in `keys`, by the `envOfFast` comparison. -/
+def varIx (keys : List Variable) (y : Variable) : Option Nat :=
+  match keys with
+  | [] => none
+  | x :: rest =>
+    if (y.powdrId? == x.powdrId? && y.name == x.name) = true then some 0
+    else (varIx rest y).map (· + 1)
+
+/-- Positional lookup at `y`'s first position is exactly the `envOfFast` scan, on any
+    assignment with the given keys. -/
+theorem varIx_lookup (keys : List Variable) (y : Variable) (i : Nat)
+    (h : varIx keys y = some i) (pt : List (Variable × ZMod p))
+    (hpt : pt.map Prod.fst = keys) : lookupIx pt i = envOfFast pt y := by
+  induction keys generalizing i pt with
+  | nil =>
+    exact absurd h (by simp [varIx])
+  | cons x rest ih =>
+    cases pt with
+    | nil => exact absurd hpt (by simp)
+    | cons xv pt' =>
+      obtain ⟨x', v⟩ := xv
+      simp only [List.map_cons, List.cons.injEq] at hpt
+      obtain ⟨rfl, hpt'⟩ := hpt
+      rw [varIx] at h
+      split_ifs at h with hfast
+      · simp only [Option.some.injEq] at h
+        subst h
+        rw [lookupIx, envOfFast, if_pos hfast]
+      · rw [Option.map_eq_some_iff] at h
+        obtain ⟨j, hj, rfl⟩ := h
+        rw [lookupIx, envOfFast, if_neg hfast]
+        exact ih j hj pt' hpt'
+
+/-- Compile an expression against the key order (`none` if a variable is missing). -/
+def compileE (keys : List Variable) : Expression p → Option (IExpr p)
+  | .const n => some (.const n)
+  | .var y => (varIx keys y).map .ix
+  | .add a b =>
+    match compileE keys a, compileE keys b with
+    | some ia, some ib => some (.add ia ib)
+    | _, _ => none
+  | .mul a b =>
+    match compileE keys a, compileE keys b with
+    | some ia, some ib => some (.mul ia ib)
+    | _, _ => none
+
+theorem compileE_eval (keys : List Variable) (e : Expression p) (ie : IExpr p)
+    (h : compileE keys e = some ie) (pt : List (Variable × ZMod p))
+    (hpt : pt.map Prod.fst = keys) : ie.eval pt = e.eval (envOfFast pt) := by
+  induction e generalizing ie with
+  | const n =>
+    simp only [compileE, Option.some.injEq] at h
+    subst h
+    rfl
+  | var y =>
+    rw [compileE, Option.map_eq_some_iff] at h
+    obtain ⟨i, hi, rfl⟩ := h
+    exact varIx_lookup keys y i hi pt hpt
+  | add a b iha ihb =>
+    rw [compileE] at h
+    cases ha : compileE keys a with
+    | none => rw [ha] at h; exact absurd h (by simp)
+    | some ia =>
+      cases hb : compileE keys b with
+      | none => rw [ha, hb] at h; exact absurd h (by simp)
+      | some ib =>
+        rw [ha, hb] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        show ia.eval pt + ib.eval pt = a.eval (envOfFast pt) + b.eval (envOfFast pt)
+        rw [iha ia ha, ihb ib hb]
+  | mul a b iha ihb =>
+    rw [compileE] at h
+    cases ha : compileE keys a with
+    | none => rw [ha] at h; exact absurd h (by simp)
+    | some ia =>
+      cases hb : compileE keys b with
+      | none => rw [ha, hb] at h; exact absurd h (by simp)
+      | some ib =>
+        rw [ha, hb] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        show ia.eval pt * ib.eval pt = a.eval (envOfFast pt) * b.eval (envOfFast pt)
+        rw [iha ia ha, ihb ib hb]
+
+/-- Compile a list of expressions, all-or-nothing. -/
+def compileEs (keys : List Variable) : List (Expression p) → Option (List (IExpr p))
+  | [] => some []
+  | e :: rest =>
+    match compileE keys e, compileEs keys rest with
+    | some ie, some irest => some (ie :: irest)
+    | _, _ => none
+
+theorem compileEs_map (keys : List Variable) (es : List (Expression p)) (ces : List (IExpr p))
+    (h : compileEs keys es = some ces) (pt : List (Variable × ZMod p))
+    (hpt : pt.map Prod.fst = keys) :
+    ces.map (fun ie => ie.eval pt) = es.map (fun e => e.eval (envOfFast pt)) := by
+  induction es generalizing ces with
+  | nil =>
+    simp only [compileEs, Option.some.injEq] at h
+    subst h
+    rfl
+  | cons e rest ih =>
+    rw [compileEs] at h
+    cases he : compileE keys e with
+    | none => rw [he] at h; exact absurd h (by simp)
+    | some ie =>
+      cases hr : compileEs keys rest with
+      | none => rw [he, hr] at h; exact absurd h (by simp)
+      | some irest =>
+        rw [he, hr] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        rw [List.map_cons, List.map_cons, ih irest hr,
+          compileE_eval keys e ie he pt hpt]
+
+theorem compileEs_all (keys : List Variable) (es : List (Expression p)) (ces : List (IExpr p))
+    (h : compileEs keys es = some ces) (pt : List (Variable × ZMod p))
+    (hpt : pt.map Prod.fst = keys) :
+    ces.all (fun ie => decide (ie.eval pt = 0)) =
+      es.all (fun e => decide (e.eval (envOfFast pt) = 0)) := by
+  induction es generalizing ces with
+  | nil =>
+    simp only [compileEs, Option.some.injEq] at h
+    subst h
+    rfl
+  | cons e rest ih =>
+    rw [compileEs] at h
+    cases he : compileE keys e with
+    | none => rw [he] at h; exact absurd h (by simp)
+    | some ie =>
+      cases hr : compileEs keys rest with
+      | none => rw [he, hr] at h; exact absurd h (by simp)
+      | some irest =>
+        rw [he, hr] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        rw [List.all_cons, List.all_cons, ih irest hr,
+          compileE_eval keys e ie he pt hpt]
+
+/-- A bus interaction with compiled multiplicity and payload. -/
+structure CBi (p : ℕ) where
+  busId : Nat
+  mult : IExpr p
+  payload : List (IExpr p)
+
+def CBi.eval (cbi : CBi p) (pt : List (Variable × ZMod p)) : BusInteraction (ZMod p) :=
+  { busId := cbi.busId,
+    multiplicity := cbi.mult.eval pt,
+    payload := cbi.payload.map (fun ie => ie.eval pt) }
+
+/-- `CBi.eval` with hoisted ring operations (cf. `IExpr.evalWith`). -/
+def CBi.evalWith (add mul : ZMod p → ZMod p → ZMod p) (cbi : CBi p)
+    (pt : List (Variable × ZMod p)) : BusInteraction (ZMod p) :=
+  { busId := cbi.busId,
+    multiplicity := cbi.mult.evalWith add mul pt,
+    payload := cbi.payload.map (fun ie => ie.evalWith add mul pt) }
+
+theorem CBi.evalWith_eq (add mul : ZMod p → ZMod p → ZMod p)
+    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
+    (cbi : CBi p) (pt : List (Variable × ZMod p)) :
+    cbi.evalWith add mul pt = cbi.eval pt := by
+  simp only [CBi.evalWith, CBi.eval, IExpr.evalWith_eq add mul hadd hmul]
+
+def compileBi (keys : List Variable) (bi : BusInteraction (Expression p)) : Option (CBi p) :=
+  match compileE keys bi.multiplicity, compileEs keys bi.payload with
+  | some m, some pl => some ⟨bi.busId, m, pl⟩
+  | _, _ => none
+
+theorem compileBi_eval (keys : List Variable) (bi : BusInteraction (Expression p)) (cbi : CBi p)
+    (h : compileBi keys bi = some cbi) (pt : List (Variable × ZMod p))
+    (hpt : pt.map Prod.fst = keys) : cbi.eval pt = bi.eval (envOfFast pt) := by
+  rw [compileBi] at h
+  cases hm : compileE keys bi.multiplicity with
+  | none => rw [hm] at h; exact absurd h (by simp)
+  | some m =>
+    cases hp : compileEs keys bi.payload with
+    | none => rw [hm, hp] at h; exact absurd h (by simp)
+    | some pl =>
+      rw [hm, hp] at h
+      simp only [Option.some.injEq] at h
+      subst h
+      unfold CBi.eval BusInteraction.eval
+      rw [compileE_eval keys bi.multiplicity m hm pt hpt,
+        compileEs_map keys bi.payload pl hp pt hpt]
+
+/-- Compile a list of interactions, all-or-nothing. -/
+def compileBis (keys : List Variable) : List (BusInteraction (Expression p)) →
+    Option (List (CBi p))
+  | [] => some []
+  | bi :: rest =>
+    match compileBi keys bi, compileBis keys rest with
+    | some cbi, some crest => some (cbi :: crest)
+    | _, _ => none
+
+theorem compileBis_all (bs : BusSemantics p) (keys : List Variable)
+    (bis : List (BusInteraction (Expression p))) (cbis : List (CBi p))
+    (h : compileBis keys bis = some cbis) (pt : List (Variable × ZMod p))
+    (hpt : pt.map Prod.fst = keys) :
+    cbis.all (fun cbi =>
+        let v := cbi.eval pt
+        decide (v.multiplicity = 0) || !bs.violatesConstraint v) =
+      bis.all (fun bi =>
+        let v := bi.eval (envOfFast pt)
+        decide (v.multiplicity = 0) || !bs.violatesConstraint v) := by
+  induction bis generalizing cbis with
+  | nil =>
+    simp only [compileBis, Option.some.injEq] at h
+    subst h
+    rfl
+  | cons bi rest ih =>
+    rw [compileBis] at h
+    cases hb : compileBi keys bi with
+    | none => rw [hb] at h; exact absurd h (by simp)
+    | some cbi =>
+      cases hr : compileBis keys rest with
+      | none => rw [hb, hr] at h; exact absurd h (by simp)
+      | some crest =>
+        rw [hb, hr] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        rw [List.all_cons, List.all_cons, ih crest hr,
+          compileBi_eval keys bi cbi hb pt hpt]
+
+/-- The compiled survival predicate (`= survivesAllM` on right-keyed points,
+    `compiledSurv`). -/
+def survivesAllC (bs : BusSemantics p) (ces : List (IExpr p)) (cbis : List (CBi p))
+    (pt : List (Variable × ZMod p)) : Bool :=
+  ces.all (fun ie => decide (ie.eval pt = 0)) &&
+    cbis.all (fun cbi =>
+      let v := cbi.eval pt
+      decide (v.multiplicity = 0) || !bs.violatesConstraint v)
+
+theorem survivesAllC_eq (bs : BusSemantics p) (es : List (Expression p))
+    (bis : List (BusInteraction (Expression p))) (keys : List Variable)
+    (ces : List (IExpr p)) (cbis : List (CBi p))
+    (hce : compileEs keys es = some ces) (hcb : compileBis keys bis = some cbis)
+    (pt : List (Variable × ZMod p)) (hpt : pt.map Prod.fst = keys) :
+    survivesAllC bs ces cbis pt = survivesAllM bs es bis pt := by
+  unfold survivesAllC survivesAllM
+  rw [compileEs_all keys es ces hce pt hpt, compileBis_all bs keys bis cbis hcb pt hpt]
+
+/-- `survivesAllC` with the ring operations and the zero test hoisted out of the per-point
+    evaluation (cf. `IExpr.evalWith`). -/
+def survivesAllCW (add mul : ZMod p → ZMod p → ZMod p) (isZero : ZMod p → Bool)
+    (bs : BusSemantics p) (ces : List (IExpr p)) (cbis : List (CBi p))
+    (pt : List (Variable × ZMod p)) : Bool :=
+  ces.all (fun ie => isZero (ie.evalWith add mul pt)) &&
+    cbis.all (fun cbi =>
+      let v := cbi.evalWith add mul pt
+      isZero v.multiplicity || !bs.violatesConstraint v)
+
+theorem survivesAllCW_eq (add mul : ZMod p → ZMod p → ZMod p) (isZero : ZMod p → Bool)
+    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
+    (hz : ∀ v, isZero v = decide (v = 0))
+    (bs : BusSemantics p) (ces : List (IExpr p)) (cbis : List (CBi p))
+    (pt : List (Variable × ZMod p)) :
+    survivesAllCW add mul isZero bs ces cbis pt = survivesAllC bs ces cbis pt := by
+  simp only [survivesAllCW, survivesAllC, IExpr.evalWith_eq add mul hadd hmul,
+    CBi.evalWith_eq add mul hadd hmul, hz]
+
+/-- The per-point survival predicate for a target: the covered items compiled against the key
+    order and the field operations extracted from the instances once, with the proof that it
+    decides exactly `survivesAllM` on every right-keyed point (identity fallback if compilation
+    fails — it cannot, for covered items). -/
+def compiledSurv (bs : BusSemantics p) (es : List (Expression p))
+    (bis : List (BusInteraction (Expression p))) (keys : List Variable) :
+    { surv : List (Variable × ZMod p) → Bool //
+      ∀ pt, pt.map Prod.fst = keys → surv pt = survivesAllM bs es bis pt } :=
+  match hce : compileEs keys es, hcb : compileBis keys bis with
+  | some ces, some cbis =>
+    let addI : Add (ZMod p) := inferInstance
+    let mulI : Mul (ZMod p) := inferInstance
+    let dec : DecidableEq (ZMod p) := inferInstance
+    let add := addI.add
+    let mul := mulI.mul
+    let isZero : ZMod p → Bool := fun v => @decide (v = 0) (dec v 0)
+    ⟨fun pt => survivesAllCW add mul isZero bs ces cbis pt,
+     fun pt hpt => by
+       show survivesAllCW add mul isZero bs ces cbis pt = survivesAllM bs es bis pt
+       rw [survivesAllCW_eq add mul isZero (fun _ _ => rfl) (fun _ _ => rfl)
+             (fun v => decide_eq_decide.mpr Iff.rfl)
+             bs ces cbis pt,
+           survivesAllC_eq bs es bis keys ces cbis hce hcb pt hpt]⟩
+  | none, _ => ⟨survivesAllM bs es bis, fun _ _ => rfl⟩
+  | some _, none => ⟨survivesAllM bs es bis, fun _ _ => rfl⟩
+
 /-- `xs.contains y`, testing the cheap `powdrId?` discriminator before the name String (the
     `envOfFast` trick, for the covered-item scans' membership tests). -/
 def containsFast (xs : List Variable) (y : Variable) : Bool :=
@@ -377,7 +713,18 @@ def constraintRedundant {cs : ConstraintSystem p} {bs : BusSemantics p} (T : Dom
   | none => false
   | some d =>
     (d.map (fun yd => yd.2.length)).prod ≤ maxEnumSize &&
-      (assignments d).all (fun a => decide (c.eval (envOfFast a) = 0))
+      -- index-compiled evaluation with hoisted operations (`compileE_eval`/`IExpr.evalWith_eq`:
+      -- same result — the check is proof-free, only the surviving `activeCs` membership matters
+      -- downstream)
+      match compileE (d.map Prod.fst) c with
+      | some ic =>
+        let addI : Add (ZMod p) := inferInstance
+        let mulI : Mul (ZMod p) := inferInstance
+        let dec : DecidableEq (ZMod p) := inferInstance
+        let add := addI.add
+        let mul := mulI.mul
+        (assignments d).all (fun a => @decide (ic.evalWith add mul a = 0) (dec _ 0))
+      | none => (assignments d).all (fun a => decide (c.eval (envOfFast a) = 0))
 
 /-- The single-pass box scan, after the first survivor: walk the remaining points, intersecting
     the list of `(x, c)` candidates on which every survivor seen so far agrees. The moment no
@@ -386,35 +733,32 @@ def constraintRedundant {cs : ConstraintSystem p} {bs : BusSemantics p} (T : Dom
     survivors instead of paying the full `box × items` evaluation cost. Claiming nothing needs no
     certificate, so the abort carries no proof obligation; for the candidates that do survive to
     the end, the scan itself is the checked certificate (`scanWith_agrees`). -/
-def scanWith (bs : BusSemantics p) (es : List (Expression p))
-    (bis : List (BusInteraction (Expression p))) :
+def scanWith (surv : List (Variable × ZMod p) → Bool) :
     List (List (Variable × ZMod p)) → List (Variable × ZMod p) → List (Variable × ZMod p)
   | [], cands => cands
   | pt :: rest, cands =>
-    if survivesAllM bs es bis pt = true then
+    if surv pt = true then
       match cands.filter (fun xc => decide (envOfFast pt xc.1 = xc.2)) with
       | [] => []
-      | c :: cands' => scanWith bs es bis rest (c :: cands')
-    else scanWith bs es bis rest cands
+      | c :: cands' => scanWith surv rest (c :: cands')
+    else scanWith surv rest cands
 
 /-- The box scan up to the first survivor, whose values over `keys` initialize the candidate
     list for `scanWith`. `none` means no point survived at all. -/
-def scanInit (bs : BusSemantics p) (es : List (Expression p))
-    (bis : List (BusInteraction (Expression p))) (keys : List Variable) :
+def scanInit (surv : List (Variable × ZMod p) → Bool) (keys : List Variable) :
     List (List (Variable × ZMod p)) → Option (List (Variable × ZMod p))
   | [] => none
   | pt :: rest =>
-    if survivesAllM bs es bis pt = true then
-      some (scanWith bs es bis rest (keys.map (fun x => (x, envOfFast pt x))))
-    else scanInit bs es bis keys rest
+    if surv pt = true then
+      some (scanWith surv rest (keys.map (fun x => (x, envOfFast pt x))))
+    else scanInit surv keys rest
 
 /-- The intersection certificate: every candidate returned by `scanWith` was among the input
     candidates and agrees with every surviving point of the scanned list. -/
-theorem scanWith_agrees {bs : BusSemantics p} (es : List (Expression p))
-    (bis : List (BusInteraction (Expression p)))
+theorem scanWith_agrees (surv : List (Variable × ZMod p) → Bool)
     (pts : List (List (Variable × ZMod p))) (cands : List (Variable × ZMod p)) :
-    ∀ xc ∈ scanWith bs es bis pts cands, xc ∈ cands ∧
-      ∀ pt ∈ pts, survivesAllM bs es bis pt = true → envOfFast pt xc.1 = xc.2 := by
+    ∀ xc ∈ scanWith surv pts cands, xc ∈ cands ∧
+      ∀ pt ∈ pts, surv pt = true → envOfFast pt xc.1 = xc.2 := by
   induction pts generalizing cands with
   | nil =>
     intro xc hxc
@@ -422,7 +766,7 @@ theorem scanWith_agrees {bs : BusSemantics p} (es : List (Expression p))
   | cons pt rest ih =>
     intro xc hxc
     rw [scanWith] at hxc
-    by_cases hs : survivesAllM bs es bis pt = true
+    by_cases hs : surv pt = true
     · rw [if_pos hs] at hxc
       cases hfil : cands.filter (fun xc => decide (envOfFast pt xc.1 = xc.2)) with
       | nil => rw [hfil] at hxc; exact absurd hxc (by simp)
@@ -446,22 +790,21 @@ theorem scanWith_agrees {bs : BusSemantics p} (es : List (Expression p))
 
 /-- The scan's certificate: every returned candidate `(x, c)` has `x ∈ keys` and agrees with
     every surviving point of the scanned list. -/
-theorem scanInit_some {bs : BusSemantics p} (es : List (Expression p))
-    (bis : List (BusInteraction (Expression p))) (keys : List Variable)
+theorem scanInit_some (surv : List (Variable × ZMod p) → Bool) (keys : List Variable)
     (pts : List (List (Variable × ZMod p))) (res : List (Variable × ZMod p))
-    (h : scanInit bs es bis keys pts = some res) :
+    (h : scanInit surv keys pts = some res) :
     ∀ xc ∈ res, xc.1 ∈ keys ∧
-      ∀ pt ∈ pts, survivesAllM bs es bis pt = true → envOfFast pt xc.1 = xc.2 := by
+      ∀ pt ∈ pts, surv pt = true → envOfFast pt xc.1 = xc.2 := by
   induction pts with
   | nil => exact absurd h (by simp [scanInit])
   | cons pt rest ih =>
     rw [scanInit] at h
-    by_cases hs : survivesAllM bs es bis pt = true
+    by_cases hs : surv pt = true
     · rw [if_pos hs] at h
       simp only [Option.some.injEq] at h
       subst h
       intro xc hxc
-      obtain ⟨hmem, hagree⟩ := scanWith_agrees es bis rest _ xc hxc
+      obtain ⟨hmem, hagree⟩ := scanWith_agrees surv rest _ xc hxc
       obtain ⟨x, hxkeys, hxeq⟩ := List.mem_map.1 hmem
       constructor
       · rw [← hxeq]
@@ -480,16 +823,15 @@ theorem scanInit_some {bs : BusSemantics p} (es : List (Expression p))
       · exact hagree pt' hpt' hs'
 
 /-- If the scan returns `none`, no enumerated point survived. -/
-theorem scanInit_none {bs : BusSemantics p} (es : List (Expression p))
-    (bis : List (BusInteraction (Expression p))) (keys : List Variable)
+theorem scanInit_none (surv : List (Variable × ZMod p) → Bool) (keys : List Variable)
     (pts : List (List (Variable × ZMod p)))
-    (h : scanInit bs es bis keys pts = none) :
-    ∀ pt ∈ pts, survivesAllM bs es bis pt = false := by
+    (h : scanInit surv keys pts = none) :
+    ∀ pt ∈ pts, surv pt = false := by
   induction pts with
   | nil => simp
   | cons pt rest ih =>
     rw [scanInit] at h
-    by_cases hs : survivesAllM bs es bis pt = true
+    by_cases hs : surv pt = true
     · rw [if_pos hs] at h
       exact absurd h (by simp)
     · rw [if_neg hs] at h
@@ -548,14 +890,22 @@ theorem scanForced_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
     (es : List (Expression p)) (bis : List (BusInteraction (Expression p)))
     (hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true)
     (hbis : ∀ bi ∈ bis, bi ∈ cs.busInteractions ∧ bi.varsIn xs = true)
+    (surv : List (Variable × ZMod p) → Bool)
+    (hsurvEq : ∀ pt, pt.map Prod.fst = doms.map Prod.fst →
+      surv pt = survivesAllM bs es bis pt)
     (res : List (Variable × ZMod p))
-    (hscan : scanInit bs es bis (doms.map Prod.fst) (assignments doms) = some res)
+    (hscan : scanInit surv (doms.map Prod.fst) (assignments doms) = some res)
     (xc : Variable × ZMod p) (hxc : xc ∈ res)
     (env : Variable → ZMod p) (hsat : cs.satisfies bs env) : env xc.1 = xc.2 := by
   have hmem : doms.map (fun yd => (yd.1, env yd.1)) ∈ assignments doms :=
     mem_assignments doms env (T.doms_sound xs doms hdoms env hsat)
-  have hsurv := restriction_survives T xs doms hdoms es bis hes hbis env hsat
-  obtain ⟨hkey, hagree⟩ := scanInit_some es bis (doms.map Prod.fst)
+  have hpt : (doms.map (fun yd => (yd.1, env yd.1))).map Prod.fst = doms.map Prod.fst := by
+    rw [List.map_map]
+    exact List.map_congr_left (fun yd _ => rfl)
+  have hsurv : surv (doms.map (fun yd => (yd.1, env yd.1))) = true := by
+    rw [hsurvEq _ hpt]
+    exact restriction_survives T xs doms hdoms es bis hes hbis env hsat
+  obtain ⟨hkey, hagree⟩ := scanInit_some surv (doms.map Prod.fst)
     (assignments doms) res hscan xc hxc
   have hxc' := hagree _ hmem hsurv
   rw [envOfFast_eq, envOf_map doms env _ hkey] at hxc'
@@ -569,12 +919,20 @@ theorem scanNone_unsat {cs : ConstraintSystem p} {bs : BusSemantics p}
     (es : List (Expression p)) (bis : List (BusInteraction (Expression p)))
     (hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true)
     (hbis : ∀ bi ∈ bis, bi ∈ cs.busInteractions ∧ bi.varsIn xs = true)
-    (hscan : scanInit bs es bis (doms.map Prod.fst) (assignments doms) = none)
+    (surv : List (Variable × ZMod p) → Bool)
+    (hsurvEq : ∀ pt, pt.map Prod.fst = doms.map Prod.fst →
+      surv pt = survivesAllM bs es bis pt)
+    (hscan : scanInit surv (doms.map Prod.fst) (assignments doms) = none)
     (env : Variable → ZMod p) (hsat : cs.satisfies bs env) : False := by
   have hmem : doms.map (fun yd => (yd.1, env yd.1)) ∈ assignments doms :=
     mem_assignments doms env (T.doms_sound xs doms hdoms env hsat)
-  have hsurv := restriction_survives T xs doms hdoms es bis hes hbis env hsat
-  have hdead := scanInit_none es bis (doms.map Prod.fst) (assignments doms) hscan _ hmem
+  have hpt : (doms.map (fun yd => (yd.1, env yd.1))).map Prod.fst = doms.map Prod.fst := by
+    rw [List.map_map]
+    exact List.map_congr_left (fun yd _ => rfl)
+  have hsurv : surv (doms.map (fun yd => (yd.1, env yd.1))) = true := by
+    rw [hsurvEq _ hpt]
+    exact restriction_survives T xs doms hdoms es bis hes hbis env hsat
+  have hdead := scanInit_none surv (doms.map Prod.fst) (assignments doms) hscan _ hmem
   rw [hsurv] at hdead
   exact absurd hdead (by simp)
 
@@ -623,14 +981,17 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable 
           have h2 := hm.2
           rw [Bool.and_eq_true] at h2
           exact ⟨hm.1, BusInteraction.varsInF_eq xs bi ▸ h2.1⟩
-        match hscan : scanInit bs es bis (doms.map Prod.fst) (assignments doms) with
+        let survC := compiledSurv bs es bis (doms.map Prod.fst)
+        match hscan : scanInit survC.val (doms.map Prod.fst) (assignments doms) with
         | none =>
           -- no surviving point: the box is empty of solutions, everything is vacuously forced
           (doms.map Prod.fst).map (fun x => ⟨x, 0, fun env hsat =>
-            (scanNone_unsat T xs doms hdoms es bis hes hbis hscan env hsat).elim⟩)
+            (scanNone_unsat T xs doms hdoms es bis hes hbis survC.val survC.property
+              hscan env hsat).elim⟩)
         | some res =>
           res.attach.map (fun xc => ⟨xc.1.1, xc.1.2, fun env hsat =>
-            scanForced_sound T xs doms hdoms es bis hes hbis res hscan xc.1 xc.2 env hsat⟩)
+            scanForced_sound T xs doms hdoms es bis hes hbis survC.val survC.property
+              res hscan xc.1 xc.2 env hsat⟩)
       else []
     else []
 
