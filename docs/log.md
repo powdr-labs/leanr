@@ -1926,3 +1926,40 @@ reduction (`b² → b` on boolean-domained variables, box-certified) for the sel
 constraints — the general contextual rewriter sketched in the design documents. (D) unlocks the
 address-side; (E) the constraint side; with both, the probe numbers above (−64 vars, −64 bus
 per apc_005-class block) become landable.
+
+### 65. Box-certified multilinear rewriting completes the XOR flag fold (`BoxRewrite.lean`)
+
+The missing piece from entry 64, and it subsumes both gaps at once: a pass that rewrites every
+**over-bound** expression of the system to its multilinear reduction (`b² → b` on
+small-domain variables), accepting each rewrite only under a decidable certificate — on every
+point of the expression's small-domain box, both forms **partially evaluate to the same affine
+form** in the remaining symbolic (e.g. data) variables (`linearize` + canonical normalized
+comparison; soundness via `eval_substF`/`envF` restriction, `linearize_eval`, and permutation
+sums). The reduction itself is heuristic monomial expansion (exponent capping on box variables,
+64-monomial cap) and carries no proof; the certificate re-verifies pointwise. Single-variable
+constraints are never rewritten (the `findDomainAlg` sources — same non-circularity as the
+entry-64 parts), and rewrites that would introduce variables are rejected by a decidable guard.
+
+The completed composite `flagFoldPass' = fxSubst ∘ boxRewrite ∘ boxTautoDrop ∘ pointwiseDupDrop`
+under one degree guard: the XOR substitution fires, the rewriter legalizes the substituted
+address payloads (degree 3 → 2) and selection constraints (degree 4 → 3), the tautology and
+duplicate collectors clean up. Stage probe on apc_005: `wd=false` after substitution,
+**`wd=true` after the rewrite**, and the guard now accepts.
+
+`lake build` green; all three `maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** apc_005-class blocks: **1491 → 1427 vars (−64), 649 → 585 constraints (−64),
+765 → 701 bus (−64)** each. 9-case sample across the other size classes byte-identical. Full
+100-case sweep (before → after, baseline = the entry-60 line):
+
+- **variables: 4.286× → 4.352× aggregate (3.655× → 3.667× geomean)** vs powdr's 4.092×/3.787×
+- **bus interactions: 3.006× → 3.077× aggregate (2.466× → 2.482× geomean)**
+- **constraints: 9.854× → 10.235× aggregate (10.214× → 10.292× geomean** — closing on powdr's
+  10.311× geomean)
+
+Runtime cost: apc_005 ~18 s → ~80 s (the composite's scans run every cycle) — a known
+entry-53-style target for a follow-up perf pass; not intractable, and effectiveness lands
+first. The `boxRewritePass` is general machinery: it is the "contextual polynomial reduction"
+enabler the early design surveys called for, and the sign-split comparison gadget (entry 63
+item 3) is its natural next customer.
