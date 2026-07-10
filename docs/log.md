@@ -1470,3 +1470,10 @@ fixpoint wrapper (`sizeKey`/`varCount` per invocation), the per-invocation `deci
 and the per-accepted-drop `checkCancel`/split-decide — a batched multi-pair sweep (entry 53's
 idea) would cut the invocation count itself but needs an output-equality argument across
 reordered drops.
+
+**Entry 55 addendum:** deferring the A/B/C materialization behind the region tests
+(`Array.all` over the index ranges; lists built only for accepted candidates) recovers a
+further ~0.8 s on apc_006 (`busPairCancel` 11.3 s → 10.5 s) and ~0.3 s on apc_036 (3.1 s →
+2.8 s), output identical. The remaining apc_006 residual is the refutation scans over ~28k
+matched same-payload candidates and the ~1.2k not-yet-justifiable candidates re-scanned per
+drop — the batched multi-drop sweep above remains the real lever.
