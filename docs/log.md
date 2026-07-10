@@ -1894,3 +1894,35 @@ Measurement/diagnosis only, completing entry 62 with the concrete shapes.
    (`f ∈ {a3, a3 − 256}`), so `reencode`/`domainBatch` (constant-domain machinery) cannot
    compress the group either; a folding pass would need parameterized-domain reasoning or
    derived-column substitution with the same composite-guard treatment as (1).
+
+### 64. XOR flag fold: three of five pieces built and firing; blocked on stateful-payload and selection-constraint degrees
+
+Implementation attempt on log 63's finding 1 (`FlagFold.lean`, committed **unwired**). The
+composite `flagFoldPass = fxSubstPass ∘ boxTautoDropPass ∘ pointwiseDupDropPass` under a single
+degree guard. Stage probe on apc_005's optimized output:
+
+- `fxSubstPass` **fires: 1491 → 1427 vars (−64)** — the certified interpolation `c1 := a0 ⊕ a1`
+  (built from `fuPairData?`'s own compatible-point tables, validated pointwise by `fxCheckWith`,
+  entailed by the residue argument via `fxCheck_sound`) substitutes every remaining pair flag.
+- `boxTautoDropPass` replaces the degree-4 substituted booleanities by `0` (multi-variable
+  constraints vanishing on their proven domain box; single-variable constraints are never
+  replaced, keeping the `findDomainAlg` sources — non-circular by construction).
+- `pointwiseDupDropPass` **fires: 765 → 701 bus (−64)** — stateless interactions pointwise-equal
+  on the box to an earlier *first-of-class* twin are dropped (`filterBusEntailed_correct`
+  ported from the entry-56 line with `hok` generalized to be multiplicity-conditional; the
+  depth-1 first-of-class rule avoids chain induction).
+- **But `withinDegree = false` at every stage**: the substituted flag also sits in the
+  **stateful memory address payloads** (`limbsum − F(a1, c1)`, degree 3 after substitution —
+  no pass may drop or alter stateful interactions) and in the degree-3 **data-selection
+  constraints** (degree 4 after). The guard rejects the composite, so the wired pipeline is a
+  no-op at +74 s per apc_005 run — hence unwired at this commit.
+
+**What completing it needs** (both specified, neither trivial):
+(D) a *compatible-point-entailed payload rewrite* — replace the eliminated access's address
+expression by the survivor's (already degree-legal; pointwise-equal under the pair certificate,
+i.e. `slotEqCert` refined from box-equality to compatible-point equality with both checks
+retained); sideEffects stay *equal* because the evaluated messages are. (E) a multilinear
+reduction (`b² → b` on boolean-domained variables, box-certified) for the selection
+constraints — the general contextual rewriter sketched in the design documents. (D) unlocks the
+address-side; (E) the constraint side; with both, the probe numbers above (−64 vars, −64 bus
+per apc_005-class block) become landable.
