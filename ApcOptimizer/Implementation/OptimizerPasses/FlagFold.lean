@@ -28,55 +28,90 @@ def singleVarCs (all : List (Expression p)) : List (Expression p) :=
 /-- Certificate: `c` mentions ≥ 2 distinct variables, every one carries a proven finite domain
     (from the single-variable constraints), the joint box is small, and `c` vanishes on all of
     it. -/
-def btCert (all : List (Expression p)) (c : Expression p) : Bool :=
+def btCert (singles : List (Expression p)) (c : Expression p) : Bool :=
   2 ≤ c.vars.eraseDups.length &&
   (let doms := c.vars.eraseDups.filterMap (fun v =>
-     (findDomainAlg (singleVarCs all) v).map (fun d => (v, d)))
+     (findDomainAlg singles v).map (fun d => (v, d)))
    decide (doms.map Prod.fst = c.vars.eraseDups) &&
    decide ((doms.map (fun vd => vd.2.length)).prod ≤ 32) &&
    (assignments doms).all (fun pt => decide (c.eval (envOf pt) = 0)))
 
-/-- Replace certified box tautologies by the trivial constraint. -/
-def ConstraintSystem.boxTautoReplace (cs : ConstraintSystem p) : ConstraintSystem p :=
+/-- Cheap mirror of `btCert` over a precomputed (pure, memoized) domain lookup — a prefilter
+    only; accepted candidates re-run the real certificate, so the proofs consume `btCert`
+    alone. -/
+def btPre (domOf : Variable → Option (List (ZMod p))) (c : Expression p) : Bool :=
+  2 ≤ c.vars.eraseDups.length &&
+  (let doms := c.vars.eraseDups.filterMap (fun v => (domOf v).map (fun d => (v, d)))
+   decide (doms.map Prod.fst = c.vars.eraseDups) &&
+   decide ((doms.map (fun vd => vd.2.length)).prod ≤ 32) &&
+   (assignments doms).all (fun pt => decide (c.eval (envOf pt) = 0)))
+
+/-- The replacement condition: the memoized prefilter gates the (expensive) certificate.
+    `singles` and `domOf` are computed once per pass invocation and passed in — a def-local
+    `let` would be re-evaluated per constraint by arity expansion. -/
+def btKeep (singles : List (Expression p)) (domOf : Variable → Option (List (ZMod p)))
+    (c : Expression p) : Bool :=
+  btPre domOf c && btCert singles c
+
+theorem btKeep_cert {singles : List (Expression p)}
+    {domOf : Variable → Option (List (ZMod p))} {c : Expression p}
+    (h : btKeep singles domOf c = true) : btCert singles c = true := by
+  unfold btKeep at h
+  rw [Bool.and_eq_true] at h
+  exact h.2
+
+theorem btKeep_of_cert_false {singles : List (Expression p)}
+    {domOf : Variable → Option (List (ZMod p))} {c : Expression p}
+    (h : btCert singles c = false) : btKeep singles domOf c = false := by
+  unfold btKeep
+  rw [h, Bool.and_false]
+
+/-- Replace certified box tautologies by the trivial constraint (parameterized over the
+    precomputed prefilter inputs). -/
+def ConstraintSystem.boxTautoReplaceWith (cs : ConstraintSystem p)
+    (singles : List (Expression p)) (domOf : Variable → Option (List (ZMod p))) :
+    ConstraintSystem p :=
   { cs with algebraicConstraints := cs.algebraicConstraints.map (fun c =>
-      if btCert cs.algebraicConstraints c then Expression.const 0 else c) }
+      if btKeep singles domOf c then Expression.const 0 else c) }
 
 /-- A single-variable constraint is never replaced (it fails the ≥ 2 guard), so it survives
     verbatim into the output — which is what lets the box justification stand on the output's
     own satisfaction. -/
-theorem singleVar_mem_boxTautoReplace (cs : ConstraintSystem p) (c : Expression p)
+theorem singleVar_mem_boxTautoReplace (cs : ConstraintSystem p)
+    (domOf : Variable → Option (List (ZMod p))) (c : Expression p)
     (hc : c ∈ cs.algebraicConstraints) (hs : (c.vars.eraseDups.length == 1) = true) :
-    c ∈ (cs.boxTautoReplace).algebraicConstraints := by
-  have himg : (if btCert cs.algebraicConstraints c then Expression.const 0 else c) = c := by
-    have : btCert cs.algebraicConstraints c = false := by
-      unfold btCert
-      have h1 : ¬ (2 ≤ c.vars.eraseDups.length) := by
-        have := of_decide_eq_true hs
-        omega
-      simp [h1]
-    rw [this]; simp
-  exact List.mem_map.2 ⟨c, hc, himg⟩
+    c ∈ (cs.boxTautoReplaceWith (singleVarCs cs.algebraicConstraints) domOf).algebraicConstraints := by
+  have hcf : btCert (singleVarCs cs.algebraicConstraints) c = false := by
+    unfold btCert
+    have h1 : ¬ (2 ≤ c.vars.eraseDups.length) := by
+      have := of_decide_eq_true hs
+      omega
+    simp [h1]
+  refine List.mem_map.2 ⟨c, hc, ?_⟩
+  rw [btKeep_of_cert_false hcf]
+  simp
 
 theorem ConstraintSystem.boxTautoReplace_correct [Fact p.Prime]
-    (cs : ConstraintSystem p) (bs : BusSemantics p) :
-    PassCorrect cs (cs.boxTautoReplace) [] bs := by
+    (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (domOf : Variable → Option (List (ZMod p))) :
+    PassCorrect cs (cs.boxTautoReplaceWith (singleVarCs cs.algebraicConstraints) domOf) [] bs := by
   -- every replaced constraint is zero under any assignment satisfying the output
-  have hzero : ∀ env, (cs.boxTautoReplace).satisfies bs env →
-      ∀ c ∈ cs.algebraicConstraints, btCert cs.algebraicConstraints c = true →
+  have hzero : ∀ env, (cs.boxTautoReplaceWith (singleVarCs cs.algebraicConstraints)
+      domOf).satisfies bs env →
+      ∀ c ∈ cs.algebraicConstraints, btCert (singleVarCs cs.algebraicConstraints) c = true →
       c.eval env = 0 := by
     intro env hsat c _hc hcert
     unfold btCert at hcert
     rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hcert
     obtain ⟨_h2, ⟨⟨hcover, _hcap⟩, hall⟩⟩ := hcert
     have hcover' := of_decide_eq_true hcover
-    -- the environment's restriction to the box is an enumerated point
     have hdom : ∀ c' ∈ singleVarCs cs.algebraicConstraints, c'.eval env = 0 := by
       intro c' hc'
       simp only [singleVarCs] at hc'
       have hmem := List.mem_of_mem_filter hc'
       have hsingle : (c'.vars.eraseDups.length == 1) = true :=
         (List.mem_filter.1 hc').2
-      exact hsat.1 c' (singleVar_mem_boxTautoReplace cs c' hmem hsingle)
+      exact hsat.1 c' (singleVar_mem_boxTautoReplace cs domOf c' hmem hsingle)
     have hmemdoms : ∀ vd ∈ c.vars.eraseDups.filterMap (fun v =>
         (findDomainAlg (singleVarCs cs.algebraicConstraints) v).map (fun d => (v, d))),
         env vd.1 ∈ vd.2 := by
@@ -90,7 +125,8 @@ theorem ConstraintSystem.boxTautoReplace_correct [Fact p.Prime]
         obtain rfl := hvd'.symm
         exact findDomainAlg_sound (singleVarCs cs.algebraicConstraints) v d hfd env hdom
     have hpt := mem_assignments (c.vars.eraseDups.filterMap (fun v =>
-      (findDomainAlg (singleVarCs cs.algebraicConstraints) v).map (fun d => (v, d)))) env hmemdoms
+      (findDomainAlg (singleVarCs cs.algebraicConstraints) v).map (fun d => (v, d)))) env
+      hmemdoms
     have hptz := of_decide_eq_true (List.all_eq_true.mp hall _ hpt)
     have hagree : c.eval (envOf ((c.vars.eraseDups.filterMap (fun v =>
         (findDomainAlg (singleVarCs cs.algebraicConstraints) v).map (fun d => (v, d)))).map
@@ -102,22 +138,23 @@ theorem ConstraintSystem.boxTautoReplace_correct [Fact p.Prime]
           Prod.fst) = c.vars.eraseDups from hcover']
       exact List.mem_eraseDups.2 hv
     rw [← hagree]; exact hptz
-  have hiff : ∀ env, (cs.boxTautoReplace).satisfies bs env ↔ cs.satisfies bs env := by
+  have hiff : ∀ env, (cs.boxTautoReplaceWith (singleVarCs cs.algebraicConstraints)
+      domOf).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     constructor
     · intro hsat
       refine ⟨fun c hc => ?_, hsat.2⟩
-      by_cases hcert : btCert cs.algebraicConstraints c = true
-      · exact hzero env hsat c hc hcert
+      by_cases hcond : btKeep (singleVarCs cs.algebraicConstraints) domOf c = true
+      · exact hzero env hsat c hc (btKeep_cert hcond)
       · have h0 := hsat.1 _ (List.mem_map.2 ⟨c, hc, rfl⟩)
-        rw [if_neg hcert] at h0
+        rw [if_neg hcond] at h0
         exact h0
     · intro hsat
       refine ⟨fun c' hc' => ?_, hsat.2⟩
       obtain ⟨c, hc, rfl⟩ := List.mem_map.1 hc'
-      by_cases hcert : btCert cs.algebraicConstraints c = true
-      · rw [if_pos hcert]; rfl
-      · rw [if_neg hcert]; exact hsat.1 c hc
+      by_cases hcond : btKeep (singleVarCs cs.algebraicConstraints) domOf c = true
+      · rw [if_pos hcond]; rfl
+      · rw [if_neg hcond]; exact hsat.1 c hc
   refine PassCorrect.ofEnvEq ?_ ?_ ?_ ?_
   · intro env hsat
     exact ⟨env, (hiff env).1 hsat, BusState.equiv_refl _⟩
@@ -127,9 +164,9 @@ theorem ConstraintSystem.boxTautoReplace_correct [Fact p.Prime]
     rw [ConstraintSystem.mem_vars] at hv ⊢
     rcases hv with ⟨c', hc', hvc⟩ | h
     · obtain ⟨c, hc, rfl⟩ := List.mem_map.1 hc'
-      by_cases hcert : btCert cs.algebraicConstraints c = true
-      · rw [if_pos hcert] at hvc; simp [Expression.vars] at hvc
-      · rw [if_neg hcert] at hvc; exact Or.inl ⟨c, hc, hvc⟩
+      by_cases hcond : btKeep (singleVarCs cs.algebraicConstraints) domOf c = true
+      · rw [if_pos hcond] at hvc; simp [Expression.vars] at hvc
+      · rw [if_neg hcond] at hvc; exact Or.inl ⟨c, hc, hvc⟩
     · exact Or.inr h
   · intro env hadm hsat
     exact ⟨(hiff env).2 hsat, hadm, BusState.equiv_refl _⟩
@@ -138,7 +175,12 @@ theorem ConstraintSystem.boxTautoReplace_correct [Fact p.Prime]
 def boxTautoDropPass : VerifiedPass p := fun cs bs =>
   if hp : (decide p.Prime) = true then
     haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
-    ⟨cs.boxTautoReplace, [], cs.boxTautoReplace_correct bs⟩
+    let singles := singleVarCs cs.algebraicConstraints
+    let cache : Std.HashMap Variable (Option (List (ZMod p))) :=
+      (cs.algebraicConstraints.flatMap Expression.vars).eraseDups.foldl
+        (fun m v => m.insert v (findDomainAlg singles v)) ∅
+    ⟨cs.boxTautoReplaceWith singles (fun v => cache.getD v none), [],
+     cs.boxTautoReplace_correct bs (fun v => cache.getD v none)⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
 
 /-! ## Part C: pointwise-duplicate stateless check removal -/
@@ -207,41 +249,93 @@ theorem ConstraintSystem.filterBusEntailed_correct (cs : ConstraintSystem p)
       by rw [hside]; exact BusState.equiv_refl _⟩
 
 
+/-- Joint-box agreement: every joint variable of `R`/`R'` has a proven finite domain, the box
+    is small, and the two expressions agree at every box point. -/
+def boxAgree (singles : List (Expression p)) (R R' : Expression p) : Bool :=
+  let jv := (R.vars ++ R'.vars).eraseDups
+  let doms := jv.filterMap (fun v =>
+    (findDomainAlg singles v).map (fun d => (v, d)))
+  decide (doms.map Prod.fst = jv) &&
+  decide ((doms.map (fun vd => vd.2.length)).prod ≤ 32) &&
+  (assignments doms).all (fun pt =>
+    decide (R.eval (envOf pt) = R'.eval (envOf pt)))
+
 /-- Slot-pair certificate: the two expressions are syntactically equal, or they decompose over
     the same carrier with the same constant coefficient and their offset difference vanishes on
-    the joint (proven, small) domain box of the offset variables. -/
-def slotEqCert (all : List (Expression p)) (e e' : Expression p) : Bool :=
+    the joint (proven, small) domain box of the offset variables. The carrier must appear in
+    both expressions — the `mentions` gate is ZMod-free, so the ubiquitous disjoint-variable
+    pair costs plain tree walks, never `splitAt`'s per-node ring arithmetic (a carrier absent
+    from `e'` could only certify through a fully cancelled coefficient in `e`, which the
+    constant folding and normalization ahead of this pass never leave behind). -/
+def slotEqCert (singles : List (Expression p)) (e e' : Expression p) : Bool :=
   e == e' ||
   e.vars.eraseDups.any (fun x =>
+    e'.mentions x &&
     match e.splitAt x, e'.splitAt x with
-    | some (k, R), some (k2, R') =>
-      k2 == k &&
-      (let jv := (R.vars ++ R'.vars).eraseDups
-       let doms := jv.filterMap (fun v =>
-         (findDomainAlg (singleVarCs all) v).map (fun d => (v, d)))
-       decide (doms.map Prod.fst = jv) &&
-       decide ((doms.map (fun vd => vd.2.length)).prod ≤ 32) &&
-       (assignments doms).all (fun pt =>
-         decide (R.eval (envOf pt) = R'.eval (envOf pt))))
+    | some (k, R), some (k2, R') => k2 == k && boxAgree singles R R'
     | _, _ => false)
 
 /-- Full-message certificate: same bus, same constant multiplicity, pointwise-equal payloads. -/
-def msgEqCert (all : List (Expression p)) (bi bi' : BusInteraction (Expression p)) : Bool :=
+def msgEqCert (singles : List (Expression p)) (bi bi' : BusInteraction (Expression p)) : Bool :=
   bi.busId == bi'.busId &&
   (match bi.multiplicity.constValue?, bi'.multiplicity.constValue? with
    | some m, some m' => m == m'
    | _, _ => false) &&
   bi.payload.length == bi'.payload.length &&
-  (bi.payload.zip bi'.payload).all (fun ee => slotEqCert all ee.1 ee.2)
+  (bi.payload.zip bi'.payload).all (fun ee => slotEqCert singles ee.1 ee.2)
 
-theorem slotEqCert_sound [Fact p.Prime] (all : List (Expression p)) (e e' : Expression p)
-    (h : slotEqCert all e e' = true) (env : Variable → ZMod p)
-    (hdom : ∀ c ∈ singleVarCs all, c.eval env = 0) : e.eval env = e'.eval env := by
+theorem boxAgree_sound [Fact p.Prime] (singles : List (Expression p)) (R R' : Expression p)
+    (h : boxAgree singles R R' = true) (env : Variable → ZMod p)
+    (hdom : ∀ c ∈ singles, c.eval env = 0) : R.eval env = R'.eval env := by
+  unfold boxAgree at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨hcover, _hcap⟩, hall⟩ := h
+  have hmemdoms : ∀ vd ∈ (R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
+      (findDomainAlg singles v).map (fun d => (v, d))), env vd.1 ∈ vd.2 := by
+    intro vd hvd
+    obtain ⟨v, _hv, hvd'⟩ := List.mem_filterMap.1 hvd
+    cases hfd : findDomainAlg singles v with
+    | none => rw [hfd] at hvd'; simp at hvd'
+    | some d =>
+      rw [hfd] at hvd'
+      simp only [Option.map_some, Option.some.injEq] at hvd'
+      obtain rfl := hvd'.symm
+      exact findDomainAlg_sound singles v d hfd env hdom
+  have hpt := mem_assignments ((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
+    (findDomainAlg singles v).map (fun d => (v, d)))) env hmemdoms
+  have hagree : ∀ v, v ∈ (R.vars ++ R'.vars).eraseDups →
+      envOf (((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
+        (findDomainAlg singles v).map (fun d => (v, d)))).map
+          (fun vd => (vd.1, env vd.1))) v = env v := by
+    intro v hv
+    refine envOf_map _ env v ?_
+    rw [show (((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
+      (findDomainAlg singles v).map (fun d => (v, d)))).map Prod.fst)
+      = (R.vars ++ R'.vars).eraseDups from hcover]
+    exact hv
+  have hRR := of_decide_eq_true (List.all_eq_true.mp hall _ hpt)
+  have hRa : R.eval (envOf (((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
+      (findDomainAlg singles v).map (fun d => (v, d)))).map
+        (fun vd => (vd.1, env vd.1)))) = R.eval env :=
+    Expression.eval_congr R _ env (fun v hv =>
+      hagree v (List.mem_eraseDups.2 (List.mem_append_left _ hv)))
+  have hRa' : R'.eval (envOf (((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
+      (findDomainAlg singles v).map (fun d => (v, d)))).map
+        (fun vd => (vd.1, env vd.1)))) = R'.eval env :=
+    Expression.eval_congr R' _ env (fun v hv =>
+      hagree v (List.mem_eraseDups.2 (List.mem_append_right _ hv)))
+  rw [← hRa, ← hRa', hRR]
+
+theorem slotEqCert_sound [Fact p.Prime] (singles : List (Expression p)) (e e' : Expression p)
+    (h : slotEqCert singles e e' = true) (env : Variable → ZMod p)
+    (hdom : ∀ c ∈ singles, c.eval env = 0) : e.eval env = e'.eval env := by
   unfold slotEqCert at h
   rw [Bool.or_eq_true] at h
   rcases h with heq | hany
   · rw [eq_of_beq heq]
   · obtain ⟨x, _hx, hx⟩ := List.any_eq_true.1 hany
+    rw [Bool.and_eq_true] at hx
+    obtain ⟨_hm, hx⟩ := hx
     cases hsX : e.splitAt x with
     | none => rw [hsX] at hx; simp at hx
     | some kR =>
@@ -250,50 +344,16 @@ theorem slotEqCert_sound [Fact p.Prime] (all : List (Expression p)) (e e' : Expr
       | none => rw [hsX, hsY] at hx; simp at hx
       | some kR' =>
         obtain ⟨k2, R'⟩ := kR'
-        simp only [hsX, hsY, Bool.and_eq_true, decide_eq_true_eq] at hx
-        obtain ⟨hk2, ⟨⟨hcover, _hcap⟩, hall⟩⟩ := hx
-        have hmemdoms : ∀ vd ∈ (R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
-            (findDomainAlg (singleVarCs all) v).map (fun d => (v, d))), env vd.1 ∈ vd.2 := by
-          intro vd hvd
-          obtain ⟨v, _hv, hvd'⟩ := List.mem_filterMap.1 hvd
-          cases hfd : findDomainAlg (singleVarCs all) v with
-          | none => rw [hfd] at hvd'; simp at hvd'
-          | some d =>
-            rw [hfd] at hvd'
-            simp only [Option.map_some, Option.some.injEq] at hvd'
-            obtain rfl := hvd'.symm
-            exact findDomainAlg_sound (singleVarCs all) v d hfd env hdom
-        have hpt := mem_assignments ((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
-          (findDomainAlg (singleVarCs all) v).map (fun d => (v, d)))) env hmemdoms
-        have hagree : ∀ v, v ∈ (R.vars ++ R'.vars).eraseDups →
-            envOf (((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
-              (findDomainAlg (singleVarCs all) v).map (fun d => (v, d)))).map
-                (fun vd => (vd.1, env vd.1))) v = env v := by
-          intro v hv
-          refine envOf_map _ env v ?_
-          rw [show (((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
-            (findDomainAlg (singleVarCs all) v).map (fun d => (v, d)))).map Prod.fst)
-            = (R.vars ++ R'.vars).eraseDups from hcover]
-          exact hv
-        have hRR := of_decide_eq_true (List.all_eq_true.mp hall _ hpt)
-        have hRa : R.eval (envOf (((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
-            (findDomainAlg (singleVarCs all) v).map (fun d => (v, d)))).map
-              (fun vd => (vd.1, env vd.1)))) = R.eval env :=
-          Expression.eval_congr R _ env (fun v hv =>
-            hagree v (List.mem_eraseDups.2 (List.mem_append_left _ hv)))
-        have hRa' : R'.eval (envOf (((R.vars ++ R'.vars).eraseDups.filterMap (fun v =>
-            (findDomainAlg (singleVarCs all) v).map (fun d => (v, d)))).map
-              (fun vd => (vd.1, env vd.1)))) = R'.eval env :=
-          Expression.eval_congr R' _ env (fun v hv =>
-            hagree v (List.mem_eraseDups.2 (List.mem_append_right _ hv)))
+        simp only [hsX, hsY, Bool.and_eq_true] at hx
+        obtain ⟨hk2, hba⟩ := hx
         rw [Expression.splitAt_eval x e k R hsX env,
             Expression.splitAt_eval x e' k2 R' hsY env, eq_of_beq hk2,
-            ← hRa, ← hRa', hRR]
+            boxAgree_sound singles R R' hba env hdom]
 
-theorem msgEqCert_sound [Fact p.Prime] (all : List (Expression p))
-    (bi bi' : BusInteraction (Expression p)) (h : msgEqCert all bi bi' = true)
+theorem msgEqCert_sound [Fact p.Prime] (singles : List (Expression p))
+    (bi bi' : BusInteraction (Expression p)) (h : msgEqCert singles bi bi' = true)
     (env : Variable → ZMod p)
-    (hdom : ∀ c ∈ singleVarCs all, c.eval env = 0) : bi.eval env = bi'.eval env := by
+    (hdom : ∀ c ∈ singles, c.eval env = 0) : bi.eval env = bi'.eval env := by
   unfold msgEqCert at h
   rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h
   obtain ⟨⟨⟨hbus, hmult⟩, hlen⟩, hslots⟩ := h
@@ -322,33 +382,33 @@ theorem msgEqCert_sound [Fact p.Prime] (all : List (Expression p))
       exact List.getElem_mem _
     have hcert := List.all_eq_true.mp hslots _ hz
     simp only [List.getElem_map]
-    exact slotEqCert_sound all _ _ hcert env hdom
+    exact slotEqCert_sound singles _ _ hcert env hdom
   show bi.eval env = bi'.eval env
   unfold BusInteraction.eval
   rw [eq_of_beq hbus, hmm, hpay]
 
 /-- Is `bi` the first of its pointwise class (no earlier certified twin)? -/
-def pdFirst (bs : BusSemantics p) (all : List (Expression p))
+def pdFirst (bs : BusSemantics p) (singles : List (Expression p))
     (bis : List (BusInteraction (Expression p))) (bi : BusInteraction (Expression p)) : Bool :=
   match bis.findIdx? (fun b => b == bi) with
   | none => true
-  | some i => (bis.take i).all (fun b => bs.isStateful b.busId || !(msgEqCert all b bi))
+  | some i => (bis.take i).all (fun b => bs.isStateful b.busId || !(msgEqCert singles b bi))
 
 /-- Keep unless a *first-of-class* earlier stateless twin exists (depth-1 rule: the twin that
     justifies a drop is itself provably kept, so no chain induction is needed). -/
-def pdKeep (bs : BusSemantics p) (all : List (Expression p))
+def pdKeep (bs : BusSemantics p) (singles : List (Expression p))
     (bis : List (BusInteraction (Expression p))) (bi : BusInteraction (Expression p)) : Bool :=
   bs.isStateful bi.busId ||
   (match bis.findIdx? (fun b => b == bi) with
    | none => true
    | some i =>
-     !((bis.take i).any (fun b => !bs.isStateful b.busId && msgEqCert all b bi
-         && pdFirst bs all bis b)))
+     !((bis.take i).any (fun b => !bs.isStateful b.busId && msgEqCert singles b bi
+         && pdFirst bs singles bis b)))
 
 /-- A first-of-class interaction is always kept — the depth-1 justification for `pdKeep`. -/
-theorem pdFirst_keep (bs : BusSemantics p) (all : List (Expression p))
+theorem pdFirst_keep (bs : BusSemantics p) (singles : List (Expression p))
     (bis : List (BusInteraction (Expression p))) (b : BusInteraction (Expression p))
-    (h : pdFirst bs all bis b = true) : pdKeep bs all bis b = true := by
+    (h : pdFirst bs singles bis b = true) : pdKeep bs singles bis b = true := by
   unfold pdKeep
   rw [Bool.or_eq_true]
   right
@@ -361,9 +421,9 @@ theorem pdFirst_keep (bs : BusSemantics p) (all : List (Expression p))
     rw [Bool.not_eq_true']
     by_contra hany
     have hany' : ((bis.take i).any (fun b' => !bs.isStateful b'.busId
-        && msgEqCert all b' b && pdFirst bs all bis b')) = true := by
+        && msgEqCert singles b' b && pdFirst bs singles bis b')) = true := by
       by_cases hh : ((bis.take i).any (fun b' => !bs.isStateful b'.busId
-          && msgEqCert all b' b && pdFirst bs all bis b')) = true
+          && msgEqCert singles b' b && pdFirst bs singles bis b')) = true
       · exact hh
       · exact absurd (by simpa using hh) hany
     obtain ⟨b'', hb''mem, hb''⟩ := List.any_eq_true.1 hany'
@@ -381,11 +441,13 @@ theorem pdFirst_keep (bs : BusSemantics p) (all : List (Expression p))
 
 /-- Part C as a standalone (unguarded) pass: drop stateless interactions pointwise-equal to an
     earlier first-of-class one. -/
-def pointwiseDupDropPass : VerifiedPass p := fun cs bs =>
-  if hp : (decide p.Prime) = true then
-    haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
-    ⟨cs.filterBus (pdKeep bs cs.algebraicConstraints cs.busInteractions), [],
-     cs.filterBusEntailed_correct bs _
+theorem ConstraintSystem.pointwiseDupDrop_correct [Fact p.Prime]
+    (cs : ConstraintSystem p) (bs : BusSemantics p) :
+    PassCorrect cs
+      (cs.filterBus
+        (pdKeep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions))
+      [] bs :=
+  cs.filterBusEntailed_correct bs _
        (by
          intro bi _ hkf
          unfold pdKeep at hkf
@@ -405,19 +467,27 @@ def pointwiseDupDropPass : VerifiedPass p := fun cs bs =>
            rw [Bool.and_eq_true, Bool.and_eq_true] at hb
            obtain ⟨⟨hnst, hcert⟩, hfirst⟩ := hb
            have hbcs : b ∈ cs.busInteractions := List.mem_of_mem_take hbmem
-           have hbkeep : pdKeep bs cs.algebraicConstraints cs.busInteractions b = true :=
-             pdFirst_keep bs cs.algebraicConstraints cs.busInteractions b hfirst
+           have hbkeep : pdKeep bs (singleVarCs cs.algebraicConstraints)
+               cs.busInteractions b = true :=
+             pdFirst_keep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions b hfirst
            have hbout : b ∈ (cs.filterBus
-               (pdKeep bs cs.algebraicConstraints cs.busInteractions)).busInteractions :=
+               (pdKeep bs (singleVarCs cs.algebraicConstraints)
+                 cs.busInteractions)).busInteractions :=
              List.mem_filter.2 ⟨hbcs, hbkeep⟩
            have hdom : ∀ c ∈ singleVarCs cs.algebraicConstraints, c.eval env = 0 := by
              intro c hc
              exact hsat.1 c (List.mem_of_mem_filter hc)
            have heq : b.eval env = bi.eval env :=
-             msgEqCert_sound cs.algebraicConstraints b bi hcert env hdom
+             msgEqCert_sound (singleVarCs cs.algebraicConstraints) b bi hcert env hdom
            have hob := hsat.2 b hbout
            rw [heq] at hob
-           exact hob hm)⟩
+           exact hob hm)
+
+def pointwiseDupDropPass : VerifiedPass p := fun cs bs =>
+  if hp : (decide p.Prime) = true then
+    haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
+    ⟨cs.filterBus (pdKeep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions), [],
+     cs.pointwiseDupDrop_correct bs⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
 
 /-! ## Part A: the entailed nonlinear substitution -/
