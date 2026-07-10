@@ -1378,3 +1378,102 @@ entry-45 note still applies (enumerate only the non-pinned variables of the doma
 it drops one send/receive pair per invocation and rescans the system per drop, so a chain of
 `k` cancellations costs `k` full `findCancel` sweeps (a batched variant would cancel a whole
 chain per sweep).
+
+### 54. Optimizer runtime: early-abort box scans and hoisted `ZMod` operations in `domainBatch`/`reencode` (effectiveness unchanged)
+
+Pure **performance** work in the entry-45/53 style — every change is output-preserving, so
+effectiveness is untouched. Closes entry 53's `domainBatch` bottleneck. Found by per-stage
+instrumentation, then `perf record` and reading the generated C: the decisive discovery is that
+every `+`/`*`/`decide (· = 0)` on `ZMod p` with a **runtime** `p` re-invokes `ZMod.commRing p`
+and re-projects the instance chain **per expression node** — `perf` attributed the bulk of
+`domainBatch` to the allocator building and freeing instance records (plus ~10% in
+`ZMod.commRing` and its projections directly). The other structural finds: the box enumeration
+paid the full `box × items` evaluation even for targets that force nothing (the entire final
+fixpoint-check iteration was wasted), and `reencode` rebuilt and re-evaluated its interpolation
+candidates ~3× per bit pattern for the ~52 candidate groups that `checkReencode` accepts but the
+degree guard rejects — every cleanup iteration again.
+
+1. **`domainBatch` (`DomainBatch.lean`)** — replace the survivor-list enumeration
+   (materialize box → filter → read off candidates → re-check per candidate) with the
+   single-pass `scanInit`/`scanWith` fold: it keeps the list of candidates every survivor so far
+   agrees on and **aborts as soon as it is empty** — claiming nothing needs no certificate, and
+   a completed scan *is* the checked certificate (`scanInit_some`, consumed by
+   `scanForced_sound`/`scanNone_unsat`). Cache the materialized range domains per bound
+   (`RangeCache`; `interactionDomainC_fst` proves the table identical). Compare `powdrId?`
+   before the name String in the covered-item scans (`varsInF`/`containsFast`, extensionally
+   equal). Compile the covered items per target to positional leaves and extract `add`/`mul`/
+   `decide` from the instances once (`IExpr.evalWith`/`survivesAllCW`/`compiledSurv`, whose
+   bundled pointwise equality with `survivesAllM` is all the certificates consume).
+2. **`reencode` (`Reencode.lean`)** — bind the substituted expression, its per-pattern values,
+   and the folded interpolation once (`interpOfV`/`candSelect`); evaluate the pattern/survivor
+   loops through `Expression.evalFast` (field operations hoisted per call, `evalFast_eq`);
+   reuse the covered set for the survivor filter (`groupSurvivorsE`); `powdrId?`-first
+   comparisons in `coveredBy`/`groupSubst`/`groupRewrite` and the freshness sweep
+   (`Expression.mentionsF`).
+
+**Impact (solo runs, same machine, output identical; A/B against current `main`):** apc_006
+`profile` total **101.2 s → 32.1 s (3.2×)** — `domainBatch` **67.2 s → 5.5 s (12.2×)**,
+`reencode` **9.8 s → 2.8 s (3.5×)**; all other passes unchanged. Verified output-identical
+(`vars/constraints/bus`) against the `main` binary on the entry-53 13-case list
+(apc_001/003/005/006/008/010/014/028/047/056/069/092/100) plus 10 random cases (seed 42) —
+20 distinct cases, identical on every one; before the repo-rename rebase additionally
+byte-identical `run` output on apc_006 and exact stats on apc_001–010 plus 10 more sampled
+cases against the pre-change binary. The passes'
+internal decision counters (forced values, candidate groups found/built/checked/accepted per
+iteration) are identical throughout. Nothing in the audited surface changed; correctness axioms
+stay `{propext, Classical.choice, Quot.sound}`; `lake build` green;
+`check-proof-integrity.sh` passes.
+
+Remaining bottlenecks (documented for future work): `busPairCancel` is now the top pass on
+apc_006 (18.5 s; entry 53's batching idea still applies); `domainFold` evaluates through the
+plain per-node-instance `Expression.eval` (~1.7 s on apc_006 — the `evalFast` treatment applies
+almost verbatim); the degree-rejected `reencode` candidate groups still pay a (now much
+cheaper) full-system rewrite every iteration; and the entry-45 pinned-variable box reduction
+for `domainBatch` remains open.
+
+### 55. Optimizer runtime: hash-index `busPairCancel`'s receive search (effectiveness unchanged)
+
+Pure **performance** work in the entry-53/54 style, closing entry 53's `busPairCancel`
+bottleneck note. After entry 54, `busPairCancel` was the top pass (apc_036: 17.4 s of 27.3 s,
+64%; apc_006: 18.5 s). Stage instrumentation of the fixpoint loop showed **~90% of the pass in
+`findMatchRecv`** (apc_036: 13.9 s of 15.4 s) — every invocation re-probes every send against
+the whole remaining interaction list with structural payload comparisons (51k probes at ~200 µs
+in one cleanup iteration alone), once per dropped pair.
+
+1. **Hash-indexed receive search** — index the candidate receives (constant `-1` multiplicity,
+   on the bus) once per invocation by a structural payload hash (`recvIndex`/`payloadHash`),
+   and scan sends over an `Array`, resolving each probe by hash lookup plus an exact payload
+   comparison on the rare hash hits (`firstMatchAt`); `A`/`B`/`C` come from `Array.extract`
+   slices. Hash inequality proves payload inequality and hits are re-verified structurally, so
+   exactly the same first matching receive is found in the same send order; correctness never
+   depended on the search (the accepted candidate is re-verified by `checkCancel` and the
+   decided split equation, as before). `findMatchRecv`: 13.9 s → 0.33 s on apc_036.
+2. **Single-pass byte justification** — each accepted drop paid the justification scan twice
+   (`unjustifiedSlots`, then `checkCancel`'s `recvSlotsJustified` re-verification). Try the
+   certificate with `checks := []` first: every non-justification conjunct is guaranteed by the
+   scan's own gates, so it passes iff every declared byte slot is justified — exactly what
+   `unjustifiedSlots = []` decides. Only candidates with an unjustified slot fall back to
+   computing `unjustifiedSlots` and emitting the single self-check as before.
+
+**Impact (solo runs, same machine, output identical):** apc_036 `busPairCancel`
+**17.4 s → 3.1 s (5.6×)**, case total **27.3 s → 12.9 s (2.1×)**; the instrumented replica's
+per-stage counts (send probes, matches, region passes, drops per iteration) are identical
+before/after. Verified output-identical (`vars/constraints/bus`) against the pre-change binary
+on the entry-53 13-case list plus apc_036 — identical on every case. Nothing in the audited
+surface changed; correctness axioms stay `{propext, Classical.choice, Quot.sound}`;
+`lake build` green; `check-proof-integrity.sh` passes.
+
+Remaining bottlenecks (documented for future work): `domainFold` is now apc_036's top pass
+(3.4 s; plain per-node-instance `Expression.eval` in `constOnSurvs` — the entry-54 `evalFast`
+treatment applies almost verbatim); `busPairCancel`'s residual ~3 s is spread across the
+fixpoint wrapper (`sizeKey`/`varCount` per invocation), the per-invocation `decide p.Prime`,
+and the per-accepted-drop `checkCancel`/split-decide — a batched multi-pair sweep (entry 53's
+idea) would cut the invocation count itself but needs an output-equality argument across
+reordered drops.
+
+**Entry 55 addendum:** deferring the A/B/C materialization behind the region tests
+(`Array.all` over the index ranges; lists built only for accepted candidates) recovers a
+further ~0.8 s on apc_006 (`busPairCancel` 11.3 s → 10.5 s) and ~0.3 s on apc_036 (3.1 s →
+2.8 s), output identical. The remaining apc_006 residual is the refutation scans over ~28k
+matched same-payload candidates and the ~1.2k not-yet-justifiable candidates re-scanned per
+drop — the batched multi-drop sweep above remains the real lever.

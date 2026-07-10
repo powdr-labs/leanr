@@ -693,19 +693,49 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
 
 /-! ## The pass: detect and drop matched pairs -/
 
-/-- Scan for the first matching receive `R` for a send `S`: constant `-1` multiplicity, on `busId`,
-    carrying `S`'s payload. Returns `(B, R, C)` — the scanned prefix `B`, the receive `R`, and the
-    remainder `C`. -/
-def findMatchRecv (busId : Nat) (S : BusInteraction (Expression p)) :
-    List (BusInteraction (Expression p)) → List (BusInteraction (Expression p)) →
-    Option (List (BusInteraction (Expression p)) × BusInteraction (Expression p)
-      × List (BusInteraction (Expression p)))
-  | _, [] => none
-  | revB, R :: rest =>
-      if decide (multConst R = some (-1)) && decide (R.busId = busId)
-         && decide (S.payload = R.payload) then
-        some (revB.reverse, R, rest)
-      else findMatchRecv busId S (R :: revB) rest
+/-! ### Hash-indexed receive lookup
+
+`findCancelGo` probed every send against the whole remaining list, structurally comparing
+payloads — ~90% of the pass's runtime, repeated once per dropped pair. The candidate receives
+(constant `-1` multiplicity, on the bus) are instead indexed **once per invocation** by a
+structural payload hash; a send probe is then a hash lookup plus an exact payload comparison on
+the (rare) hash hits. Hash inequality proves payload inequality, and hits are re-verified
+structurally, so exactly the same first matching receive is found — the pass's output is
+unchanged, and its correctness never depended on the search (the accepted candidate is
+re-verified by `checkCancel` and the decided split equation). -/
+
+/-- Structural hash of an expression (order-sensitive), for the payload-match prefilter. -/
+def Expression.structHash : Expression p → UInt64
+  | .const n => mixHash 11 (UInt64.ofNat n.val)
+  | .var y => mixHash 13 (mixHash (hash y.name) (hash y.powdrId?))
+  | .add a b => mixHash 17 (mixHash a.structHash b.structHash)
+  | .mul a b => mixHash 19 (mixHash a.structHash b.structHash)
+
+/-- Structural hash of a payload (order-sensitive). -/
+def payloadHash (pl : List (Expression p)) : UInt64 :=
+  pl.foldl (fun h e => mixHash h e.structHash) 7
+
+/-- Positions (ascending) of the candidate receives (constant `-1` multiplicity, on `busId`),
+    keyed by payload hash. -/
+def recvIndex (busId : Nat) (arr : Array (BusInteraction (Expression p))) :
+    Std.HashMap UInt64 (List Nat) :=
+  (arr.toList.zipIdx).foldr (fun bij m =>
+    if decide (multConst bij.1 = some (-1)) && decide (bij.1.busId = busId) then
+      let h := payloadHash bij.1.payload
+      m.insert h (bij.2 :: m.getD h [])
+    else m) ∅
+
+/-- The first indexed position strictly after `i` whose payload equals `S.payload` (positions
+    ascending; the hash bucket pre-filters, the structural comparison decides). -/
+def firstMatchAt (arr : Array (BusInteraction (Expression p)))
+    (S : BusInteraction (Expression p)) (i : Nat) : List Nat → Option Nat
+  | [] => none
+  | j :: rest =>
+    if i < j then
+      match arr[j]? with
+      | some R => if decide (S.payload = R.payload) then some j else firstMatchAt arr S i rest
+      | none => firstMatchAt arr S i rest
+    else firstMatchAt arr S i rest
 
 /-- Refute `m` as an active same-address message on `busId` (the "between" region test). -/
 def midRefuted (shape : MemoryBusShape) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
@@ -917,62 +947,81 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
   · intro env m0 hm0 hbid hmne hmaddr
     exact preRefuted_sound shape busId S m0 (List.all_eq_true.mp hpre m0 hm0) env hbid hmne hmaddr
 
-/-- Fused left-to-right scan for the first droppable pair on `busId`: at each send `S` (accumulating
-    the reversed prefix `revA`), find its matching receive and run the cheap `checkCancel`; the O(n)
-    split-equation decide runs only when `checkCancel` passes. Stops at the first hit, so each pass
-    invocation is linear (no eager materialization of all candidates). -/
-def findCancelGo (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+/-- Indexed left-to-right scan for the first droppable pair on `busId`: at each send `S`
+    (position `i` in `arr`), find its matching receive through the hash index (the first
+    position after `i` with an equal payload — exactly what the linear scan found) and run the
+    cheap region tests; the byte-justification scan and the O(n) split-equation decide run only
+    for candidates that already match. Stops at the first hit. -/
+def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
     (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
     (bcBus? : Option Nat)
-    (revA : List (BusInteraction (Expression p))) :
-    List (BusInteraction (Expression p)) →
-    Option (PassResult cs bs)
-  | [] => none
-  | S :: rest =>
+    (arr : Array (BusInteraction (Expression p))) (idx : Std.HashMap UInt64 (List Nat))
+    (i : Nat) : Option (PassResult cs bs) :=
+  if hi : i < arr.size then
+    let S := arr[i]
+    -- (thunked: Lean is strict, and the continuation must not run once a pair is accepted)
+    let next := fun (_ : Unit) => findCancelGoIdx cs bs facts hp1 deep hdeep busId shape hshape
+      slots hslots bcBus? arr idx (i + 1)
     if decide (multConst S = some 1) && decide (S.busId = busId) then
-      match findMatchRecv busId S [] rest with
-      | some (B, R, C) =>
-        let A := revA.reverse
-        -- Cheap region tests first: only an otherwise-valid candidate pays the byte
-        -- justification scan (`checkCancel` re-verifies everything).
-        if B.all (midRefuted shape busId S) && A.all (preRefuted shape busId S) then
-        -- Byte slots the remaining system does not justify are materialized as a single
-        -- explicit self-check on the byte-check bus (more than one would not shrink the bus
-        -- count and would stall the cancellation loop); when the justification cannot pass
-        -- (≥ 2 unjustified slots, or no byte-check bus), skip the certificate re-check —
-        -- the justification scan is the expensive part.
-        let unjust := unjustifiedSlots deep cs.algebraicConstraints bs facts (A ++ B ++ C)
-          slots R
-        let checks : List (BusInteraction (Expression p)) :=
-          match unjust, bcBus? with
-          | [slot], some bcBus => (R.payload[slot]?).elim [] (fun e =>
-              [{ busId := bcBus, multiplicity := .const 1,
-                 payload := [e, e, .const 0, .const 1] }])
-          | _, _ => []
-        if unjust.isEmpty || !checks.isEmpty then
-        if hchk : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
-            A S B R C checks = true then
-          if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
-            some ⟨{ cs with busInteractions := A ++ B ++ C ++ checks }, [],
-                  checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
-                    A S B R C checks hsplit hchk⟩
-          else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
-            (S :: revA) rest
-        else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
-          (S :: revA) rest
-        else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
-          (S :: revA) rest
-        else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
-          (S :: revA) rest
-      | none => findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
-          (S :: revA) rest
-    else findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
-        (S :: revA) rest
+      match firstMatchAt arr S i (idx.getD (payloadHash S.payload) []) with
+      | some j =>
+        match arr[j]? with
+        | some R =>
+          -- Cheap region tests first, over the array index ranges (`Array.all` with
+          -- start/stop) — the A/B/C lists are materialized only for the few candidates the
+          -- tests accept, not for every payload match; only an otherwise-valid candidate pays
+          -- the byte justification scan (`checkCancel` re-verifies everything).
+          if arr.all (midRefuted shape busId S) (i + 1) j
+              && arr.all (preRefuted shape busId S) 0 i then
+          let A := (arr.extract 0 i).toList
+          let B := (arr.extract (i + 1) j).toList
+          let C := (arr.extract (j + 1) arr.size).toList
+          -- Try the certificate with no emitted checks first: every non-justification conjunct
+          -- of `checkCancel` is guaranteed by the scan's own gates, so it passes iff every
+          -- declared byte slot is justified — the same predicate `unjustifiedSlots` decides —
+          -- and the common fully-justified drop pays the justification scan **once**.
+          if hchk0 : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
+              A S B R C [] = true then
+            if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
+              some ⟨{ cs with busInteractions := A ++ B ++ C ++ [] }, [],
+                    checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
+                      A S B R C [] hsplit hchk0⟩
+            else next ()
+          else
+          -- Some slot is unjustified. Such slots are materialized as a single explicit
+          -- self-check on the byte-check bus (more than one would not shrink the bus count and
+          -- would stall the cancellation loop); when the justification cannot pass (≥ 2
+          -- unjustified slots, or no byte-check bus), skip the certificate re-check — the
+          -- justification scan is the expensive part.
+          let unjust := unjustifiedSlots deep cs.algebraicConstraints bs facts (A ++ B ++ C)
+            slots R
+          let checks : List (BusInteraction (Expression p)) :=
+            match unjust, bcBus? with
+            | [slot], some bcBus => (R.payload[slot]?).elim [] (fun e =>
+                [{ busId := bcBus, multiplicity := .const 1,
+                   payload := [e, e, .const 0, .const 1] }])
+            | _, _ => []
+          if !checks.isEmpty then
+          if hchk : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
+              A S B R C checks = true then
+            if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
+              some ⟨{ cs with busInteractions := A ++ B ++ C ++ checks }, [],
+                    checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
+                      A S B R C checks hsplit hchk⟩
+            else next ()
+          else next ()
+          else next ()
+          else next ()
+        | none => next ()
+      | none => next ()
+    else next ()
+  else none
+  termination_by arr.size - i
 
-/-- Search one declared bus for a droppable pair. -/
+/-- Search one declared bus for a droppable pair (index built once per invocation). -/
 def findCancelForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (busId : Nat) (shape : MemoryBusShape)
@@ -980,8 +1029,9 @@ def findCancelForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
     (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
     (bcBus? : Option Nat) :
     Option (PassResult cs bs) :=
-  findCancelGo cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus? []
-    cs.busInteractions
+  let arr := cs.busInteractions.toArray
+  findCancelGoIdx cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
+    arr (recvIndex busId arr) 0
 
 /-- Search all declared buses. -/
 def findCancel (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)

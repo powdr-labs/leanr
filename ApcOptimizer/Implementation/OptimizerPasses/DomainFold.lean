@@ -209,15 +209,15 @@ theorem foldRewrite_agree_covered [Fact p.Prime] (cs : ConstraintSystem p) (xs :
     intro x hx
     rw [hs_def, envOf_map doms env x (by rw [hkeys]; exact hx)]
   have hsurv : s ∈ groupSurvivors cs xs doms := by
-    simp only [groupSurvivors, List.mem_filter]
+    simp only [groupSurvivors, groupSurvivorsE, List.mem_filter]
     refine ⟨hsassign, ?_⟩
     rw [List.all_eq_true]
     intro c hc
-    rw [decide_eq_true_iff]
+    rw [decide_eq_true_iff, Expression.evalFast_eq]
     have hcvin : c.varsIn xs = true := by
       have hcb : coveredBy xs c = true := (List.mem_filter.mp hc).2
       rw [coveredBy, Bool.and_eq_true] at hcb
-      exact hcb.2
+      exact Expression.varsInF_eq xs c ▸ hcb.2
     have heq : c.eval (envOf s) = c.eval env :=
       Expression.eval_congr c _ _
         (fun x hx => (hagree x (Expression.varsIn_sound xs c hcvin x hx)).symm)
