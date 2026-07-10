@@ -2,12 +2,15 @@ name: Lean Action CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-2404-x64-32x
 
     steps:
       - uses: actions/checkout@v4
