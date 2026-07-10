@@ -20,6 +20,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroRegister
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.CarryBranch
 
 set_option autoImplicit false
 
@@ -55,7 +56,8 @@ pass's own `PassCorrect`. -/
     scale every constraint's affine factors to monic form (zero-set preserving) and re-fold.
     Extend it by composing passes with `.andThen`. -/
 def cleanupCycle : VerifiedPassW p :=
-  gaussElimPass.withFacts.guardDegree
+  carryBranchPass.guardDegree
+    |>.andThen gaussElimPass.withFacts.guardDegree
     |>.andThen normalizePass.withFacts.guardDegree
     |>.andThen constantFoldPass.withFacts.guardDegree
     |>.andThen domainBatchPass.guardDegree

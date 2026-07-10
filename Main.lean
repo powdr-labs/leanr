@@ -238,7 +238,8 @@ def cmdProfile (fileName : String) : IO Unit := do
   let bs := openVmBusSemantics babyBear busMap.toBusMap
   let facts := openVmFacts babyBear busMap.toBusMap
   let cleanupPasses : List (String × VerifiedPassW babyBear) :=
-    [ ("gauss", gaussElimPass.withFacts.guardDegree),
+    [ ("carryBranch", carryBranchPass.guardDegree),
+      ("gauss", gaussElimPass.withFacts.guardDegree),
       ("normalize1", normalizePass.withFacts.guardDegree),
       ("constFold1", constantFoldPass.withFacts.guardDegree),
       ("domainBatch", domainBatchPass.guardDegree),
