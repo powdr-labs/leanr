@@ -1963,3 +1963,50 @@ entry-53-style target for a follow-up perf pass; not intractable, and effectiven
 first. The `boxRewritePass` is general machinery: it is the "contextual polynomial reduction"
 enabler the early design surveys called for, and the sign-split comparison gadget (entry 63
 item 3) is its natural next customer.
+
+### 66. Perf: the flagFold composite from 67 s to 1.7 s on apc_005 (entry-65 follow-up)
+
+The `ImprovingRuntime.md` pass over the entry-64/65 additions. Baseline: `flagFoldPass'` cost
+66.9 s of apc_005's ~81 s run. Staged sub-pass timings (temporary `ffprof` command) plus layered
+scan decompositions localized four mechanisms, landed as three commits:
+
+1. **`findDomainAlg` gates its scan on `Expression.mentions`** (`DomainProp.lean`). `rootsIn`
+   runs `linearize` — allocation-heavy normalization — per (variable, constraint) probe, so
+   every domain lookup scanned all ~650 single-variable constraints at full price. A constraint
+   that does not mention the variable can only yield a root list through the
+   unsatisfiable-constant case (`rootsOfTerms` on an empty term list), so skipping it never
+   loses a live domain. This one gate took boxTauto from 15.4 s → 0.2 s (with the cache below)
+   and sped up every caller: flagUnify, `slotEqCert`, `brCert`.
+2. **Hoisted scan invariants** (`FlagFold.lean`, `BoxRewrite.lean`). `btCert`, `slotEqCert`/
+   `msgEqCert`, `pdFirst`/`pdKeep`, and `brRw`/`brCert` all refiltered `singleVarCs all` per
+   candidate (in `brRw`'s case per *variable* of every over-bound expression); they now take
+   the precomputed list, bound once per pass invocation. boxRewrite's fold-iteration stage:
+   4.4 s → 0.16 s. **Lean gotcha worth remembering**: precomputed values must be passed as
+   *plain arguments* — a def-local `let` in front of a trailing `fun c => …` is re-evaluated on
+   every application by arity expansion, and hoisting the partial application
+   (`let keep := btKeepCond cs`) does **not** prevent it (first attempt hung: O(n) cache
+   rebuilds per constraint).
+3. **boxTauto memoized-domain prefilter** (`btPre`): a faithful mirror of `btCert` over a
+   per-pass `HashMap` of `findDomainAlg` results gates the certificate; the certificate
+   re-checks with the real scan, so the cache carries no proof obligation (the `BusFacts`
+   philosophy applied to perf).
+4. **`slotEqCert` requires a shared carrier** (`x ∈ e'` via a ZMod-free `mentions` walk) before
+   any `splitAt`. The pointwiseDup prefix scans visit 2.5M interaction pairs on apc_005; layered
+   timing showed the skeleton (findIdx?, busId, multiplicity, payload-BEq layers) costs 0.26 s
+   and *everything else* was `splitAt`/`coeffAt` per-node ZMod ring ops — the runtime-`p`
+   instance-reconstruction tax (entry 53). The dropped arm — carrier with a fully cancelled
+   constant coefficient, absent from `e'` — cannot survive the constantFold/normalize passes
+   that run ahead of the composite every cycle. pointwiseDup: 4.1 s → 0.43 s.
+
+Dead ends, killed by measurement: a domain-`HashMap` for pointwiseDup (cache build alone cost
+9.1 s over payload vars and saved nothing — domains were never the scan's cost); iterating var
+*occurrences* instead of `eraseDups` (repeated flag variables re-ran certified arms per
+occurrence: 4.1 s → 18.7 s).
+
+Validation per the playbook: 13-case `run` outputs and the full apc_005 render **byte-identical**
+against a 9e703ed reference binary (this also empirically confirms the two "cannot fire on real
+inputs" arguments above — items 1 and 4 are conservative narrowings, sound by construction
+either way). Effectiveness unchanged by construction. apc_005: **81 s → 12.7 s**; flagFold
+**66.9 s → 1.7 s** (iter 0: 0.65 s; fold iteration: 0.44 s). The profile is now led by
+pre-existing passes — domainFold 3.3 s, reencode 1.7 s, domainBatch 1.6 s — so the composite is
+no longer the pipeline's bottleneck. `lake build` green at every commit; proof integrity clean.
