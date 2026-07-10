@@ -282,6 +282,7 @@ def cmdProfile (fileName : String) : IO Unit := do
       ("domainFold", domainFoldPass.withFacts.guardDegree),
       ("busUnify", busUnifyPass.guardDegree),
       ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint busPairCancelPass)),
+      ("tupleRange", VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass)),
       ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint bytePackPass)),
       ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
       ("reencode", reencodePass.withFacts.guardDegree) ]

@@ -15,6 +15,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
 import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancel
 import ApcOptimizer.Implementation.OptimizerPasses.BytePack
+import ApcOptimizer.Implementation.OptimizerPasses.TupleRange
 import ApcOptimizer.Implementation.OptimizerPasses.DisconnectedComponent
 import ApcOptimizer.Implementation.OptimizerPasses.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
@@ -84,6 +85,7 @@ def cleanupCycle : VerifiedPassW p :=
     |>.andThen domainFoldPass.withFacts.guardDegree
     |>.andThen busUnifyPass.guardDegree
     |>.andThen (VerifiedPassW.guardDegree (iterateToFixpoint busPairCancelPass))
+    |>.andThen (VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass))
     |>.andThen (VerifiedPassW.guardDegree (iterateToFixpoint bytePackPass))
     |>.andThen disconnectedComponentPass.withFacts.guardDegree
     |>.andThen reencodePass.withFacts.guardDegree

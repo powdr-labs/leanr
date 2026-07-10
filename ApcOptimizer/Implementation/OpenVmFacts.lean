@@ -633,6 +633,44 @@ def openVmFacts (p : ℕ) [NeZero p]
       · simp only [h1, ZMod.val_zero, isByte, Bool.not_eq_false',
           Bool.and_eq_true, decide_eq_true_eq] at hviol
         exact valeq z x (hviol.2.trans (Nat.xor_zero x.val))
+  varRangeBus busId := match busMap busId with
+    | some .variableRangeChecker => true
+    | _ => false
+  varRangeBus_sound := by
+    intro busId h
+    have hbus : busMap busId = some OpenVmBusType.variableRangeChecker := by
+      revert h; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    refine ⟨?_, ?_⟩
+    · show (match busMap busId with | some t => t.isStateful | none => false) = false
+      rw [hbus]; rfl
+    · intro x b mult
+      show violates busMap { busId := busId, multiplicity := mult, payload := [x, b] }
+          = false ↔ (b.val ≤ 25 ∧ x.val < 2 ^ b.val)
+      unfold violates; rw [hbus]
+      simp
+  tupleRangeBus busId := match busMap busId with
+    | some (.tupleRangeChecker s1 s2) => some (s1, s2)
+    | _ => none
+  tupleRangeBus_sound := by
+    intro busId s1 s2 h
+    have hbus : busMap busId = some (OpenVmBusType.tupleRangeChecker s1 s2) := by
+      revert h; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp_all
+    refine ⟨?_, ?_, ?_⟩
+    · show (match busMap busId with | some t => t.isStateful | none => false) = false
+      rw [hbus]; rfl
+    · intro x y
+      show breaksInvariant busMap { busId := busId, multiplicity := 1, payload := [x, y] }
+        = false
+      unfold breaksInvariant; rw [hbus]; simp
+    · intro x y mult
+      show violates busMap { busId := busId, multiplicity := mult, payload := [x, y] }
+          = false ↔ (x.val < s1 ∧ y.val < s2)
+      unfold violates; rw [hbus]
+      simp
   zeroCell := zeroCellImpl busMap
   zeroCell_sound := by
     intro msgs hadm busId addrReq dataSlots hfact m hm hbusId hmne haddr slot hslot v hget

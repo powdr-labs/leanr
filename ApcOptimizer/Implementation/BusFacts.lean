@@ -166,6 +166,29 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       ∀ (x mult : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, 0, x, 1] }
             = false ↔ x.val < 256
+  /-- Variable-range-checker style *stateless* bus: the 2-ary message `[x, b]` is accepted
+      **iff** the requested width is supported and `x` fits (`b.val ≤ 25 ∧ x.val < 2 ^ b.val`).
+      `trivial` sets it `false`; the OpenVM instance proves it for the variable range checker. -/
+  varRangeBus : (busId : Nat) → Bool
+  varRangeBus_sound :
+    ∀ (busId : Nat), varRangeBus busId = true →
+      bs.isStateful busId = false ∧
+      ∀ (x b mult : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, b] }
+            = false ↔ (b.val ≤ 25 ∧ x.val < 2 ^ b.val)
+  /-- Tuple-range-checker style *stateless* bus with fixed sizes: the 2-ary message `[x, y]` is
+      accepted **iff** `x.val < s1 ∧ y.val < s2`, and at multiplicity `1` it never breaks an
+      invariant. Lets a pass pack a byte obligation (`s1 = 256`) and an exact-width range check
+      (`2 ^ bits = s2`) into a single interaction. `trivial` declares none. -/
+  tupleRangeBus : (busId : Nat) → Option (Nat × Nat)
+  tupleRangeBus_sound :
+    ∀ (busId s1 s2 : Nat), tupleRangeBus busId = some (s1, s2) →
+      bs.isStateful busId = false ∧
+      (∀ (x y : ZMod p),
+        bs.breaksInvariant { busId := busId, multiplicity := 1, payload := [x, y] } = false) ∧
+      ∀ (x y mult : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, y] }
+            = false ↔ (x.val < s1 ∧ y.val < s2)
   /-- Real-trace fixed-zero cells (e.g. the hardwired RISC-V `x0` register).
       `zeroCell busId = some (addrReq, dataSlots)` asserts that on the (stateful) bus `busId`, every
       *active* message whose payload has `payload[s] = v` for each `(s, v) ∈ addrReq` carries value
@@ -232,6 +255,10 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   byteCheck_sound := by intro _ h; exact absurd h (by simp)
   xorZeroCheck _ := false
   xorZeroCheck_sound := by intro _ h; exact absurd h (by simp)
+  varRangeBus _ := false
+  varRangeBus_sound := by intro _ h; exact absurd h (by simp)
+  tupleRangeBus _ := none
+  tupleRangeBus_sound := by intro _ _ _ h; exact absurd h (by simp)
   zeroCell _ := none
   zeroCell_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)
   zeroRangeEq _ := false
