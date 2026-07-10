@@ -1,0 +1,58 @@
+name: Effectiveness Bench
+
+# Run the effectiveness benchmark (OpenVmBenchmarks/benchmark.py): the circuit size metrics —
+# variables / bus interactions / constraints, each `before / after` — for apc-optimizer vs powdr
+# over a benchmark set, and publish the summary table. Unlike Runtime Bench, the metrics are
+# deterministic circuit sizes, so there is no baseline run: to compare against main, dispatch
+# this on main and diff the tables.
+#
+# On demand only. Dispatch from the Actions UI or with, e.g.:
+#
+#   gh workflow run "Effectiveness Bench"            # dispatched branch, job summary only
+#   gh workflow run "Effectiveness Bench" -f pr=85   # bench PR #85's head, sticky-comment there
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number: bench its head and post/update a sticky comment there (empty = bench the dispatched branch, job summary only)"
+        required: false
+        default: ""
+      benchmark:
+        description: "benchmark set (a subdirectory of OpenVmBenchmarks/)"
+        required: false
+        default: "openvm-eth"
+      n:
+        description: "only the top N cases by cost rank (empty = all)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  bench:
+    runs-on: warp-ubuntu-2404-x64-32x
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr != '' && format('refs/pull/{0}/head', inputs.pr) || github.ref }}
+      - uses: leanprover/lean-action@v1
+      - name: Benchmark effectiveness
+        run: |
+          echo "BENCH_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          N='${{ inputs.n }}'
+          python3 OpenVmBenchmarks/benchmark.py '${{ inputs.benchmark }}' \
+            --md bench.md ${N:+--n "$N"}
+      - name: Report
+        uses: ./.github/actions/report-bench
+        with:
+          md-file: bench.md
+          marker: "<!-- effectiveness-bench -->"
+          pr: ${{ inputs.pr }}
+          note: >-
+            Effectiveness bench of `${{ env.BENCH_SHA }}`. Circuit sizes are deterministic;
+            to compare against main, dispatch this workflow on main and diff the tables.
+          token: ${{ github.token }}
