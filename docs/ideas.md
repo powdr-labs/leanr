@@ -109,12 +109,11 @@ same-address decompositions via the two-root/no-wrap argument (−128 vars on ea
 apc_005-class blocks; apc-optimizer now leads powdr on aggregate variable effectiveness). Two
 residuals remain:
 
-1. **Duplicate-structure cleanup:** the unification leaves the eliminated decomposition's carry
-   constraints and range checks behind as *syntactically identical* copies of the survivor's.
-   A syntactic duplicate dropper (constraints: trivially entailed; stateless interactions: same
-   obligation twice — needs a fold-based keep-first, `filter` cannot distinguish identical
-   elements) would convert this into constraint- and bus-interaction wins. Duplicates did not
-   occur in optimized outputs before log 57, so this only became profitable now.
+1. **Duplicate-structure cleanup:** landed as `dedupPass` (log 58) — collects the unified
+   decomposition's carry constraints and raw-slot range check. The *scaled* low-limb check
+   survives: its flag polynomial differs per access, so the copies are not syntactic. Dropping
+   it needs entailment (the survivor's check plus flag domains imply the duplicate's obligation)
+   — the `filterBusEntailed_correct`-style argument over a per-access flag renaming.
 2. **Cross-offset chaining** (`ptr` and `ptr+4` sharing the high limb): powdr-side this needs
    reasoning that the low limb doesn't cross the 2¹⁶ page boundary, which is not statically
    true — presumably a carry-witness argument. Harder, unclear value after (1).

@@ -1708,3 +1708,37 @@ constraints and range checks behind as *syntactically identical* copies — a du
 would convert the remaining redundancy into constraint/bus wins; and powdr's cross-offset
 chaining (`ptr+4` sharing the high limb) needs page-crossing reasoning beyond equal-address
 unification.
+
+### 58. Syntactic duplicate removal (`Dedup.lean`) — collect what unification leaves behind
+
+Entry 57's limb unification substitutes one variable for another, which turns the eliminated
+decomposition's two carry constraints and its raw-slot range check into **literal copies** of
+the survivor's. Nothing dropped them: `trivialConstraintDropPass` only removes identically-zero
+constraints, and a `List.filter` cannot express "keep the first occurrence" — identical elements
+get identical predicate values. (Before entry 57 the optimized outputs contained no syntactic
+duplicates at all, so this pass would have been a no-op — measured as part of the entry-56-era
+census on the old line.)
+
+**The pass (`Implementation/OptimizerPasses/Dedup.lean`, fact-free `VerifiedPass`).** Constraints
+dedup via `List.dedup` — `satisfies` only consults membership, so which occurrence survives is
+irrelevant and correctness is `List.mem_dedup`. Stateless interactions dedup by an explicit
+keep-first recursion carrying the kept-so-far list; three small lemmas discharge `PassCorrect`
+via `ofEnvEq`: every kept interaction is original (`dedupStateless_subset`), every original is
+kept or already seen (`dedupStateless_covers` — the dropped copy's obligation transfers from its
+kept twin), and both the syntactic stateful sublist and the active∧stateful *evaluated* message
+list are untouched (`_statefulFilter`/`_evalFilter` — so `sideEffects` stays *equal* and
+`admissible` transfers). Stateful duplicates are deliberately kept: two sends of the same
+message are two sends. Wired into `cleanupCycle` right after `rootPairUnifyPass`.
+
+`lake build` green; all three `maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** apc_005-class: **841 → 713 constraints (−128) and 829 → 765 bus interactions (−64)**
+per block at unchanged 1555 vars — the 64 unified pairs' two carry constraints and one raw-slot
+range check each (the flag-dependent scaled check survives: its flag polynomial differs per
+access, so the copies are not syntactic — see `docs/ideas.md`). 9-case sample across the other
+size classes byte-identical. Full 100-case sweep (before → after):
+
+- variables **4.222×/3.644× unchanged** (the pass is variable-neutral by construction)
+- **bus interactions: 2.924× → 3.006× aggregate (2.442× → 2.466× geomean)**
+- **constraints: 8.801× → 9.500× aggregate (9.918× → 10.144× geomean)**
