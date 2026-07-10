@@ -54,8 +54,9 @@ OpenVmBenchmarks/benchmark.py --n 10 --report report.html   # + interactive HTML
 ```
 
 To bench the optimizer's *runtime* instead — the wall time of each optimizer call plus per-pass
-attribution (`apc-optimizer profile`) — use `runtime_bench.py`; the `Runtime Bench` CI job runs it
-on every PR and posts the summary as a sticky comment:
+attribution (`apc-optimizer profile`) — use `runtime_bench.py`; the on-demand `Runtime Bench` CI
+job runs it and, given a PR number, posts the summary there as a sticky comment
+(`gh workflow run "Runtime Bench" -f pr=<N>`):
 
 ```bash
 OpenVmBenchmarks/runtime_bench.py            # all openvm-eth cases, serial (stable timings)
