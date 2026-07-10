@@ -1378,3 +1378,55 @@ entry-45 note still applies (enumerate only the non-pinned variables of the doma
 it drops one send/receive pair per invocation and rescans the system per drop, so a chain of
 `k` cancellations costs `k` full `findCancel` sweeps (a batched variant would cancel a whole
 chain per sweep).
+
+### 54. Optimizer runtime: early-abort box scans and hoisted `ZMod` operations in `domainBatch`/`reencode` (effectiveness unchanged)
+
+Pure **performance** work in the entry-45/53 style — every change is output-preserving, so
+effectiveness is untouched. Closes entry 53's `domainBatch` bottleneck. Found by per-stage
+instrumentation, then `perf record` and reading the generated C: the decisive discovery is that
+every `+`/`*`/`decide (· = 0)` on `ZMod p` with a **runtime** `p` re-invokes `ZMod.commRing p`
+and re-projects the instance chain **per expression node** — `perf` attributed the bulk of
+`domainBatch` to the allocator building and freeing instance records (plus ~10% in
+`ZMod.commRing` and its projections directly). The other structural finds: the box enumeration
+paid the full `box × items` evaluation even for targets that force nothing (the entire final
+fixpoint-check iteration was wasted), and `reencode` rebuilt and re-evaluated its interpolation
+candidates ~3× per bit pattern for the ~52 candidate groups that `checkReencode` accepts but the
+degree guard rejects — every cleanup iteration again.
+
+1. **`domainBatch` (`DomainBatch.lean`)** — replace the survivor-list enumeration
+   (materialize box → filter → read off candidates → re-check per candidate) with the
+   single-pass `scanInit`/`scanWith` fold: it keeps the list of candidates every survivor so far
+   agrees on and **aborts as soon as it is empty** — claiming nothing needs no certificate, and
+   a completed scan *is* the checked certificate (`scanInit_some`, consumed by
+   `scanForced_sound`/`scanNone_unsat`). Cache the materialized range domains per bound
+   (`RangeCache`; `interactionDomainC_fst` proves the table identical). Compare `powdrId?`
+   before the name String in the covered-item scans (`varsInF`/`containsFast`, extensionally
+   equal). Compile the covered items per target to positional leaves and extract `add`/`mul`/
+   `decide` from the instances once (`IExpr.evalWith`/`survivesAllCW`/`compiledSurv`, whose
+   bundled pointwise equality with `survivesAllM` is all the certificates consume).
+2. **`reencode` (`Reencode.lean`)** — bind the substituted expression, its per-pattern values,
+   and the folded interpolation once (`interpOfV`/`candSelect`); evaluate the pattern/survivor
+   loops through `Expression.evalFast` (field operations hoisted per call, `evalFast_eq`);
+   reuse the covered set for the survivor filter (`groupSurvivorsE`); `powdrId?`-first
+   comparisons in `coveredBy`/`groupSubst`/`groupRewrite` and the freshness sweep
+   (`Expression.mentionsF`).
+
+**Impact (solo runs, same machine, output identical; A/B against current `main`):** apc_006
+`profile` total **101.2 s → 32.1 s (3.2×)** — `domainBatch` **67.2 s → 5.5 s (12.2×)**,
+`reencode` **9.8 s → 2.8 s (3.5×)**; all other passes unchanged. Verified output-identical
+(`vars/constraints/bus`) against the `main` binary on the entry-53 13-case list
+(apc_001/003/005/006/008/010/014/028/047/056/069/092/100) plus 10 random cases (seed 42) —
+20 distinct cases, identical on every one; before the repo-rename rebase additionally
+byte-identical `run` output on apc_006 and exact stats on apc_001–010 plus 10 more sampled
+cases against the pre-change binary. The passes'
+internal decision counters (forced values, candidate groups found/built/checked/accepted per
+iteration) are identical throughout. Nothing in the audited surface changed; correctness axioms
+stay `{propext, Classical.choice, Quot.sound}`; `lake build` green;
+`check-proof-integrity.sh` passes.
+
+Remaining bottlenecks (documented for future work): `busPairCancel` is now the top pass on
+apc_006 (18.5 s; entry 53's batching idea still applies); `domainFold` evaluates through the
+plain per-node-instance `Expression.eval` (~1.7 s on apc_006 — the `evalFast` treatment applies
+almost verbatim); the degree-rejected `reencode` candidate groups still pay a (now much
+cheaper) full-system rewrite every iteration; and the entry-45 pinned-variable box reduction
+for `domainBatch` remains open.
