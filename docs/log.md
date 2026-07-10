@@ -1430,3 +1430,43 @@ plain per-node-instance `Expression.eval` (~1.7 s on apc_006 — the `evalFast` 
 almost verbatim); the degree-rejected `reencode` candidate groups still pay a (now much
 cheaper) full-system rewrite every iteration; and the entry-45 pinned-variable box reduction
 for `domainBatch` remains open.
+
+### 55. Optimizer runtime: hash-index `busPairCancel`'s receive search (effectiveness unchanged)
+
+Pure **performance** work in the entry-53/54 style, closing entry 53's `busPairCancel`
+bottleneck note. After entry 54, `busPairCancel` was the top pass (apc_036: 17.4 s of 27.3 s,
+64%; apc_006: 18.5 s). Stage instrumentation of the fixpoint loop showed **~90% of the pass in
+`findMatchRecv`** (apc_036: 13.9 s of 15.4 s) — every invocation re-probes every send against
+the whole remaining interaction list with structural payload comparisons (51k probes at ~200 µs
+in one cleanup iteration alone), once per dropped pair.
+
+1. **Hash-indexed receive search** — index the candidate receives (constant `-1` multiplicity,
+   on the bus) once per invocation by a structural payload hash (`recvIndex`/`payloadHash`),
+   and scan sends over an `Array`, resolving each probe by hash lookup plus an exact payload
+   comparison on the rare hash hits (`firstMatchAt`); `A`/`B`/`C` come from `Array.extract`
+   slices. Hash inequality proves payload inequality and hits are re-verified structurally, so
+   exactly the same first matching receive is found in the same send order; correctness never
+   depended on the search (the accepted candidate is re-verified by `checkCancel` and the
+   decided split equation, as before). `findMatchRecv`: 13.9 s → 0.33 s on apc_036.
+2. **Single-pass byte justification** — each accepted drop paid the justification scan twice
+   (`unjustifiedSlots`, then `checkCancel`'s `recvSlotsJustified` re-verification). Try the
+   certificate with `checks := []` first: every non-justification conjunct is guaranteed by the
+   scan's own gates, so it passes iff every declared byte slot is justified — exactly what
+   `unjustifiedSlots = []` decides. Only candidates with an unjustified slot fall back to
+   computing `unjustifiedSlots` and emitting the single self-check as before.
+
+**Impact (solo runs, same machine, output identical):** apc_036 `busPairCancel`
+**17.4 s → 3.1 s (5.6×)**, case total **27.3 s → 12.9 s (2.1×)**; the instrumented replica's
+per-stage counts (send probes, matches, region passes, drops per iteration) are identical
+before/after. Verified output-identical (`vars/constraints/bus`) against the pre-change binary
+on the entry-53 13-case list plus apc_036 — identical on every case. Nothing in the audited
+surface changed; correctness axioms stay `{propext, Classical.choice, Quot.sound}`;
+`lake build` green; `check-proof-integrity.sh` passes.
+
+Remaining bottlenecks (documented for future work): `domainFold` is now apc_036's top pass
+(3.4 s; plain per-node-instance `Expression.eval` in `constOnSurvs` — the entry-54 `evalFast`
+treatment applies almost verbatim); `busPairCancel`'s residual ~3 s is spread across the
+fixpoint wrapper (`sizeKey`/`varCount` per invocation), the per-invocation `decide p.Prime`,
+and the per-accepted-drop `checkCancel`/split-decide — a batched multi-pair sweep (entry 53's
+idea) would cut the invocation count itself but needs an output-equality argument across
+reordered drops.
