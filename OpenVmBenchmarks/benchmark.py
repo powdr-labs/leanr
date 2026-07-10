@@ -164,6 +164,8 @@ def main():
                     help="only the top N cases by cost rank (default: all)")
     ap.add_argument("--report", type=Path, default=None, metavar="OUT.html",
                     help="also write a self-contained interactive HTML report to this path")
+    ap.add_argument("--md", type=Path, default=None, metavar="OUT.md",
+                    help="also write the summary as markdown (for CI job summaries / PR comments)")
     args = ap.parse_args()
 
     bench_dir = HERE / args.benchmark
@@ -239,6 +241,28 @@ def main():
         print(f"\nskipped {len(skipped)}:", file=sys.stderr)
         for name, err in skipped:
             print(f"  {name}: {err}", file=sys.stderr)
+
+    if args.md is not None:
+        lines = [f"### Effectiveness — {args.benchmark}, {n} cases, apc-optimizer vs powdr", "",
+                 "Effectiveness = size before / size after (larger is better); "
+                 "priority: variables > bus interactions > constraints. "
+                 "agg = Σbefore ⁄ Σafter, geo = geomean of per-case factors.", "",
+                 "| measure | apc-optimizer (agg / geo) | powdr (agg / geo) | diff (agg) |",
+                 "|---|---|---|---|"]
+        for mt in METRICS:
+            la, lg = summary[f"apc-optimizer_{mt}_agg"], summary[f"apc-optimizer_{mt}_geo"]
+            pa, pg = summary[f"powdr_{mt}_agg"], summary[f"powdr_{mt}_geo"]
+            lines.append(f"| {METRIC_LABEL[mt]} | {la:.3f}× / {lg:.3f}× "
+                         f"| {pa:.3f}× / {pg:.3f}× | {la - pa:+.3f}× |")
+        lines.append("")
+        lines.append(f"Per-case (by variables): apc-optimizer wins {summary['wins']}, "
+                     f"loses {summary['losses']}, ties {n - summary['wins'] - summary['losses']}.")
+        if skipped:
+            lines.append("")
+            lines.append(f"Skipped {len(skipped)}: "
+                         + ", ".join(f"{name} ({err})" for name, err in skipped) + ".")
+        args.md.write_text("\n".join(lines) + "\n")
+        print(f"wrote {args.md}", file=sys.stderr)
 
     if want_report:
         asm = load_asm(bench_dir)

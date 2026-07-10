@@ -53,6 +53,10 @@ OpenVmBenchmarks/benchmark.py --n 20         # top 20 by cost rank
 OpenVmBenchmarks/benchmark.py --n 10 --report report.html   # + interactive HTML report
 ```
 
+The on-demand `Effectiveness Bench` CI workflow runs the same script from GitHub
+(`gh workflow run "Effectiveness Bench"`, optionally `-f pr=<N>` to post the summary table on a
+PR as a sticky comment).
+
 To bench the optimizer's *runtime* instead — the wall time of each optimizer call plus per-pass
 attribution (`apc-optimizer profile`) — use `runtime_bench.py`. CI runs it at two tiers, always
 benching both sides on the same runner (cross-runner timings don't compare) and posting the result
