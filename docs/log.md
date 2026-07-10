@@ -1838,3 +1838,28 @@ The `docs/ideas.md` entry is updated accordingly. Together with entry 55 (degree
 inlining structurally blocked), two of the three Tier-1 variable candidates from the Rust-vs-Lean
 comparison are now measured dead on this benchmark; the live remainder of that tier is the
 constraint/limb-splitting shape (entry 36 lineage).
+
+### 62. Measurement: limb splitting is basis-neutral; the real residual gaps are the signed-comparison gadget and read-read data sharing
+
+Measurement only (entry-42 style), via a **variable-set diff** between our optimized outputs and
+powdr's exports on loss cases (apc_003: 133 vs 131; apc_047: 91 vs 87). Findings:
+
+1. **Constraint/limb splitting (the entry-36 lineage) is variable-neutral here.** Our surviving
+   `…timestamp_lt_aux__lower_decomp__1_*` high limbs pair **exactly 1:1** with powdr's surviving
+   `…prev_timestamp_*` columns (16↔16 on apc_003, 12↔12 on apc_047). powdr does not eliminate
+   the less-than witness; it solves the *high limb* away (`d1 = (now − prev − 1 − d0)·2⁻¹⁷`,
+   degree-1, substituted into its range check) and keeps `prev_timestamp`, while we solve
+   `prev_timestamp` away and keep both limbs. Different basis, same count. Do not build a
+   splitter for variables' sake; at most it trades a 12-bit range check's operand shape.
+2. **The whole apc_003-class gap (+2/case) is the signed-comparison gadget**: we keep
+   `{a_msb_f, b_msb_f, cmp_lt}` where powdr keeps `{cmp_result}` — the msb-extraction booleans
+   survive on our side. New, previously uncatalogued target (`docs/ideas.md`).
+3. **The apc_047-class gap (~+3/case) is duplicated read data**: powdr keeps one copy of the
+   same-address read words (`b__*`, `writes_aux__prev_data__*`) across consecutive accesses
+   where we keep several. Hypothesis: our receive-equals-send chaining (`busUnify`) is blocked
+   because the access addresses are still not *syntactically* equal — the entry-59 residual
+   (one flag component per access pair relates non-componentwise). Finishing that flag story
+   (the derived-variable interpolation in `docs/ideas.md`) would likely unlock this cascade.
+
+With entries 55 and 61, all three Tier-1 variable candidates from the Rust-comparison survey
+are now measured dead as scoped; the live variable work is items (2) and (3) above.

@@ -135,6 +135,25 @@ are typically *received* register/memory words, which now carry proven byte boun
 (multiplicity-aware `slotBound`); `byteJustified`/`deepBoundOk` in `BusPairCancel.lean` are
 reusable justification building blocks.
 
+## Signed-comparison gadget: fold the msb flags into the comparison result (variables)
+
+Log entry 62: on slt/blt-shaped blocks (apc_003 class) we keep `{a_msb_f, b_msb_f, cmp_lt}`
+where powdr keeps a single `{cmp_result}` — +2 vars per case, and these cases are the long-tail
+losses. The msb booleans are pinned by the sign-decomposition constraints; folding them needs
+either a derived-column substitution (each msb flag becomes a `ComputationMethod` over the
+operand limbs, with the pinning constraint dropped as entailed) or a `reencode`-style
+compression of the three-variable group. Diagnose the exact gadget constraints on apc_003
+before choosing.
+
+## Read-read data sharing blocked on the last flag component (variables)
+
+Log entry 62: powdr keeps one copy of same-address read-data words across consecutive accesses
+(apc_047 class, ~+3 vars per case); our receive-equals-send chaining should entail the same but
+the addresses are not syntactically equal — the entry-59 residual (one flag component per
+unified pair relates non-componentwise). The derived-variable interpolation `b := f(a₀, a₁)`
+(see the mem-ptr residuals item) would make the addresses syntactically equal and likely
+unlock the whole cascade: flag → address → busUnify data equations → word unification.
+
 ## Reuse the deep byte justification beyond pair cancellation
 
 `deepBoundOk` (log 50) proves `x < 256` by enumerating the finite domains of a defining
