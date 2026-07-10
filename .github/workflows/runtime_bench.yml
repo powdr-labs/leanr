@@ -40,7 +40,7 @@ permissions:
 
 jobs:
   bench:
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-2404-x64-32x
 
     steps:
       - uses: actions/checkout@v4
@@ -90,7 +90,7 @@ jobs:
               ? 'target `' + process.env.BENCH_SHA + '` vs baseline `' + process.env.BASE_SHA + '`'
               : '`' + process.env.BENCH_SHA + '`';
             const body = marker + '\n' + fs.readFileSync('bench.md', 'utf8') +
-              '\n_Timings from a shared CI runner (' + which +
+              '\n_Timings from a CI runner (' + which +
               '); trust shares and orders of magnitude over exact numbers._';
             const issue_number = Number('${{ inputs.pr }}');
             const {data: comments} = await github.rest.issues.listComments({
