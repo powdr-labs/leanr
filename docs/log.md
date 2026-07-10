@@ -1814,3 +1814,27 @@ iterations 3–6 still pay 64 pair-datas each for zero adoptions; `rootPairUnify
 the seen-scan (measured), so likely `rpCandidates`'s per-variable `splitAt`+`LinExpr.norm`
 over every constraint every iteration; `domainFold` 3.4 s — the pre-existing
 `ImprovingRuntime.md` lead #1 (`constOnSurvs` still on per-node-instance `eval`).
+
+### 61. Measurement: free-variable removal and smarter disconnected-witnesses have no remaining targets
+
+Measurement only, no code change (in the spirit of entry 42). Two long-standing candidates — the
+`docs/ideas.md` "smarter witnesses for `disconnectedComponentPass`" item (entry 43's "dominant
+unremoved pattern": orphaned register-read byte-decompositions needing a non-zero witness) and
+powdr's `remove_free_variables` (drop a variable occurring in exactly one solvable
+constraint/stateless interaction) — were sized against the current optimizer's outputs before
+implementing. Both are **empty**:
+
+- **Disconnected variables: 0** on every sampled case (apc_001/003/008/010/014/047/056/069) —
+  the entry-43 orphan pattern has been consumed by the passes that landed since (the entry-50
+  received-byte facts, entry-51 zero-register pinning, and the entry-57–59 unification/cleanup
+  chain). The all-zero witness never fails on anything anymore because nothing disconnected
+  survives at all.
+- **Single-occurrence variables: 0–1 per case**, and the singleton is always the `hcinv#`
+  reciprocal hint from `hintCollapse` — whose defining constraint `a·inv − cmp = 0` is *not*
+  unconditionally solvable for it (`a` may be zero), so it is not removable under powdr's rule
+  either, and it is load-bearing for the is-zero gadget.
+
+The `docs/ideas.md` entry is updated accordingly. Together with entry 55 (degree-bounded
+inlining structurally blocked), two of the three Tier-1 variable candidates from the Rust-vs-Lean
+comparison are now measured dead on this benchmark; the live remainder of that tier is the
+constraint/limb-splitting shape (entry 36 lineage).

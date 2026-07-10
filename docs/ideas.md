@@ -147,15 +147,14 @@ gets a `[0,256)` domain even when no interaction carries it raw). Generalising t
 branch to `x = c₀ + Σ cᵢ·yᵢ` with a no-wrap interval bound would subsume the is-zero and
 mem-ptr-limb ideas' bound side.
 
-## Smarter witnesses for `disconnectedComponentPass`
+## Smarter witnesses for `disconnectedComponentPass` — measured empty (log 61)
 
-`disconnectedComponentPass` (entry 43) removes a disconnected component only if the **all-zero**
-witness certifies it satisfiable. This misses the common orphaned-register-read pattern (data limbs
-surviving only in a bitwise byte-check `[K − Σ 256ⁱ·limbᵢ, limb₀, 0, 0]` plus range checks), where
-the satisfying witness is the base-256 decomposition of `K`, not `0`. A witness *finder* that solves
-the component's lookups (probe `violatesConstraint`) would capture them. Only the finder changes,
-not the proof. Phrase it as a general "solve the component's lookups" search, not hard-coded
-base-256, to avoid overfitting to the OpenVM limb structure.
+**Do not build without re-measuring.** As of log 61 the optimized outputs contain **zero**
+disconnected variables on every sampled case (the entry-43 orphan pattern was consumed by the
+entry-50/51 facts and the entry-57–59 cleanup chain), and the only single-occurrence variables
+are `hintCollapse`'s reciprocal hints, which are not unconditionally solvable and hence not
+removable under powdr's `remove_free_variables` rule either. The witness-finder generalization
+only becomes relevant again if a future pass starts stranding non-zero-satisfiable components.
 
 ## Batch pair cancellation in one traversal (performance)
 
