@@ -1,3 +1,4 @@
+import ApcOptimizer.Implementation.OptimizerPasses.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
@@ -211,14 +212,19 @@ theorem rootsIn_sound [Fact p.Prime] (x : Variable) (e : Expression p) (roots : 
         · exact List.mem_append.2 (Or.inr (ihb rb hrb hz))
       all_goals exact absurd h (by simp)
 
-/-- The finite domain of `x` derived from the first constraint that bounds it. -/
+/-- The finite domain of `x` derived from the first constraint that bounds it. Constraints not
+    mentioning `x` are skipped without linearizing (`rootsIn` runs `linearize` per constraint —
+    the ungated scan dominated whole passes); a non-mentioning constraint can only produce a
+    root list via the unsatisfiable-constant case, so the gate never loses a live domain. -/
 def findDomainAlg (all : List (Expression p)) (x : Variable) : Option (List (ZMod p)) :=
   match all with
   | [] => none
   | c :: rest =>
-    match rootsIn x c with
-    | some d => some d
-    | none => findDomainAlg rest x
+    if c.mentions x then
+      match rootsIn x c with
+      | some d => some d
+      | none => findDomainAlg rest x
+    else findDomainAlg rest x
 
 theorem findDomainAlg_sound [Fact p.Prime] (all : List (Expression p)) (x : Variable)
     (d : List (ZMod p)) (h : findDomainAlg all x = some d) (env : Variable → ZMod p)
@@ -227,14 +233,16 @@ theorem findDomainAlg_sound [Fact p.Prime] (all : List (Expression p)) (x : Vari
   | nil => exact absurd h (by simp [findDomainAlg])
   | cons c rest ih =>
     rw [findDomainAlg] at h
-    cases hr : rootsIn x c with
-    | some d' =>
-        rw [hr] at h
-        simp only [Option.some.injEq] at h
-        exact h ▸ rootsIn_sound x c d' hr env (hall c (List.mem_cons_self ..))
-    | none =>
-        rw [hr] at h
-        exact ih h (fun c' hc' => hall c' (List.mem_cons_of_mem _ hc'))
+    split_ifs at h with hm
+    · cases hr : rootsIn x c with
+      | some d' =>
+          rw [hr] at h
+          simp only [Option.some.injEq] at h
+          exact h ▸ rootsIn_sound x c d' hr env (hall c (List.mem_cons_self ..))
+      | none =>
+          rw [hr] at h
+          exact ih h (fun c' hc' => hall c' (List.mem_cons_of_mem _ hc'))
+    · exact ih h (fun c' hc' => hall c' (List.mem_cons_of_mem _ hc'))
 
 /-! ## Deriving a finite domain from a bus obligation and a proven fact -/
 
