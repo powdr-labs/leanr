@@ -23,6 +23,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.CarryBranch
 import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
 import ApcOptimizer.Implementation.OptimizerPasses.Dedup
+import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
 
 set_option autoImplicit false
 
@@ -68,6 +69,7 @@ def cleanupCycle : VerifiedPassW p :=
     |>.andThen zeroRegisterPass.guardDegree
     |>.andThen hintCollapsePass.guardDegree
     |>.andThen rootPairUnifyPass.guardDegree
+    |>.andThen flagUnifyPass.guardDegree
     |>.andThen dedupPass.withFacts.guardDegree
     |>.andThen trivialConstraintDropPass.withFacts.guardDegree
     |>.andThen zeroMultBusDropPass.withFacts.guardDegree

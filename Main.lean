@@ -273,6 +273,7 @@ def cmdProfile (fileName : String) : IO Unit := do
       ("zeroRegister", zeroRegisterPass.guardDegree),
       ("hintCollapse", hintCollapsePass.guardDegree),
       ("rootPairUnify", rootPairUnifyPass.guardDegree),
+      ("flagUnify", flagUnifyPass.guardDegree),
       ("dedup", dedupPass.withFacts.guardDegree),
       ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree),
       ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree),

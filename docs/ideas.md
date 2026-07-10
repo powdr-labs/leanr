@@ -109,11 +109,13 @@ same-address decompositions via the two-root/no-wrap argument (−128 vars on ea
 apc_005-class blocks; apc-optimizer now leads powdr on aggregate variable effectiveness). Two
 residuals remain:
 
-1. **Duplicate-structure cleanup:** landed as `dedupPass` (log 58) — collects the unified
-   decomposition's carry constraints and raw-slot range check. The *scaled* low-limb check
-   survives: its flag polynomial differs per access, so the copies are not syntactic. Dropping
-   it needs entailment (the survivor's check plus flag domains imply the duplicate's obligation)
-   — the `filterBusEntailed_correct`-style argument over a per-access flag renaming.
+1. **Duplicate-structure cleanup:** landed as `dedupPass` (log 58) and `flagUnifyPass`
+   (log 59). Remaining: per unified pair, one flag component relates to the survivor's
+   *non-componentwise* (the encodings differ), so the scaled check never becomes a syntactic
+   duplicate. Unifying it needs a derived-variable substitution `b := f(a₀, a₁)` — interpolate
+   the relation over the ≤ 4-point joint box (the certificate data already exposes it) and
+   substitute a degree-≤ 2 solution, degree-guarded. Would remove the last per-pair flag var
+   and (via dedup) the duplicate scaled check: another ~−64 vars and −64 bus on apc_005-class.
 2. **Cross-offset chaining** (`ptr` and `ptr+4` sharing the high limb): powdr-side this needs
    reasoning that the low limb doesn't cross the 2¹⁶ page boundary, which is not statically
    true — presumably a carry-witness argument. Harder, unclear value after (1).

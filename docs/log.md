@@ -1742,3 +1742,35 @@ size classes byte-identical. Full 100-case sweep (before → after):
 - variables **4.222×/3.644× unchanged** (the pass is variable-neutral by construction)
 - **bus interactions: 2.924× → 3.006× aggregate (2.442× → 2.466× geomean)**
 - **constraints: 8.801× → 9.500× aggregate (9.918× → 10.144× geomean)**
+
+### 59. Flag unification across duplicate scaled range checks (`FlagUnify.lean`)
+
+Entry 58 left the unified decomposition's *scaled* low-limb check behind: its flag polynomial
+uses the eliminated access's own flag variables, so the copy is not syntactic — and it is not
+droppable either, since that check is exactly what pins those flags (the divisibility of the
+scaled slot). But the flags are provably *equal* to the survivor's: both checks decompose the
+**same** shared limb as `x = m·u + W` (`Expression.splitAt`, slot value `u` fact-bounded, `W`
+the flag-polynomial value), so `W_X.val = W_Y.val` — both are the residue of `x.val` under
+`m.val` (`residue_uniq`, `ZMod.val_add_of_lt`/`val_mul_of_lt` no-wrap arithmetic, per-point
+`W < m` over the joint flag box) — and on every joint flag point with equal offset values the
+certificate demands the target components agree (≤ 32 points, `findDomainAlg` booleanity
+domains). Certified equalities feed the same `Solved`/`substF` machinery; the pass runs between
+`rootPairUnifyPass` (which shares the carrier limb) and `dedupPass`.
+
+The certificate is deliberately *componentwise*: it only accepts a flag pair whose equality
+holds at every offset-equal point. Measured on apc_005-class blocks exactly **one of the two
+flag components certifies** per pair — the two accesses' encodings relate the other component
+non-componentwise — so the checks do not become fully syntactic duplicates and the bus count
+stays; the remaining component would need a derived-variable substitution `b := f(a₀, a₁)`
+(nonlinear solution, degree-guarded), noted in `docs/ideas.md`.
+
+`lake build` green; all three `maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** apc_005-class blocks: **1555 → 1491 vars (−64) and 649 constraints (−64**, the
+unified flags' booleanity copies collected by `dedupPass`); bus interactions unchanged. 9-case
+sample byte-identical. Full 100-case sweep (before → after):
+
+- **variables: 4.222× → 4.286× aggregate (3.644× → 3.655× geomean)** vs powdr's 4.092×/3.787×
+- **constraints: 9.500× → 9.854× aggregate (10.144× → 10.214× geomean)**
+- bus interactions 3.006×/2.466× unchanged
