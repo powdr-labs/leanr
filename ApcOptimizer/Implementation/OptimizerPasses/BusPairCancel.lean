@@ -93,15 +93,16 @@ def pointByteOk (x : Variable) (c : Expression p) (byteVars : List Variable)
       if keys.contains v then some (.const (envOf pt v)) else none)).fold) with
   | none => false
   | some l =>
-    match (LinExpr.norm l).terms with
+    let ln := LinExpr.norm l
+    match ln.terms with
     | [(v, a)] =>
       -- `x` is pinned to the (re-checked) root; it must be a byte
       decide (v = x) && decide (a ≠ 0) &&
-        decide (a * (-(a⁻¹ * (LinExpr.norm l).const)) + (LinExpr.norm l).const = 0) &&
-        decide ((-(a⁻¹ * (LinExpr.norm l).const) : ZMod p).val < 256)
+        decide (a * (-(a⁻¹ * ln.const)) + ln.const = 0) &&
+        decide ((-(a⁻¹ * ln.const) : ZMod p).val < 256)
     | [(v1, a1), (v2, a2)] =>
       -- `x = other` (opposite coefficients, no constant); the other side is byte-bounded
-      decide ((LinExpr.norm l).const = 0) &&
+      decide (ln.const = 0) &&
       (if v1 = x then
         decide (a2 = -a1) && decide (a1 ≠ 0) && byteVars.contains v2
        else if v2 = x then
@@ -139,10 +140,11 @@ def deepEnumDoms (domCs : List (Expression p)) (x : Variable) (c : Expression p)
     the shape a memory receive of an unaligned sub-word load leaves behind. -/
 def deepBoundOk (domCs : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
     (rest : List (BusInteraction (Expression p))) (x : Variable) (c : Expression p) : Bool :=
+  let enum := deepEnumDoms domCs x c
   if (c.vars.dedup.filter (fun v => v ≠ x)).length ≤ maxDeepVars &&
-      ((deepEnumDoms domCs x c).map (fun vd => vd.2.length)).prod ≤ maxDeepPoints then
-    (assignments (deepEnumDoms domCs x c)).all
-      (pointByteOk x c (deepByteVars bs facts rest x c) ((deepEnumDoms domCs x c).map Prod.fst))
+      (enum.map (fun vd => vd.2.length)).prod ≤ maxDeepPoints then
+    (assignments enum).all
+      (pointByteOk x c (deepByteVars bs facts rest x c) (enum.map Prod.fst))
   else false
 
 /-- Deep byte justification for `x`: one of the first `maxDeepConstraints` constraints
@@ -150,8 +152,9 @@ def deepBoundOk (domCs : List (Expression p)) (bs : BusSemantics p) (facts : Bus
     single-variable constraints (the only ones `findDomainAlg` can use). -/
 def deepByteJustified (all : List (Expression p)) (bs : BusSemantics p) (facts : BusFacts p bs)
     (rest : List (BusInteraction (Expression p))) (x : Variable) : Bool :=
+  let domCs := all.filter Expression.isSingleVar
   ((all.filter (Expression.containsVar x)).take maxDeepConstraints).any
-    (fun c => deepBoundOk (all.filter Expression.isSingleVar) bs facts rest x c)
+    (fun c => deepBoundOk domCs bs facts rest x c)
 
 theorem pointByteOk_sound [Fact p.Prime] (x : Variable) (c : Expression p)
     (byteVars : List Variable)
@@ -261,6 +264,7 @@ theorem deepBoundOk_sound [Fact p.Prime] (domCs : List (Expression p))
       bs.violatesConstraint (bi.eval env) = false) :
     (env x).val < 256 := by
   unfold deepBoundOk at h
+  simp only [] at h
   split_ifs at h with hcap
   -- every enumerated variable's value lies in its domain
   have hdomsound : ∀ vd ∈ deepEnumDoms domCs x c, env vd.1 ∈ vd.2 := by
@@ -947,11 +951,13 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
   · intro env m0 hm0 hbid hmne hmaddr
     exact preRefuted_sound shape busId S m0 (List.all_eq_true.mp hpre m0 hm0) env hbid hmne hmaddr
 
-/-- Indexed left-to-right scan for the first droppable pair on `busId`: at each send `S`
-    (position `i` in `arr`), find its matching receive through the hash index (the first
-    position after `i` with an equal payload — exactly what the linear scan found) and run the
-    cheap region tests; the byte-justification scan and the O(n) split-equation decide run only
-    for candidates that already match. Stops at the first hit. -/
+/-- Indexed left-to-right scan for the first droppable pair on `busId`, starting at position `i`:
+    at each send `S` (position in `arr`), find its matching receive through the hash index (the
+    first position after it with an equal payload — exactly what the linear scan found) and run the
+    cheap region tests; the byte-justification scan and the O(n) split-equation decide run only for
+    candidates that already match. Stops at the first hit, returning the pass result together with
+    the send's position and whether a byte check was emitted (which the caller uses to decide where
+    to resume the enclosing fixpoint). -/
 def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (busId : Nat) (shape : MemoryBusShape)
@@ -959,7 +965,7 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
     (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
     (bcBus? : Option Nat)
     (arr : Array (BusInteraction (Expression p))) (idx : Std.HashMap UInt64 (List Nat))
-    (i : Nat) : Option (PassResult cs bs) :=
+    (i : Nat) : Option (PassResult cs bs × Nat × Bool) :=
   if hi : i < arr.size then
     let S := arr[i]
     -- (thunked: Lean is strict, and the continuation must not run once a pair is accepted)
@@ -986,9 +992,9 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
           if hchk0 : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
               A S B R C [] = true then
             if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
-              some ⟨{ cs with busInteractions := A ++ B ++ C ++ [] }, [],
+              some (⟨{ cs with busInteractions := A ++ B ++ C ++ [] }, [],
                     checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
-                      A S B R C [] hsplit hchk0⟩
+                      A S B R C [] hsplit hchk0⟩, i, false)
             else next ()
           else
           -- Some slot is unjustified. Such slots are materialized as a single explicit
@@ -1008,9 +1014,9 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
           if hchk : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
               A S B R C checks = true then
             if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
-              some ⟨{ cs with busInteractions := A ++ B ++ C ++ checks }, [],
+              some (⟨{ cs with busInteractions := A ++ B ++ C ++ checks }, [],
                     checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
-                      A S B R C checks hsplit hchk⟩
+                      A S B R C checks hsplit hchk⟩, i, true)
             else next ()
           else next ()
           else next ()
@@ -1021,47 +1027,80 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
   else none
   termination_by arr.size - i
 
-/-- Search one declared bus for a droppable pair (index built once per invocation). -/
+/-- Search one declared bus for a droppable pair starting at position `startPos` (index built once
+    per invocation). Returns the result together with the drop position and emitted flag. -/
 def findCancelForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
     (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
-    (bcBus? : Option Nat) :
-    Option (PassResult cs bs) :=
+    (bcBus? : Option Nat) (startPos : Nat) :
+    Option (PassResult cs bs × Nat × Bool) :=
   let arr := cs.busInteractions.toArray
   findCancelGoIdx cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
-    arr (recvIndex busId arr) 0
+    arr (recvIndex busId arr) startPos
 
-/-- Search all declared buses. -/
+/-- Search declared buses from list index `curIdx` for a droppable pair, honouring a resume hint:
+    buses before `resumeIdx` are skipped (they were exhausted on the previous sweep and — since a
+    drop on one bus never re-enables a candidate on another, region tests refute cross-bus messages
+    outright — stay exhausted), the bus at `resumeIdx` resumes at `resumePos`, and later buses start
+    from `0`. Returns the pass result together with the list index and position of the accepted
+    send and whether a byte check was emitted. -/
 def findCancel (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
-    (bcBus? : Option Nat) :
-    List Nat → Option (PassResult cs bs)
-  | [] => none
-  | busId :: rest =>
-    match hshape : facts.memShape busId with
-    | some shape =>
-      match hslots : facts.recvByteSlots busId with
-      | some slots =>
-        match findCancelForBus cs bs facts hp1 deep hdeep busId shape hshape slots hslots
-            bcBus? with
-        | some r => some r
-        | none => findCancel cs bs facts hp1 deep hdeep bcBus? rest
-      | none => findCancel cs bs facts hp1 deep hdeep bcBus? rest
-    | none => findCancel cs bs facts hp1 deep hdeep bcBus? rest
+    (bcBus? : Option Nat) (resumeIdx resumePos : Nat) :
+    Nat → List Nat → Option (PassResult cs bs × Nat × Nat × Bool)
+  | _, [] => none
+  | curIdx, busId :: rest =>
+    if curIdx < resumeIdx then
+      findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos (curIdx + 1) rest
+    else
+      let startPos := if curIdx = resumeIdx then resumePos else 0
+      match hshape : facts.memShape busId with
+      | some shape =>
+        match hslots : facts.recvByteSlots busId with
+        | some slots =>
+          match findCancelForBus cs bs facts hp1 deep hdeep busId shape hshape slots hslots
+              bcBus? startPos with
+          | some (r, pos, emitted) => some (r, curIdx, pos, emitted)
+          | none => findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos (curIdx + 1) rest
+        | none => findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos (curIdx + 1) rest
+      | none => findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos (curIdx + 1) rest
 
-/-- Drop one matched consecutive send/receive pair on a declared memory bus with a
-    `recvByteSlots` contract — justifying the dropped receive's byte obligation from the
+/-- A `PassResult` is inhabited by the identity pass (its input, unchanged) — needed so the
+    fixpoint loop below can be a `partial def`. -/
+instance instInhabitedPassResult (cs : ConstraintSystem p) (bs : BusSemantics p) :
+    Inhabited (PassResult cs bs) := ⟨⟨cs, [], PassCorrect.refl cs bs⟩⟩
+
+/-- Cancel every droppable pair, iterating to a fixpoint in a single pass invocation. Each accepted
+    drop is certified by `checkCancel_sound` exactly as before, and the composite is correct by
+    `PassCorrect.andThen`; the loop only controls the *search order*, so the set and order of drops —
+    hence the output — is identical to restarting `findCancel` from the top after each drop. The
+    speedup: after a drop that emitted no byte check, the scan resumes at the drop's own bus/position
+    (`resumeIdx`/`resumePos`) rather than rescanning the already-rejected prefix, which cannot
+    contain a newly-droppable pair; a drop that *did* emit a byte check may make an earlier pair
+    justifiable (the check joins the remaining interactions), so the scan restarts from the top. -/
+partial def cancelLoop (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (bcBus? : Option Nat) (busIds : List Nat) (resumeIdx resumePos : Nat) : PassResult cs bs :=
+  match findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos 0 busIds with
+  | none => ⟨cs, [], PassCorrect.refl cs bs⟩
+  | some (r, dropIdx, dropPos, emitted) =>
+    let nextIdx := if emitted then 0 else dropIdx
+    let nextPos := if emitted then 0 else dropPos
+    let r2 := cancelLoop r.out bs facts hp1 deep hdeep bcBus? busIds nextIdx nextPos
+    ⟨r2.out, r.derivs ++ r2.derivs, r.correct.andThen r2.correct⟩
+
+/-- Drop every matched consecutive send/receive pair on the declared memory buses with a
+    `recvByteSlots` contract — justifying each dropped receive's byte obligation from the
     remaining interactions (shallow bus-fact bounds, or the deep one-hot-selection analysis on
     prime `p`), or materializing it as one explicit byte check on a `byteCheck` bus already
-    present in the system. The cleanup loop iterates it to cancel a whole access chain. -/
+    present in the system. Runs its own cancellation fixpoint (`cancelLoop`), so a whole access
+    chain is cancelled in a single invocation. -/
 def busPairCancelPass : VerifiedPassW p := fun cs bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then
     let busIds := (cs.busInteractions.map (fun bi => bi.busId)).dedup
     let deep : Bool := decide p.Prime
-    match findCancel cs bs facts hp1 deep (fun h => of_decide_eq_true h)
-        (busIds.find? facts.byteCheck) busIds with
-    | some r => r
-    | none => ⟨cs, [], PassCorrect.refl cs bs⟩
+    cancelLoop cs bs facts hp1 deep (fun h => of_decide_eq_true h)
+      (busIds.find? facts.byteCheck) busIds 0 0
   else ⟨cs, [], PassCorrect.refl cs bs⟩

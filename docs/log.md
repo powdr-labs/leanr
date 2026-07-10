@@ -1477,3 +1477,58 @@ further ~0.8 s on apc_006 (`busPairCancel` 11.3 s → 10.5 s) and ~0.3 s on apc_
 2.8 s), output identical. The remaining apc_006 residual is the refutation scans over ~28k
 matched same-payload candidates and the ~1.2k not-yet-justifiable candidates re-scanned per
 drop — the batched multi-drop sweep above remains the real lever.
+
+### 56. Optimizer runtime: single-invocation `busPairCancel` fixpoint (kill the per-drop rescan) + deep-path hoists (effectiveness unchanged)
+
+Pure **performance** work in the entry-53/54/55 style — every change is output-preserving, so
+effectiveness is untouched and only the optimizer's wall-clock cost drops. The CI *Runtime Bench*
+job (per-pass timing) showed `busPairCancel` had become by far the dominant pass on the expensive
+cases: on apc_037, **137 s of the 167 s optimizer call (82 %)**; also the top pass on apc_100
+(16 s), apc_006 (15 s). This closes entry 55's "batched multi-drop sweep" note.
+
+**Where the time went.** Instrumenting the pass (invocation/candidate counters) plus a `deep`-off
+probe pinned it down: apc_037 ran **531** `busPairCancelPass` invocations (one per dropped pair,
+under `iterateToFixpoint`), and **~87 % of the pass was the deep byte-justification**
+(`deepBoundOk`/`pointByteOk`: enumerate a receive's selector-flag domains and linearize the
+substituted defining constraint per point). Because the pass dropped **one** pair per invocation
+and `iterateToFixpoint` restarts the scan from position 0 every time, the same region-passing but
+not-yet-justifiable candidates before the accepted drop had their expensive deep justification
+recomputed on every one of the 531 invocations (one candidate was re-examined **170×**).
+
+1. **Single-invocation cancellation fixpoint (`cancelLoop`)** — run the whole cancellation
+   fixpoint *inside one pass invocation*, resuming the scan after each drop instead of restarting
+   from the top. `findCancelGoIdx`/`findCancelForBus`/`findCancel` now return the accepted send's
+   bus-list index and position and whether a byte check was emitted; `cancelLoop` composes each
+   drop with `PassCorrect.andThen` and, after a drop that emitted **no** check, resumes at that
+   drop's own bus/position (`resumeIdx`/`resumePos`) — skipping the already-rejected prefix and
+   any earlier, exhausted bus. This is output-identical to the old restart-from-top behaviour: a
+   drop on one bus never re-enables a candidate on another (region tests refute cross-bus messages
+   by `busId` outright) and removing interactions can only make byte-justification *harder*, so no
+   skipped candidate can have become droppable; only a drop that **emits** a byte check (which
+   joins the remaining interactions and could newly justify an earlier pair) restarts from the top.
+   Every accepted drop is still certified by `checkCancel_sound` exactly as before, so the set and
+   order of drops — hence the output — is unchanged; the loop only controls the search order.
+   (`cancelLoop` is a `partial def`: each drop strictly shrinks the interaction count so it
+   terminates, but that measure is not machine-checked. Correctness does not depend on it — the
+   returned `PassResult` carries its `PassCorrect` proof by construction — and the correctness
+   theorems' axioms stay `{propext, Classical.choice, Quot.sound}`.)
+2. **Deep-path recomputation hoists** — bind `LinExpr.norm l` once per enumerated point in
+   `pointByteOk` (was recomputed ~5×), `deepEnumDoms domCs x c` once per candidate in `deepBoundOk`
+   (was 3×), and the single-variable-constraint filter `all.filter isSingleVar` once per
+   `deepByteJustified` (was up to 4×, inside the `.any`). All are zeta-transparent `let`s; the
+   soundness proofs are unchanged bar one `simp only [] at h` to reduce the introduced `let` before
+   `split_ifs` in `deepBoundOk_sound`.
+
+**Impact (solo runs, same machine, output identical; A/B against the pre-change binary):**
+apc_037 whole optimizer **167.7 s → 36.0 s (4.7×)** — `busPairCancel` **137 s → 6.9 s (~20×)**,
+no longer a top-3 pass; apc_100 total 41.4 s → 28.3 s (`busPairCancel` 16.3 → 3.7 s), apc_006
+35.2 → 21.5 s (15.0 → 1.7 s), apc_005 19.0 → 16.8 s (4.3 → 1.3 s), apc_036 (4.3 → 1.3 s). Verified
+output-identical (`vars/constraints/bus`) against the pre-change binary on every openvm-eth case.
+Nothing in the audited surface or `Basic.lean`/`FactPass.lean` changed; `lake build` green;
+`check-proof-integrity.sh` passes.
+
+Remaining bottlenecks (documented for future work): `domainBatch` and `reencode` are now the top
+passes on the expensive cases (apc_037: 11.9 s / 8.8 s); the deep byte-justification's per-point
+`substF`/`fold`/`linearize` still pays the entry-54 per-node `ZMod` instance-projection tax (a
+compiled/`evalFast`-style linearizer would cut it further), and `deepByteVars`'s `findVarBound`
+scan over the remaining interactions is recomputed per candidate.
