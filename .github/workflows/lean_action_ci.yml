@@ -25,9 +25,10 @@ jobs:
           path: .lake/build/bin/apc-optimizer
           retention-days: 30
 
-  # Quick runtime check on every PR: bench the top-10 cases with this PR's binary and with the
-  # binary from the latest successful main build, back-to-back on the same runner, and post the
-  # comparison as a sticky comment. Full-set benches stay on demand via the Runtime Bench workflow.
+  # Quick bench on every PR: effectiveness (circuit metrics) and runtime over the top-10 cases,
+  # this PR's binary vs the binary from the latest successful main build (nothing is rebuilt),
+  # posted as one sticky comment. Full-set benches stay on demand via the Effectiveness Bench and
+  # Runtime Bench workflows.
   quick-bench:
     if: github.event_name == 'pull_request'
     needs: build
@@ -43,27 +44,45 @@ jobs:
         with:
           name: apc-optimizer-bin
           path: bin-target
-      - name: Bench top-10 vs latest main binary
+      - name: Fetch baseline binary (latest main build)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "TARGET_SHA=$(cut -c1-7 <<< '${{ github.event.pull_request.head.sha }}')" \
             >> "$GITHUB_ENV"
           chmod +x bin-target/apc-optimizer
-          python3 OpenVmBenchmarks/runtime_bench.py --binary bin-target/apc-optimizer \
-            --n 10 --json target.json --md bench.md
           run_id=$(gh run list --workflow "Lean Action CI" --branch main --status success \
             --limit 1 --json databaseId -q '.[0].databaseId // empty')
           if [ -n "$run_id" ] && gh run download "$run_id" -n apc-optimizer-bin -D bin-base; then
             chmod +x bin-base/apc-optimizer
             echo "BASE_SHA=$(gh run view "$run_id" --json headSha -q .headSha | cut -c1-7)" \
               >> "$GITHUB_ENV"
-            python3 OpenVmBenchmarks/runtime_bench.py --binary bin-base/apc-optimizer \
-              --n 10 --json base.json
-            python3 OpenVmBenchmarks/runtime_bench.py --compare base.json target.json --md bench.md
           else
             echo "no apc-optimizer-bin artifact on the latest main run; reporting this PR only"
           fi
+      - name: Effectiveness, top-10 vs main
+        run: |
+          python3 OpenVmBenchmarks/benchmark.py --binary bin-target/apc-optimizer \
+            --n 10 --json eff-target.json --md eff.md
+          if [ -n "$BASE_SHA" ]; then
+            python3 OpenVmBenchmarks/benchmark.py --binary bin-base/apc-optimizer \
+              --n 10 --json eff-base.json
+            python3 OpenVmBenchmarks/benchmark.py \
+              --compare eff-base.json eff-target.json --md eff.md
+          fi
+      - name: Runtime, top-10 vs main
+        run: |
+          python3 OpenVmBenchmarks/runtime_bench.py --binary bin-target/apc-optimizer \
+            --n 10 --json rt-target.json --md rt.md
+          if [ -n "$BASE_SHA" ]; then
+            python3 OpenVmBenchmarks/runtime_bench.py --binary bin-base/apc-optimizer \
+              --n 10 --json rt-base.json
+            python3 OpenVmBenchmarks/runtime_bench.py --compare rt-base.json rt-target.json --md rt.md
+          fi
+          # Effectiveness first: it is the merge criterion; runtime breaks ties.
+          cat eff.md > bench.md
+          printf '\n' >> bench.md
+          cat rt.md >> bench.md
       - name: Report
         uses: ./.github/actions/report-bench
         with:
@@ -75,7 +94,8 @@ jobs:
           note: >-
             Top-10 quick bench on a CI runner
             (${{ env.BASE_SHA && format('PR `{0}` vs main `{1}`', env.TARGET_SHA, env.BASE_SHA)
-                 || format('PR `{0}`, no main baseline binary available', env.TARGET_SHA) }});
-            trust shares and orders of magnitude over exact numbers.
-            Full set: `gh workflow run "Runtime Bench" -f pr=${{ github.event.number }}`.
+                 || format('PR `{0}`, no main baseline binary available', env.TARGET_SHA) }}).
+            Circuit sizes are exact; for runtime, trust shares and orders of magnitude over exact
+            numbers. Full set: `gh workflow run "Effectiveness Bench" -f pr=${{ github.event.number }}`
+            or `gh workflow run "Runtime Bench" -f pr=${{ github.event.number }}`.
           token: ${{ github.token }}
