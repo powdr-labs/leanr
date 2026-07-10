@@ -78,7 +78,7 @@ Generalise the recogniser (and the `bytePairBus` fact) to pack any two messages 
 "this operand is a byte" obligation, regardless of the carrier form. Still a stateless, sound,
 variable-neutral bus win.
 
-## Eliminate memory-pointer-limb decompositions / redundant range checks (bus interactions)
+## Memory-pointer-limb residuals: cross-offset chaining and duplicate cleanup
 
 On memory-heavy blocks (e.g. apc_005) apc-optimizer keeps ~2× powdr's `mem_ptr_limbs` decompositions and
 their 13-bit range checks (the high/"page" limb is identical across same-base accesses but apc-optimizer
@@ -104,6 +104,20 @@ difference selection, one marker per limb) doesn't match yet — apc_018 measure
 carry-branch resolution (entry 57): ours 43 vars vs powdr 34; this family is the bulk of the
 residual. Generalizing the matcher (coefficients that are *differences* of byte-bounded
 variables, sign-split like `CarryBranch.splitSumMax`) should capture it.
+**Update (log 57):** the equal-address half is landed — `rootPairUnifyPass` unifies duplicate
+same-address decompositions via the two-root/no-wrap argument (−128 vars on each of the
+apc_005-class blocks; apc-optimizer now leads powdr on aggregate variable effectiveness). Two
+residuals remain:
+
+1. **Duplicate-structure cleanup:** the unification leaves the eliminated decomposition's carry
+   constraints and range checks behind as *syntactically identical* copies of the survivor's.
+   A syntactic duplicate dropper (constraints: trivially entailed; stateless interactions: same
+   obligation twice — needs a fold-based keep-first, `filter` cannot distinguish identical
+   elements) would convert this into constraint- and bus-interaction wins. Duplicates did not
+   occur in optimized outputs before log 57, so this only became profitable now.
+2. **Cross-offset chaining** (`ptr` and `ptr+4` sharing the high limb): powdr-side this needs
+   reasoning that the low limb doesn't cross the 2¹⁶ page boundary, which is not statically
+   true — presumably a carry-witness argument. Harder, unclear value after (1).
 
 ## Is-zero / is-equal witness reduction (variables)
 

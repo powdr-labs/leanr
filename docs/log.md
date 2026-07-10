@@ -1655,3 +1655,56 @@ The residual keccak gap is now **variables** (3622 vs 2021): the read-data limbs
 (bitwise) interactions even after their memory pairs cancel. Closing it needs read-value
 unification (substitute a read limb by the value written to that cell, or by the XOR functional
 dependence `slotFun`) — recorded in `docs/ideas.md`.
+### 57. Two-root decomposition unification (`RootPairUnify.lean`) — bounded-integer reasoning, aggregate variable lead over powdr
+
+Memory-pointer decompositions pin each limb by a **two-root carry constraint**
+`(A + k·x)(A + δ + k·x) = 0` (the two address-wraparound cases) plus a range check keeping the
+limb inside a window smaller than the root gap. Two accesses at the *same* address produce two
+such constraints with the same `A, k, δ` but distinct limb variables — each variable
+independently picks a root, so no purely algebraic pass can equate them, and every
+finite-*constant*-domain pass is blocked by the parameterized roots (the gap diagnosed in
+`docs/ideas.md`'s mem-ptr item). apc-optimizer kept 258 `mem_ptr_limbs` on apc_005 vs powdr's 130.
+
+**The bounded-integer argument** (`rootPair_eq`): both roots differ by `g = k⁻¹·δ`; if
+`x.val < B` and `y.val < B` with `B ≤ g.val` and `B ≤ p − g.val`, the field difference
+`x − y = ±g` is impossible over the integers, so `x = y`. The entailed equality feeds the same
+proof-carrying `Solved` map as `Gauss.lean` (solutions are bare variables — no degree gate, no
+resolution) and one `ConstraintSystem.substF`. Prime `p` only (root membership needs an integral
+domain; re-checked at runtime as in `busPairCancelPass`).
+
+**Bound sources** (`anyVarBound`, env-conditional on the system's own satisfaction):
+1. raw range-check slots via `findVarBound` (`DomainProp`) — covers the high limbs (13-bit);
+2. **scaled slots** (`scaledSlotBound`): the low limb's checked slot is `4⁻¹·(x − F)` with `F` a
+   degree-2 flag polynomial, so `linearize` fails on it — a new constant-coefficient
+   decomposition `Expression.splitAt` (`e = k·x + r`, `r` opaque and possibly nonlinear) handles
+   it. The slot value is fact-bounded (`slotBound`), the offset part enumerates the flag
+   variables' proven finite domains (`findDomainAlg` booleanity, ≤ 16 points), and
+   `ZMod.val_add_of_lt`/`val_mul_of_lt` carry the no-wrap integer arithmetic:
+   `x.val < m.val·(bound−1) + Wmax + 1`.
+
+The scan groups two-root candidates by key `(k, A.terms, A.const, δ)` and re-checks a decidable
+pair certificate (`rpCheckPair`) inside the adoption proof, so the scan itself is proof-free.
+**Runtime trap**: booleanity `b(b−1) = 0` is itself two-root (gap 1), which made every boolean
+variable an expensive-to-reject candidate pair — the first run of apc_005 exceeded 35 minutes.
+A root-gap prefilter (`min(g.val, p − g.val) ≥ 256`, which the pair condition could never pass
+anyway) restores it to seconds. Wired into `cleanupCycle` after `hintCollapse`; the fixpoint
+chains the stages (high limbs key-match only after the low limbs unify, equal bases only form
+after busUnify/pairCancel — each next cycle picks up what the previous one exposed).
+
+`lake build` green; all three `maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** apc_005 / apc_044 / apc_067: **1683 → 1555 vars (−128 each**, the predicted 64 low
++ 64 high limb pairs; powdr keeps 1808); apc_005 wall-clock 14.2 s at this commit. A 10-case
+sample across the other size classes is byte-identical. Full 100-case sweep (before → after,
+baseline re-measured at this commit's parent):
+
+- **variables: 4.082× → 4.222× aggregate (3.605× → 3.644× geomean)** vs powdr's 4.092×/3.787×
+  — **apc-optimizer takes the aggregate variable lead for the first time**; per-case wins 15 → 17
+- bus interactions 2.922× → 2.924× (downstream cascade), constraints 8.801×/9.918× unchanged
+
+Left on the table (see `docs/ideas.md`): the unification leaves the duplicate's carry
+constraints and range checks behind as *syntactically identical* copies — a duplicate-dropper
+would convert the remaining redundancy into constraint/bus wins; and powdr's cross-offset
+chaining (`ptr+4` sharing the high limb) needs page-crossing reasoning beyond equal-address
+unification.
