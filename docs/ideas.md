@@ -148,11 +148,10 @@ before choosing.
 ## Read-read data sharing blocked on the last flag component (variables)
 
 Log entry 62: powdr keeps one copy of same-address read-data words across consecutive accesses
-(apc_047 class, ~+3 vars per case); our receive-equals-send chaining should entail the same but
-the addresses are not syntactically equal — the entry-59 residual (one flag component per
-unified pair relates non-componentwise). The derived-variable interpolation `b := f(a₀, a₁)`
-(see the mem-ptr residuals item) would make the addresses syntactically equal and likely
-unlock the whole cascade: flag → address → busUnify data equations → word unification.
+(apc_047 class, ~+3 vars per case). **Log 63 correction:** apc_047's final output has *zero*
+scaled-check pairs, so this is *not* blocked on the flag residual there — the duplication needs
+its own diagnosis (render the accesses; the addresses presumably differ structurally). The
+flag→address→busUnify cascade may still apply on apc_005-class blocks.
 
 ## Reuse the deep byte justification beyond pair cancellation
 

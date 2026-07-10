@@ -1863,3 +1863,34 @@ powdr's exports on loss cases (apc_003: 133 vs 131; apc_047: 91 vs 87). Findings
 
 With entries 55 and 61, all three Tier-1 variable candidates from the Rust-comparison survey
 are now measured dead as scoped; the live variable work is items (2) and (3) above.
+
+### 63. Diagnosis: the two entry-62 gaps, pinned down (XOR flag relation; sign-split comparison gadget)
+
+Measurement/diagnosis only, completing entry 62 with the concrete shapes.
+
+1. **The entry-59 flag residual is XOR.** Probing the persisting scaled-check pairs on apc_005
+   (via `fuPairData?`'s own point tables): after entry 59 each pair's flag sets already share
+   one variable, and the compatible joint points for the remainder read off as exactly
+   `c1 = a0 ⊕ a1` — e.g. carrier `mem_ptr_limbs__0_3`, X flags `{567_0, 567_1}`, Y flags
+   `{567_1, 575_1}`, compatible points `{(0,0,0),(1,1,0),(1,0,1),(0,1,1)}`. As a field
+   polynomial `a0 + a1 − 2·a0·a1` (degree 2), so plain entailed substitution is
+   **degree-blocked twice over**: `c1`'s booleanity becomes degree 4 (> identities 3) and the
+   Y check's payload `F_Y(a1, c1 := ⊕)` becomes degree 3 (> bus 2). Eliminating the ~64
+   remaining `c1`s per apc_005-class block therefore needs a *composite, singly-guarded* pass:
+   entailed nonlinear substitution + a box-tautology constraint drop (the substituted booleanity
+   vanishes on the boolean box) + a pointwise-equal bus-payload replacement (the substituted
+   check's slot equals the survivor's on the box). All three pieces have precedents
+   (`Solved`/`substF`, the `fuCheck` box machinery, `filterBusEntailed_correct`), but composing
+   them under one `guardDegree` with intermediate over-bound states is its own project.
+2. **apc_047 has zero scaled-check pairs** in its final output — entry 62's hypothesis that its
+   duplicated read-data words are blocked on the flag residual is **wrong for that case**; its
+   read-read duplication needs a separate diagnosis (the addresses there presumably differ in
+   more than a flag component).
+3. **The sign-split comparison gadget (apc_003 class, the +2/case).** `a_msb_f` is pinned by its
+   own two-root constraint `(a__3 − f)(a__3 − f − 256) = 0` — a *definition* (limb minus sign
+   bit), not a duplicate, so `rootPairUnify` does not apply — plus the byte pair-check
+   `[a_msb_f, b_msb_f, 0, 0]` and a `diff_marker` chain deciding `cmp_lt`. powdr keeps one
+   `cmp_result` for our three `{a_msb_f, b_msb_f, cmp_lt}`. The domains are *parameterized*
+   (`f ∈ {a3, a3 − 256}`), so `reencode`/`domainBatch` (constant-domain machinery) cannot
+   compress the group either; a folding pass would need parameterized-domain reasoning or
+   derived-column substitution with the same composite-guard treatment as (1).
