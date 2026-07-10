@@ -1774,3 +1774,43 @@ sample byte-identical. Full 100-case sweep (before → after):
 - **variables: 4.222× → 4.286× aggregate (3.644× → 3.655× geomean)** vs powdr's 4.092×/3.787×
 - **constraints: 9.500× → 9.854× aggregate (10.144× → 10.214× geomean)**
 - bus interactions 3.006×/2.466× unchanged
+
+### 60. Optimizer runtime: share `flagUnify`'s pair-level certificate work (effectiveness unchanged)
+
+Pure performance work in the entry-53 style. Profiling apc_005 put **`flagUnify` at 17.4 s of
+the 30.8 s total (57%)**; stage instrumentation (temporary `fuprof` command, since reverted)
+showed all of it inside `fuCheck` — 256 calls per cleanup iteration (64 matched pairs × 4 flag
+combos) at ~10–28 ms each, and iterations 3–6 spending ~10 s re-rejecting certificates that can
+never pass after the flags unify. Each call redid the *pair-level* work — the slot-bound
+probes (`payload.map constValue?` folds), both `splitAt`s, `findDomainAlg` over every
+constraint, the ≤32-point joint enumeration, and **dozens of runtime `ZMod` inversions** (every
+`k⁻¹` occurrence re-runs the extended-gcd inverse; entry-54's gotcha in a new costume).
+
+**Fix (value-identical by construction):** `fuCheck` is now *defined* as
+`fuPairData?` (all pair-level work, inversion hoisted into a single `let m := k⁻¹`, the
+enumerated point list bound once and reused for both the bound check and the `pts` table)
+composed with `fuCheckWith` (memberships, disequality, and the pointwise agreement scan). The
+scan calls `fuPairData?` once per matched pair and `fuCheckWith` per flag combo; the adoption
+proof re-checks `fuCheck` through the same definition, so the accepted set is unchanged
+definitionally. The `fuCheck_sound`/`fuCheck_vars` proofs re-thread through the split (same
+case chain, inverted on `fuPairData?`).
+
+A hash-prefilter for `rootPairUnify`'s seen-key scan was also tried and **measured zero**
+(3.06 s → 3.02 s ≈ noise — the scan is not where its time goes); it was reverted rather than
+landed. Written-in-advance cost models remain undefeated in their wrongness.
+
+**Validation:** A/B binaries (stash-built reference at the parent commit) byte-identical on the
+13-case entry-53 set (`apc_001/003/005/006/008/010/014/028/047/056/069/092/100` — vars,
+constraints, bus all equal) plus a **full-render diff on apc_005** (identical). `lake build`
+green; `check-proof-integrity.sh` passes; axioms unchanged.
+
+**Impact (profiler, apc_005):** flagUnify **17.4 s → 5.3 s (3.3×)**; end-to-end run
+**30.8 s → 18.0 s (1.7×)**. apc_006/apc_100 unaffected (flagUnify does not fire there).
+
+Remaining bottlenecks (documented for the next agent): `flagUnify` 5.3 s — the per-pair
+residual is `findDomainAlg` over the full constraint list (×4 vars) plus the plain
+`Expression.eval` per enumeration point (the entry-54 `evalWith` treatment applies), and
+iterations 3–6 still pay 64 pair-datas each for zero adoptions; `rootPairUnify` 3.0 s — *not*
+the seen-scan (measured), so likely `rpCandidates`'s per-variable `splitAt`+`LinExpr.norm`
+over every constraint every iteration; `domainFold` 3.4 s — the pre-existing
+`ImprovingRuntime.md` lead #1 (`constOnSurvs` still on per-node-instance `eval`).
