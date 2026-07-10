@@ -50,6 +50,7 @@ jobs:
       - name: Bench target
         run: |
           echo "BENCH_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "TARGET_REF=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           # The baseline checkout below replaces the working tree, so keep this version of the
           # bench script (and its results) outside it.
           cp OpenVmBenchmarks/runtime_bench.py "$RUNNER_TEMP/runtime_bench.py"
@@ -77,32 +78,18 @@ jobs:
             ${N:+--n "$N"} --repeat "${REPEAT:-1}"
           python3 "$RUNNER_TEMP/runtime_bench.py" \
             --compare "$RUNNER_TEMP/baseline.json" "$RUNNER_TEMP/target.json" --md bench.md
-      - name: Job summary
-        run: cat bench.md >> "$GITHUB_STEP_SUMMARY"
-      - name: PR comment
-        if: inputs.pr != ''
-        uses: actions/github-script@v7
+          # Restore the target checkout: the report step below runs a local action, which must
+          # exist in the working tree (the baseline may predate it).
+          git checkout --force "$TARGET_REF"
+      - name: Report
+        uses: ./.github/actions/report-bench
         with:
-          script: |
-            const fs = require('fs');
-            const marker = '<!-- runtime-bench -->';
-            const which = process.env.BASE_SHA
-              ? 'target `' + process.env.BENCH_SHA + '` vs baseline `' + process.env.BASE_SHA + '`'
-              : '`' + process.env.BENCH_SHA + '`';
-            const body = marker + '\n' + fs.readFileSync('bench.md', 'utf8') +
-              '\n_Timings from a CI runner (' + which +
-              '); trust shares and orders of magnitude over exact numbers._';
-            const issue_number = Number('${{ inputs.pr }}');
-            const {data: comments} = await github.rest.issues.listComments({
-              owner: context.repo.owner, repo: context.repo.repo,
-              issue_number, per_page: 100});
-            const prev = comments.find(c => c.body.startsWith(marker));
-            if (prev) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                comment_id: prev.id, body});
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number, body});
-            }
+          md-file: bench.md
+          marker: "<!-- runtime-bench -->"
+          pr: ${{ inputs.pr }}
+          note: >-
+            Timings from a CI runner
+            (${{ env.BASE_SHA && format('target `{0}` vs baseline `{1}`', env.BENCH_SHA, env.BASE_SHA)
+                 || format('`{0}`', env.BENCH_SHA) }});
+            trust shares and orders of magnitude over exact numbers.
+          token: ${{ github.token }}

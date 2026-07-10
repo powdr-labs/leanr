@@ -47,6 +47,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          echo "TARGET_SHA=$(cut -c1-7 <<< '${{ github.event.pull_request.head.sha }}')" \
+            >> "$GITHUB_ENV"
           chmod +x bin-target/apc-optimizer
           python3 OpenVmBenchmarks/runtime_bench.py --binary bin-target/apc-optimizer \
             --n 10 --json target.json --md bench.md
@@ -62,35 +64,18 @@ jobs:
           else
             echo "no apc-optimizer-bin artifact on the latest main run; reporting this PR only"
           fi
-      - name: Job summary
-        run: cat bench.md >> "$GITHUB_STEP_SUMMARY"
-      - name: PR comment
-        # Same-repo PRs only: fork PRs get a read-only token, so the comment would fail.
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/github-script@v7
+      - name: Report
+        uses: ./.github/actions/report-bench
         with:
-          script: |
-            const fs = require('fs');
-            const marker = '<!-- runtime-bench-quick -->';
-            const target = context.payload.pull_request.head.sha.slice(0, 7);
-            const which = process.env.BASE_SHA
-              ? 'PR `' + target + '` vs main `' + process.env.BASE_SHA + '`'
-              : 'PR `' + target + '`, no main baseline binary available';
-            const body = marker + '\n' + fs.readFileSync('bench.md', 'utf8') +
-              '\n_Top-10 quick bench on a CI runner (' + which +
-              '); trust shares and orders of magnitude over exact numbers. ' +
-              'Full set: `gh workflow run "Runtime Bench" -f pr=' +
-              context.issue.number + '`._';
-            const {data: comments} = await github.rest.issues.listComments({
-              owner: context.repo.owner, repo: context.repo.repo,
-              issue_number: context.issue.number, per_page: 100});
-            const prev = comments.find(c => c.body.startsWith(marker));
-            if (prev) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                comment_id: prev.id, body});
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: context.issue.number, body});
-            }
+          md-file: bench.md
+          marker: "<!-- runtime-bench-quick -->"
+          # Comment on same-repo PRs only: fork PRs get a read-only token.
+          pr: ${{ github.event.pull_request.head.repo.full_name == github.repository
+                  && github.event.number || '' }}
+          note: >-
+            Top-10 quick bench on a CI runner
+            (${{ env.BASE_SHA && format('PR `{0}` vs main `{1}`', env.TARGET_SHA, env.BASE_SHA)
+                 || format('PR `{0}`, no main baseline binary available', env.TARGET_SHA) }});
+            trust shares and orders of magnitude over exact numbers.
+            Full set: `gh workflow run "Runtime Bench" -f pr=${{ github.event.number }}`.
+          token: ${{ github.token }}
