@@ -86,15 +86,15 @@ def canonEq (l1 l2 : LinExpr p) : Bool :=
 
 /-- Certificate: on every point of the joint small-domain box, both expressions partially
     evaluate to the same affine form in the remaining symbolic variables. -/
-def brCert (all : List (Expression p)) (e e' : Expression p) : Bool :=
+def brCert (singles : List (Expression p)) (e e' : Expression p) : Bool :=
   2 ≤ e.vars.eraseDups.length &&
   (let jv := (e.vars ++ e'.vars).eraseDups
    let boxed := jv.filter (fun v =>
-     match findDomainAlg (singleVarCs all) v with
+     match findDomainAlg (singles) v with
      | some d => d.length ≤ 2
      | none => false)
    let doms := boxed.filterMap (fun v =>
-     (findDomainAlg (singleVarCs all) v).map (fun d => (v, d)))
+     (findDomainAlg (singles) v).map (fun d => (v, d)))
    decide (doms.map Prod.fst = boxed) &&
    decide ((doms.map (fun vd => vd.2.length)).prod ≤ 16) &&
    (assignments doms).all (fun pt =>
@@ -119,31 +119,31 @@ theorem envF_ptFun_self (doms : List (Variable × List (ZMod p))) (env : Variabl
     exact List.mem_map.2 ⟨vd, hvd, rfl⟩
   · rw [if_neg hin]
 
-theorem brCert_sound [Fact p.Prime] (all : List (Expression p)) (e e' : Expression p)
-    (h : brCert all e e' = true) (env : Variable → ZMod p)
-    (hdom : ∀ c ∈ singleVarCs all, c.eval env = 0) : e.eval env = e'.eval env := by
+theorem brCert_sound [Fact p.Prime] (singles : List (Expression p)) (e e' : Expression p)
+    (h : brCert singles e e' = true) (env : Variable → ZMod p)
+    (hdom : ∀ c ∈ singles, c.eval env = 0) : e.eval env = e'.eval env := by
   unfold brCert at h
   rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h
   obtain ⟨_h2, ⟨⟨hcover, _hcap⟩, hall⟩⟩ := h
   have hcover' := of_decide_eq_true hcover
   -- the environment restricted to the box is an enumerated point
   set boxed := ((e.vars ++ e'.vars).eraseDups.filter (fun v =>
-    match findDomainAlg (singleVarCs all) v with
+    match findDomainAlg (singles) v with
     | some d => d.length ≤ 2
     | none => false)) with hboxed
   set doms := (boxed.filterMap (fun v =>
-    (findDomainAlg (singleVarCs all) v).map (fun d => (v, d)))) with hdoms
+    (findDomainAlg (singles) v).map (fun d => (v, d)))) with hdoms
   have hmemdoms : ∀ vd ∈ doms, env vd.1 ∈ vd.2 := by
     intro vd hvd
     rw [hdoms] at hvd
     obtain ⟨v, _hv, hvd'⟩ := List.mem_filterMap.1 hvd
-    cases hfd : findDomainAlg (singleVarCs all) v with
+    cases hfd : findDomainAlg (singles) v with
     | none => rw [hfd] at hvd'; simp at hvd'
     | some d =>
       rw [hfd] at hvd'
       simp only [Option.map_some, Option.some.injEq] at hvd'
       obtain rfl := hvd'.symm
-      exact findDomainAlg_sound (singleVarCs all) v d hfd env hdom
+      exact findDomainAlg_sound (singles) v d hfd env hdom
   have hpt := mem_assignments doms env hmemdoms
   have hcond := List.all_eq_true.mp hall _ hpt
   cases hl1 : linearize (e.substF (ptFun (doms.map (fun vd => (vd.1, env vd.1))))) with
@@ -186,28 +186,28 @@ theorem brCert_sound [Fact p.Prime] (all : List (Expression p)) (e e' : Expressi
 
 /-- Per-expression rewrite: only over-bound expressions, only when the reduction is within
     bound, introduces no variable, and is certified. -/
-def brRw (all : List (Expression p)) (bound : Nat) (e : Expression p) : Expression p :=
+def brRw (singles : List (Expression p)) (bound : Nat) (e : Expression p) : Expression p :=
   if e.degree ≤ bound then e
   else
     let boolSet := e.vars.eraseDups.filter (fun v =>
-      match findDomainAlg (singleVarCs all) v with
+      match findDomainAlg (singles) v with
       | some d => d.length ≤ 2
       | none => false)
     match reduceExpr boolSet e with
     | some e' =>
-      if e'.degree ≤ bound && e'.vars.all (fun v => v ∈ e.vars) && brCert all e e'
+      if e'.degree ≤ bound && e'.vars.all (fun v => v ∈ e.vars) && brCert singles e e'
       then e' else e
     | none => e
 
-theorem brRw_sound [Fact p.Prime] (all : List (Expression p)) (bound : Nat)
+theorem brRw_sound [Fact p.Prime] (singles : List (Expression p)) (bound : Nat)
     (e : Expression p) (env : Variable → ZMod p)
-    (hdom : ∀ c ∈ singleVarCs all, c.eval env = 0) :
-    (brRw all bound e).eval env = e.eval env := by
+    (hdom : ∀ c ∈ singles, c.eval env = 0) :
+    (brRw singles bound e).eval env = e.eval env := by
   simp only [brRw]
   split_ifs with hd
   · rfl
   · cases hr : reduceExpr (e.vars.eraseDups.filter (fun v =>
-        match findDomainAlg (singleVarCs all) v with
+        match findDomainAlg (singles) v with
         | some d => d.length ≤ 2
         | none => false)) e with
     | none => simp only [hr]
@@ -215,17 +215,17 @@ theorem brRw_sound [Fact p.Prime] (all : List (Expression p)) (bound : Nat)
       simp only [hr]
       split_ifs with hok
       · rw [Bool.and_eq_true, Bool.and_eq_true] at hok
-        exact (brCert_sound all e e' hok.2 env hdom).symm
+        exact (brCert_sound singles e e' hok.2 env hdom).symm
       · rfl
 
-theorem brRw_vars (all : List (Expression p)) (bound : Nat) (e : Expression p) :
-    ∀ v ∈ (brRw all bound e).vars, v ∈ e.vars := by
+theorem brRw_vars (singles : List (Expression p)) (bound : Nat) (e : Expression p) :
+    ∀ v ∈ (brRw singles bound e).vars, v ∈ e.vars := by
   intro v hv
   simp only [brRw] at hv
   split_ifs at hv with hd
   · exact hv
   · cases hr : reduceExpr (e.vars.eraseDups.filter (fun v =>
-        match findDomainAlg (singleVarCs all) v with
+        match findDomainAlg (singles) v with
         | some d => d.length ≤ 2
         | none => false)) e with
     | none => simp only [hr] at hv; exact hv
@@ -238,19 +238,19 @@ theorem brRw_vars (all : List (Expression p)) (bound : Nat) (e : Expression p) :
 
 /-- A single-variable expression is never rewritten (the certificate's ≥ 2-variables guard),
     keeping the domain sources intact. -/
-theorem brRw_singleVar (all : List (Expression p)) (bound : Nat) (c : Expression p)
-    (hs : c.vars.eraseDups.length ≤ 1) : brRw all bound c = c := by
+theorem brRw_singleVar (singles : List (Expression p)) (bound : Nat) (c : Expression p)
+    (hs : c.vars.eraseDups.length ≤ 1) : brRw singles bound c = c := by
   simp only [brRw]
   split_ifs with hd
   · rfl
   · cases hr : reduceExpr (c.vars.eraseDups.filter (fun v =>
-        match findDomainAlg (singleVarCs all) v with
+        match findDomainAlg (singles) v with
         | some d => d.length ≤ 2
         | none => false)) c with
     | none => simp only [hr]
     | some e' =>
       simp only [hr]
-      have hcert : brCert all c e' = false := by
+      have hcert : brCert singles c e' = false := by
         unfold brCert
         have h2 : (2 ≤ c.vars.eraseDups.length : Bool) = false := by
           simp only [decide_eq_false_iff_not]
@@ -259,28 +259,29 @@ theorem brRw_singleVar (all : List (Expression p)) (bound : Nat) (c : Expression
       rw [hcert, Bool.and_false, if_neg (by simp)]
 
 /-- The per-interaction rewrite (bus id untouched). -/
-def brBi (all : List (Expression p)) (db : DegreeBound)
+def brBi (singles : List (Expression p)) (db : DegreeBound)
     (bi : BusInteraction (Expression p)) : BusInteraction (Expression p) :=
   { busId := bi.busId,
-    multiplicity := brRw all db.busInteractions bi.multiplicity,
-    payload := bi.payload.map (brRw all db.busInteractions) }
+    multiplicity := brRw singles db.busInteractions bi.multiplicity,
+    payload := bi.payload.map (brRw singles db.busInteractions) }
 
 /-- Rewrite every over-bound expression of the system to its certified reduction. -/
 def ConstraintSystem.boxRewrite (cs : ConstraintSystem p) (bs : BusSemantics p) :
     ConstraintSystem p :=
+  let singles := singleVarCs cs.algebraicConstraints
   { algebraicConstraints := cs.algebraicConstraints.map
-      (brRw cs.algebraicConstraints bs.degreeBound.identities),
-    busInteractions := cs.busInteractions.map (brBi cs.algebraicConstraints bs.degreeBound) }
+      (brRw singles bs.degreeBound.identities),
+    busInteractions := cs.busInteractions.map (brBi singles bs.degreeBound) }
 
-theorem brBi_eval [Fact p.Prime] (all : List (Expression p)) (db : DegreeBound)
+theorem brBi_eval [Fact p.Prime] (singles : List (Expression p)) (db : DegreeBound)
     (bi : BusInteraction (Expression p)) (env : Variable → ZMod p)
-    (hdom : ∀ c ∈ singleVarCs all, c.eval env = 0) :
-    (brBi all db bi).eval env = bi.eval env := by
+    (hdom : ∀ c ∈ singles, c.eval env = 0) :
+    (brBi singles db bi).eval env = bi.eval env := by
   unfold brBi BusInteraction.eval
   simp only [BusInteraction.mk.injEq]
-  refine ⟨trivial, brRw_sound all _ _ env hdom, ?_⟩
+  refine ⟨trivial, brRw_sound singles _ _ env hdom, ?_⟩
   rw [List.map_map]
-  exact List.map_congr_left (fun e _ => brRw_sound all _ e env hdom)
+  exact List.map_congr_left (fun e _ => brRw_sound singles _ e env hdom)
 
 theorem ConstraintSystem.boxRewrite_correct [Fact p.Prime]
     (cs : ConstraintSystem p) (bs : BusSemantics p) :
@@ -327,13 +328,13 @@ theorem ConstraintSystem.boxRewrite_correct [Fact p.Prime]
       (cs.boxRewrite bs).sideEffects bs env = cs.sideEffects bs env := by
     intro env hdom
     unfold ConstraintSystem.sideEffects
-    show ((cs.busInteractions.map (brBi cs.algebraicConstraints bs.degreeBound)).filter
+    show ((cs.busInteractions.map (brBi (singleVarCs cs.algebraicConstraints) bs.degreeBound)).filter
       (fun bi => bs.isStateful bi.busId)).map _ = _
     induction cs.busInteractions with
     | nil => rfl
     | cons bi rest ih =>
       simp only [List.map_cons, List.filter_cons]
-      have hb : bs.isStateful (brBi cs.algebraicConstraints bs.degreeBound bi).busId
+      have hb : bs.isStateful (brBi (singleVarCs cs.algebraicConstraints) bs.degreeBound bi).busId
           = bs.isStateful bi.busId := rfl
       rw [hb]
       by_cases hst : bs.isStateful bi.busId = true
@@ -349,7 +350,7 @@ theorem ConstraintSystem.boxRewrite_correct [Fact p.Prime]
     unfold ConstraintSystem.admissible
     have hmap : (cs.boxRewrite bs).busInteractions.map (fun bi => bi.eval env)
         = cs.busInteractions.map (fun bi => bi.eval env) := by
-      show (cs.busInteractions.map (brBi cs.algebraicConstraints bs.degreeBound)).map
+      show (cs.busInteractions.map (brBi (singleVarCs cs.algebraicConstraints) bs.degreeBound)).map
         (fun bi => bi.eval env) = _
       rw [List.map_map]
       exact List.map_congr_left (fun bi _ => brBi_eval _ _ bi env hdom)
