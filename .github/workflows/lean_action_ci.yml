@@ -2,7 +2,10 @@ name: Lean Action CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 jobs:
