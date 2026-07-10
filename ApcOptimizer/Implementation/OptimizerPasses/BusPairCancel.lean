@@ -976,11 +976,23 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
           -- Cheap region tests first: only an otherwise-valid candidate pays the byte
           -- justification scan (`checkCancel` re-verifies everything).
           if B.all (midRefuted shape busId S) && A.all (preRefuted shape busId S) then
-          -- Byte slots the remaining system does not justify are materialized as a single
-          -- explicit self-check on the byte-check bus (more than one would not shrink the bus
-          -- count and would stall the cancellation loop); when the justification cannot pass
-          -- (≥ 2 unjustified slots, or no byte-check bus), skip the certificate re-check —
-          -- the justification scan is the expensive part.
+          -- Try the certificate with no emitted checks first: every non-justification conjunct
+          -- of `checkCancel` is guaranteed by the scan's own gates, so it passes iff every
+          -- declared byte slot is justified — the same predicate `unjustifiedSlots` decides —
+          -- and the common fully-justified drop pays the justification scan **once**.
+          if hchk0 : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
+              A S B R C [] = true then
+            if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
+              some ⟨{ cs with busInteractions := A ++ B ++ C ++ [] }, [],
+                    checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
+                      A S B R C [] hsplit hchk0⟩
+            else next ()
+          else
+          -- Some slot is unjustified. Such slots are materialized as a single explicit
+          -- self-check on the byte-check bus (more than one would not shrink the bus count and
+          -- would stall the cancellation loop); when the justification cannot pass (≥ 2
+          -- unjustified slots, or no byte-check bus), skip the certificate re-check — the
+          -- justification scan is the expensive part.
           let unjust := unjustifiedSlots deep cs.algebraicConstraints bs facts (A ++ B ++ C)
             slots R
           let checks : List (BusInteraction (Expression p)) :=
@@ -989,7 +1001,7 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
                 [{ busId := bcBus, multiplicity := .const 1,
                    payload := [e, e, .const 0, .const 1] }])
             | _, _ => []
-          if unjust.isEmpty || !checks.isEmpty then
+          if !checks.isEmpty then
           if hchk : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
               A S B R C checks = true then
             if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
