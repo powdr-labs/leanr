@@ -146,10 +146,109 @@ def load_asm(bench_dir):
             for e in man.get("entries", [])}
 
 
-def available_benchmarks():
-    """Benchmark names available: subdirectories of HERE that hold apc_*_pc*.json.gz cases."""
-    return sorted(d.name for d in HERE.iterdir()
+def available_benchmarks(bench_root):
+    """Benchmark names available: subdirectories of bench_root holding apc_*_pc*.json.gz cases."""
+    return sorted(d.name for d in bench_root.iterdir()
                   if d.is_dir() and any(d.glob("apc_*_pc*.json.gz")))
+
+
+def summarize(results):
+    """Aggregate effectiveness of a result list [(name, {role: {vars, constraints, bus}})]:
+    agg (Σbefore ⁄ Σafter) and geomean per role and measure, plus per-case wins/losses on the
+    primary metric (variables)."""
+    n = len(results)
+
+    def agg(role, mt):
+        sb = sum(m["before"][mt] for _, m in results)
+        sa = sum(m[role][mt] for _, m in results)
+        return sb / sa if sa else float("inf")
+
+    def geo(role, mt):
+        return math.exp(sum(math.log(_ratio(m["before"][mt], m[role][mt]))
+                            for _, m in results) / n)
+
+    summary = {
+        "n": n,
+        "wins": sum(1 for _, m in results if m["apc-optimizer"]["vars"] < m["powdr"]["vars"]),
+        "losses": sum(1 for _, m in results if m["apc-optimizer"]["vars"] > m["powdr"]["vars"]),
+    }
+    for role in ("apc-optimizer", "powdr"):
+        for mt in METRICS:
+            summary[f"{role}_{mt}_agg"] = agg(role, mt)
+            summary[f"{role}_{mt}_geo"] = geo(role, mt)
+    return summary
+
+
+def emit_summary_md(benchmark, summary, skipped):
+    """Markdown summary of one benchmark run (apc-optimizer vs powdr)."""
+    lines = [f"### Effectiveness — {benchmark}, {summary['n']} cases, apc-optimizer vs powdr", "",
+             "Effectiveness = size before / size after (larger is better); "
+             "priority: variables > bus interactions > constraints. "
+             "agg = Σbefore ⁄ Σafter, geo = geomean of per-case factors.", "",
+             "| measure | apc-optimizer (agg / geo) | powdr (agg / geo) | diff (agg) |",
+             "|---|---|---|---|"]
+    for mt in METRICS:
+        la, lg = summary[f"apc-optimizer_{mt}_agg"], summary[f"apc-optimizer_{mt}_geo"]
+        pa, pg = summary[f"powdr_{mt}_agg"], summary[f"powdr_{mt}_geo"]
+        lines.append(f"| {METRIC_LABEL[mt]} | {la:.3f}× / {lg:.3f}× "
+                     f"| {pa:.3f}× / {pg:.3f}× | {la - pa:+.3f}× |")
+    lines.append("")
+    lines.append(f"Per-case (by variables): apc-optimizer wins {summary['wins']}, "
+                 f"loses {summary['losses']}, "
+                 f"ties {summary['n'] - summary['wins'] - summary['losses']}.")
+    if skipped:
+        lines.append("")
+        lines.append(f"Skipped {len(skipped)}: "
+                     + ", ".join(f"{name} ({err})" for name, err in skipped) + ".")
+    return "\n".join(lines) + "\n"
+
+
+def emit_compare_md(base, target):
+    """Markdown comparison of two runs' apc-optimizer effectiveness (target vs baseline).
+    The metrics are deterministic circuit sizes, so any difference is a real change."""
+    common = sorted(set(base["results"]) & set(target["results"]))
+    dropped = (set(base["results"]) | set(target["results"])) - set(common)
+    t_results = [(name, target["results"][name]) for name in common]
+    b_results = [(name, base["results"][name]) for name in common]
+    ts, bs = summarize(t_results), summarize(b_results)
+
+    lines = [f"### Effectiveness — {target['benchmark']}, {len(common)} cases, "
+             "target vs baseline", "",
+             "Effectiveness = size before / size after (larger is better); "
+             "priority: variables > bus interactions > constraints. "
+             "agg = Σbefore ⁄ Σafter, geo = geomean; powdr shown for reference.", "",
+             "| measure | target (agg / geo) | baseline (agg / geo) | Δ (agg) "
+             "| powdr (agg / geo) |",
+             "|---|---|---|---|---|"]
+    for mt in METRICS:
+        ta, tg = ts[f"apc-optimizer_{mt}_agg"], ts[f"apc-optimizer_{mt}_geo"]
+        ba, bg = bs[f"apc-optimizer_{mt}_agg"], bs[f"apc-optimizer_{mt}_geo"]
+        pa, pg = ts[f"powdr_{mt}_agg"], ts[f"powdr_{mt}_geo"]
+        lines.append(f"| {METRIC_LABEL[mt]} | {ta:.3f}× / {tg:.3f}× | {ba:.3f}× / {bg:.3f}× "
+                     f"| {ta - ba:+.3f}× | {pa:.3f}× / {pg:.3f}× |")
+
+    changed = [name for name in common
+               if target["results"][name]["apc-optimizer"] != base["results"][name]["apc-optimizer"]]
+    lines.append("")
+    if not changed:
+        lines.append("Per-case circuit sizes are **identical** between target and baseline.")
+    else:
+        lines.append(f"Circuit sizes changed on {len(changed)} of {len(common)} cases "
+                     "(baseline → target):")
+        lines.append("")
+        lines.append("| case | variables | bus interactions | constraints |")
+        lines.append("|---|---|---|---|")
+        for name in changed:
+            t, b = target["results"][name]["apc-optimizer"], base["results"][name]["apc-optimizer"]
+            cells = []
+            for mt in METRICS:
+                cells.append(f"{b[mt]} → **{t[mt]}**" if t[mt] != b[mt] else str(t[mt]))
+            lines.append(f"| {name} | {cells[0]} | {cells[1]} | {cells[2]} |")
+    if dropped:
+        lines.append("")
+        lines.append("Cases present on only one side (not compared): "
+                     + ", ".join(sorted(dropped)) + ".")
+    return "\n".join(lines) + "\n"
 
 
 def main():
@@ -166,19 +265,42 @@ def main():
                     help="also write a self-contained interactive HTML report to this path")
     ap.add_argument("--md", type=Path, default=None, metavar="OUT.md",
                     help="also write the summary as markdown (for CI job summaries / PR comments)")
+    ap.add_argument("--json", type=Path, default=None, metavar="OUT.json",
+                    help="also dump the raw per-case metrics (input for --compare)")
+    ap.add_argument("--compare", nargs=2, default=None, metavar=("BASE.json", "TARGET.json"),
+                    help="don't bench; render a comparison of two --json dumps instead")
+    ap.add_argument("--binary", type=Path, default=None, metavar="EXE",
+                    help="use this apc-optimizer executable instead of building the repo's "
+                         "(e.g. a prebuilt CI artifact); implies no build")
+    ap.add_argument("--repo", type=Path, default=REPO, metavar="DIR",
+                    help="repository to build and bench (default: the one holding this script; "
+                         "lets a saved copy of the script bench another checkout, e.g. a baseline)")
     args = ap.parse_args()
 
-    bench_dir = HERE / args.benchmark
-    if not bench_dir.is_dir():
-        avail = ", ".join(available_benchmarks()) or "(none found)"
-        sys.exit(f"error: no benchmark {args.benchmark!r} under {HERE} (available: {avail})")
+    if args.compare is not None:
+        base, target = (json.loads(p.read_text()) for p in map(Path, args.compare))
+        md = emit_compare_md(base, target)
+        print(md)
+        if args.md is not None:
+            args.md.write_text(md)
+            print(f"wrote {args.md}", file=sys.stderr)
+        return
 
-    os.chdir(REPO)
-    print("building apc-optimizer...", file=sys.stderr)
-    subprocess.run(["lake", "build"], check=True)
-    binary = REPO / ".lake" / "build" / "bin" / "apc-optimizer"
+    repo = args.repo.resolve()
+    bench_root = repo / "OpenVmBenchmarks"
+    bench_dir = bench_root / args.benchmark
+    if not bench_dir.is_dir():
+        avail = ", ".join(available_benchmarks(bench_root)) or "(none found)"
+        sys.exit(f"error: no benchmark {args.benchmark!r} under {bench_root} (available: {avail})")
+
+    binary = args.binary.resolve() if args.binary is not None else None
+    os.chdir(repo)
+    if binary is None:
+        print("building apc-optimizer...", file=sys.stderr)
+        subprocess.run(["lake", "build"], check=True)
+        binary = repo / ".lake" / "build" / "bin" / "apc-optimizer"
     if not binary.exists():
-        sys.exit(f"error: {binary} missing after build")
+        sys.exit(f"error: {binary} missing")
 
     cases = sorted(f for f in bench_dir.glob("apc_*_pc*.json.gz")
                    if not f.name.endswith(".powdr_opt.json.gz"))
@@ -205,26 +327,8 @@ def main():
         sys.exit("no results produced")
 
     n = len(results)
-
-    def agg(role, mt):  # aggregate effectiveness: sum of befores / sum of afters
-        sb = sum(m["before"][mt] for _, m in results)
-        sa = sum(m[role][mt] for _, m in results)
-        return sb / sa if sa else float("inf")
-
-    def geo(role, mt):  # geometric mean of the per-case shrink factors
-        return math.exp(sum(math.log(_ratio(m["before"][mt], m[role][mt]))
-                            for _, m in results) / n)
-
     # Wins/losses stay on the primary metric (variables).
-    summary = {
-        "n": n,
-        "wins": sum(1 for _, m in results if m["apc-optimizer"]["vars"] < m["powdr"]["vars"]),
-        "losses": sum(1 for _, m in results if m["apc-optimizer"]["vars"] > m["powdr"]["vars"]),
-    }
-    for role in ("apc-optimizer", "powdr"):
-        for mt in METRICS:
-            summary[f"{role}_{mt}_agg"] = agg(role, mt)
-            summary[f"{role}_{mt}_geo"] = geo(role, mt)
+    summary = summarize(results)
 
     print(f"\n=== {args.benchmark}: apc-optimizer vs powdr over {n} cases ===")
     print("effectiveness = size before / size after (larger is better); "
@@ -242,26 +346,13 @@ def main():
         for name, err in skipped:
             print(f"  {name}: {err}", file=sys.stderr)
 
+    if args.json is not None:
+        args.json.write_text(json.dumps({"benchmark": args.benchmark,
+                                         "results": dict(results),
+                                         "skipped": skipped}))
+        print(f"wrote {args.json}", file=sys.stderr)
     if args.md is not None:
-        lines = [f"### Effectiveness — {args.benchmark}, {n} cases, apc-optimizer vs powdr", "",
-                 "Effectiveness = size before / size after (larger is better); "
-                 "priority: variables > bus interactions > constraints. "
-                 "agg = Σbefore ⁄ Σafter, geo = geomean of per-case factors.", "",
-                 "| measure | apc-optimizer (agg / geo) | powdr (agg / geo) | diff (agg) |",
-                 "|---|---|---|---|"]
-        for mt in METRICS:
-            la, lg = summary[f"apc-optimizer_{mt}_agg"], summary[f"apc-optimizer_{mt}_geo"]
-            pa, pg = summary[f"powdr_{mt}_agg"], summary[f"powdr_{mt}_geo"]
-            lines.append(f"| {METRIC_LABEL[mt]} | {la:.3f}× / {lg:.3f}× "
-                         f"| {pa:.3f}× / {pg:.3f}× | {la - pa:+.3f}× |")
-        lines.append("")
-        lines.append(f"Per-case (by variables): apc-optimizer wins {summary['wins']}, "
-                     f"loses {summary['losses']}, ties {n - summary['wins'] - summary['losses']}.")
-        if skipped:
-            lines.append("")
-            lines.append(f"Skipped {len(skipped)}: "
-                         + ", ".join(f"{name} ({err})" for name, err in skipped) + ".")
-        args.md.write_text("\n".join(lines) + "\n")
+        args.md.write_text(emit_summary_md(args.benchmark, summary, skipped))
         print(f"wrote {args.md}", file=sys.stderr)
 
     if want_report:
