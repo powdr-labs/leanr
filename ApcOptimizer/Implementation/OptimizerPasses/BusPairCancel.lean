@@ -970,12 +970,15 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
       | some j =>
         match arr[j]? with
         | some R =>
+          -- Cheap region tests first, over the array index ranges (`Array.all` with
+          -- start/stop) — the A/B/C lists are materialized only for the few candidates the
+          -- tests accept, not for every payload match; only an otherwise-valid candidate pays
+          -- the byte justification scan (`checkCancel` re-verifies everything).
+          if arr.all (midRefuted shape busId S) (i + 1) j
+              && arr.all (preRefuted shape busId S) 0 i then
           let A := (arr.extract 0 i).toList
           let B := (arr.extract (i + 1) j).toList
           let C := (arr.extract (j + 1) arr.size).toList
-          -- Cheap region tests first: only an otherwise-valid candidate pays the byte
-          -- justification scan (`checkCancel` re-verifies everything).
-          if B.all (midRefuted shape busId S) && A.all (preRefuted shape busId S) then
           -- Try the certificate with no emitted checks first: every non-justification conjunct
           -- of `checkCancel` is guaranteed by the scan's own gates, so it passes iff every
           -- declared byte slot is justified — the same predicate `unjustifiedSlots` decides —
