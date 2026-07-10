@@ -17,3 +17,65 @@ jobs:
       - uses: leanprover/lean-action@v1
       - name: Proof integrity (no sorry / new axioms)
         run: ./Scripts/check-proof-integrity.sh
+      # The optimizer binary, reused by the quick-bench job below (and, from main runs, as the
+      # baseline binary for PR benches — so PRs never rebuild main).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apc-optimizer-bin
+          path: .lake/build/bin/apc-optimizer
+          retention-days: 30
+
+  # Quick runtime check on every PR: bench the top-10 cases with this PR's binary and with the
+  # binary from the latest successful main build, back-to-back on the same runner, and post the
+  # comparison as a sticky comment. Full-set benches stay on demand via the Runtime Bench workflow.
+  quick-bench:
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: warp-ubuntu-2404-x64-32x
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: apc-optimizer-bin
+          path: bin-target
+      - name: Bench top-10 vs latest main binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "TARGET_SHA=$(cut -c1-7 <<< '${{ github.event.pull_request.head.sha }}')" \
+            >> "$GITHUB_ENV"
+          chmod +x bin-target/apc-optimizer
+          python3 OpenVmBenchmarks/runtime_bench.py --binary bin-target/apc-optimizer \
+            --n 10 --json target.json --md bench.md
+          run_id=$(gh run list --workflow "Lean Action CI" --branch main --status success \
+            --limit 1 --json databaseId -q '.[0].databaseId // empty')
+          if [ -n "$run_id" ] && gh run download "$run_id" -n apc-optimizer-bin -D bin-base; then
+            chmod +x bin-base/apc-optimizer
+            echo "BASE_SHA=$(gh run view "$run_id" --json headSha -q .headSha | cut -c1-7)" \
+              >> "$GITHUB_ENV"
+            python3 OpenVmBenchmarks/runtime_bench.py --binary bin-base/apc-optimizer \
+              --n 10 --json base.json
+            python3 OpenVmBenchmarks/runtime_bench.py --compare base.json target.json --md bench.md
+          else
+            echo "no apc-optimizer-bin artifact on the latest main run; reporting this PR only"
+          fi
+      - name: Report
+        uses: ./.github/actions/report-bench
+        with:
+          md-file: bench.md
+          marker: "<!-- runtime-bench-quick -->"
+          # Comment on same-repo PRs only: fork PRs get a read-only token.
+          pr: ${{ github.event.pull_request.head.repo.full_name == github.repository
+                  && github.event.number || '' }}
+          note: >-
+            Top-10 quick bench on a CI runner
+            (${{ env.BASE_SHA && format('PR `{0}` vs main `{1}`', env.TARGET_SHA, env.BASE_SHA)
+                 || format('PR `{0}`, no main baseline binary available', env.TARGET_SHA) }});
+            trust shares and orders of magnitude over exact numbers.
+            Full set: `gh workflow run "Runtime Bench" -f pr=${{ github.event.number }}`.
+          token: ${{ github.token }}

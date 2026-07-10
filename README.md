@@ -52,3 +52,15 @@ OpenVmBenchmarks/benchmark.py                # all openvm-eth cases (--jobs = co
 OpenVmBenchmarks/benchmark.py --n 20         # top 20 by cost rank
 OpenVmBenchmarks/benchmark.py --n 10 --report report.html   # + interactive HTML report
 ```
+
+To bench the optimizer's *runtime* instead — the wall time of each optimizer call plus per-pass
+attribution (`apc-optimizer profile`) — use `runtime_bench.py`. CI runs it at two tiers, always
+benching both sides on the same runner (cross-runner timings don't compare) and posting the result
+as a sticky PR comment: every PR gets a top-10 quick bench of the PR's CI-built binary against the
+binary from the latest main build (no rebuild), and the on-demand `Runtime Bench` workflow
+(`gh workflow run "Runtime Bench" -f pr=<N>`) benches the full set from source against `main`:
+
+```bash
+OpenVmBenchmarks/runtime_bench.py            # all openvm-eth cases, serial (stable timings)
+OpenVmBenchmarks/runtime_bench.py --n 20 --repeat 3   # top 20, best-of-3 per case
+```

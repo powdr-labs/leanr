@@ -1,0 +1,55 @@
+name: Report bench results
+description: >-
+  Append a runtime-bench markdown report to the job summary and, when a PR number is given,
+  post it to that PR as a sticky comment — one comment per marker, updated in place on re-runs.
+
+inputs:
+  md-file:
+    description: Markdown report to publish
+    required: true
+  marker:
+    description: HTML comment identifying the sticky comment (becomes its first line)
+    required: true
+  note:
+    description: Trailing italic note appended to the PR comment (not to the job summary)
+    default: ""
+  pr:
+    description: PR number to comment on (empty = job summary only)
+    default: ""
+  token:
+    description: Token with pull-requests write permission
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Job summary
+      shell: bash
+      env:
+        MD: ${{ inputs.md-file }}
+      run: cat "$MD" >> "$GITHUB_STEP_SUMMARY"
+    - name: Sticky PR comment
+      if: inputs.pr != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        MD: ${{ inputs.md-file }}
+        MARKER: ${{ inputs.marker }}
+        NOTE: ${{ inputs.note }}
+        PR: ${{ inputs.pr }}
+      run: |
+        body="$RUNNER_TEMP/sticky-comment-body.md"
+        {
+          echo "$MARKER"
+          cat "$MD"
+          if [ -n "$NOTE" ]; then printf '\n_%s_\n' "$NOTE"; fi
+        } > "$body"
+        cid=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+          --jq '.[] | select(.body | startswith(env.MARKER)) | .id' | head -n 1)
+        if [ -n "$cid" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$cid" -F "body=@$body" \
+            --jq .html_url
+        else
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F "body=@$body" \
+            --jq .html_url
+        fi

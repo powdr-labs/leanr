@@ -1,0 +1,95 @@
+name: Runtime Bench
+
+# Benchmark the *runtime* of the optimizer (not its effectiveness): the wall time of each
+# optimizer call over the openvm-eth set, plus per-pass attribution via `apc-optimizer profile`.
+# By default the target is also compared against `main`, benched on the same runner in the same
+# job — timings from different runners don't compare.
+#
+# On-demand only (it runs the full set serially, twice when comparing, which takes a while).
+# Dispatch it from the Actions UI or with, e.g.:
+#
+#   gh workflow run "Runtime Bench" -f pr=82        # bench PR #82 vs main, sticky-comment there
+#   gh workflow run "Runtime Bench" -f pr=82 -f baseline=   # no comparison, target only
+#   gh workflow run "Runtime Bench"                 # bench the dispatched branch vs main
+#
+# Results always go to the job summary; with `pr` set they are also posted as a sticky comment.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number: bench its head and post/update a sticky comment there (empty = bench the dispatched branch, job summary only)"
+        required: false
+        default: ""
+      baseline:
+        description: "ref to compare against, benched on the same runner (empty = no comparison)"
+        required: false
+        default: "main"
+      n:
+        description: "only the top N cases by cost rank (empty = all)"
+        required: false
+        default: ""
+      repeat:
+        description: "runs per case; the fastest is kept"
+        required: false
+        default: "1"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  bench:
+    runs-on: warp-ubuntu-2404-x64-32x
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr != '' && format('refs/pull/{0}/head', inputs.pr) || github.ref }}
+      - uses: leanprover/lean-action@v1
+      - name: Bench target
+        run: |
+          echo "BENCH_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "TARGET_REF=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          # The baseline checkout below replaces the working tree, so keep this version of the
+          # bench script (and its results) outside it.
+          cp OpenVmBenchmarks/runtime_bench.py "$RUNNER_TEMP/runtime_bench.py"
+          N='${{ inputs.n }}'
+          REPEAT='${{ inputs.repeat }}'
+          python3 OpenVmBenchmarks/runtime_bench.py --no-build \
+            --json "$RUNNER_TEMP/target.json" --md bench.md \
+            ${N:+--n "$N"} --repeat "${REPEAT:-1}"
+      - name: Bench baseline
+        if: inputs.baseline != ''
+        run: |
+          git fetch --depth 1 origin '${{ inputs.baseline }}'
+          if [ "$(git rev-parse FETCH_HEAD)" = "$(git rev-parse HEAD)" ]; then
+            echo "baseline is the benched commit itself; skipping comparison"
+            exit 0
+          fi
+          echo "BASE_SHA=$(git rev-parse --short FETCH_HEAD)" >> "$GITHUB_ENV"
+          git checkout --force FETCH_HEAD
+          lake exe cache get || true
+          lake build
+          N='${{ inputs.n }}'
+          REPEAT='${{ inputs.repeat }}'
+          python3 "$RUNNER_TEMP/runtime_bench.py" --no-build --repo "$GITHUB_WORKSPACE" \
+            --json "$RUNNER_TEMP/baseline.json" \
+            ${N:+--n "$N"} --repeat "${REPEAT:-1}"
+          python3 "$RUNNER_TEMP/runtime_bench.py" \
+            --compare "$RUNNER_TEMP/baseline.json" "$RUNNER_TEMP/target.json" --md bench.md
+          # Restore the target checkout: the report step below runs a local action, which must
+          # exist in the working tree (the baseline may predate it).
+          git checkout --force "$TARGET_REF"
+      - name: Report
+        uses: ./.github/actions/report-bench
+        with:
+          md-file: bench.md
+          marker: "<!-- runtime-bench -->"
+          pr: ${{ inputs.pr }}
+          note: >-
+            Timings from a CI runner
+            (${{ env.BASE_SHA && format('target `{0}` vs baseline `{1}`', env.BENCH_SHA, env.BASE_SHA)
+                 || format('`{0}`', env.BENCH_SHA) }});
+            trust shares and orders of magnitude over exact numbers.
+          token: ${{ github.token }}
