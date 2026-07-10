@@ -1,0 +1,66 @@
+name: Runtime Bench
+
+# Benchmark the *runtime* of the optimizer (not its effectiveness): the wall time of each
+# optimizer call over the openvm-eth set, plus per-pass attribution via `apc-optimizer profile`.
+# Results go to the job summary and, on PRs, a sticky comment.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "only the top N cases by cost rank (empty = all)"
+        required: false
+        default: ""
+      repeat:
+        description: "runs per case; the fastest is kept"
+        required: false
+        default: "1"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+      - name: Bench optimizer runtime
+        run: |
+          N='${{ github.event.inputs.n }}'
+          REPEAT='${{ github.event.inputs.repeat }}'
+          python3 OpenVmBenchmarks/runtime_bench.py --no-build --md bench.md \
+            ${N:+--n "$N"} --repeat "${REPEAT:-1}"
+      - name: Job summary
+        run: cat bench.md >> "$GITHUB_STEP_SUMMARY"
+      - name: PR comment
+        # Same-repo PRs only: fork PRs get a read-only token, so the comment would fail.
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- runtime-bench -->';
+            const body = marker + '\n' + fs.readFileSync('bench.md', 'utf8') +
+              '\n_Timings from a shared CI runner (`' + context.sha.slice(0, 7) +
+              '`); trust shares and orders of magnitude over exact numbers._';
+            const {data: comments} = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100});
+            const prev = comments.find(c => c.body.startsWith(marker));
+            if (prev) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: prev.id, body});
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body});
+            }
