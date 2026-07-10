@@ -91,13 +91,15 @@ def bench(args):
     if not bench_dir.is_dir():
         sys.exit(f"error: no benchmark {args.benchmark!r} under {bench_dir.parent}")
 
+    binary = args.binary.resolve() if args.binary is not None else None
     os.chdir(repo)
-    if not args.no_build:
-        print("building apc-optimizer...", file=sys.stderr)
-        subprocess.run(["lake", "build"], check=True)
-    binary = repo / ".lake" / "build" / "bin" / "apc-optimizer"
+    if binary is None:
+        if not args.no_build:
+            print("building apc-optimizer...", file=sys.stderr)
+            subprocess.run(["lake", "build"], check=True)
+        binary = repo / ".lake" / "build" / "bin" / "apc-optimizer"
     if not binary.exists():
-        sys.exit(f"error: {binary} missing (build first or drop --no-build)")
+        sys.exit(f"error: {binary} missing (build first, or pass --binary/--no-build correctly)")
 
     cases = sorted(f for f in bench_dir.glob("apc_*_pc*.json.gz")
                    if not f.name.endswith(".powdr_opt.json.gz"))
@@ -232,6 +234,9 @@ def main():
                     help="runs per case; the fastest is kept (default: 1)")
     ap.add_argument("--no-build", action="store_true",
                     help="skip `lake build` (the binary must already exist)")
+    ap.add_argument("--binary", type=Path, default=None, metavar="EXE",
+                    help="bench this apc-optimizer executable instead of building the repo's "
+                         "(e.g. a prebuilt CI artifact); implies no build")
     ap.add_argument("--repo", type=Path, default=REPO, metavar="DIR",
                     help="repository to build and bench (default: the one holding this script; "
                          "lets a saved copy of the script bench another checkout, e.g. a baseline)")
