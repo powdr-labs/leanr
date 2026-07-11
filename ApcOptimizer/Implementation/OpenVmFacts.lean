@@ -563,6 +563,26 @@ def openVmFacts (p : ℕ) [NeZero p]
         have hx0 : x.val = 0 := Nat.lt_one_iff.1 (ZMod.val_lt x)
         simp [h1, hv0, hx0, isByte]
       · simp [h1, hv0, isByte, Nat.xor_zero]
+  zeroRangeEq busId := match busMap busId with
+    | some .variableRangeChecker => true
+    | _ => false
+  zeroRangeEq_sound := by
+    intro busId h
+    have hbus : busMap busId = some OpenVmBusType.variableRangeChecker := by
+      revert h; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    refine ⟨?_, ?_⟩
+    · show (match busMap busId with | some t => t.isStateful | none => false) = false
+      rw [hbus]; rfl
+    · intro x
+      -- variableRangeChecker `[x, 0]`: `!(0 ≤ 25 ∧ x.val < 2^0) = false ↔ x.val < 1 ↔ x = 0`.
+      have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
+      show violates busMap { busId := busId, multiplicity := 1, payload := [x, 0] } = false ↔ x = 0
+      unfold violates; rw [hbus]
+      rw [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq,
+        hv0, pow_zero, Nat.lt_one_iff, ZMod.val_eq_zero]
+      exact ⟨fun h => h.2, fun h => ⟨Nat.zero_le 25, h⟩⟩
   zeroCell := zeroCellImpl busMap
   zeroCell_sound := by
     intro msgs hadm busId addrReq dataSlots hfact m hm hbusId hmne haddr slot hslot v hget
