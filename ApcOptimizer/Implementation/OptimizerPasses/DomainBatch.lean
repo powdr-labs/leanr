@@ -700,6 +700,23 @@ def coveredBis (bs : BusSemantics p) (cs : ConstraintSystem p) (xs : List Variab
 /-- Work cap for one joint enumeration: box size × number of covered targets. -/
 def maxEnumWork : Nat := 524288
 
+/-- Can this covered interaction ever eliminate a box point? A payload of raw variables and
+    constants is usually the range/byte check that *defined* the box domains (probing it filters
+    nothing), so such interactions used to be skipped as uninformative wholesale. The exception —
+    measured on `[0, 0, z, 1]` XOR rows left behind by substitution, whose constant operands pin
+    `z = 0` — is a raw-variable slot that carries **no** fact bound from this very interaction
+    (`interactionBound = none`): the variable's domain came from elsewhere, so this interaction's
+    table can genuinely filter the box. Domain-defining checks bound every variable slot they
+    carry and stay excluded, preserving the gate's performance property. Heuristic only: it
+    selects enumeration targets, and the forced values that come out carry their own
+    certificates. -/
+def biInformative (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) : Bool :=
+  bi.payload.any (fun e => !(e.isVar || e.constValue?.isSome)) ||
+  bi.payload.any (fun e => match e with
+    | .var x => (interactionBound bs facts bi x).isNone
+    | _ => false)
+
 /-- Is this constraint *redundant* for enumeration — identically zero on the box of its own
     variables' domains (from `T`)? Such a constraint is then zero on every larger box that contains
     those variables, so it never eliminates a survivor and can be dropped from every joint
@@ -949,7 +966,8 @@ theorem scanNone_unsat {cs : ConstraintSystem p} {bs : BusSemantics p}
     survivor set while removing almost all of the per-box-point constraint evaluations. Covered
     obligations likewise omit stateful buses (`coveredBis`). Both are just sub-selections of the
     covered items, which `scanForced_sound` accepts (`hactive`/membership). -/
-def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable p cs bs)
+def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
+    (T : DomainTable p cs bs)
     (activeCs : List (Expression p)) (hactiveCs : ∀ c ∈ activeCs, c ∈ cs.algebraicConstraints)
     (xs : List Variable) : List ((x : Variable) × { c : ZMod p //
       ∀ env, cs.satisfies bs env → env x = c }) :=
@@ -969,8 +987,7 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable 
       let esFull := coveredCs cs xs
       let bis := coveredBis bs cs xs
       let es := activeCs.filter (fun c => c.varsInF xs)
-      let informative := !esFull.isEmpty ||
-        bis.any (fun bi => bi.payload.any (fun e => !(e.isVar || e.constValue?.isSome)))
+      let informative := !esFull.isEmpty || bis.any (biInformative bs facts)
       if informative && boxSize * (esFull.length + bis.length) ≤ maxEnumWork then
         have hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true :=
           fun e he => ⟨hactiveCs e (List.mem_filter.1 he).1,
@@ -1004,17 +1021,17 @@ def varSetKey (xs : List Variable) : String :=
 /-- Collect forced constants from joint enumerations of the given targets' variable sets,
     skipping variable sets already enumerated. `activeCs` (the non-redundant constraints) and its
     membership witness are threaded to `forcedOver`. -/
-def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p}
+def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
     (T : DomainTable p cs bs) (activeCs : List (Expression p))
     (hactiveCs : ∀ c ∈ activeCs, c ∈ cs.algebraicConstraints) :
     List (List Variable) → Std.HashSet String → Solved p cs bs → Solved p cs bs
   | [], _, σ => σ
   | xs :: rest, seen, σ =>
     let key := varSetKey xs
-    if seen.contains key then collectForced T activeCs hactiveCs rest seen σ
+    if seen.contains key then collectForced facts T activeCs hactiveCs rest seen σ
     else
-      let found := forcedOver T activeCs hactiveCs xs
-      collectForced T activeCs hactiveCs rest (seen.insert key)
+      let found := forcedOver facts T activeCs hactiveCs xs
+      collectForced facts T activeCs hactiveCs rest (seen.insert key)
         (σ.insertAll (found.map (fun f => (f.1, .const f.2.val)))
           (by
             intro env hsat yt hyt
@@ -1040,7 +1057,8 @@ def domainBatchPass : VerifiedPassW p := fun cs bs facts =>
     let targets := cs.algebraicConstraints.map (fun e => e.vars.dedup) ++
       cs.busInteractions.map (fun bi => bi.vars.dedup)
     let activeCs := cs.algebraicConstraints.filter (fun c => !constraintRedundant T c)
-    let σ := collectForced T activeCs (fun _ h => (List.mem_filter.1 h).1) targets ∅ Solved.empty
+    let σ := collectForced facts T activeCs (fun _ h => (List.mem_filter.1 h).1) targets ∅
+      Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs.substF σ.fn, [],
       cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)

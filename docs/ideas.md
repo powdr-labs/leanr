@@ -12,13 +12,15 @@ Only worth it if the flag-compression edge is judged not worth `reencode`'s comp
 pass would then also want a `bits ≥ vars` / large-group path (groups `reencode` skips) to claw some of
 it back. Left for Georg to decide.
 
-Effectiveness priority: **variables > bus interactions > constraints**. As of the byte-check
-packing pass (log entry 49), on the top-12 `openvm-eth` sample apc-optimizer and powdr are ~tied on
-variables (apc-optimizer wins the aggregate, powdr the geomean) and apc-optimizer leads on constraints; the
-remaining *systematic* gap is bus interactions. The bus gap now decomposes as: (a) range-check
-packing via the tuple range checker, (b) memory-pointer-limb 13-bit checks on memory-heavy blocks,
-(c) residual bitwise checks that are not self-XOR byte checks, (d) occasional missed memory
-send↔receive cancellations. See the `docs/log.md` entry 42/46/49 discussion for measurements.
+Effectiveness priority: **variables > bus interactions > constraints**. As of carry-branch
+resolution (log entry 57), on the full 100-case `openvm-eth` benchmark apc-optimizer *wins* variables on
+aggregate (4.135× vs 4.092×) and trails on geomean (3.706× vs 3.787×; per-case: 17 wins / 52
+losses / 31 ties — the losses are a few variables each, dominated by the sltu-compare
+`diff_marker` family below) and leads clearly on constraints; the remaining *systematic* gap is
+bus interactions. The bus gap decomposes as: (a) range-check packing via the tuple range checker,
+(b) memory-pointer-limb 13-bit checks on memory-heavy blocks, (c) residual bitwise checks that
+are not self-XOR byte checks, (d) occasional missed memory send↔receive cancellations. See the
+`docs/log.md` entry 42/46/49/57 discussion for measurements.
 
 ## Drop never-violating stateless lookups (close the residual pc-lookup bus gap)
 
@@ -57,17 +59,27 @@ variable-neutral bus win.
 On memory-heavy blocks (e.g. apc_005) apc-optimizer keeps ~2× powdr's `mem_ptr_limbs` decompositions and
 their 13-bit range checks (the high/"page" limb is identical across same-base accesses but apc-optimizer
 re-decomposes and re-checks per access). The limbs are pinned by **degree-2 carry constraints**
-`(L₁)(L₂) = 0` whose roots are `base + offset` (parameterised by the base variable), so no linear
-(`gauss`/`affine`) or finite-*constant*-domain (`domainProp`/`domainBatch`/`reencode`) pass can
-touch them. Closing it needs a **carry-branch-resolution** step: use the proven byte/range bounds
-(`BusFacts.slotBound`) to show one factor of the product can't vanish, collapsing `(L₁)(L₂)=0` to
-the linear `Lᵢ=0` so Gauss can unify the shared limb and drop the duplicate check. This is the
-hardest of the current ideas — dropping a range check is sound only if the shared limb is *proven*
-equal (a bounded-no-wrap argument in the style of `MemoryUnify.boundedSumMax`) — and it is a bus
-win on an axis where apc-optimizer is already ~tied with powdr on variables, so lower leverage than the
-packing passes. **Update (log 50):** the base `mem_ptr_limbs` derive from *received* register
-words, whose limbs now carry proven byte bounds (`slotBound` on memory receives, since the
-receive-byte spec change) — the missing input bound for the no-wrap argument now exists.
+`(L₁)(L₂) = 0` whose roots are `base + offset` (parameterised by the base variable).
+**Update (log 57):** carry-branch resolution (`CarryBranch.lean`) is now landed and does *not*
+close this family — measured on apc_005, both factors' value intervals genuinely contain `0`
+(e.g. `300 + rs1₀ + 256·rs1₁ − mp₀` ranges over `[−65235, 65835]` with `mp₀ < 2^16`: the 16-bit
+wrap really happens on some traces), so no sound one-factor refutation exists and the constraint
+is irreducibly two-branched. Closing the gap instead needs **cross-access unification**: two
+accesses off the same base at close offsets have provably equal high limbs (`mp₁` differs only
+when the low-limb carry differs, a bounded-no-wrap argument in the style of
+`MemoryUnify.boundedSumMax`), so the duplicate decomposition + 13-bit check of the second access
+can be replaced by the first's limbs plus a small correction. Sound but needs the proven byte
+bounds on the base register word (present since the log-50 receive-byte spec change).
+
+## Widen `hintCollapse` to the sltu-style compare gadget (variables)
+
+On comparison blocks powdr collapses the per-limb `diff_marker` witnesses into one inverse hint;
+`hintCollapse` (entry 52) does this only when the constraint matches its exact `Σ aᵢ·dimᵢ + t = 0`
+shape with byte-bounded single-variable coefficients. The sltu-style gadget (most-significant
+difference selection, one marker per limb) doesn't match yet — apc_018 measured after
+carry-branch resolution (entry 57): ours 43 vars vs powdr 34; this family is the bulk of the
+residual. Generalizing the matcher (coefficients that are *differences* of byte-bounded
+variables, sign-split like `CarryBranch.splitSumMax`) should capture it.
 
 ## Is-zero / is-equal witness reduction (variables)
 
