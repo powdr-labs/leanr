@@ -27,6 +27,11 @@ private def slotBoundImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat) 
   match busMap busId, pattern, slot with
   | some .bitwiseLookup, [_, _, _, some op], 0 => if op.val ≤ 1 then some 256 else none
   | some .bitwiseLookup, [_, _, _, some op], 1 => if op.val ≤ 1 then some 256 else none
+  -- Slot 2 is the bitwise *result* `z`: op 0 forces `z = 0`, op 1 forces `z = x ^ y` with
+  -- byte operands, so `z` is a byte in either case (op ≥ 2 violates). This byte guarantee on
+  -- the XOR/AND result — not just the operands — is what lets a memory pair whose data is an
+  -- XOR output be cancelled (`byteJustified`).
+  | some .bitwiseLookup, [_, _, _, some op], 2 => if op.val ≤ 1 then some 256 else none
   | some .variableRangeChecker, [_, some bits], 0 =>
       if bits.val ≤ 25 then some (2 ^ bits.val) else none
   | some (.tupleRangeChecker s1 _), [_, _], 0 => some s1
@@ -233,6 +238,31 @@ def openVmFacts (p : ℕ) [NeZero p]
         · simp only [h0] at hok'
           rw [Bool.not_eq_false', Bool.and_eq_true, Bool.and_eq_true] at hok'
           exact of_decide_eq_true hok'.1.2
+    · -- bitwise lookup, slot 2 (the XOR/AND result is a byte)
+      rename_i q0 q1 q2 op hbus
+      split_ifs at hfact with hop
+      simp only [Option.some.injEq] at hfact
+      subst hfact
+      obtain ⟨a, b, c, d, hpay⟩ := payload_four hmatch
+      have hd : d = op := by
+        have h3 := hmatch.2 3 op (by simp)
+        rw [hpay] at h3; simpa using h3
+      have hx : c = x := by rw [hpay] at hget; simpa using hget
+      subst hx hd
+      unfold violates at hok'
+      rw [hbus, hpay] at hok'
+      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 hop with h0 | h0
+      · -- op = 0: `z = 0`
+        simp only [h0] at hok'
+        rw [Bool.not_eq_false', Bool.and_eq_true, Bool.and_eq_true] at hok'
+        rw [of_decide_eq_true hok'.2]; decide
+      · -- op = 1: `z = x ^ y` with byte operands
+        simp only [h0] at hok'
+        rw [Bool.not_eq_false', Bool.and_eq_true, Bool.and_eq_true] at hok'
+        have hxa : a.val < 2 ^ 8 := of_decide_eq_true hok'.1.1
+        have hxb : b.val < 2 ^ 8 := of_decide_eq_true hok'.1.2
+        rw [of_decide_eq_true hok'.2]
+        exact Nat.xor_lt_two_pow hxa hxb
     · -- variable range checker
       rename_i q0 bits hbus
       split_ifs at hfact with hbits

@@ -1,5 +1,29 @@
 # Ideas for future optimization passes
 
+## keccak: unify read-data limbs to close the variable gap (variables — top priority)
+
+On the keccak stress case, after the bitwise-result byte bound (log entry 58) cancelled the memory
+send/receive chains (bus 5206 → 3904), the **variable** gap is now the story: apc-optimizer 3622
+vs powdr 2021. The bulk is ~1200 read-data limbs (`b__*`, `c__*` classes — powdr has *none* of
+them) that survive because, although their memory interactions cancelled, the same limbs still
+occur as **operands/results of the XOR (bitwise) interactions**. powdr eliminates them by
+substituting each read limb by the value written to that cell (memory last-write-wins: a read
+returns the send's payload, so `read_limb = written_limb`) and/or by the XOR functional dependence
+(`slotFun` already proves `z = x ⊕ y` for the bitwise result). Two concrete angles:
+- **Read-value substitution.** When `busUnify` pairs a constant-address send `S` (writing value
+  `V`) with the next receive `R` (reading `W`), it already adds `W = V`; Gauss should then
+  substitute `W := V` and drop `W`. Check why this is not eliminating the keccak `b`/`c` limbs —
+  likely the chain's *first* receive reads a genuine pre-block value (no earlier send), so only
+  the initial limb is irreducible and the rest should collapse. If `busUnify`'s constant-address
+  gate or `findConsumer`'s mid-refutation is missing these, widening it is the win.
+- **XOR-result derivation.** A bitwise interaction `[x, y, z, 1]` functionally determines `z`
+  (`slotFun`, entry-for the XOR). A pass that turns `z` into a derived column
+  (`ComputationMethod`, like `reencode`) reading `x, y` would remove `z` as a free variable. Needs
+  the completeness `derivesWitness` bookkeeping, but `slotFun` already carries the soundness half.
+
+The bitwise-**result** byte bound itself is now landed (`openVmFacts.slotBound` slot 2, entry 58) —
+do not re-propose it.
+
 ## Consider dropping `reencode` in favour of `domainFoldPass` alone (entry-47 option B)
 
 `domainFoldPass` (`DomainFold.lean`, log entry 48) is now landed **alongside** `reencode` (option A) —

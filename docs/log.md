@@ -1612,3 +1612,46 @@ products are **not** one-sided (the 16-bit wrap genuinely occurs on some traces 
 intervals contain 0), so that bus gap needs cross-access limb unification instead; and the
 apc_018 compare-block gap is the sltu-style `diff_marker` gadget that `hintCollapse`'s matcher
 does not cover yet (43 vs powdr 34 after this change).
+
+### 58. Bitwise-lookup **result** byte bound (`openVmFacts.slotBound` slot 2): unblocks keccak memory-pair cancellation — the main bus win
+
+**The idea** (from profiling the new keccak stress case against powdr). The headline keccak gap
+was bus interactions: apc-optimizer 5206 vs powdr 1734, dominated by the **memory** bus — apc kept
+2482 memory interactions (1241 send/receive pairs) where powdr keeps 258. `busPairCancel` cancels a
+matched send→receive pair only when the dropped receive's data limbs are provably bytes from the
+*remaining* system (the `recvByteSlots` spec obligation, entry 50); when ≥2 limbs are unjustified
+it can't even emit the fallback self-check (that path covers a single slot), so the drop is
+refused. On keccak the **first** send of each register access chain writes an *XOR result*
+(`a__i` in a bitwise interaction `[x, y, a__i, 1]`), and the result slot carried **no** byte
+guarantee — `openVmFacts.slotBound` bounded the bitwise **operands** (slots 0, 1) but not the
+**result** (slot 2). So the first pair of every chain failed byte-justification, and — being the
+earliest active send — blocked the whole chain from cancelling (later pairs, whose data *was*
+justified, saw a same-address active send before them).
+
+But the bitwise table already forces the result to be a byte: op 0 pins `z = 0`, op 1 pins
+`z = x ⊕ y` with `x, y < 256` (and op ≥ 2 violates), so `z < 256` in every non-violating case.
+
+**Implementation** (`ApcOptimizer/Implementation/OpenVmFacts.lean`, ~25 lines, zero audit surface):
+one new `slotBoundImpl` arm `| some .bitwiseLookup, [_, _, _, some op], 2 => if op.val ≤ 1 then
+some 256 else none`, mirroring the operand arms, plus its `slotBound_sound` bullet — op 0 gives
+`z.val = 0`, op 1 gives `z.val = Nat.xor x.val y.val < 2^8` (`Nat.xor_lt_two_pow`). Purely
+additive true information: every existing `slotBound` consumer (`busPairCancel` byte
+justification, `domainProp`, `CarryBranch`, `hintCollapse`) can only fire *more*, never less, so
+no pass's correctness or the audited surface is touched. With `BusFacts.trivial` the bound is
+absent and behaviour is unchanged.
+
+**Impact.** keccak stress case: **bus interactions 5206 → 3904** (2.55× → 3.40×; memory
+2482 → cascaded down as the chains now fully cancel), variables 3626 → 3622 (slightly better, no
+regression — the freed data limbs still live in the XOR interactions, so the *variable* gap to
+powdr's 2021 is untouched; see the new ideas entry), constraints unchanged at 492. Full
+100-case **openvm-eth** sweep: variables unchanged (4.136×/3.706× agg/geo), **bus interactions
+2.922× → 2.951× agg / 2.440× → 2.447× geo** (a small win there too), constraints unchanged
+(9.073×/11.190×); per-case variables still 17 wins / 52 losses / 31 ties — **no case regressed**.
+Runtime unchanged (keccak ~320 s). `lake build` green; `check-proof-integrity.sh` passes;
+correctness axioms stay `{propext, Classical.choice, Quot.sound}`.
+
+The residual keccak gap is now **variables** (3622 vs 2021): the read-data limbs (`b`/`c` classes,
+~1200 vars powdr has none of) survive because they still occur as operands/results of the XOR
+(bitwise) interactions even after their memory pairs cancel. Closing it needs read-value
+unification (substitute a read limb by the value written to that cell, or by the XOR functional
+dependence `slotFun`) — recorded in `docs/ideas.md`.
