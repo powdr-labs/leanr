@@ -189,6 +189,21 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       ∀ (x : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, 0] } = false
           ↔ x = 0
+  /-- Bitwise XOR-with-zero equality: on a bitwise-style bus where an accepted multiplicity-1
+      message `[a, b, c, 1]` asserts `c = a ⊕ b`, a zero operand linearizes the XOR to an equality —
+      `[0, y, z, 1]` accepted ⟹ `z = y`, and `[x, 0, z, 1]` accepted ⟹ `z = x`. apc keeps these
+      equalities on the bus, so Gaussian elimination never uses them to eliminate the intermediate
+      byte the identity pins. Recognising them lets a pass add the entailed equality (keeping the
+      interaction, which still imposes byte-ness) for Gauss to consume. `trivial` sets it `false`. -/
+  xorZeroEq : (busId : Nat) → Bool
+  xorZeroEq_sound :
+    ∀ (busId : Nat), xorZeroEq busId = true →
+      (∀ (y z : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [0, y, z, 1] }
+          = false → z = y) ∧
+      (∀ (x z : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, 0, z, 1] }
+          = false → z = x)
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
@@ -215,3 +230,5 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   zeroCell_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)
   zeroRangeEq _ := false
   zeroRangeEq_sound := by intro _ h; exact absurd h (by simp)
+  xorZeroEq _ := false
+  xorZeroEq_sound := by intro _ h; exact absurd h (by simp)

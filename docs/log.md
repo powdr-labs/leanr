@@ -2106,3 +2106,42 @@ genuine-two-root carry-witness follow-up (add a boolean carry ⇒ net 0 vars —
 ceiling was unsound one-root collapse), the N2 signed-compare msb fold (basis rename; apc/powdr both
 keep 2 gadget vars), and the C4c timestamp split (`2×lower_decomp` ↔ `lower_decomp + prev_timestamp`,
 equal counts).
+
+## Entry 70: bitwise-XOR equality extraction, 0-operand (C4a)
+
+**Idea.** powdr-exported memory/shift blocks keep, on the bitwise-lookup bus, interactions
+`[x, y, z, 1]` (op 1: `z = x ⊕ y`, `x`,`y` bytes) with **one operand the constant 0**. The XOR then
+linearizes to an equality: `[0, y, z, 1] ⟹ z = y`, `[x, 0, z, 1] ⟹ z = x`. These pin an intermediate
+loaded-data / effective-address byte (the `b`/`a`/`c` families — essentially the whole residual
+variable gap to powdr) to another variable, but Gaussian elimination — consuming only *algebraic*
+constraints — never uses them, so the intermediate limbs survive. powdr represents everything with
+the canonical loaded value.
+
+`xorEqExtractPass` recognizes each 0-operand XOR interaction and **adds the entailed equality**
+`z − y` (resp. `z − x`) as an algebraic constraint, keeping the interaction (still imposes byte-ness).
+Placed early in the cleanup cycle, the equalities feed same-cycle Gauss, which eliminates the
+intermediate variables and cascades — a variable win plus a bus win (the range/bitwise checks the
+eliminated variables no longer need).
+
+**How.** New audit-free `BusFacts` field `xorZeroEq busId` — "an accepted mult-1 `[0,y,z,1]` forces
+`z = y`, `[x,0,z,1]` forces `z = x`" — proven for OpenVM's `bitwiseLookup` from `Nat.zero_xor` /
+`Nat.xor_zero`. The pass is a `ConstraintSystem.addConstraints_correct`: the equalities are entailed
+by the interactions' acceptance (completeness), soundness drops the added constraints, and adding
+constraints touches no interaction so side effects/admissibility are unchanged. Gated on
+`(1 : ZMod p) ≠ 0` (identity on `ZMod 1`).
+
+`lake build` green; all three `maintainsCorrectness` theorems still `{propext, Classical.choice,
+Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** Faithful census what-if (#XE0) predicted the realized numbers. Broad: **38 of 100 cases**
+carry const-operand XOR interactions. Full 100-case sweep vs the C3 (entry-69) line: **16 cases
+changed, 0 regressions**; totals **−449 variables, −554 bus interactions, 0 constraints**. Biggest:
+apc_071 413→349 vars / 335→279 bus (now 349 vs powdr 330), apc_006 −64 vars, apc_019/012/049 −64 vars
+each, apc_089 −40, apc_037 −16 vars / −148 bus, apc_100 −24. Aggregate vs powdr: **variables
+4.420× → 4.490× agg (3.772× → 3.810× geo)** — well ahead of powdr's 4.092×/3.787×; **bus 3.190× →
+3.290× agg (2.588× → 2.629× geo)** vs powdr 3.480×/2.822×; constraints unchanged. Runtime smoke set
+vs C3: **−3.9% total** (the pass pays for itself — eliminating variables early shrinks the circuit
+for later passes; apc_056/069/092 −80%, apc_008 −21%, apc_014 −19%).
+
+**Follow-up (C4b).** The 255-operand XOR cases (`[x, 255, z, 1] ⟹ z = 255 − x`) stack on this pass —
+they need the byte-complement identity `Nat.xor n 255 = 255 − n` (n < 256); +16 vars on apc_071.
