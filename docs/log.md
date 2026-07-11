@@ -1655,3 +1655,162 @@ The residual keccak gap is now **variables** (3622 vs 2021): the read-data limbs
 (bitwise) interactions even after their memory pairs cancel. Closing it needs read-value
 unification (substitute a read limb by the value written to that cell, or by the XOR functional
 dependence `slotFun`) — recorded in `docs/ideas.md`.
+### 57. Two-root decomposition unification (`RootPairUnify.lean`) — bounded-integer reasoning, aggregate variable lead over powdr
+
+Memory-pointer decompositions pin each limb by a **two-root carry constraint**
+`(A + k·x)(A + δ + k·x) = 0` (the two address-wraparound cases) plus a range check keeping the
+limb inside a window smaller than the root gap. Two accesses at the *same* address produce two
+such constraints with the same `A, k, δ` but distinct limb variables — each variable
+independently picks a root, so no purely algebraic pass can equate them, and every
+finite-*constant*-domain pass is blocked by the parameterized roots (the gap diagnosed in
+`docs/ideas.md`'s mem-ptr item). apc-optimizer kept 258 `mem_ptr_limbs` on apc_005 vs powdr's 130.
+
+**The bounded-integer argument** (`rootPair_eq`): both roots differ by `g = k⁻¹·δ`; if
+`x.val < B` and `y.val < B` with `B ≤ g.val` and `B ≤ p − g.val`, the field difference
+`x − y = ±g` is impossible over the integers, so `x = y`. The entailed equality feeds the same
+proof-carrying `Solved` map as `Gauss.lean` (solutions are bare variables — no degree gate, no
+resolution) and one `ConstraintSystem.substF`. Prime `p` only (root membership needs an integral
+domain; re-checked at runtime as in `busPairCancelPass`).
+
+**Bound sources** (`anyVarBound`, env-conditional on the system's own satisfaction):
+1. raw range-check slots via `findVarBound` (`DomainProp`) — covers the high limbs (13-bit);
+2. **scaled slots** (`scaledSlotBound`): the low limb's checked slot is `4⁻¹·(x − F)` with `F` a
+   degree-2 flag polynomial, so `linearize` fails on it — a new constant-coefficient
+   decomposition `Expression.splitAt` (`e = k·x + r`, `r` opaque and possibly nonlinear) handles
+   it. The slot value is fact-bounded (`slotBound`), the offset part enumerates the flag
+   variables' proven finite domains (`findDomainAlg` booleanity, ≤ 16 points), and
+   `ZMod.val_add_of_lt`/`val_mul_of_lt` carry the no-wrap integer arithmetic:
+   `x.val < m.val·(bound−1) + Wmax + 1`.
+
+The scan groups two-root candidates by key `(k, A.terms, A.const, δ)` and re-checks a decidable
+pair certificate (`rpCheckPair`) inside the adoption proof, so the scan itself is proof-free.
+**Runtime trap**: booleanity `b(b−1) = 0` is itself two-root (gap 1), which made every boolean
+variable an expensive-to-reject candidate pair — the first run of apc_005 exceeded 35 minutes.
+A root-gap prefilter (`min(g.val, p − g.val) ≥ 256`, which the pair condition could never pass
+anyway) restores it to seconds. Wired into `cleanupCycle` after `hintCollapse`; the fixpoint
+chains the stages (high limbs key-match only after the low limbs unify, equal bases only form
+after busUnify/pairCancel — each next cycle picks up what the previous one exposed).
+
+`lake build` green; all three `maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** apc_005 / apc_044 / apc_067: **1683 → 1555 vars (−128 each**, the predicted 64 low
++ 64 high limb pairs; powdr keeps 1808); apc_005 wall-clock 14.2 s at this commit. A 10-case
+sample across the other size classes is byte-identical. Full 100-case sweep (before → after,
+baseline re-measured at this commit's parent):
+
+- **variables: 4.082× → 4.222× aggregate (3.605× → 3.644× geomean)** vs powdr's 4.092×/3.787×
+  — **apc-optimizer takes the aggregate variable lead for the first time**; per-case wins 15 → 17
+- bus interactions 2.922× → 2.924× (downstream cascade), constraints 8.801×/9.918× unchanged
+
+Left on the table (see `docs/ideas.md`): the unification leaves the duplicate's carry
+constraints and range checks behind as *syntactically identical* copies — a duplicate-dropper
+would convert the remaining redundancy into constraint/bus wins; and powdr's cross-offset
+chaining (`ptr+4` sharing the high limb) needs page-crossing reasoning beyond equal-address
+unification.
+
+### 58. Syntactic duplicate removal (`Dedup.lean`) — collect what unification leaves behind
+
+Entry 57's limb unification substitutes one variable for another, which turns the eliminated
+decomposition's two carry constraints and its raw-slot range check into **literal copies** of
+the survivor's. Nothing dropped them: `trivialConstraintDropPass` only removes identically-zero
+constraints, and a `List.filter` cannot express "keep the first occurrence" — identical elements
+get identical predicate values. (Before entry 57 the optimized outputs contained no syntactic
+duplicates at all, so this pass would have been a no-op — measured as part of the entry-56-era
+census on the old line.)
+
+**The pass (`Implementation/OptimizerPasses/Dedup.lean`, fact-free `VerifiedPass`).** Constraints
+dedup via `List.dedup` — `satisfies` only consults membership, so which occurrence survives is
+irrelevant and correctness is `List.mem_dedup`. Stateless interactions dedup by an explicit
+keep-first recursion carrying the kept-so-far list; three small lemmas discharge `PassCorrect`
+via `ofEnvEq`: every kept interaction is original (`dedupStateless_subset`), every original is
+kept or already seen (`dedupStateless_covers` — the dropped copy's obligation transfers from its
+kept twin), and both the syntactic stateful sublist and the active∧stateful *evaluated* message
+list are untouched (`_statefulFilter`/`_evalFilter` — so `sideEffects` stays *equal* and
+`admissible` transfers). Stateful duplicates are deliberately kept: two sends of the same
+message are two sends. Wired into `cleanupCycle` right after `rootPairUnifyPass`.
+
+`lake build` green; all three `maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** apc_005-class: **841 → 713 constraints (−128) and 829 → 765 bus interactions (−64)**
+per block at unchanged 1555 vars — the 64 unified pairs' two carry constraints and one raw-slot
+range check each (the flag-dependent scaled check survives: its flag polynomial differs per
+access, so the copies are not syntactic — see `docs/ideas.md`). 9-case sample across the other
+size classes byte-identical. Full 100-case sweep (before → after):
+
+- variables **4.222×/3.644× unchanged** (the pass is variable-neutral by construction)
+- **bus interactions: 2.924× → 3.006× aggregate (2.442× → 2.466× geomean)**
+- **constraints: 8.801× → 9.500× aggregate (9.918× → 10.144× geomean)**
+
+### 59. Flag unification across duplicate scaled range checks (`FlagUnify.lean`)
+
+Entry 58 left the unified decomposition's *scaled* low-limb check behind: its flag polynomial
+uses the eliminated access's own flag variables, so the copy is not syntactic — and it is not
+droppable either, since that check is exactly what pins those flags (the divisibility of the
+scaled slot). But the flags are provably *equal* to the survivor's: both checks decompose the
+**same** shared limb as `x = m·u + W` (`Expression.splitAt`, slot value `u` fact-bounded, `W`
+the flag-polynomial value), so `W_X.val = W_Y.val` — both are the residue of `x.val` under
+`m.val` (`residue_uniq`, `ZMod.val_add_of_lt`/`val_mul_of_lt` no-wrap arithmetic, per-point
+`W < m` over the joint flag box) — and on every joint flag point with equal offset values the
+certificate demands the target components agree (≤ 32 points, `findDomainAlg` booleanity
+domains). Certified equalities feed the same `Solved`/`substF` machinery; the pass runs between
+`rootPairUnifyPass` (which shares the carrier limb) and `dedupPass`.
+
+The certificate is deliberately *componentwise*: it only accepts a flag pair whose equality
+holds at every offset-equal point. Measured on apc_005-class blocks exactly **one of the two
+flag components certifies** per pair — the two accesses' encodings relate the other component
+non-componentwise — so the checks do not become fully syntactic duplicates and the bus count
+stays; the remaining component would need a derived-variable substitution `b := f(a₀, a₁)`
+(nonlinear solution, degree-guarded), noted in `docs/ideas.md`.
+
+`lake build` green; all three `maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** apc_005-class blocks: **1555 → 1491 vars (−64) and 649 constraints (−64**, the
+unified flags' booleanity copies collected by `dedupPass`); bus interactions unchanged. 9-case
+sample byte-identical. Full 100-case sweep (before → after):
+
+- **variables: 4.222× → 4.286× aggregate (3.644× → 3.655× geomean)** vs powdr's 4.092×/3.787×
+- **constraints: 9.500× → 9.854× aggregate (10.144× → 10.214× geomean)**
+- bus interactions 3.006×/2.466× unchanged
+
+### 60. Optimizer runtime: share `flagUnify`'s pair-level certificate work (effectiveness unchanged)
+
+Pure performance work in the entry-53 style. Profiling apc_005 put **`flagUnify` at 17.4 s of
+the 30.8 s total (57%)**; stage instrumentation (temporary `fuprof` command, since reverted)
+showed all of it inside `fuCheck` — 256 calls per cleanup iteration (64 matched pairs × 4 flag
+combos) at ~10–28 ms each, and iterations 3–6 spending ~10 s re-rejecting certificates that can
+never pass after the flags unify. Each call redid the *pair-level* work — the slot-bound
+probes (`payload.map constValue?` folds), both `splitAt`s, `findDomainAlg` over every
+constraint, the ≤32-point joint enumeration, and **dozens of runtime `ZMod` inversions** (every
+`k⁻¹` occurrence re-runs the extended-gcd inverse; entry-54's gotcha in a new costume).
+
+**Fix (value-identical by construction):** `fuCheck` is now *defined* as
+`fuPairData?` (all pair-level work, inversion hoisted into a single `let m := k⁻¹`, the
+enumerated point list bound once and reused for both the bound check and the `pts` table)
+composed with `fuCheckWith` (memberships, disequality, and the pointwise agreement scan). The
+scan calls `fuPairData?` once per matched pair and `fuCheckWith` per flag combo; the adoption
+proof re-checks `fuCheck` through the same definition, so the accepted set is unchanged
+definitionally. The `fuCheck_sound`/`fuCheck_vars` proofs re-thread through the split (same
+case chain, inverted on `fuPairData?`).
+
+A hash-prefilter for `rootPairUnify`'s seen-key scan was also tried and **measured zero**
+(3.06 s → 3.02 s ≈ noise — the scan is not where its time goes); it was reverted rather than
+landed. Written-in-advance cost models remain undefeated in their wrongness.
+
+**Validation:** A/B binaries (stash-built reference at the parent commit) byte-identical on the
+13-case entry-53 set (`apc_001/003/005/006/008/010/014/028/047/056/069/092/100` — vars,
+constraints, bus all equal) plus a **full-render diff on apc_005** (identical). `lake build`
+green; `check-proof-integrity.sh` passes; axioms unchanged.
+
+**Impact (profiler, apc_005):** flagUnify **17.4 s → 5.3 s (3.3×)**; end-to-end run
+**30.8 s → 18.0 s (1.7×)**. apc_006/apc_100 unaffected (flagUnify does not fire there).
+
+Remaining bottlenecks (documented for the next agent): `flagUnify` 5.3 s — the per-pair
+residual is `findDomainAlg` over the full constraint list (×4 vars) plus the plain
+`Expression.eval` per enumeration point (the entry-54 `evalWith` treatment applies), and
+iterations 3–6 still pay 64 pair-datas each for zero adoptions; `rootPairUnify` 3.0 s — *not*
+the seen-scan (measured), so likely `rpCandidates`'s per-variable `splitAt`+`LinExpr.norm`
+over every constraint every iteration; `domainFold` 3.4 s — the pre-existing
+`ImprovingRuntime.md` lead #1 (`constOnSurvs` still on per-node-instance `eval`).
