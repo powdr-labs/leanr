@@ -26,7 +26,7 @@ OpenVmBenchmarks/benchmark.py --n 10 --report report.html   # + interactive HTML
 
 ## Latest results (snapshot)
 
-Effectiveness at repo commit `b8d2593` (2026-07-11); refresh this section when the numbers move.
+Effectiveness at repo commit `d922b32` (2026-07-11); refresh this section when the numbers move.
 Full openvm-eth sweep (`OpenVmBenchmarks/benchmark.py`, 100 cases; agg = Σbefore ⁄ Σafter,
 geo = geomean):
 
