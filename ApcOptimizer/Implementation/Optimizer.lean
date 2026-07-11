@@ -26,6 +26,8 @@ import ApcOptimizer.Implementation.OptimizerPasses.Dedup
 import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
 import ApcOptimizer.Implementation.OptimizerPasses.BoxRewrite
 import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
+import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
+import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 
 set_option autoImplicit false
 
@@ -61,7 +63,9 @@ pass's own `PassCorrect`. -/
     scale every constraint's affine factors to monic form (zero-set preserving) and re-fold.
     Extend it by composing passes with `.andThen`. -/
 def cleanupCycle : VerifiedPassW p :=
-  carryBranchPass.guardDegree
+  ZeroWidthRange.zeroWidthRangePass.guardDegree
+    |>.andThen XorEqExtract.xorEqExtractPass.guardDegree
+    |>.andThen carryBranchPass.guardDegree
     |>.andThen gaussElimPass.withFacts.guardDegree
     |>.andThen normalizePass.withFacts.guardDegree
     |>.andThen constantFoldPass.withFacts.guardDegree

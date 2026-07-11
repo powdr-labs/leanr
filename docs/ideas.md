@@ -23,6 +23,45 @@ returns the send's payload, so `read_limb = written_limb`) and/or by the XOR fun
 
 The bitwise-**result** byte bound itself is now landed (`openVmFacts.slotBound` slot 2, entry 58) —
 do not re-propose it.
+## Genuine two-root carries: carry-witness substitution — MEASURED WASH, do not build
+
+**Measured a wash (faithful census what-if, 2026-07).** `carryCollapsePass` (log 67) collapses only
+*pure copies* `(L)·(L±256)=0` where a byte bound rules out one root, correctly leaving **genuine**
+two-root carries intact (both roots reachable): the 3-operand ADD limb carry `(b+c−a)·(b+c−a−256)=0`
+and the `mem_ptr` page-boundary carry (gap 65536). It looked like a large win — an *optimistic* what-if
+(zero one root, ignore whether the bound holds, re-optimize) claimed up to **−249 vars** on apc_037,
+−52 on apc_071. But the **faithful** transform (introduce the boolean carry witness it actually needs,
+`a = b+c − 256·carry`, plus booleanity, then re-optimize) nets **exactly 0 variables** on every case:
+eliminating `a` as a derived column adds `carry`, a pure swap with no cascade. powdr matches apc on
+these blocks (e.g. apc_061/003 var-identical). The ceiling was entirely unsound one-root collapse.
+Do not build a carry-witness pass; the residual C1 gap is not a real variable opportunity.
+
+## Bitwise-XOR equality extraction (C4a landed, entry 70; C4b = 255-operand follow-up)
+
+**Update (log 70):** the dominant residual mechanism turned out to be **bitwise XOR interactions
+with a constant operand** encoding equalities Gauss can't see. `[0,y,z,1] ⟹ z=y`, `[x,0,z,1] ⟹ z=x`
+(0-operand, `Nat.zero_xor`/`Nat.xor_zero`) landed as `xorEqExtractPass` (C4a) — adds the entailed
+equality, Gauss eliminates the `b`/`a`/`c` limbs. −449 vars / −554 bus over 16 cases, 0 regressions,
+runtime −3.9%. **Remaining C4b:** the 255-operand cases `[x,255,z,1] ⟹ z=255−x` (needs the
+byte-complement identity `Nat.xor n 255 = 255−n` for `n<256`, plus `x` byte from acceptance);
++16 vars on apc_071, +3 on apc_037. Stacks directly on C4a via a second `xorZeroEq`-style fact.
+
+## Intermediate effective-address elimination (deeper residual, after C4a/C4b)
+
+`zeroWidthRangePass` (log 69, C3) converts the width-0 range checks `[expr, 0]` into equalities
+`expr = 0`, letting Gauss eliminate the pinned limbs — closing ~40 of apc_071's 123-variable gap to
+powdr (and 11 on apc_020, 3 on apc_037). The **residual** gap on apc_071 is the `a` (48) and `c`
+(16) families: intermediate effective-address bytes. For each access at `base + offsetᵢ`, apc
+materializes the effective address as a fresh 4-byte decomposition via a two-root carry chain and
+then decomposes again into `mem_ptr_limbs`; powdr derives `mem_ptr_limbs` **directly** from
+`rs1_data + offsetᵢ`, skipping the intermediate byte layer entirely. Eliminating it needs a
+derived-column pass (reencode-class): recognise `addr = base + offset` carry chains feeding only a
+memory address / byte-decomposed write, and express the `mem_ptr` limbs affinely in `base + offset`
+with carry witnesses, without materializing the intermediate bytes. Higher proof cost; the true
+"highest cost" item of the old C4 cluster. Note the naive per-limb carry-witnessing is net-neutral
+(swap 4 address bytes for 4 carries — same wash as the carry-witness follow-up below); the win comes
+only from *not materializing the intermediate layer at all* while still satisfying the memory bus's
+byte requirement.
 
 ## Consider dropping `reencode` in favour of `domainFoldPass` alone (entry-47 option B)
 

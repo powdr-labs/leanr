@@ -2053,3 +2053,95 @@ powdr:
 
 Largest drops on memory/shift-heavy blocks (apc_037 −110 bus, apc_071 −48, apc_100 −35, apc_006 −30).
 Runtime smoke set vs C1: **+0% total** (one coda pass; worst case apc_100 +1.5%).
+
+## Entry 69: width-0 range-check → equality (C3)
+
+**Idea.** powdr-exported address-computation blocks keep, on the variable range checker, a family of
+**width-0 range checks** `[expr, 0]` (multiplicity 1). A 0-bit range check asserts `expr < 2⁰ = 1`,
+i.e. `expr = 0` — it is powdr/OpenVM's encoding of "this linear form is exactly zero", pinning an
+intermediate address/data limb to a combination of others (e.g. `-a__2 + b__3 = 0`,
+`7864320·(a__3 − b__0) = 0`). Because the optimizer's Gaussian elimination consumes only *algebraic*
+constraints, these equalities — carried on the **bus** — are never used to eliminate a variable, so
+the intermediate limbs (the `a`/`b`/`c` families) survive. powdr substitutes them away.
+
+`zeroWidthRangePass` converts each such interaction into the algebraic constraint `expr = 0` and
+drops the interaction — they have the *same* satisfying set (a stateless range check `[x, 0]` is
+accepted iff `x = 0`, new fact `BusFacts.zeroRangeEq`). Placed first in the cleanup cycle, it feeds
+the equalities to same-cycle Gauss, which eliminates the intermediate variables and cascades: a
+variable win, plus a bus win (the dropped interaction and the range checks the eliminated variables
+no longer need).
+
+**How.** New audit-free `BusFacts` field `zeroRangeEq busId` — "on a stateless bus, `[x,0]` mult-1 is
+accepted iff `x = 0`" — proven for the OpenVM `variableRangeChecker` (`violates [x,0] = false ↔ x.val
+< 2⁰ = 1 ↔ x = 0`). The pass is two `PassCorrect` steps via `andThen`: (1) *add* the equality
+constraints, keeping every interaction — `PassCorrect.ofEnvEq`, side effects/admissibility literally
+unchanged (same interactions), completeness from "an accepted width-0 interaction forces its value to
+zero"; (2) *drop* the now-entailed interactions via `ConstraintSystem.filterBusEntailed_correct`
+(each dropped check is stateless and accepted under the filtered system, which retains the step-1
+equality). Gated on `(1 : ZMod p) ≠ 0` (every prime field; identity on `ZMod 1`).
+
+`lake build` green; all three `maintainsCorrectness` theorems still `{propext, Classical.choice,
+Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** A faithful census what-if (apply the sound transform to apc's own output, re-optimize)
+predicted the exact realized numbers. The pattern occurs on 3 of the 100 cases (address-computation
+loads/stores); the pass is a provable no-op on the other 97. Full 100-case sweep vs the C2 (entry-68)
+line — **circuit sizes changed on exactly 3 cases, 0 regressions**:
+
+- **apc_071: 453 → 413 vars (−40), 407 → 335 bus (−72)**, constraints unchanged (53)
+- **apc_020: 800 → 789 vars (−11), 457 → 435 bus (−22)** — already ahead of powdr (800 < 850), lead extended
+- **apc_037: 733 → 730 vars (−3), 793 → 789 bus (−4)**
+- totals across the 3: **−54 variables, −98 bus interactions, 0 constraints**
+
+Aggregate vs powdr: **variables 4.411× → 4.420× agg (3.768× → 3.772× geo)**, ahead of powdr's
+4.092×/3.787×; **bus 3.173× → 3.190× agg (2.581× → 2.588× geo)** vs powdr 3.480×/2.822×; constraints
+unchanged (10.593×/11.585×). Runtime smoke set (13 cases, none width-0-bearing) vs C2: **−0.9% total**
+(within noise; the only cost is one filter/filterMap scan per cleanup iteration).
+
+**Follow-up.** #EQ closes ~40 of apc_071's 123-variable gap to powdr; the residual `a`/`c` families
+(~64 vars on apc_071) are the intermediate effective-address bytes powdr derives directly from
+`base + offset` — a derived-column (reencode-class) elimination (see docs/ideas.md), higher proof
+cost. The same faithful-what-if pass also confirmed three **washes** (do not build): the
+genuine-two-root carry-witness follow-up (add a boolean carry ⇒ net 0 vars — the −249-on-apc_037
+ceiling was unsound one-root collapse), the N2 signed-compare msb fold (basis rename; apc/powdr both
+keep 2 gadget vars), and the C4c timestamp split (`2×lower_decomp` ↔ `lower_decomp + prev_timestamp`,
+equal counts).
+
+## Entry 70: bitwise-XOR equality extraction, 0-operand (C4a)
+
+**Idea.** powdr-exported memory/shift blocks keep, on the bitwise-lookup bus, interactions
+`[x, y, z, 1]` (op 1: `z = x ⊕ y`, `x`,`y` bytes) with **one operand the constant 0**. The XOR then
+linearizes to an equality: `[0, y, z, 1] ⟹ z = y`, `[x, 0, z, 1] ⟹ z = x`. These pin an intermediate
+loaded-data / effective-address byte (the `b`/`a`/`c` families — essentially the whole residual
+variable gap to powdr) to another variable, but Gaussian elimination — consuming only *algebraic*
+constraints — never uses them, so the intermediate limbs survive. powdr represents everything with
+the canonical loaded value.
+
+`xorEqExtractPass` recognizes each 0-operand XOR interaction and **adds the entailed equality**
+`z − y` (resp. `z − x`) as an algebraic constraint, keeping the interaction (still imposes byte-ness).
+Placed early in the cleanup cycle, the equalities feed same-cycle Gauss, which eliminates the
+intermediate variables and cascades — a variable win plus a bus win (the range/bitwise checks the
+eliminated variables no longer need).
+
+**How.** New audit-free `BusFacts` field `xorZeroEq busId` — "an accepted mult-1 `[0,y,z,1]` forces
+`z = y`, `[x,0,z,1]` forces `z = x`" — proven for OpenVM's `bitwiseLookup` from `Nat.zero_xor` /
+`Nat.xor_zero`. The pass is a `ConstraintSystem.addConstraints_correct`: the equalities are entailed
+by the interactions' acceptance (completeness), soundness drops the added constraints, and adding
+constraints touches no interaction so side effects/admissibility are unchanged. Gated on
+`(1 : ZMod p) ≠ 0` (identity on `ZMod 1`).
+
+`lake build` green; all three `maintainsCorrectness` theorems still `{propext, Classical.choice,
+Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** Faithful census what-if (#XE0) predicted the realized numbers. Broad: **38 of 100 cases**
+carry const-operand XOR interactions. Full 100-case sweep vs the C3 (entry-69) line: **16 cases
+changed, 0 regressions**; totals **−449 variables, −554 bus interactions, 0 constraints**. Biggest:
+apc_071 413→349 vars / 335→279 bus (now 349 vs powdr 330), apc_006 −64 vars, apc_019/012/049 −64 vars
+each, apc_089 −40, apc_037 −16 vars / −148 bus, apc_100 −24. Aggregate vs powdr: **variables
+4.420× → 4.490× agg (3.772× → 3.810× geo)** — well ahead of powdr's 4.092×/3.787×; **bus 3.190× →
+3.290× agg (2.588× → 2.629× geo)** vs powdr 3.480×/2.822×; constraints unchanged. Runtime smoke set
+vs C3: **−3.9% total** (the pass pays for itself — eliminating variables early shrinks the circuit
+for later passes; apc_056/069/092 −80%, apc_008 −21%, apc_014 −19%).
+
+**Follow-up (C4b).** The 255-operand XOR cases (`[x, 255, z, 1] ⟹ z = 255 − x`) stack on this pass —
+they need the byte-complement identity `Nat.xor n 255 = 255 − n` (n < 256); +16 vars on apc_071.

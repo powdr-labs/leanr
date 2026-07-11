@@ -563,6 +563,65 @@ def openVmFacts (p : ℕ) [NeZero p]
         have hx0 : x.val = 0 := Nat.lt_one_iff.1 (ZMod.val_lt x)
         simp [h1, hv0, hx0, isByte]
       · simp [h1, hv0, isByte, Nat.xor_zero]
+  zeroRangeEq busId := match busMap busId with
+    | some .variableRangeChecker => true
+    | _ => false
+  zeroRangeEq_sound := by
+    intro busId h
+    have hbus : busMap busId = some OpenVmBusType.variableRangeChecker := by
+      revert h; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    refine ⟨?_, ?_⟩
+    · show (match busMap busId with | some t => t.isStateful | none => false) = false
+      rw [hbus]; rfl
+    · intro x
+      -- variableRangeChecker `[x, 0]`: `!(0 ≤ 25 ∧ x.val < 2^0) = false ↔ x.val < 1 ↔ x = 0`.
+      have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
+      show violates busMap { busId := busId, multiplicity := 1, payload := [x, 0] } = false ↔ x = 0
+      unfold violates; rw [hbus]
+      rw [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq,
+        hv0, pow_zero, Nat.lt_one_iff, ZMod.val_eq_zero]
+      exact ⟨fun h => h.2, fun h => ⟨Nat.zero_le 25, h⟩⟩
+  xorZeroEq busId := match busMap busId with
+    | some .bitwiseLookup => true
+    | _ => false
+  xorZeroEq_sound := by
+    intro busId h
+    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
+      revert h; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    have h1le : (1 : ZMod p).val ≤ 1 := by
+      rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_le 1 p
+    -- `ZMod.val` is injective (via its right inverse `Nat.cast`).
+    have valeq : ∀ a b : ZMod p, a.val = b.val → a = b := fun a b hab =>
+      (ZMod.natCast_rightInverse a).symm.trans ((congrArg _ hab).trans (ZMod.natCast_rightInverse b))
+    -- The degenerate `p = 1` case: `ZMod 1` is a subsingleton, so any equality holds.
+    have degen : (1 : ZMod p).val = 0 → ∀ a b : ZMod p, a = b := by
+      intro h1 a b
+      have hp1 : p = 1 := Nat.dvd_one.mp (Nat.dvd_of_mod_eq_zero (by
+        rwa [ZMod.val_one_eq_one_mod] at h1))
+      subst hp1; exact Subsingleton.elim a b
+    refine ⟨?_, ?_⟩
+    · intro y z hviol
+      replace hviol : violates busMap
+          { busId := busId, multiplicity := 1, payload := [0, y, z, 1] } = false := hviol
+      unfold violates at hviol; rw [hbus] at hviol
+      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1
+      · exact degen h1 z y
+      · simp only [h1, ZMod.val_zero, isByte, Bool.not_eq_false',
+          Bool.and_eq_true, decide_eq_true_eq] at hviol
+        exact valeq z y (hviol.2.trans (Nat.zero_xor y.val))
+    · intro x z hviol
+      replace hviol : violates busMap
+          { busId := busId, multiplicity := 1, payload := [x, 0, z, 1] } = false := hviol
+      unfold violates at hviol; rw [hbus] at hviol
+      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1
+      · exact degen h1 z x
+      · simp only [h1, ZMod.val_zero, isByte, Bool.not_eq_false',
+          Bool.and_eq_true, decide_eq_true_eq] at hviol
+        exact valeq z x (hviol.2.trans (Nat.xor_zero x.val))
   zeroCell := zeroCellImpl busMap
   zeroCell_sound := by
     intro msgs hadm busId addrReq dataSlots hfact m hm hbusId hmne haddr slot hslot v hget

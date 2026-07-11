@@ -176,6 +176,34 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
         ∀ m ∈ msgs, m.busId = busId → m.multiplicity ≠ 0 →
           (∀ ar ∈ addrReq, m.payload[ar.1]? = some ar.2) →
           ∀ slot ∈ dataSlots, ∀ v, m.payload[slot]? = some v → v = 0
+  /-- Width-0 range equality: on a **stateless** bus, the range-check message `[x, 0]`
+      (multiplicity `1`) is accepted **iff** `x = 0`. A 0-bit range check asserts `x < 2⁰ = 1`,
+      i.e. `x = 0`; this is the "assert this linear form is zero" encoding OpenVM emits as a 0-bit
+      range check. Recognising it lets a pass convert such a stateless interaction into the
+      algebraic constraint `x = 0`, which Gaussian elimination can then consume — turning a bus
+      interaction into a variable-eliminating equality. `trivial` sets it `false`. -/
+  zeroRangeEq : (busId : Nat) → Bool
+  zeroRangeEq_sound :
+    ∀ (busId : Nat), zeroRangeEq busId = true →
+      bs.isStateful busId = false ∧
+      ∀ (x : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, 0] } = false
+          ↔ x = 0
+  /-- Bitwise XOR-with-zero equality: on a bitwise-style bus where an accepted multiplicity-1
+      message `[a, b, c, 1]` asserts `c = a ⊕ b`, a zero operand linearizes the XOR to an equality —
+      `[0, y, z, 1]` accepted ⟹ `z = y`, and `[x, 0, z, 1]` accepted ⟹ `z = x`. apc keeps these
+      equalities on the bus, so Gaussian elimination never uses them to eliminate the intermediate
+      byte the identity pins. Recognising them lets a pass add the entailed equality (keeping the
+      interaction, which still imposes byte-ness) for Gauss to consume. `trivial` sets it `false`. -/
+  xorZeroEq : (busId : Nat) → Bool
+  xorZeroEq_sound :
+    ∀ (busId : Nat), xorZeroEq busId = true →
+      (∀ (y z : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [0, y, z, 1] }
+          = false → z = y) ∧
+      (∀ (x z : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, 0, z, 1] }
+          = false → z = x)
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
@@ -200,3 +228,7 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   xorZeroCheck_sound := by intro _ h; exact absurd h (by simp)
   zeroCell _ := none
   zeroCell_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)
+  zeroRangeEq _ := false
+  zeroRangeEq_sound := by intro _ h; exact absurd h (by simp)
+  xorZeroEq _ := false
+  xorZeroEq_sound := by intro _ h; exact absurd h (by simp)
