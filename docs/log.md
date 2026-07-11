@@ -2010,3 +2010,46 @@ either way). Effectiveness unchanged by construction. apc_005: **81 s → 12.7 s
 **66.9 s → 1.7 s** (iter 0: 0.65 s; fold iteration: 0.44 s). The profile is now led by
 pre-existing passes — domainFold 3.3 s, reencode 1.7 s, domainBatch 1.6 s — so the composite is
 no longer the pipeline's bottleneck. `lake build` green at every commit; proof integrity clean.
+
+### 68. Redundant byte-check removal (C2): drop entailed bitwise byte checks (`RedundantByteDrop.lean`)
+
+Blocks keep stateless bitwise-lookup interactions whose only obligation is "this operand is a
+byte": the self-check `[x, x, 0, 1]` (`BusFacts.byteCheck`), the XOR-with-zero `[x, 0, x, 1]`
+(`BusFacts.xorZeroCheck`, added this entry), and the packed pair `[x, y, 0, 0]`
+(`bytePairBus` + `byteCheck`). When an operand's byte-ness is already guaranteed by the *rest* of
+the retained system — a raw slot of a retained memory receive (`slotBound`), a retained range check
+(`findVarBound`), or a constraint that pins it on every selector-flag branch (`deepBoundOk`, prime
+`p`) — the check is *entailed* and dropping it is sound, variable-neutral, and removes one bus
+interaction. Checks on freshly *computed* values (byte-ness enforced only by the check itself) are
+**kept** — `byteJustified` cannot justify them — matching powdr (drop on memory-read words, keep on
+ALU results). `redundantByteDropPass` runs in the pipeline coda, after the cleanup fixpoint, so it
+does not starve the mid-loop enumeration passes of the finite-domain knowledge a raw byte-check slot
+carries.
+
+Reuses existing machinery: `ConstraintSystem.filterBusEntailed_correct` (from `FlagFold.lean`; the
+drop's acceptance is conditional on satisfaction of the *filtered* system — exactly "redundant"),
+`byteJustified`/`deepBoundOk` (from `BusPairCancel.lean`), and a **non-circular justification base**
+(operands justified only against interactions this pass can never drop, so two identical checks
+can't justify each other). `byteCheckOperands?` recognises all three forms; soundness threads
+through `byteCheck_sound`/`xorZeroCheck_sound`/`bytePairBus_sound`. Only new audit-free surface is
+the `xorZeroCheck` `BusFacts` field + its OpenVM instance (`bitwiseLookup` accepts `[x,0,x,1]` iff
+`x` is a byte).
+
+Coverage checked against powdr per case: the pass drops all three forms whenever the operand is
+byte-justified; the residual bitwise interactions it leaves are genuine XOR *operations* (not byte
+checks) or checks on computed values whose byte-ness is not otherwise entailed — which powdr removes
+only by eliminating the variable (C4) or deeper structural reasoning, outside C2's scope.
+
+`lake build` green; all three `maintainsCorrectness` theorems still `{propext, Classical.choice,
+Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** Variable- and constraint-neutral by construction (a coda `filterBus`). Full 100-case
+sweep vs the C1 (entry-67) line, per-case: **bus dropped on 57 cases, 0 regressions**; totals
+variables 28645 (unchanged), constraints 11215 (unchanged), bus 18887 → 18341 (−546). Aggregate vs
+powdr:
+
+- **bus interactions: 3.081× → 3.173× aggregate (2.486× → 2.581× geomean)** vs powdr's 3.480×/2.822×
+- variables 4.411×/3.768× and constraints 10.593×/11.585× unchanged
+
+Largest drops on memory/shift-heavy blocks (apc_037 −110 bus, apc_071 −48, apc_100 −35, apc_006 −30).
+Runtime smoke set vs C1: **+0% total** (one coda pass; worst case apc_100 +1.5%).

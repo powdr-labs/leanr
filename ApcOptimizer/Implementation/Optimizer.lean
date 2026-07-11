@@ -25,6 +25,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
 import ApcOptimizer.Implementation.OptimizerPasses.Dedup
 import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
 import ApcOptimizer.Implementation.OptimizerPasses.BoxRewrite
+import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
 
 set_option autoImplicit false
 
@@ -90,6 +91,7 @@ theorem cleanupCycle_respectsDeg : RespectsDeg (cleanupCycle (p := p)) := by
 def pipeline : VerifiedPassW p :=
   constantFoldPass.withFacts.guardDegree
     |>.andThen (iterateToFixpoint cleanupCycle)
+    |>.andThen RedundantByteDrop.redundantByteDropPass.guardDegree
     |>.andThen monicScalePass.withFacts.guardDegree
     |>.andThen constantFoldPass.withFacts.guardDegree
 
@@ -98,6 +100,7 @@ theorem pipeline_respectsDeg : RespectsDeg (pipeline (p := p)) := by
   repeat' apply VerifiedPassW.andThen_respectsDeg
   · exact VerifiedPassW.guardDegree_respectsDeg _
   · exact iterateToFixpoint_respectsDeg cleanupCycle_respectsDeg
+  · exact VerifiedPassW.guardDegree_respectsDeg _
   · exact VerifiedPassW.guardDegree_respectsDeg _
   · exact VerifiedPassW.guardDegree_respectsDeg _
 
