@@ -37,6 +37,9 @@ lake exe apc-optimizer powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
 
 # Both, side by side
 lake exe apc-optimizer compare <unopt>.json.gz <unopt>.powdr_opt.json.gz
+
+# Optimize and write the result as {machine, bus_map} JSON (readable by powdr/compare above)
+lake exe apc-optimizer opt-export <unopt>.json.gz <out>.json
 ```
 
 The benchmark sets live in [`OpenVmBenchmarks/`](./OpenVmBenchmarks/) (see its README); the main one, used for optimization, is the top-100 `openvm-eth` set in [`OpenVmBenchmarks/openvm-eth/`](./OpenVmBenchmarks/openvm-eth/).
