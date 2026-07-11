@@ -148,6 +148,18 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       ∀ (x mult : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, x, 0, 1] }
             = false ↔ x.val < 256
+  /-- Byte-check *via XOR-with-zero*: the check `[x, 0, x, 1]` (`x ⊕ 0 = x`, multiplicity any) on a
+      stateless bitwise-style bus is accepted **iff** `x` is a byte. The XOR-with-zero encoding is
+      how OpenVM materializes a bare "this operand is a byte" obligation that was not packed into a
+      pair; recognising it lets the redundant-byte-check dropper reach those interactions.
+      `trivial` sets it `false`. -/
+  xorZeroCheck : (busId : Nat) → Bool
+  xorZeroCheck_sound :
+    ∀ (busId : Nat), xorZeroCheck busId = true →
+      bs.isStateful busId = false ∧
+      ∀ (x mult : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, 0, x, 1] }
+            = false ↔ x.val < 256
   /-- Real-trace fixed-zero cells (e.g. the hardwired RISC-V `x0` register).
       `zeroCell busId = some (addrReq, dataSlots)` asserts that on the (stateful) bus `busId`, every
       *active* message whose payload has `payload[s] = v` for each `(s, v) ∈ addrReq` carries value
@@ -184,5 +196,7 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   bytePairBus_sound := by intro _ h; exact absurd h (by simp)
   byteCheck _ := false
   byteCheck_sound := by intro _ h; exact absurd h (by simp)
+  xorZeroCheck _ := false
+  xorZeroCheck_sound := by intro _ h; exact absurd h (by simp)
   zeroCell _ := none
   zeroCell_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)

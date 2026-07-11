@@ -157,13 +157,12 @@ flag→address→busUnify cascade may still apply on apc_005-class blocks.
 
 `deepBoundOk` (log 50) proves `x < 256` by enumerating the finite domains of a defining
 constraint's selector flags and checking each branch pins `x` to a byte constant or a
-byte-bounded variable. Today only `busPairCancelPass` consumes it. It could also power (a) a
-redundant-range-check dropper (a stateless byte check whose operands are deep-justified from the
-*rest* of the system is removable — same `filterBus` shape as `tautoBusDropPass` but with an
-env-dependent justification), and (b) wider domains for `domainProp` (a deep-justified byte var
-gets a `[0,256)` domain even when no interaction carries it raw). Generalising the two-term
-branch to `x = c₀ + Σ cᵢ·yᵢ` with a no-wrap interval bound would subsume the is-zero and
-mem-ptr-limb ideas' bound side.
+byte-bounded variable. **Update (log 68):** part (a) — the redundant byte-check dropper — is
+**landed** as `redundantByteDropPass` (C2), consuming `byteJustified`/`deepBoundOk` to drop
+entailed bitwise byte checks in the coda. Remaining: (b) wider domains for `domainProp` (a
+deep-justified byte var gets a `[0,256)` domain even when no interaction carries it raw).
+Generalising the two-term branch to `x = c₀ + Σ cᵢ·yᵢ` with a no-wrap interval bound would
+subsume the is-zero and mem-ptr-limb ideas' bound side.
 
 ## Smarter witnesses for `disconnectedComponentPass` — measured empty (log 61)
 
