@@ -145,6 +145,31 @@ def cmdRender (fileName : String) : IO Unit := do
   let optimized ← IO.lazyPure (fun _ => (openVmOptimizer busMap.toBusMap cs).1)
   IO.println (ApcOptimizer.Spec.Dsl.render optimized)
 
+/-- `opt-export <in> <out.json>`: run the optimizer and write the optimized machine back out as
+    `{"machine", "bus_map"}` JSON — the same shape `parseFile` reads, so the export can be fed to
+    `powdr`/`compare` like a `.powdr_opt` file. The `bus_map` is spliced through verbatim from the
+    input; the machine comes from the FFI serializer (`serializeSystem`, including
+    `derived_columns` for optimizer-introduced witness columns). -/
+def cmdOptExport (inFile outFile : String) : IO Unit := do
+  let (cs, busMap) ← parseFile inFile
+  let rawJson ← readInput inFile
+  let busMapJson ← do
+    match Lean.Json.parse rawJson >>= (·.getObjVal? "bus_map") with
+    | .error err =>
+      IO.eprintln s!"Error: cannot extract bus_map from {inFile}: {err}"
+      IO.Process.exit 1
+    | .ok j => pure j
+  let (optimized, ds) ← IO.lazyPure (fun _ => openVmOptimizer busMap.toBusMap cs)
+  let machineStr ← IO.lazyPure (fun _ => ApcOptimizer.Serialize.serializeSystem optimized ds)
+  let machineJson ← do
+    match Lean.Json.parse machineStr with
+    | .error err =>
+      IO.eprintln s!"Error: serializer produced invalid JSON: {err}"
+      IO.Process.exit 1
+    | .ok j => pure j
+  IO.FS.writeFile outFile
+    (Lean.Json.mkObj [("machine", machineJson), ("bus_map", busMapJson)]).compress
+
 def cmdPowdr (unoptFile : String) (optFile : String) : IO Unit := do
   let (csBefore, _) ← parseFile unoptFile
   let (csAfter, _) ← parseFile optFile
@@ -275,7 +300,9 @@ def usage : String :=
   "       apc-optimizer profile <file.json[.gz]>  (per-pass optimizer timing)\n" ++
   "       apc-optimizer powdr <unopt.json[.gz]> <opt.json[.gz]>\n" ++
   "       apc-optimizer compare <unopt.json[.gz]> <opt.json[.gz]>\n" ++
-  "       apc-optimizer report  <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n\n" ++
+  "       apc-optimizer report  <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n" ++
+  "       apc-optimizer opt-export <in.json[.gz]> <out.json>  (optimize and write the result\n" ++
+  "                                as {machine, bus_map} JSON, readable by powdr/compare)\n\n" ++
   "Files are powdr SymbolicMachine exports (ApcWithBusMap), e.g. OpenVmBenchmarks/openvm-eth/*.json.gz.\n" ++
   "The optimizer runs its cleanup loop to a fixpoint (provably terminating); there is no\n" ++
   "iteration count to set."
@@ -289,6 +316,8 @@ def main (args : List String) : IO Unit := do
   | ["powdr", unoptFile, optFile] => cmdPowdr (unoptFile := unoptFile) (optFile := optFile)
   | ["report", unoptFile, optFile] =>
     cmdReport (unoptFile := unoptFile) (optFile := optFile)
+  | ["opt-export", inFile, outFile] =>
+    cmdOptExport (inFile := inFile) (outFile := outFile)
   | ["compare", unoptFile, optFile] =>
     cmdCompare (unoptFile := unoptFile) (optFile := optFile)
   | _ =>

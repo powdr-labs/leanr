@@ -9,7 +9,8 @@
     {
       "files": {
         "unopt": "keccak_apc_pre_opt.json.gz",
-        "powdr_opt": "keccak_apc_pre_opt.powdr_opt.json.gz"
+        "powdr_opt": "keccak_apc_pre_opt.powdr_opt.json.gz",
+        "apc_opt": "keccak_apc_pre_opt.apc_opt.json.gz"
       },
       "stats": {
         "before": {
@@ -22,6 +23,13 @@
         "main_columns": 2021,
         "constraints": 186,
         "bus_interactions": 1734
+      },
+      "apc_opt_stats": {
+        "note": "apc-optimizer output snapshot; regenerate with `apc-optimizer opt-export` as the optimizer improves",
+        "commit": "b8d2593",
+        "main_columns": 3626,
+        "constraints": 492,
+        "bus_interactions": 5206
       }
     }
   ]
