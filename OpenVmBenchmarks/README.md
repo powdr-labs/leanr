@@ -24,6 +24,23 @@ OpenVmBenchmarks/benchmark.py --n 20         # top 20 by cost rank
 OpenVmBenchmarks/benchmark.py --n 10 --report report.html   # + interactive HTML report
 ```
 
+## Latest results (snapshot)
+
+Effectiveness at repo commit `b8d2593` (2026-07-11); refresh this section when the numbers move.
+Full openvm-eth sweep (`OpenVmBenchmarks/benchmark.py`, 100 cases; agg = Σbefore ⁄ Σafter,
+geo = geomean):
+
+| measure | apc-optimizer (agg / geo) | powdr (agg / geo) | diff (agg) |
+| --- | --- | --- | --- |
+| variables | 4.136× / 3.706× | 4.092× / 3.787× | +0.044× |
+| bus interactions | 2.922× / 2.440× | 3.480× / 2.822× | −0.558× |
+| constraints | 9.073× / 11.190× | 5.853× / 10.311× | +3.220× |
+
+Per-case (by variables): apc-optimizer wins 17, loses 52, ties 31.
+
+For the keccak stress case (not part of the sweep), see the table in
+[keccak (standalone stress case)](#keccak-standalone-stress-case) below — same snapshot commit.
+
 ## Layout
 
 Each benchmark set is a subdirectory of `OpenVmBenchmarks/`. To add another, create a new
@@ -55,10 +72,23 @@ This set was built from Ethereum mainnet [block 24171377](https://etherscan.io/b
 export in the same format as the case files above, but **not** part of a sweep set: it has no
 `.powdr_opt` pair and is not walked by `benchmark.py`. It's a stress case for the optimizer.
 
-Running it takes **tens of minutes** (the cleanup loop runs to a fixpoint over a circuit this
-large), so it is not part of `benchmark.py` or CI. Run it on demand with the existing CLI — the
-same generic parse → optimize → report path used for every benchmark circuit:
+Running it takes **minutes** (the cleanup loop runs to a fixpoint over a circuit this large;
+~6.3 min at repo commit `b8d2593`, 2026-07-11), so it is not part of `benchmark.py` or CI. Run it
+on demand with the existing CLI — the same generic parse → optimize → report path used for every
+benchmark circuit:
 
 ```bash
 lake exe apc-optimizer run OpenVmBenchmarks/keccak_apc_pre_opt.json.gz
 ```
+
+Measured effectiveness (repo commit `b8d2593`, 2026-07-11). Since there is no `.powdr_opt` pair,
+powdr's numbers cannot be computed by the CLI; they are recorded as static reference in
+[`keccak_manifest.json`](./keccak_manifest.json) (same shape as a sweep set's `manifest.json`),
+taken from powdr's own snapshot test (`autoprecompiles/tests/optimizer.rs::test_optimize`, powdr
+commit `b072302`), which runs the native Rust optimizer on the byte-identical file:
+
+| | columns (vars) | bus interactions | constraints |
+| --- | --- | --- | --- |
+| before | 27521 | 13262 | 28627 |
+| apc-optimizer | 3626 (7.59×) | 5206 (2.55×) | 492 (58.18×) |
+| powdr | 2021 (13.62×) | 1734 (7.65×) | 186 (153.91×) |

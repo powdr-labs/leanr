@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "source": {
+    "note": "keccak precompile APC (standalone stress case); byte-identical to powdr's autoprecompiles/tests/keccak_apc_pre_opt.json.gz (md5 8998aa08893f93797479ab9cee7e2008)",
+    "powdr_opt_stage": "no .powdr_opt export exists; powdr_opt_stats are the native Rust optimize() snapshot from powdr autoprecompiles/tests/optimizer.rs::test_optimize at powdr commit b07230275",
+    "date": "2026-07-11"
+  },
+  "entries": [
+    {
+      "files": {
+        "unopt": "keccak_apc_pre_opt.json.gz"
+      },
+      "stats": {
+        "before": {
+          "main_columns": 27521,
+          "constraints": 28627,
+          "bus_interactions": 13262
+        }
+      },
+      "powdr_opt_stats": {
+        "main_columns": 2021,
+        "constraints": 186,
+        "bus_interactions": 1734
+      }
+    }
+  ]
+}
