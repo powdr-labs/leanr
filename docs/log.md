@@ -1532,3 +1532,83 @@ passes on the expensive cases (apc_037: 11.9 s / 8.8 s); the deep byte-justifica
 `substF`/`fold`/`linearize` still pays the entry-54 per-node `ZMod` instance-projection tax (a
 compiled/`evalFast`-style linearizer would cut it further), and `deepByteVars`'s `findVarBound`
 scan over the remaining interactions is recomputed per candidate.
+
+### 57. Carry-branch resolution (`CarryBranch.lean`): interval analysis collapses one-sided adder carry products — the main per-case variable win
+
+**The idea** (from the apc_039 variable diff against powdr): add/move blocks keep whole
+register data-word copies alive through unresolved **carry-branch constraints** — per limb, the
+byte-decomposed adder leaves `(b₀ − a₀)·(b₀ − a₀ − 256) = 0` ("the difference is 0 or 256").
+When both operands are provably bytes — `b₀` because it is a memory receive (the entry-50
+receive-byte spec change), `a₀` because it is bitwise-checked — the second factor's value lies
+in the integer interval `[p−511, p−1]`, so it can *never* vanish and the product is **equivalent**
+to the linear `b₀ = a₀`. Gauss then substitutes the `b` word away entirely (its memory receive
+carries the `a` limbs directly), and the higher limbs cascade: once `b₀ = a₀` is substituted and
+normalized, the limb-1 constraint's cross terms cancel and it becomes the same one-sided shape.
+No existing pass could do this: the roots are parameterized by another variable (`b₀ ∈
+{a₀, a₀+256}`), outside the constant-domain passes, and the constraint is degree 2, outside
+Gauss/affine.
+
+**Implementation** (`ApcOptimizer/Implementation/OptimizerPasses/CarryBranch.lean`): a `VerifiedPassW`
+that maps each algebraic constraint through `resolveExpr`: on a product `f·g`, if either factor
+is certified never-zero, keep (recursively) the other. The certificate (`neverZeroB`) linearizes
+the factor, normalizes, and computes a **two-sided interval** from the proven bus-fact bounds
+(`BoundsMap`, built from `BusFacts.slotBound` exactly as in `hintCollapse`): each term picks the
+representation — positive `a·v` or negative `−((−a)·v)` — with the smaller magnitude
+(`splitSumMax`), and the form is refuted when `maxNeg < const.val ∧ const.val + maxPos < p`
+(`linNeverZeroSplit`, the two-sided generalization of `MemoryUnify.linNeverZero`). Two
+non-obvious points, both found by measurement:
+
+1. **Candidate rescaling.** Mid-pipeline (before the coda's `monicScale`) the carry factors read
+   `−1 + 256⁻¹·b₀ − 256⁻¹·a₀` — raw coefficient values overflow every interval. Since a factor's
+   zero set is scaling-invariant, the certificate tries the field inverse of each coefficient and
+   of the constant as a scalar and certifies any rescaling. Soundness needs nothing about the
+   candidate (if `k·l` never vanishes, `l = 0` would force `k·l = 0`), so the candidate list is
+   pure heuristic.
+2. **Placement: first in the cycle, *before* Gauss.** `iterateToFixpoint` only keeps a cycle
+   whose lexicographic `sizeKey` strictly drops. Resolution alone changes no count (the variables
+   still sit in the memory interactions), so with the pass placed after Gauss its rewrite was
+   *discarded* at the fixpoint — the linear constraint must be consumed by Gauss in the same
+   cycle to shrink the key. One cycle resolves one limb per word; the cascade converges in a few
+   extra cycles.
+
+Correctness: the rewrite is an *equivalence* on satisfying assignments (`resolveExpr_eval_iff`;
+`p` prime checked at runtime for `mul_eq_zero`, like the other field-dependent passes), so both
+`PassCorrect` directions use the unchanged assignment; bus interactions, side effects, and
+`admissible` are untouched, and no variable is introduced. With `BusFacts.trivial` no bound
+exists, no certificate fires, and the pass is the identity.
+
+**The regression it exposed, and the `domainBatch` fix.** The first full-set baseline
+comparison showed 51 of 100 cases improved but **apc_051 regressed** (482 → 485 vars,
+329 → 354 bus): the new pass changed Gauss's substitution orientation around a chained register
+word, and the final state stranded XOR rows `[0, 0, a__i, 1]` (constant operands — the table
+forces `a__i = 0`) plus an identical memory send/receive pair kept alive by those unpinned
+limbs. No pass could make progress on that state: nothing consumes `BusFacts.slotFun`, and
+`domainBatch` skipped the XOR rows as *uninformative* — its gate assumed any all-vars/constants
+payload is the range check that defined the box domains. The gate was sharpened
+(`biInformative`): an interaction is also informative when it has a raw-variable slot carrying
+**no** `interactionBound` from that same interaction (the XOR result slot) — its domain came
+from elsewhere, so the table can genuinely filter the box. Domain-defining range/byte/tuple
+checks bound every variable slot they carry and stay excluded, so the gate keeps its performance
+property; the change is heuristic-only (target selection — forced values still carry their own
+certificates). This recovered apc_051's variables exactly (482) and its bitwise count; 7
+identical send/receive pairs with compound (shift-gadget) payload slots remain uncancelled there
+(+14 bus on that one case, invisible in the aggregate) — `busPairCancel`'s byte justification
+does not cover compound slots, a known boundary-pair gap.
+
+**Impact** (full 100-case `openvm-eth` benchmark, target vs baseline vs powdr): variables
+**4.082× → 4.136× aggregate** (powdr 4.092× — apc-optimizer now wins the aggregate),
+**3.605× → 3.706× geomean** (powdr 3.787× — over half the remaining geomean gap closed);
+per-case variable losses to powdr **71 → 52** (wins 17, ties 31). Constraints improve to
+9.073×/11.190× agg/geo (powdr 5.853×/10.311×); bus interactions unchanged (2.922×/2.440× vs
+powdr 3.480×/2.822×). Per-case against baseline: **no case regressed in variables or
+constraints**; the only bus regression is apc_051's +14 above. Spot checks: apc_039 38 → 30 vars
+(= powdr), apc_011 59 → 51 (powdr 48), apc_090 50 → 46 (powdr 43). Runtime is *down* on the
+affected cases (apc_039 ~700 → ~400 ms — the resolved constraints leave later passes less
+work). `lake build` green; `check-proof-integrity.sh` passes; correctness axioms stay
+`{propext, Classical.choice, Quot.sound}`.
+
+Two negative findings recorded in `docs/ideas.md`: the apc_005-class `mem_ptr_limbs` carry
+products are **not** one-sided (the 16-bit wrap genuinely occurs on some traces — both factors'
+intervals contain 0), so that bus gap needs cross-access limb unification instead; and the
+apc_018 compare-block gap is the sltu-style `diff_marker` gadget that `hintCollapse`'s matcher
+does not cover yet (43 vs powdr 34 after this change).
