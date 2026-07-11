@@ -1814,3 +1814,199 @@ iterations 3–6 still pay 64 pair-datas each for zero adoptions; `rootPairUnify
 the seen-scan (measured), so likely `rpCandidates`'s per-variable `splitAt`+`LinExpr.norm`
 over every constraint every iteration; `domainFold` 3.4 s — the pre-existing
 `ImprovingRuntime.md` lead #1 (`constOnSurvs` still on per-node-instance `eval`).
+
+### 61. Measurement: free-variable removal and smarter disconnected-witnesses have no remaining targets
+
+Measurement only, no code change (in the spirit of entry 42). Two long-standing candidates — the
+`docs/ideas.md` "smarter witnesses for `disconnectedComponentPass`" item (entry 43's "dominant
+unremoved pattern": orphaned register-read byte-decompositions needing a non-zero witness) and
+powdr's `remove_free_variables` (drop a variable occurring in exactly one solvable
+constraint/stateless interaction) — were sized against the current optimizer's outputs before
+implementing. Both are **empty**:
+
+- **Disconnected variables: 0** on every sampled case (apc_001/003/008/010/014/047/056/069) —
+  the entry-43 orphan pattern has been consumed by the passes that landed since (the entry-50
+  received-byte facts, entry-51 zero-register pinning, and the entry-57–59 unification/cleanup
+  chain). The all-zero witness never fails on anything anymore because nothing disconnected
+  survives at all.
+- **Single-occurrence variables: 0–1 per case**, and the singleton is always the `hcinv#`
+  reciprocal hint from `hintCollapse` — whose defining constraint `a·inv − cmp = 0` is *not*
+  unconditionally solvable for it (`a` may be zero), so it is not removable under powdr's rule
+  either, and it is load-bearing for the is-zero gadget.
+
+The `docs/ideas.md` entry is updated accordingly. Together with entry 55 (degree-bounded
+inlining structurally blocked), two of the three Tier-1 variable candidates from the Rust-vs-Lean
+comparison are now measured dead on this benchmark; the live remainder of that tier is the
+constraint/limb-splitting shape (entry 36 lineage).
+
+### 62. Measurement: limb splitting is basis-neutral; the real residual gaps are the signed-comparison gadget and read-read data sharing
+
+Measurement only (entry-42 style), via a **variable-set diff** between our optimized outputs and
+powdr's exports on loss cases (apc_003: 133 vs 131; apc_047: 91 vs 87). Findings:
+
+1. **Constraint/limb splitting (the entry-36 lineage) is variable-neutral here.** Our surviving
+   `…timestamp_lt_aux__lower_decomp__1_*` high limbs pair **exactly 1:1** with powdr's surviving
+   `…prev_timestamp_*` columns (16↔16 on apc_003, 12↔12 on apc_047). powdr does not eliminate
+   the less-than witness; it solves the *high limb* away (`d1 = (now − prev − 1 − d0)·2⁻¹⁷`,
+   degree-1, substituted into its range check) and keeps `prev_timestamp`, while we solve
+   `prev_timestamp` away and keep both limbs. Different basis, same count. Do not build a
+   splitter for variables' sake; at most it trades a 12-bit range check's operand shape.
+2. **The whole apc_003-class gap (+2/case) is the signed-comparison gadget**: we keep
+   `{a_msb_f, b_msb_f, cmp_lt}` where powdr keeps `{cmp_result}` — the msb-extraction booleans
+   survive on our side. New, previously uncatalogued target (`docs/ideas.md`).
+3. **The apc_047-class gap (~+3/case) is duplicated read data**: powdr keeps one copy of the
+   same-address read words (`b__*`, `writes_aux__prev_data__*`) across consecutive accesses
+   where we keep several. Hypothesis: our receive-equals-send chaining (`busUnify`) is blocked
+   because the access addresses are still not *syntactically* equal — the entry-59 residual
+   (one flag component per access pair relates non-componentwise). Finishing that flag story
+   (the derived-variable interpolation in `docs/ideas.md`) would likely unlock this cascade.
+
+With entries 55 and 61, all three Tier-1 variable candidates from the Rust-comparison survey
+are now measured dead as scoped; the live variable work is items (2) and (3) above.
+
+### 63. Diagnosis: the two entry-62 gaps, pinned down (XOR flag relation; sign-split comparison gadget)
+
+Measurement/diagnosis only, completing entry 62 with the concrete shapes.
+
+1. **The entry-59 flag residual is XOR.** Probing the persisting scaled-check pairs on apc_005
+   (via `fuPairData?`'s own point tables): after entry 59 each pair's flag sets already share
+   one variable, and the compatible joint points for the remainder read off as exactly
+   `c1 = a0 ⊕ a1` — e.g. carrier `mem_ptr_limbs__0_3`, X flags `{567_0, 567_1}`, Y flags
+   `{567_1, 575_1}`, compatible points `{(0,0,0),(1,1,0),(1,0,1),(0,1,1)}`. As a field
+   polynomial `a0 + a1 − 2·a0·a1` (degree 2), so plain entailed substitution is
+   **degree-blocked twice over**: `c1`'s booleanity becomes degree 4 (> identities 3) and the
+   Y check's payload `F_Y(a1, c1 := ⊕)` becomes degree 3 (> bus 2). Eliminating the ~64
+   remaining `c1`s per apc_005-class block therefore needs a *composite, singly-guarded* pass:
+   entailed nonlinear substitution + a box-tautology constraint drop (the substituted booleanity
+   vanishes on the boolean box) + a pointwise-equal bus-payload replacement (the substituted
+   check's slot equals the survivor's on the box). All three pieces have precedents
+   (`Solved`/`substF`, the `fuCheck` box machinery, `filterBusEntailed_correct`), but composing
+   them under one `guardDegree` with intermediate over-bound states is its own project.
+2. **apc_047 has zero scaled-check pairs** in its final output — entry 62's hypothesis that its
+   duplicated read-data words are blocked on the flag residual is **wrong for that case**; its
+   read-read duplication needs a separate diagnosis (the addresses there presumably differ in
+   more than a flag component).
+3. **The sign-split comparison gadget (apc_003 class, the +2/case).** `a_msb_f` is pinned by its
+   own two-root constraint `(a__3 − f)(a__3 − f − 256) = 0` — a *definition* (limb minus sign
+   bit), not a duplicate, so `rootPairUnify` does not apply — plus the byte pair-check
+   `[a_msb_f, b_msb_f, 0, 0]` and a `diff_marker` chain deciding `cmp_lt`. powdr keeps one
+   `cmp_result` for our three `{a_msb_f, b_msb_f, cmp_lt}`. The domains are *parameterized*
+   (`f ∈ {a3, a3 − 256}`), so `reencode`/`domainBatch` (constant-domain machinery) cannot
+   compress the group either; a folding pass would need parameterized-domain reasoning or
+   derived-column substitution with the same composite-guard treatment as (1).
+
+### 64. XOR flag fold: three of five pieces built and firing; blocked on stateful-payload and selection-constraint degrees
+
+Implementation attempt on log 63's finding 1 (`FlagFold.lean`, committed **unwired**). The
+composite `flagFoldPass = fxSubstPass ∘ boxTautoDropPass ∘ pointwiseDupDropPass` under a single
+degree guard. Stage probe on apc_005's optimized output:
+
+- `fxSubstPass` **fires: 1491 → 1427 vars (−64)** — the certified interpolation `c1 := a0 ⊕ a1`
+  (built from `fuPairData?`'s own compatible-point tables, validated pointwise by `fxCheckWith`,
+  entailed by the residue argument via `fxCheck_sound`) substitutes every remaining pair flag.
+- `boxTautoDropPass` replaces the degree-4 substituted booleanities by `0` (multi-variable
+  constraints vanishing on their proven domain box; single-variable constraints are never
+  replaced, keeping the `findDomainAlg` sources — non-circular by construction).
+- `pointwiseDupDropPass` **fires: 765 → 701 bus (−64)** — stateless interactions pointwise-equal
+  on the box to an earlier *first-of-class* twin are dropped (`filterBusEntailed_correct`
+  ported from the entry-56 line with `hok` generalized to be multiplicity-conditional; the
+  depth-1 first-of-class rule avoids chain induction).
+- **But `withinDegree = false` at every stage**: the substituted flag also sits in the
+  **stateful memory address payloads** (`limbsum − F(a1, c1)`, degree 3 after substitution —
+  no pass may drop or alter stateful interactions) and in the degree-3 **data-selection
+  constraints** (degree 4 after). The guard rejects the composite, so the wired pipeline is a
+  no-op at +74 s per apc_005 run — hence unwired at this commit.
+
+**What completing it needs** (both specified, neither trivial):
+(D) a *compatible-point-entailed payload rewrite* — replace the eliminated access's address
+expression by the survivor's (already degree-legal; pointwise-equal under the pair certificate,
+i.e. `slotEqCert` refined from box-equality to compatible-point equality with both checks
+retained); sideEffects stay *equal* because the evaluated messages are. (E) a multilinear
+reduction (`b² → b` on boolean-domained variables, box-certified) for the selection
+constraints — the general contextual rewriter sketched in the design documents. (D) unlocks the
+address-side; (E) the constraint side; with both, the probe numbers above (−64 vars, −64 bus
+per apc_005-class block) become landable.
+
+### 65. Box-certified multilinear rewriting completes the XOR flag fold (`BoxRewrite.lean`)
+
+The missing piece from entry 64, and it subsumes both gaps at once: a pass that rewrites every
+**over-bound** expression of the system to its multilinear reduction (`b² → b` on
+small-domain variables), accepting each rewrite only under a decidable certificate — on every
+point of the expression's small-domain box, both forms **partially evaluate to the same affine
+form** in the remaining symbolic (e.g. data) variables (`linearize` + canonical normalized
+comparison; soundness via `eval_substF`/`envF` restriction, `linearize_eval`, and permutation
+sums). The reduction itself is heuristic monomial expansion (exponent capping on box variables,
+64-monomial cap) and carries no proof; the certificate re-verifies pointwise. Single-variable
+constraints are never rewritten (the `findDomainAlg` sources — same non-circularity as the
+entry-64 parts), and rewrites that would introduce variables are rejected by a decidable guard.
+
+The completed composite `flagFoldPass' = fxSubst ∘ boxRewrite ∘ boxTautoDrop ∘ pointwiseDupDrop`
+under one degree guard: the XOR substitution fires, the rewriter legalizes the substituted
+address payloads (degree 3 → 2) and selection constraints (degree 4 → 3), the tautology and
+duplicate collectors clean up. Stage probe on apc_005: `wd=false` after substitution,
+**`wd=true` after the rewrite**, and the guard now accepts.
+
+`lake build` green; all three `maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes.
+
+**Impact.** apc_005-class blocks: **1491 → 1427 vars (−64), 649 → 585 constraints (−64),
+765 → 701 bus (−64)** each. 9-case sample across the other size classes byte-identical. Full
+100-case sweep (before → after, baseline = the entry-60 line):
+
+- **variables: 4.286× → 4.352× aggregate (3.655× → 3.667× geomean)** vs powdr's 4.092×/3.787×
+- **bus interactions: 3.006× → 3.077× aggregate (2.466× → 2.482× geomean)**
+- **constraints: 9.854× → 10.235× aggregate (10.214× → 10.292× geomean** — closing on powdr's
+  10.311× geomean)
+
+Runtime cost: apc_005 ~18 s → ~80 s (the composite's scans run every cycle) — a known
+entry-53-style target for a follow-up perf pass; not intractable, and effectiveness lands
+first. The `boxRewritePass` is general machinery: it is the "contextual polynomial reduction"
+enabler the early design surveys called for, and the sign-split comparison gadget (entry 63
+item 3) is its natural next customer.
+
+### 66. Perf: the flagFold composite from 67 s to 1.7 s on apc_005 (entry-65 follow-up)
+
+The `ImprovingRuntime.md` pass over the entry-64/65 additions. Baseline: `flagFoldPass'` cost
+66.9 s of apc_005's ~81 s run. Staged sub-pass timings (temporary `ffprof` command) plus layered
+scan decompositions localized four mechanisms, landed as three commits:
+
+1. **`findDomainAlg` gates its scan on `Expression.mentions`** (`DomainProp.lean`). `rootsIn`
+   runs `linearize` — allocation-heavy normalization — per (variable, constraint) probe, so
+   every domain lookup scanned all ~650 single-variable constraints at full price. A constraint
+   that does not mention the variable can only yield a root list through the
+   unsatisfiable-constant case (`rootsOfTerms` on an empty term list), so skipping it never
+   loses a live domain. This one gate took boxTauto from 15.4 s → 0.2 s (with the cache below)
+   and sped up every caller: flagUnify, `slotEqCert`, `brCert`.
+2. **Hoisted scan invariants** (`FlagFold.lean`, `BoxRewrite.lean`). `btCert`, `slotEqCert`/
+   `msgEqCert`, `pdFirst`/`pdKeep`, and `brRw`/`brCert` all refiltered `singleVarCs all` per
+   candidate (in `brRw`'s case per *variable* of every over-bound expression); they now take
+   the precomputed list, bound once per pass invocation. boxRewrite's fold-iteration stage:
+   4.4 s → 0.16 s. **Lean gotcha worth remembering**: precomputed values must be passed as
+   *plain arguments* — a def-local `let` in front of a trailing `fun c => …` is re-evaluated on
+   every application by arity expansion, and hoisting the partial application
+   (`let keep := btKeepCond cs`) does **not** prevent it (first attempt hung: O(n) cache
+   rebuilds per constraint).
+3. **boxTauto memoized-domain prefilter** (`btPre`): a faithful mirror of `btCert` over a
+   per-pass `HashMap` of `findDomainAlg` results gates the certificate; the certificate
+   re-checks with the real scan, so the cache carries no proof obligation (the `BusFacts`
+   philosophy applied to perf).
+4. **`slotEqCert` requires a shared carrier** (`x ∈ e'` via a ZMod-free `mentions` walk) before
+   any `splitAt`. The pointwiseDup prefix scans visit 2.5M interaction pairs on apc_005; layered
+   timing showed the skeleton (findIdx?, busId, multiplicity, payload-BEq layers) costs 0.26 s
+   and *everything else* was `splitAt`/`coeffAt` per-node ZMod ring ops — the runtime-`p`
+   instance-reconstruction tax (entry 53). The dropped arm — carrier with a fully cancelled
+   constant coefficient, absent from `e'` — cannot survive the constantFold/normalize passes
+   that run ahead of the composite every cycle. pointwiseDup: 4.1 s → 0.43 s.
+
+Dead ends, killed by measurement: a domain-`HashMap` for pointwiseDup (cache build alone cost
+9.1 s over payload vars and saved nothing — domains were never the scan's cost); iterating var
+*occurrences* instead of `eraseDups` (repeated flag variables re-ran certified arms per
+occurrence: 4.1 s → 18.7 s).
+
+Validation per the playbook: 13-case `run` outputs and the full apc_005 render **byte-identical**
+against a 9e703ed reference binary (this also empirically confirms the two "cannot fire on real
+inputs" arguments above — items 1 and 4 are conservative narrowings, sound by construction
+either way). Effectiveness unchanged by construction. apc_005: **81 s → 12.7 s**; flagFold
+**66.9 s → 1.7 s** (iter 0: 0.65 s; fold iteration: 0.44 s). The profile is now led by
+pre-existing passes — domainFold 3.3 s, reencode 1.7 s, domainBatch 1.6 s — so the composite is
+no longer the pipeline's bottleneck. `lake build` green at every commit; proof integrity clean.

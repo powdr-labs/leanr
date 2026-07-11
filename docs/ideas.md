@@ -135,6 +135,24 @@ are typically *received* register/memory words, which now carry proven byte boun
 (multiplicity-aware `slotBound`); `byteJustified`/`deepBoundOk` in `BusPairCancel.lean` are
 reusable justification building blocks.
 
+## Signed-comparison gadget: fold the msb flags into the comparison result (variables)
+
+Log entry 62: on slt/blt-shaped blocks (apc_003 class) we keep `{a_msb_f, b_msb_f, cmp_lt}`
+where powdr keeps a single `{cmp_result}` — +2 vars per case, and these cases are the long-tail
+losses. The msb booleans are pinned by the sign-decomposition constraints; folding them needs
+either a derived-column substitution (each msb flag becomes a `ComputationMethod` over the
+operand limbs, with the pinning constraint dropped as entailed) or a `reencode`-style
+compression of the three-variable group. Diagnose the exact gadget constraints on apc_003
+before choosing.
+
+## Read-read data sharing blocked on the last flag component (variables)
+
+Log entry 62: powdr keeps one copy of same-address read-data words across consecutive accesses
+(apc_047 class, ~+3 vars per case). **Log 63 correction:** apc_047's final output has *zero*
+scaled-check pairs, so this is *not* blocked on the flag residual there — the duplication needs
+its own diagnosis (render the accesses; the addresses presumably differ structurally). The
+flag→address→busUnify cascade may still apply on apc_005-class blocks.
+
 ## Reuse the deep byte justification beyond pair cancellation
 
 `deepBoundOk` (log 50) proves `x < 256` by enumerating the finite domains of a defining
@@ -147,15 +165,14 @@ gets a `[0,256)` domain even when no interaction carries it raw). Generalising t
 branch to `x = c₀ + Σ cᵢ·yᵢ` with a no-wrap interval bound would subsume the is-zero and
 mem-ptr-limb ideas' bound side.
 
-## Smarter witnesses for `disconnectedComponentPass`
+## Smarter witnesses for `disconnectedComponentPass` — measured empty (log 61)
 
-`disconnectedComponentPass` (entry 43) removes a disconnected component only if the **all-zero**
-witness certifies it satisfiable. This misses the common orphaned-register-read pattern (data limbs
-surviving only in a bitwise byte-check `[K − Σ 256ⁱ·limbᵢ, limb₀, 0, 0]` plus range checks), where
-the satisfying witness is the base-256 decomposition of `K`, not `0`. A witness *finder* that solves
-the component's lookups (probe `violatesConstraint`) would capture them. Only the finder changes,
-not the proof. Phrase it as a general "solve the component's lookups" search, not hard-coded
-base-256, to avoid overfitting to the OpenVM limb structure.
+**Do not build without re-measuring.** As of log 61 the optimized outputs contain **zero**
+disconnected variables on every sampled case (the entry-43 orphan pattern was consumed by the
+entry-50/51 facts and the entry-57–59 cleanup chain), and the only single-occurrence variables
+are `hintCollapse`'s reciprocal hints, which are not unconditionally solvable and hence not
+removable under powdr's `remove_free_variables` rule either. The witness-finder generalization
+only becomes relevant again if a future pass starts stranding non-zero-satisfiable components.
 
 ## Batch pair cancellation in one traversal (performance)
 
