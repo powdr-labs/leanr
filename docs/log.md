@@ -2382,3 +2382,58 @@ case**; only the covered-set lookup differs. No audited surface; proof integrity
 (`{propext, Classical.choice, Quot.sound}`-only). Expected effect: keccak keeps its −13 % `domainFold`
 win; openvm-eth `domainFold` returns to baseline (no 1.24× regression); `busUnify`'s −66/−72 % win is
 unaffected.
+## Entry 71: symbolic-timestamp forwarding — two-root address disequality
+
+**Idea.** `busUnifyPass` (`BusUnify.lean`) forwards read/`prev_data` limbs across a
+symbolic-timestamp memory access by pairing an active send `S` with its consumer receive `R` (same
+address, none active-same-address between) and adding the slot equalities `memEqConstraints`
+(timestamp included) — Gauss then pins the timestamp `lower_decomp` and substitutes the read/
+`prev_data` limbs by the written value. On keccak's heap this never fired: `findConsumer`'s scan
+must step over interleaved *other-pointer* accesses, and `addrConstsNeq` only refutes a
+different-address message when **both** address slots are literal constants — but a heap address is
+the pointer *expression* `mem_ptr_limbs__0 + 2¹⁶·mem_ptr_limbs__1`, so no candidate ever formed
+(AS2 stuck at 482, `lower_decomp`/`prev_data` families uncollapsed — the concrete blocker behind the
+top ideas.md item "unify read-data limbs").
+
+**Mechanism (bound-free, simpler than a bounded-interval approach).** Each pointer limb is
+pinned by a two-root constraint `(A + k·x)(A + δ + k·x) = 0` (recognized by `twoRootOf?`,
+`RootPairUnify.lean`). The high limb's constraint reads `(F − limb₁)(F − 2¹⁶ − limb₁) = 0` with
+`F = C_hi + 30720·limb₀`. Over BabyBear `1 + 2¹⁶·30720 ≡ 0 (mod p)`, so substituting either root of
+`limb₁` into `addr = limb₀ + 2¹⁶·limb₁` **cancels `limb₀` algebraically**, leaving an affine form in
+the base register `rs1_data` only, in each of the two branches: `addr ∈ {2¹⁶·C_hi, 2¹⁶·C_hi − 2³²}`.
+For two same-base pointers every one of the four branch-pair differences is a nonzero field constant
+(the immediate diff, ±2³²) ⇒ the addresses provably differ — **no range bounds needed**, purely the
+two-root disjunction and linear arithmetic.
+
+**How.** New audit-free `AddrDiseq.lean`: `ptrBranchesOf` (substitute a two-root branch into a
+`LinExpr`), `ptrReductions` (the ≤2 branch forms per limb of an address expression), `constDiffNZ`
+(a nonzero-constant difference), `exprTwoRootNeq` (four branch-pair diffs all nonzero constants),
+`addrTwoRootNeq` (some address slot provably differs). Wired into `BusUnify.lean`: the new disjunct
+`addrTwoRootNeq` is OR-ed into `findConsumer`'s step-over test and `checkPair`'s `mid`-refutation;
+`checkPair_sound` gained an `hsat` hypothesis (the two-root soundness needs the constraints to hold).
+The same predicate is also usable by `busPairCancel`'s `midRefuted` (not wired yet). Zero audit
+surface, no new `BusFacts`. Proof: `twoRootOf?_sound` gives the root disjunction, `LinExpr`
+arithmetic gives the branch reduction, and the four nonzero-constant checks contradict any address
+equality.
+
+**Perf.** The naive per-pair certificate (re-scan every constraint per `(send, mid)`
+pair, plus a per-call `decide (Nat.Prime p)`) made keccak **~5× slower** (30+ min vs ~6). Fixed with
+a proof-carrying `TwoRootMap` (per-variable `(k, A, δ)` data, mirroring `BoundsMap`) built **once per
+pass** — constant-time hash lookup per pair; each entry also carries `Nat.Prime p`, dropping the
+per-call primality `decide`. Keccak runtime is **back to ~baseline (~6 min)**; output byte-identical
+to the naive version on the quick case.
+
+**Impact.** **keccak: 3056 → 2224 variables (−832, −27%), 2862 → 2411 bus interactions (−451),
+120 → 118 constraints.** The variable gap to powdr shrank **+1035 → +203** (80% closed, now 2224 vs
+2021). The cascade landed as predicted: `read_data_aux…lower_decomp` 534→164, `prev_data` 448→148,
+width-12/17 range checks 267/267 → **129/129 (= powdr)**; register-chain (AS1) cancellation cascaded
+free (230 → **58 = powdr**). AS2 count itself stays 482 (the ±1 identical-tuple residue rose 178→282 —
+those need the item-1.2 affine `byteJustified` rule to cancel; future work). **openvm-eth 100-case
+sweep: variables 4.490× → 4.507× agg (3.810 → 3.818 geo), bus 3.290× → 3.331× agg (2.629 → 2.641
+geo), constraints ~flat, 0 regressions** — the pass also fires on the main benchmark's heap accesses.
+Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only).
+
+**Follow-up.** (1) The 282 identical ±1 memory tuples my forwarding created are cancellable by
+`busPairCancel` once `byteJustified` gets an affine no-wrap rule (ideas.md 1.2) — another ~−282 bus.
+(2) Wiring `addrTwoRootNeq` into `busPairCancel.midRefuted` could telescope the AS2 middle pairs
+(below powdr's 200 floor; ideas.md 2.2).
