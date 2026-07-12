@@ -435,7 +435,7 @@ def openVmFacts (p : ℕ) [NeZero p]
   admissible_dropPair := by
     -- `openVmBusSemantics.admissible` is the per-declared-bus `admissibleMemoryBus` conjunction
     -- (`.1`) together with the `zeroRegisterReads` clause (`.2`).
-    intro hp1 busId shape hshape A B C S R hSbus hRbus hSm hRm haddrEq hcons hearliest hadm_full
+    intro hp1 busId shape hshape A B C S R hSbus hRbus hSm hRm haddrEq hcons hshield hadm_full
     obtain ⟨hdisc, hzero⟩ := hadm_full
     refine ⟨fun busId' shape' hshape' => ?_, ?_⟩
     · -- memory discipline conjunct
@@ -457,9 +457,20 @@ def openVmFacts (p : ℕ) [NeZero p]
         · intro m hm hmne hmaddr
           rw [List.mem_filter] at hm
           exact hcons m hm.1 (of_decide_eq_true hm.2) hmne hmaddr
-        · intro m hm hmne hmaddr
-          rw [List.mem_filter] at hm
-          exact hearliest m hm.1 (of_decide_eq_true hm.2) hmne hmaddr
+        · -- shield over the filtered `A`: lift the split to raw `A`, apply the abstract shield,
+          -- then push the resulting receive back into the filtered suffix.
+          intro A₁' Sx A₂' hAsplit hSxne hSxaddr hSxmult
+          obtain ⟨A₁, A₂, hAeq, _, hA₂filt⟩ :=
+            filter_split (fun m => m.busId = busId) Sx A A₁' A₂' hAsplit
+          -- `Sx` is in the filtered list, so it carries `busId`.
+          have hSxbus : Sx.busId = busId := by
+            have : Sx ∈ A.filter (fun m => m.busId = busId) := by
+              rw [hAsplit]; exact List.mem_append_right A₁' (List.mem_cons_self ..)
+            exact of_decide_eq_true (List.mem_filter.mp this).2
+          obtain ⟨m, hmem, hmbus, hmne, hmaddr, hmmult⟩ :=
+            hshield A₁ Sx A₂ hAeq hSxbus hSxne hSxaddr hSxmult
+          refine ⟨m, ?_, hmne, hmaddr, hmmult⟩
+          rw [← hA₂filt]; exact List.mem_filter.mpr ⟨hmem, by simp [hmbus]⟩
       · -- `busId' ≠ busId`: `S`, `R` are on `busId`, so they drop out and the filter is unchanged.
         have hne : busId ≠ busId' := fun h => hbb h.symm
         have heq : (A ++ B ++ C).filter (fun m => m.busId = busId')

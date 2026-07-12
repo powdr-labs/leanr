@@ -24,33 +24,6 @@ returns the send's payload, so `read_limb = written_limb`) and/or by the XOR fun
 The bitwise-**result** byte bound itself is now landed (`openVmFacts.slotBound` slot 2, entry 58) —
 do not re-propose it.
 
-## Relax `busPairCancel`'s earliest-send completeness condition (openvm-eth memory bus — the real win)
-
-**This is the binding constraint on openvm-eth memory cancellation** (see log entry 69). With
-finite-domain byte justification landed (entry 69), the sign-extension memory chains
-(`apc_010` family) are byte-justified but still not cancelled: `busPairCancel` requires the
-dropped send `S` to be the **earliest active same-address send** (`admissibleMemoryBus_dropPair`'s
-`hearliest`, checked as `A.all (preRefuted …)`). openvm-eth chains put a boundary *store* of a
-computed value before the read pairs — an earlier active same-address send with no syntactic
-match — so every later read pair is refused (`pre=false`), and the chain never cascades.
-
-**The sound weakening.** Replace "no active same-address send in the before-region `A`" with
-"**the last active same-address message in `A` is a receive** (or `A` has none)." Soundness (a
-from-scratch argument, sketched and validated by hand): map any split of the post-drop list back
-to the pre-drop list; the only pairs the drop can newly expose are ones whose `mid` straddles the
-removed `S₀`/`R₀`. If such an exposed `(S, R)` has `S` an active same-address send in `A`, then
-the trailing receive `Rp` (the last active same-address message in `A`) sits *after* `S` and
-*before* `R`, i.e. inside `mid` — contradicting the split's "mid all-inactive/other-address"
-hypothesis. So `Rp` **shields** every earlier send and no mismatched consecutive pair is exposed.
-Combined with entry-69 byte justification, this should cascade the `apc_010`-family read chains
-(measured potential: `apc_010` bus 307 → toward powdr's 239; ~12 cases).
-
-**Cost/scope.** Touches the completeness-critical memory-discipline proof: weaken
-`admissibleMemoryBus_dropPair` / `admissibleMemoryBus_dropOne` (`MemoryBusDrop.lean`), the
-`admissible_dropPair` field of `BusFacts` and its `openVmFacts` instance, `dropPair_correct` and
-the `preRefuted`/region-`A` test in `BusPairCancel.lean`. Bus-only win (variables already beat
-powdr), so worth it but sizeable; keep it a separate, carefully-reviewed change.
-
 ## AND-gadget byte justification (`apc_037`, minor)
 
 `apc_037`'s blocked chain writes `b = x AND y`, encoded as the adder identity

@@ -33,7 +33,7 @@ geo = geomean):
 | measure | apc-optimizer (agg / geo) | powdr (agg / geo) | diff (agg) |
 | --- | --- | --- | --- |
 | variables | 4.491× / 3.810× | 4.092× / 3.787× | +0.399× |
-| bus interactions | 3.333× / 2.644× | 3.480× / 2.822× | −0.147× |
+| bus interactions | 3.360× / 2.662× | 3.480× / 2.822× | −0.120× |
 | constraints | 10.595× / 11.585× | 5.853× / 10.311× | +4.742× |
 
 Per-case (by variables): apc-optimizer wins 25, loses 43, ties 32.
@@ -97,5 +97,5 @@ optimizer on the byte-identical file:
 | | columns (vars) | bus interactions | constraints |
 | --- | --- | --- | --- |
 | before | 27521 | 13262 | 28627 |
-| apc-optimizer | 3056 (9.01×) | 2862 (4.63×) | 120 (238.56×) |
+| apc-optimizer | 3056 (9.01×) | 2690 (4.93×) | 120 (238.56×) |
 | powdr | 2021 (13.62×) | 1734 (7.65×) | 186 (153.91×) |
