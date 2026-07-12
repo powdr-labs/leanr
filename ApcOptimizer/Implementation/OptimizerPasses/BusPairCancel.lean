@@ -317,24 +317,93 @@ theorem deepByteJustified_sound [Fact p.Prime] [NeZero p] (all : List (Expressio
   exact deepBoundOk_sound (all.filter Expression.isSingleVar) bs facts rest x c hck env
     (fun c' hc'' => hall c' (List.mem_of_mem_filter hc'')) (hall c hc') hbus
 
+/-- Evaluate the single-variable expression `e` with its variable fixed to `d` and check the
+    result is a byte constant. `constValue? = none` (so `false`) whenever the fold is not a
+    constant — i.e. `e` still mentions a variable other than the one fixed — so this only ever
+    succeeds for a genuinely single-variable `e`. -/
+def exprPointByte (e : Expression p) (x : Variable) (d : ZMod p) : Bool :=
+  match (e.substF (fun v => if v = x then some (.const d) else none)).fold.constValue? with
+  | some c => decide (c.val < 256)
+  | none => false
+
+/-- Is `e` a byte because its single variable `x` ranges over a small constraint-derived finite
+    domain (`findDomainAlg`) at every point of which `e` evaluates to a byte? Generalises the raw
+    byte-variable case to expressions like the sign-extension limb `255·b` (b boolean, values
+    `{0, 255}`) that a signed memory load leaves in a word's high limbs. -/
+def domainByteJustified (domCs : List (Expression p)) (e : Expression p) : Bool :=
+  match e.singleVarAux with
+  | some (some x) =>
+    match findDomainAlg domCs x with
+    | some d => decide (d.length ≤ maxDeepDomain) && d.all (exprPointByte e x)
+    | none => false
+  | _ => false
+
+theorem domainByteJustified_sound [Fact p.Prime] (domCs : List (Expression p)) (e : Expression p)
+    (h : domainByteJustified domCs e = true) (env : Variable → ZMod p)
+    (hdom : ∀ c ∈ domCs, c.eval env = 0) :
+    (e.eval env).val < 256 := by
+  unfold domainByteJustified at h
+  cases hsv : e.singleVarAux with
+  | none => rw [hsv] at h; simp at h
+  | some ov =>
+    cases ov with
+    | none => rw [hsv] at h; simp at h
+    | some x =>
+      rw [hsv] at h
+      dsimp only at h
+      cases hfd : findDomainAlg domCs x with
+      | none => rw [hfd] at h; simp at h
+      | some d =>
+        rw [hfd, Bool.and_eq_true] at h
+        obtain ⟨_, hall⟩ := h
+        have hmem : env x ∈ d := findDomainAlg_sound domCs x d hfd env hdom
+        have hpt : exprPointByte e x (env x) = true := List.all_eq_true.mp hall _ hmem
+        unfold exprPointByte at hpt
+        cases hcv : (e.substF (fun v => if v = x then some (.const (env x)) else none)).fold.constValue?
+          with
+        | none => rw [hcv] at hpt; simp at hpt
+        | some c =>
+          rw [hcv] at hpt
+          have hbyte : c.val < 256 := of_decide_eq_true hpt
+          have hfoldeval :
+              (e.substF (fun v => if v = x then some (.const (env x)) else none)).fold.eval env = c :=
+            Expression.constValue?_sound _ c hcv env
+          have hsubeval :
+              (e.substF (fun v => if v = x then some (.const (env x)) else none)).eval env
+                = e.eval env := by
+            rw [Expression.eval_substF, envF_eq_self]
+            intro y t hy
+            by_cases hk : y = x
+            · subst y
+              simp only [if_pos rfl] at hy
+              injection hy with hy'
+              subst hy'
+              rfl
+            · simp only [if_neg hk] at hy; exact absurd hy (by simp)
+          rw [Expression.fold_eval, hsubeval] at hfoldeval
+          rw [hfoldeval]; exact hbyte
+
 /-- Is `e` provably a byte under every assignment satisfying the remaining system? Either a
     constant `< 256`, a variable with a proven bus-fact bound `≤ 256` derived from the remaining
     interactions `rest` (e.g. another receive of the same word, or an explicit byte-check
     lookup), or — when `deep` is set (prime `p` only) — a variable a constraint pins to a byte
-    on every point of its selector flags' finite domains (`deepBoundOk`). -/
+    on every point of its selector flags' finite domains (`deepBoundOk`), or a single-variable
+    expression whose variable's finite domain makes `e` a byte at every point
+    (`domainByteJustified`, e.g. the `255·b` sign-extension limbs). -/
 def byteJustified (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
     (e : Expression p) : Bool :=
   match e.constValue? with
   | some c => decide (c.val < 256)
   | none =>
-    match e with
-    | .var x =>
-      (match findVarBound bs facts rest x with
-       | some bound => decide (bound ≤ 256)
-       | none => false) ||
-      (deep && deepByteJustified all bs facts rest x)
-    | _ => false
+    (match e with
+     | .var x =>
+       (match findVarBound bs facts rest x with
+        | some bound => decide (bound ≤ 256)
+        | none => false) ||
+       (deep && deepByteJustified all bs facts rest x)
+     | _ => false) ||
+    (deep && domainByteJustified (all.filter Expression.isSingleVar) e)
 
 theorem byteJustified_sound (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p))) (e : Expression p)
@@ -354,25 +423,33 @@ theorem byteJustified_sound (deep : Bool) (all : List (Expression p)) (bs : BusS
   | none =>
     rw [hc] at h
     dsimp only at h
-    cases e with
-    | var x =>
-      dsimp only at h
-      show (env x).val < 256
-      rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
-      · cases hb : findVarBound bs facts rest x with
-        | some bound =>
-          rw [hb] at h'
-          dsimp only at h'
-          exact lt_of_lt_of_le (findVarBound_sound bs facts rest x bound hb env hbus)
-            (of_decide_eq_true h')
-        | none => rw [hb] at h'; simp at h'
-      · rw [Bool.and_eq_true] at h'
-        haveI : Fact p.Prime := ⟨hdeep h'.1⟩
-        haveI : NeZero p := ⟨(hdeep h'.1).ne_zero⟩
-        exact deepByteJustified_sound all bs facts rest x h'.2 env hall hbus
-    | const n => simp at h
-    | add a b => simp at h
-    | mul a b => simp at h
+    rw [Bool.or_eq_true] at h
+    rcases h with h | h
+    · -- variable path (bus-fact bound or deep selector-flag justification)
+      cases e with
+      | var x =>
+        dsimp only at h
+        show (env x).val < 256
+        rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
+        · cases hb : findVarBound bs facts rest x with
+          | some bound =>
+            rw [hb] at h'
+            dsimp only at h'
+            exact lt_of_lt_of_le (findVarBound_sound bs facts rest x bound hb env hbus)
+              (of_decide_eq_true h')
+          | none => rw [hb] at h'; simp at h'
+        · rw [Bool.and_eq_true] at h'
+          haveI : Fact p.Prime := ⟨hdeep h'.1⟩
+          haveI : NeZero p := ⟨(hdeep h'.1).ne_zero⟩
+          exact deepByteJustified_sound all bs facts rest x h'.2 env hall hbus
+      | const n => simp at h
+      | add a b => simp at h
+      | mul a b => simp at h
+    · -- single-variable finite-domain expression path
+      rw [Bool.and_eq_true] at h
+      haveI : Fact p.Prime := ⟨hdeep h.1⟩
+      exact domainByteJustified_sound (all.filter Expression.isSingleVar) e h.2 env
+        (fun c' hc' => hall c' (List.mem_of_mem_filter hc'))
 
 /-- Are all of `R`'s payload entries at the declared byte slots justified from `rest`? -/
 def recvSlotsJustified (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)

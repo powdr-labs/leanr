@@ -26,10 +26,10 @@
       },
       "apc_opt_stats": {
         "note": "apc-optimizer output snapshot; regenerate with `apc-optimizer opt-export` as the optimizer improves",
-        "commit": "claude/keccak-effectiveness-gap-nb5j56 (bitwise-result byte bound)",
-        "main_columns": 3622,
-        "constraints": 492,
-        "bus_interactions": 3904
+        "commit": "claude/keccak-effectiveness-gap-nb5j56 (finite-domain byte justification; on main 9844184)",
+        "main_columns": 3056,
+        "constraints": 120,
+        "bus_interactions": 2862
       }
     }
   ]

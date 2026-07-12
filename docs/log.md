@@ -2145,3 +2145,50 @@ for later passes; apc_056/069/092 −80%, apc_008 −21%, apc_014 −19%).
 
 **Follow-up (C4b).** The 255-operand XOR cases (`[x, 255, z, 1] ⟹ z = 255 − x`) stack on this pass —
 they need the byte-complement identity `Nat.xor n 255 = 255 − n` (n < 256); +16 vars on apc_071.
+
+### 69. Finite-domain byte justification generalises the keccak byte-source fix (`BusPairCancel.byteJustified`)
+
+**Context / investigation.** Entry (#95) added a byte bound on the bitwise **result** slot so keccak's
+memory pairs (whose data are XOR outputs) could be byte-justified and cancelled. This entry
+investigates whether that memory-cancellation mechanism transfers to the openvm-eth set. Profiling
+(a temporary `dbgcancel` harness running `busPairCancel` alone on each optimized circuit and
+reporting, per blocked send, the `mid`/`pre`/`just` breakdown and the unjustified byte slots)
+found:
+
+- The blocked-memory-chain **trigger does occur** in openvm-eth — ~12 cases have a chain whose
+  first send/receive pair fails byte justification (`just=false`), which — being the earliest
+  active send — blocks the whole chain.
+- The unjustified data are **not** XOR results. Two families dominate: (a) **sign-extension**
+  high limbs `255·b` where `b` is a boolean most-significant-bit (`apc_010` etc.), and (b) an
+  **AND gadget** `b = x AND y` encoded via the adder identity `x + y − 2b = x⊕y` (`apc_037`).
+  Family (a) is a clean, general "single variable over a small finite domain" shape.
+
+**The generalization (implemented).** `byteJustified` now also accepts a **single-variable
+expression whose variable ranges over a small constraint-derived finite domain** and which
+evaluates to a byte at every point of that domain (`domainByteJustified` / `exprPointByte`, gated
+on prime `p`). For `255·b` with `b`'s boolean domain `{0,1}` (from `b·(b−1)=0`, found by
+`findDomainAlg`), the two points evaluate to `{0, 255}`, both `< 256`. Soundness
+(`domainByteJustified_sound`): `findDomainAlg_sound` puts `env x` in the enumerated domain, and
+the checked point's substituted fold is a constant equal to `e.eval env` (`eval_substF` +
+`envF_eq_self`), so the byte bound transports. Purely additive to `byteJustified`; no audited
+surface, no new axioms; `BusFacts.trivial` unaffected. This subsumes the raw-byte-variable case
+and the XOR-result-limb case as instances of "e is a byte at every point of its variable's
+domain."
+
+**Impact and the *real* binding constraint.** With this change the sign-extension limbs are
+byte-justified (`just` flips to `true`), but the openvm-eth gain is only marginal — bus
+interactions **3.324× → 3.333× agg** (2.638× → 2.644× geo) over the 100-case sweep, variables
+unchanged (4.491×/3.810×, still ahead of powdr's 4.092×/3.787×), no case regressed; **keccak
+unchanged** (3056 vars / 2862 bus / 120 constraints, identical — its cancellations were already
+captured by the memory/dedup passes merged since #95). The reason: unblocking `just` exposes a
+**second, conservative blocker** — `busPairCancel`'s completeness side condition requires the
+dropped send to be the **earliest active same-address send** (`admissibleMemoryBus_dropPair`'s
+`hearliest`). On the openvm-eth chains a boundary *store* of a computed value sits before the
+read pairs as an earlier active same-address send with no syntactic match, so every later read
+pair is refused (`pre=false`). Byte justification and the earliest-send condition must **both**
+be relaxed for the chains to cascade; this entry lands the first half (general and correct on its
+own), and records the earliest-send relaxation as the next step (see `docs/ideas.md`) — it is
+sound (a trailing active same-address *receive* in the "before" region shields every earlier
+send, so no removal exposes a mismatched consecutive pair) but touches the memory-discipline
+completeness proof, so is left as a separate, carefully-scoped change. Runtime unaffected
+(keccak within noise; the new path only fires where the shallow bound already failed).
