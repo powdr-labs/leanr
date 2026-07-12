@@ -26,10 +26,13 @@ Under the spec this is sound because:
   the pass *materializes* the obligation as an explicit self-check on a `byteCheck` bus
   (`emitOk`), still a net bus win. The pair's net side-effect contribution is `0`;
 * **completeness** (`cs.impliesAdmissible out`): removing the pair preserves the VM's `admissible`
-  predicate (`admissible_dropPair`), provided `S` is the *earliest* active send to its address —
-  otherwise the removal could expose a fresh consecutive send→receive pair with mismatched payloads.
-  This side condition holds for the standard receive-before-send access discipline. Any emitted
-  check is *implied* by the dropped receive's own accepted message, so real traces satisfy it. -/
+  predicate (`admissible_dropPair`), provided the *shield* condition on the before-region `A`
+  holds — every active same-address send in `A` is followed by an active same-address receive in
+  `A` (`shieldOk`; strictly weaker than "`S` is the earliest active same-address send"). Otherwise
+  the removal could expose a fresh consecutive send→receive pair with mismatched payloads; the
+  trailing receive shields every earlier send, so none is exposed. This admits access chains led
+  by an unmatched boundary store (the common read-modify-write shape). Any emitted check is
+  *implied* by the dropped receive's own accepted message, so real traces satisfy it. -/
 
 variable {p : ℕ}
 
@@ -317,24 +320,93 @@ theorem deepByteJustified_sound [Fact p.Prime] [NeZero p] (all : List (Expressio
   exact deepBoundOk_sound (all.filter Expression.isSingleVar) bs facts rest x c hck env
     (fun c' hc'' => hall c' (List.mem_of_mem_filter hc'')) (hall c hc') hbus
 
+/-- Evaluate the single-variable expression `e` with its variable fixed to `d` and check the
+    result is a byte constant. `constValue? = none` (so `false`) whenever the fold is not a
+    constant — i.e. `e` still mentions a variable other than the one fixed — so this only ever
+    succeeds for a genuinely single-variable `e`. -/
+def exprPointByte (e : Expression p) (x : Variable) (d : ZMod p) : Bool :=
+  match (e.substF (fun v => if v = x then some (.const d) else none)).fold.constValue? with
+  | some c => decide (c.val < 256)
+  | none => false
+
+/-- Is `e` a byte because its single variable `x` ranges over a small constraint-derived finite
+    domain (`findDomainAlg`) at every point of which `e` evaluates to a byte? Generalises the raw
+    byte-variable case to expressions like the sign-extension limb `255·b` (b boolean, values
+    `{0, 255}`) that a signed memory load leaves in a word's high limbs. -/
+def domainByteJustified (domCs : List (Expression p)) (e : Expression p) : Bool :=
+  match e.singleVarAux with
+  | some (some x) =>
+    match findDomainAlg domCs x with
+    | some d => decide (d.length ≤ maxDeepDomain) && d.all (exprPointByte e x)
+    | none => false
+  | _ => false
+
+theorem domainByteJustified_sound [Fact p.Prime] (domCs : List (Expression p)) (e : Expression p)
+    (h : domainByteJustified domCs e = true) (env : Variable → ZMod p)
+    (hdom : ∀ c ∈ domCs, c.eval env = 0) :
+    (e.eval env).val < 256 := by
+  unfold domainByteJustified at h
+  cases hsv : e.singleVarAux with
+  | none => rw [hsv] at h; simp at h
+  | some ov =>
+    cases ov with
+    | none => rw [hsv] at h; simp at h
+    | some x =>
+      rw [hsv] at h
+      dsimp only at h
+      cases hfd : findDomainAlg domCs x with
+      | none => rw [hfd] at h; simp at h
+      | some d =>
+        rw [hfd, Bool.and_eq_true] at h
+        obtain ⟨_, hall⟩ := h
+        have hmem : env x ∈ d := findDomainAlg_sound domCs x d hfd env hdom
+        have hpt : exprPointByte e x (env x) = true := List.all_eq_true.mp hall _ hmem
+        unfold exprPointByte at hpt
+        cases hcv : (e.substF (fun v => if v = x then some (.const (env x)) else none)).fold.constValue?
+          with
+        | none => rw [hcv] at hpt; simp at hpt
+        | some c =>
+          rw [hcv] at hpt
+          have hbyte : c.val < 256 := of_decide_eq_true hpt
+          have hfoldeval :
+              (e.substF (fun v => if v = x then some (.const (env x)) else none)).fold.eval env = c :=
+            Expression.constValue?_sound _ c hcv env
+          have hsubeval :
+              (e.substF (fun v => if v = x then some (.const (env x)) else none)).eval env
+                = e.eval env := by
+            rw [Expression.eval_substF, envF_eq_self]
+            intro y t hy
+            by_cases hk : y = x
+            · subst y
+              simp only [if_pos rfl] at hy
+              injection hy with hy'
+              subst hy'
+              rfl
+            · simp only [if_neg hk] at hy; exact absurd hy (by simp)
+          rw [Expression.fold_eval, hsubeval] at hfoldeval
+          rw [hfoldeval]; exact hbyte
+
 /-- Is `e` provably a byte under every assignment satisfying the remaining system? Either a
     constant `< 256`, a variable with a proven bus-fact bound `≤ 256` derived from the remaining
     interactions `rest` (e.g. another receive of the same word, or an explicit byte-check
     lookup), or — when `deep` is set (prime `p` only) — a variable a constraint pins to a byte
-    on every point of its selector flags' finite domains (`deepBoundOk`). -/
+    on every point of its selector flags' finite domains (`deepBoundOk`), or a single-variable
+    expression whose variable's finite domain makes `e` a byte at every point
+    (`domainByteJustified`, e.g. the `255·b` sign-extension limbs). -/
 def byteJustified (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
     (e : Expression p) : Bool :=
   match e.constValue? with
   | some c => decide (c.val < 256)
   | none =>
-    match e with
-    | .var x =>
-      (match findVarBound bs facts rest x with
-       | some bound => decide (bound ≤ 256)
-       | none => false) ||
-      (deep && deepByteJustified all bs facts rest x)
-    | _ => false
+    (match e with
+     | .var x =>
+       (match findVarBound bs facts rest x with
+        | some bound => decide (bound ≤ 256)
+        | none => false) ||
+       (deep && deepByteJustified all bs facts rest x)
+     | _ => false) ||
+    (deep && domainByteJustified (all.filter Expression.isSingleVar) e)
 
 theorem byteJustified_sound (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p))) (e : Expression p)
@@ -354,25 +426,33 @@ theorem byteJustified_sound (deep : Bool) (all : List (Expression p)) (bs : BusS
   | none =>
     rw [hc] at h
     dsimp only at h
-    cases e with
-    | var x =>
-      dsimp only at h
-      show (env x).val < 256
-      rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
-      · cases hb : findVarBound bs facts rest x with
-        | some bound =>
-          rw [hb] at h'
-          dsimp only at h'
-          exact lt_of_lt_of_le (findVarBound_sound bs facts rest x bound hb env hbus)
-            (of_decide_eq_true h')
-        | none => rw [hb] at h'; simp at h'
-      · rw [Bool.and_eq_true] at h'
-        haveI : Fact p.Prime := ⟨hdeep h'.1⟩
-        haveI : NeZero p := ⟨(hdeep h'.1).ne_zero⟩
-        exact deepByteJustified_sound all bs facts rest x h'.2 env hall hbus
-    | const n => simp at h
-    | add a b => simp at h
-    | mul a b => simp at h
+    rw [Bool.or_eq_true] at h
+    rcases h with h | h
+    · -- variable path (bus-fact bound or deep selector-flag justification)
+      cases e with
+      | var x =>
+        dsimp only at h
+        show (env x).val < 256
+        rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
+        · cases hb : findVarBound bs facts rest x with
+          | some bound =>
+            rw [hb] at h'
+            dsimp only at h'
+            exact lt_of_lt_of_le (findVarBound_sound bs facts rest x bound hb env hbus)
+              (of_decide_eq_true h')
+          | none => rw [hb] at h'; simp at h'
+        · rw [Bool.and_eq_true] at h'
+          haveI : Fact p.Prime := ⟨hdeep h'.1⟩
+          haveI : NeZero p := ⟨(hdeep h'.1).ne_zero⟩
+          exact deepByteJustified_sound all bs facts rest x h'.2 env hall hbus
+      | const n => simp at h
+      | add a b => simp at h
+      | mul a b => simp at h
+    · -- single-variable finite-domain expression path
+      rw [Bool.and_eq_true] at h
+      haveI : Fact p.Prime := ⟨hdeep h.1⟩
+      exact domainByteJustified_sound (all.filter Expression.isSingleVar) e h.2 env
+        (fun c' hc' => hall c' (List.mem_of_mem_filter hc'))
 
 /-- Are all of `R`'s payload entries at the declared byte slots justified from `rest`? -/
 def recvSlotsJustified (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
@@ -491,6 +571,27 @@ theorem mem_activeStatefulMsgs (bs : BusSemantics p) (env : Variable → ZMod p)
   obtain ⟨m0, hm0, hev⟩ := List.mem_map.mp hmem
   exact ⟨m0, hm0, hev⟩
 
+/-- A split of the active∧stateful evaluated messages of `A` lifts to a syntactic split of `A`
+    whose evaluated tail is the split's tail (via `filter_split` + `map_split`). Lets the pass's
+    *syntactic* shield discharge the `admissible_dropPair` shield stated over `activeStatefulMsgs`. -/
+theorem activeStatefulMsgs_split (bs : BusSemantics p) (env : Variable → ZMod p)
+    (A : List (BusInteraction (Expression p))) (A₁ A₂ : List (BusInteraction (ZMod p)))
+    (Sx : BusInteraction (ZMod p)) (h : activeStatefulMsgs bs env A = A₁ ++ Sx :: A₂) :
+    ∃ (A_pre : List (BusInteraction (Expression p))) (m0 : BusInteraction (Expression p))
+      (A_suf : List (BusInteraction (Expression p))),
+      A = A_pre ++ m0 :: A_suf ∧ m0.eval env = Sx ∧ activeStatefulMsgs bs env A_suf = A₂ := by
+  have h' : (A.map (fun bi => bi.eval env)).filter
+      (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId) = A₁ ++ Sx :: A₂ := h
+  have hfs := filter_split (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId) Sx
+      (A.map (fun bi => bi.eval env)) A₁ A₂ h'
+  obtain ⟨M_pre, M_suf, hmapeq, _, hMsuf⟩ := hfs
+  have hms := map_split (fun bi => bi.eval env) Sx A M_pre M_suf hmapeq
+  obtain ⟨A_pre, m0, A_suf, hAeq, _, hm0, hAsuf⟩ := hms
+  refine ⟨A_pre, m0, A_suf, hAeq, hm0, ?_⟩
+  show (A_suf.map (fun bi => bi.eval env)).filter
+    (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId) = A₂
+  rw [hAsuf]; exact hMsuf
+
 /-- A list of stateless interactions contributes nothing to the bus state. -/
 theorem toBusState_stateless (bs : BusSemantics p) (env : Variable → ZMod p)
     (L : List (BusInteraction (Expression p)))
@@ -546,9 +647,15 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     (hmidEval : ∀ (env : Variable → ZMod p), ∀ m0 ∈ B, (m0.eval env).busId = busId →
         (m0.eval env).multiplicity ≠ 0 →
         shape.address (m0.eval env) = shape.address (S.eval env) → False)
-    (hpreEval : ∀ (env : Variable → ZMod p), ∀ m0 ∈ A, (m0.eval env).busId = busId →
+    (hpreEval : ∀ (env : Variable → ZMod p) (A_pre : List (BusInteraction (Expression p)))
+        (m0 : BusInteraction (Expression p)) (A_suf : List (BusInteraction (Expression p))),
+        A = A_pre ++ m0 :: A_suf → (m0.eval env).busId = busId →
         (m0.eval env).multiplicity ≠ 0 →
-        shape.address (m0.eval env) = shape.address (S.eval env) → (m0.eval env).multiplicity ≠ 1) :
+        shape.address (m0.eval env) = shape.address (S.eval env) →
+        (m0.eval env).multiplicity = 1 →
+        ∃ Rp ∈ A_suf, (Rp.eval env).busId = busId ∧ (Rp.eval env).multiplicity ≠ 0 ∧
+          shape.address (Rp.eval env) = shape.address (S.eval env) ∧
+          (Rp.eval env).multiplicity = -1) :
     PassCorrect cs { cs with busInteractions := A ++ B ++ C ++ checks } [] bs := by
   set out : ConstraintSystem p := { cs with busInteractions := A ++ B ++ C ++ checks } with hout
   have houtb : out.busInteractions = A ++ B ++ C ++ checks := rfl
@@ -661,9 +768,20 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     · intro m hm hbid hmne hmaddr
       obtain ⟨m0, hm0, rfl⟩ := mem_activeStatefulMsgs bs env B m hm
       exact hmidEval env m0 hm0 hbid hmne hmaddr
-    · intro m hm hbid hmne hmaddr
-      obtain ⟨m0, hm0, rfl⟩ := mem_activeStatefulMsgs bs env A m hm
-      exact hpreEval env m0 hm0 hbid hmne hmaddr
+    · -- shield: lift the split of `activeStatefulMsgs A` to a syntactic split of `A`, apply the
+      -- syntactic shield `hpreEval`, then push the resulting receive back into the filtered tail.
+      intro A₁ Sx A₂ hAsplit hbid hne haddr hmult
+      obtain ⟨A_pre, m0, A_suf, hAeq, hm0, hAsuf⟩ :=
+        activeStatefulMsgs_split bs env A A₁ A₂ Sx hAsplit
+      subst hm0
+      obtain ⟨Rp, hRpmem, hRpbid, hRpne, hRpaddr, hRpmult⟩ :=
+        hpreEval env A_pre m0 A_suf hAeq hbid hne haddr hmult
+      refine ⟨Rp.eval env, ?_, hRpbid, hRpne, hRpaddr, hRpmult⟩
+      rw [← hAsuf]
+      unfold activeStatefulMsgs
+      refine List.mem_filter.mpr ⟨List.mem_map.mpr ⟨Rp, hRpmem, rfl⟩, ?_⟩
+      rw [show bs.isStateful (Rp.eval env).busId = true from by rw [hRpbid]; exact hStateful]
+      rw [Bool.and_true, decide_eq_true_eq]; exact hRpne
   -- Variables only shrink (the pair is dropped; each emitted check's variables come from `R`).
   have hsub : ∀ v ∈ out.vars, v ∈ cs.vars := by
     intro v hv
@@ -777,6 +895,81 @@ theorem preRefuted_sound (shape : MemoryBusShape) (busId : Nat) (S m : BusIntera
       have heval : (m.eval env).multiplicity = c := m.multiplicity.constValue?_sound c hc env
       rw [heval]
       exact of_decide_eq_true h
+
+/-- `m` is a *provable* active same-address receive on `busId`: on-bus, constant `-1`
+    multiplicity, and a constant address equal to `S`'s. -/
+def provRecv (shape : MemoryBusShape) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
+  decide (m.busId = busId) && addrConstsEq shape S m && decide (multConst m = some (-1))
+
+theorem provRecv_sound (shape : MemoryBusShape) (busId : Nat) (hp1 : (1 : ZMod p) ≠ 0)
+    (S m : BusInteraction (Expression p)) (h : provRecv shape busId S m = true)
+    (env : Variable → ZMod p) :
+    (m.eval env).busId = busId ∧ (m.eval env).multiplicity ≠ 0 ∧
+    shape.address (m.eval env) = shape.address (S.eval env) ∧ (m.eval env).multiplicity = -1 := by
+  unfold provRecv at h
+  rw [Bool.and_eq_true, Bool.and_eq_true] at h
+  obtain ⟨⟨hbid, haddr⟩, hmult⟩ := h
+  have hmult' : (m.eval env).multiplicity = -1 :=
+    m.multiplicity.constValue?_sound (-1) (of_decide_eq_true hmult) env
+  refine ⟨of_decide_eq_true hbid, ?_, (addrConstsEq_sound shape S m haddr env).symm, hmult'⟩
+  rw [hmult']; exact neg_ne_zero.mpr hp1
+
+/-- Single right-to-left pass returning `(hasRecvSoFar, ok)`: `hasRecvSoFar` is whether the tail
+    processed so far (everything to the right) contains a provable active same-address receive; `ok`
+    is whether every not-`preRefuted` message so far is followed by such a receive. O(n). -/
+def shieldScan (shape : MemoryBusShape) (busId : Nat) (S : BusInteraction (Expression p)) :
+    List (BusInteraction (Expression p)) → Bool × Bool
+  | [] => (false, true)
+  | m0 :: rest =>
+    let r := shieldScan shape busId S rest
+    (r.1 || provRecv shape busId S m0, r.2 && (preRefuted shape busId S m0 || r.1))
+
+/-- The *shield* check on the before-region: every message that is **not** provably a
+    non-(active-same-address-send) (`¬preRefuted`) is followed by a provable active same-address
+    receive (`provRecv`). Certifies "every active same-address send in the region has an active
+    same-address receive after it" — the relaxed completeness side condition that admits chains led
+    by a boundary store. Computed in one O(n) pass (`shieldScan`). -/
+def shieldOk (shape : MemoryBusShape) (busId : Nat) (S : BusInteraction (Expression p))
+    (l : List (BusInteraction (Expression p))) : Bool :=
+  (shieldScan shape busId S l).2
+
+/-- If the scan's `hasRecv` flag is set, the list contains a provable receive. -/
+theorem shieldScan_hasRecv (shape : MemoryBusShape) (busId : Nat)
+    (S : BusInteraction (Expression p)) :
+    ∀ (l : List (BusInteraction (Expression p))), (shieldScan shape busId S l).1 = true →
+      ∃ Rp ∈ l, provRecv shape busId S Rp = true
+  | [], h => by simp [shieldScan] at h
+  | m0 :: rest, h => by
+      rw [shieldScan] at h
+      dsimp only at h
+      rcases Bool.or_eq_true _ _ |>.mp h with h1 | h1
+      · obtain ⟨Rp, hRp, hprov⟩ := shieldScan_hasRecv shape busId S rest h1
+        exact ⟨Rp, List.mem_cons_of_mem _ hRp, hprov⟩
+      · exact ⟨m0, List.mem_cons_self .., h1⟩
+
+/-- From a passing `shieldOk` and a syntactic split `A_pre ++ m0 :: A_suf` whose `m0` is not
+    provably excluded (`¬preRefuted`), the suffix `A_suf` carries a provable active same-address
+    receive. -/
+theorem shieldOk_sound (shape : MemoryBusShape) (busId : Nat)
+    (S m0 : BusInteraction (Expression p)) (A_suf : List (BusInteraction (Expression p))) :
+    ∀ (A_pre : List (BusInteraction (Expression p))),
+      shieldOk shape busId S (A_pre ++ m0 :: A_suf) = true →
+      preRefuted shape busId S m0 = false →
+      ∃ Rp ∈ A_suf, provRecv shape busId S Rp = true
+  | [], h, hpre => by
+      unfold shieldOk at h
+      rw [List.nil_append, shieldScan] at h
+      dsimp only at h
+      rw [Bool.and_eq_true] at h
+      obtain ⟨_, h2⟩ := h
+      rw [hpre, Bool.false_or] at h2
+      exact shieldScan_hasRecv shape busId S A_suf h2
+  | a :: A_pre', h, hpre => by
+      unfold shieldOk at h
+      rw [List.cons_append, shieldScan] at h
+      dsimp only at h
+      rw [Bool.and_eq_true] at h
+      exact shieldOk_sound shape busId S m0 A_suf A_pre' h.1 hpre
 
 /-! ## Emitted byte checks
 
@@ -915,7 +1108,7 @@ def checkCancel (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
   decide (multConst S = some 1) && decide (multConst R = some (-1)) &&
   decide (S.payload = R.payload) &&
   B.all (midRefuted shape busId S) &&
-  A.all (preRefuted shape busId S) &&
+  shieldOk shape busId S A &&
   checks.all (emitOk bs facts busId slots R) &&
   recvSlotsJustified deep all bs facts (A ++ B ++ C ++ checks) slots R
 
@@ -948,8 +1141,13 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (of_decide_eq_true hSm) (of_decide_eq_true hRm) (of_decide_eq_true hpay) ?_ ?_
   · intro env m0 hm0 hbid hmne hmaddr
     exact midRefuted_sound shape busId S m0 (List.all_eq_true.mp hmid m0 hm0) env hbid hmne hmaddr
-  · intro env m0 hm0 hbid hmne hmaddr
-    exact preRefuted_sound shape busId S m0 (List.all_eq_true.mp hpre m0 hm0) env hbid hmne hmaddr
+  · intro env A_pre m0 A_suf hAeq hbid hmne hmaddr hmult
+    have hnp : preRefuted shape busId S m0 = false := by
+      by_contra hp'
+      rw [Bool.not_eq_false] at hp'
+      exact (preRefuted_sound shape busId S m0 hp' env hbid hmne hmaddr) hmult
+    obtain ⟨Rp, hRpmem, hRpprov⟩ := shieldOk_sound shape busId S m0 A_suf A_pre (hAeq ▸ hpre) hnp
+    exact ⟨Rp, hRpmem, provRecv_sound shape busId hp1 S Rp hRpprov env⟩
 
 /-- Indexed left-to-right scan for the first droppable pair on `busId`, starting at position `i`:
     at each send `S` (position in `arr`), find its matching receive through the hash index (the
@@ -980,9 +1178,9 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
           -- start/stop) — the A/B/C lists are materialized only for the few candidates the
           -- tests accept, not for every payload match; only an otherwise-valid candidate pays
           -- the byte justification scan (`checkCancel` re-verifies everything).
-          if arr.all (midRefuted shape busId S) (i + 1) j
-              && arr.all (preRefuted shape busId S) 0 i then
           let A := (arr.extract 0 i).toList
+          if arr.all (midRefuted shape busId S) (i + 1) j
+              && shieldOk shape busId S A then
           let B := (arr.extract (i + 1) j).toList
           let C := (arr.extract (j + 1) arr.size).toList
           -- Try the certificate with no emitted checks first: every non-justification conjunct

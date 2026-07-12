@@ -23,6 +23,14 @@ returns the send's payload, so `read_limb = written_limb`) and/or by the XOR fun
 
 The bitwise-**result** byte bound itself is now landed (`openVmFacts.slotBound` slot 2, entry 58) —
 do not re-propose it.
+
+## AND-gadget byte justification (`apc_037`, minor)
+
+`apc_037`'s blocked chain writes `b = x AND y`, encoded as the adder identity
+`x + y − 2·b = x ⊕ y` on a bitwise interaction (so `b`'s byteness needs the bit-identity
+`a + b − (a⊕b) = 2·(a∧b)` and `a∧b < 256`). Not a clean finite-domain shape; a dedicated
+AND-result recogniser would justify it, but it is one case and low priority — do the earliest-send
+relaxation first.
 ## Genuine two-root carries: carry-witness substitution — MEASURED WASH, do not build
 
 **Measured a wash (faithful census what-if, 2026-07).** `carryCollapsePass` (log 67) collapses only

@@ -96,11 +96,13 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
   /-- Reverse bridge for pair cancellation (the completeness half). Dropping a matched, isolated
       send→receive pair from a declared bus preserves `admissible`: given a send `S` and a later
       receive `R` on `busId` with equal addresses, no active same-address message between them
-      (`B`), and no active same-address send before `S` (`A`), removing both from the active-stateful
-      message list keeps it admissible. Gated on `memShape busId = some shape`, so `trivial` (no
-      shapes) discharges it vacuously; for a VM whose `admissible` is the per-bus `admissibleMemoryBus`
-      conjunction it follows from `admissibleMemoryBus_dropPair`. Takes `1 ≠ 0` (the pass supplies
-      it; the degenerate `ZMod 1` is then out of the way). -/
+      (`B`), and the *shield* condition on `A` — every active same-address send in `A` is followed
+      by an active same-address receive in `A` (strictly weaker than "no active same-address send
+      in `A`") — removing both from the active-stateful message list keeps it admissible. Gated on
+      `memShape busId = some shape`, so `trivial` (no shapes) discharges it vacuously; for a VM
+      whose `admissible` is the per-bus `admissibleMemoryBus` conjunction it follows from
+      `admissibleMemoryBus_dropPair`. Takes `1 ≠ 0` (the pass supplies it; the degenerate `ZMod 1`
+      is then out of the way). -/
   admissible_dropPair :
     (1 : ZMod p) ≠ 0 →
     ∀ (busId : Nat) (shape : MemoryBusShape), memShape busId = some shape →
@@ -109,8 +111,12 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       S.multiplicity = 1 → R.multiplicity = -1 →
       shape.address S = shape.address R →
       (∀ m ∈ B, m.busId = busId → m.multiplicity ≠ 0 → shape.address m = shape.address S → False) →
-      (∀ m ∈ A, m.busId = busId → m.multiplicity ≠ 0 → shape.address m = shape.address S →
-        m.multiplicity ≠ 1) →
+      (∀ (A₁ : List (BusInteraction (ZMod p))) (Sx : BusInteraction (ZMod p))
+         (A₂ : List (BusInteraction (ZMod p))),
+         A = A₁ ++ Sx :: A₂ → Sx.busId = busId → Sx.multiplicity ≠ 0 →
+         shape.address Sx = shape.address S → Sx.multiplicity = 1 →
+         ∃ m ∈ A₂, m.busId = busId ∧ m.multiplicity ≠ 0 ∧ shape.address m = shape.address S ∧
+           m.multiplicity = -1) →
       bs.admissible (A ++ S :: B ++ R :: C) →
       bs.admissible (A ++ B ++ C)
   /-- Byte-check pairing on a bitwise-style *stateless* bus. If `bytePairBus busId = true` then the
