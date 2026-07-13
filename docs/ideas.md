@@ -1,272 +1,274 @@
 # Ideas for future optimization passes
 
-## keccak: unify read-data limbs to close the variable gap (variables — top priority)
+Ranked by **expected benefit**. Effectiveness priority is **variables > bus interactions >
+constraints**, used as the tiebreak; the two cheap high-confidence bus wins (#2, #3) are ranked
+early because they are nearly free and close the *only* axis on which apc-optimizer trails powdr in
+aggregate, plus keccak's dominant gap.
 
-**Read-value substitution: LANDED (entry 71, symbolic-ts forwarding).** The "widen `findConsumer`'s
-mid-refutation" angle is done: `AddrDiseq.lean`'s two-root address-disequality (`addrTwoRootNeq`) lets
-`busUnify` step over interleaved other-pointer heap accesses (their addresses are `mem_ptr_limbs`
-expressions, not constants), so the send↔consumer slot equalities now fire on the heap. keccak
-**3056 → 2224 vars (−832), 2862 → 2411 bus**; `lower_decomp` 534→164, `prev_data` 448→148, width-12/17
-range checks → 129/129 (= powdr). Gap to powdr now +203 (was +1035).
+## Where we stand (measured on `c007db0`; keccak/eth figures refreshed for the merged C4b, #109)
 
-**Constant-operand XOR extraction: LANDED (C4a entry 70, C4b entry 74).** The affine constant-operand
-XORs (`⊕0`, `⊕255`) are done — see the dedicated section below. Stacked on the entry-71 forwarding
-baseline, C4b (`[x,255,z,1] ⟹ z=255−x`) eliminated the residual `c`-family NOT-results: keccak
-**2224 → 2028 vars (−196)**, so the gap to powdr collapsed to **+7** (2028 vs 2021 — near parity).
+| benchmark | apc-optimizer | powdr | apc gap |
+|---|---|---|---|
+| **keccak** (`apc_001_pckeccak`) | 2028 v / 118 c / ~2405 bus | 2021 / 186 / 1734 | vars **+7 (near parity)**, **bus +671** (wins constraints) |
+| **openvm-eth** (100-case agg / geo) | vars 4.509× / 3.820× · bus 3.401× / 2.705× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo only +0.033); **trails bus** |
+| **apc_010** (`pc0x200c18`) | 466 v / 251 c / 271 bus | 498 / 331 / 239 | wins vars+constraints, **bus +32** |
 
-The bitwise-**result** byte bound itself is now landed (`openVmFacts.slotBound` slot 2, entry 58) —
-do not re-propose it.
+C4b (#109, entry 74) closed the keccak *variable* gap to near-parity, so **keccak's dominant remaining
+loss is now bus (+671)**; on openvm-eth the story is unchanged (per-case by variables **25 W / 42 L /
+33 T**; variable losses total ~+243 over 42 cases, bus gap net +368). Both gaps decompose into a
+*small* number of structural families, each addressed by one idea below.
 
-## AND-gadget byte justification (`apc_037`, minor)
+- **keccak bus +671** = memory interior pairs +276 · bitwise (bus 6) +327 · width-1 range (bus 3) +68.
+- **eth bus +368** = bitwise +440 (72 cases) · tupleRange +160 (22 cases) · memory +144 (15 cases) ·
+  varRange **−376** (apc already *wins* — do not touch).
+- **eth vars ~+243** = `rd_data` write-result limbs ~93 (23 cases) · comparison gadget ~130 markers/flags
+  (43 cases) · `bit_shift_carry` +67 (13 cases) · `apc_071` intermediate address bytes. (Per-case
+  numbers below were measured on `c007db0`; C4b shifted only the `255`-XOR NOT cases on `apc_071`/`apc_037`,
+  otherwise per-case-neutral.)
 
-`apc_037`'s blocked chain writes `b = x AND y`, encoded as the adder identity
-`x + y − 2·b = x ⊕ y` on a bitwise interaction (so `b`'s byteness needs the bit-identity
-`a + b − (a⊕b) = 2·(a∧b)` and `a∧b < 256`). Not a clean finite-domain shape; a dedicated
-AND-result recogniser would justify it, but it is one case and low priority — do the earliest-send
-relaxation first.
+---
 
-**Remaining variable gap (≈203, the residual `b`/`c` read-data limbs).** powdr additionally eliminates
-each read limb via the **XOR functional dependence** (`slotFun` proves `z = x ⊕ y`): a bitwise
-`[x, y, z, 1]` determines `z`. A pass turning `z` into a derived column (`ComputationMethod`, like
-`reencode`) reading `x, y` removes `z` as a free variable. Needs the completeness `derivesWitness`
-bookkeeping, but `slotFun` already carries the soundness half. This is the reencode-class residual.
+## 1. Fold byte/limb decompositions of compile-time constants  ·  *variables*  ·  high confidence · medium effort
 
-**Two cheap bus follow-ups unlocked by entry 71:**
-- **1.2 identical-tuple cancellation (−≈282 bus).** The forwarding created 282 memory interactions in
-  syntactically-identical ±1 pairs (was 178) that `busPairCancel` cannot cancel: the dropped receive's
-  data slots are rotation *expressions* (`128·a__1 + bit_shift_carry__…`) and `byteJustified` has no
-  affine rule. Add a no-wrap affine byte rule: for `e = c₀ + Σ cᵢ·yᵢ` with every `yᵢ` bounded and
-  `c₀ + Σ cᵢ·(Bᵢ−1) < 256`, conclude `e < 256`. Shares the bound machinery with the shift-carry work.
-- **2.2 AS2 middle-pair telescoping (below powdr's 200 floor).** Wire `addrTwoRootNeq` into
-  `busPairCancel`'s `midRefuted` (same predicate) so the heap middle pairs telescope — AS2 count
-  (still 482 here) could drop toward / below powdr's 200.
+**Gap:** `rd_data`/PC-limb families are the single largest variable loss — ~93 vars over 23 cases,
+and **powdr keeps zero of them**. On JAL/JALR-terminated blocks the return address and jump target
+are compile-time constants, so powdr folds every limb to a literal; apc keeps them free because
+cracking `Σ 256ⁱ·byteᵢ = K` under byte bounds needs positional-uniqueness reasoning Gauss can't do
+(the 256³ combination space is too large for domain enumeration). Measured: `apc_045` +14 (all
+constant-PC limbs), `apc_026` +14, and the return-address part of the `+3` cluster
+(`apc_011/013/022/027/033/034/040/043`).
 
-## Genuine two-root carries: carry-witness substitution — MEASURED WASH, do not build
+**Mechanism** (new `VerifiedPass`; `ZeroWidthRange` is the `K=0`, single-term special case):
 
-**Measured a wash (faithful census what-if, 2026-07).** `carryCollapsePass` (log 67) collapses only
-*pure copies* `(L)·(L±256)=0` where a byte bound rules out one root, correctly leaving **genuine**
-two-root carries intact (both roots reachable): the 3-operand ADD limb carry `(b+c−a)·(b+c−a−256)=0`
-and the `mem_ptr` page-boundary carry (gap 65536). It looked like a large win — an *optimistic* what-if
-(zero one root, ignore whether the bound holds, re-optimize) claimed up to **−249 vars** on apc_037,
-−52 on apc_071. But the **faithful** transform (introduce the boolean carry witness it actually needs,
-`a = b+c − 256·carry`, plus booleanity, then re-optimize) nets **exactly 0 variables** on every case:
-eliminating `a` as a derived column adds `carry`, a pure swap with no cascade. powdr matches apc on
-these blocks (e.g. apc_061/003 var-identical). The ceiling was entirely unsound one-root collapse.
-Do not build a carry-witness pass; the residual C1 gap is not a real variable opportunity.
+```
+for each affine constraint  Σ cᵢ·xᵢ = K   (K a field constant):
+    require each xᵢ range-bounded 0 ≤ xᵢ < Bᵢ   (from its range-check bus fact / byteJustified)
+    sort terms by |cᵢ|; require a non-overlapping mixed-radix system:
+        cᵢ·(Bᵢ−1) < c_{i+1}   for all i,   and   Σ cᵢ·(Bᵢ−1) < p   (no wrap)
+    then the xᵢ are UNIQUELY forced:  xᵢ = digitᵢ(K)  by iterated div/mod
+    emit  Derivation xᵢ := ComputationMethod.Constant (digitᵢ K)
+    substitute the literal everywhere; drop the now-entailed range checks
+```
 
-## Bitwise-XOR constant-operand equality extraction — COMPLETE (C4a entry 70, C4b entry 74)
+**Why sound.** Soundness = uniqueness of a bounded mixed-radix representation (a `Nat.div`/`Nat.mod`
+digit lemma — no `native_decide`): the constraint already forces `xᵢ = digitᵢ(K)`, so substituting
+the constant preserves the satisfying set. Completeness: a real trace's column literally holds that
+constant, so the `Constant` method reproduces it (`derivesWitness` holds). Dropped range checks are
+entailed (`digitᵢ(K) < Bᵢ`).
 
-Both **affine** constant operands are now landed in `xorEqExtractPass`: the 0-operand
-(`[0,y,z,1] ⟹ z=y`, `[x,0,z,1] ⟹ z=x`, C4a entry 70, `Nat.zero_xor`/`Nat.xor_zero`) and the
-255-operand byte complement (`[x,255,z,1] ⟹ z=255−x`, `[255,y,z,1] ⟹ z=255−y`, C4b entry 74,
-`n ⊕ 255 = 255−n` for a byte `n`, `xorComplEq` fact gated on `256 ≤ p`). `{0, 255}` are the **only**
-constants for which `x ⊕ c` is affine in `x` (every other makes the XOR bit-dependent), so this
-mechanism is **exhausted — do not re-propose a generic constant-operand XOR pass.** C4b removed 196
-keccak variables on the post-#105 base (2224 → 2028, +7 from powdr parity), openvm-eth
-variable-positive / per-case-neutral. The remaining XOR-computation gap to powdr is the **pure-XOR
-intermediates** — `b`/`c` limbs that appear *only* as an XOR result then an XOR operand — which no
-affine extraction can reach: eliminating them needs turning the XOR result into a **derived column**
-(the XOR-result-derivation angle in the keccak idea below), not another equality.
+**Expected impact.** ~40–65 of the 103 extra vars across the losing cases; flips ~6–10 losses to
+ties/wins (roughly 25 W / 42 L → ~32 W / 34 L, and lifts the thin +0.031 geomean variable lead).
+Top-priority axis.
 
-## Intermediate effective-address elimination (deeper residual, after C4a/C4b)
+---
 
-`zeroWidthRangePass` (log 69, C3) converts the width-0 range checks `[expr, 0]` into equalities
-`expr = 0`, letting Gauss eliminate the pinned limbs — closing ~40 of apc_071's 123-variable gap to
-powdr (and 11 on apc_020, 3 on apc_037). The **residual** gap on apc_071 is the `a` (48) and `c`
-(16) families: intermediate effective-address bytes. For each access at `base + offsetᵢ`, apc
-materializes the effective address as a fresh 4-byte decomposition via a two-root carry chain and
-then decomposes again into `mem_ptr_limbs`; powdr derives `mem_ptr_limbs` **directly** from
-`rs1_data + offsetᵢ`, skipping the intermediate byte layer entirely. Eliminating it needs a
-derived-column pass (reencode-class): recognise `addr = base + offset` carry chains feeding only a
-memory address / byte-decomposed write, and express the `mem_ptr` limbs affinely in `base + offset`
-with carry witnesses, without materializing the intermediate bytes. Higher proof cost; the true
-"highest cost" item of the old C4 cluster. Note the naive per-limb carry-witnessing is net-neutral
-(swap 4 address bytes for 4 carries — same wash as the carry-witness follow-up below); the win comes
-only from *not materializing the intermediate layer at all* while still satisfying the memory bus's
-byte requirement.
+## 2. Cancel interior memory send/receive pairs  ·  *bus*  ·  high confidence · low–medium effort
 
-## Consider dropping `reencode` in favour of `domainFoldPass` alone (entry-47 option B)
+**Gap:** the memory bus is where apc systematically trails on the memory-heavy blocks and on keccak.
+A register/heap cell accessed *N* times emits 2N memory interactions, but only the first receive and
+last send are externally observable — the N−1 interior send/receive pairs are exact `+1`/`−1`
+message negations and cancel. powdr does this; apc does not, purely because `busPairCancelPass`
+cannot *recognize* the pairs. Two independent recognizer gaps, both local to `BusPairCancel.lean`:
 
-`domainFoldPass` (`DomainFold.lean`, log entry 48) is now landed **alongside** `reencode` (option A) —
-effectiveness-neutral but the general, powdr-style mechanism made explicit. The remaining open decision
-is entry-47 **option B**: drop `reencode` and keep only the fold pass. Measured trade-off on the
-apc_005 load/store class: fold-only reaches **1939** vars (keeping all flags, close to powdr's 1808),
-vs **1683** with `reencode` — i.e. option B is more principled / powdr-aligned but gives up the ~13%
-flag binary-compression (512 ternary flags → 256 bits) that currently makes apc-optimizer *beat* powdr there.
-Only worth it if the flag-compression edge is judged not worth `reencode`'s complexity/runtime; the fold
-pass would then also want a `bits ≥ vars` / large-group path (groups `reencode` skips) to claw some of
-it back. Left for Georg to decide.
+**(a) Symbolic-address step-over** (keccak, the −276 chunk). Measured: 137/138 of keccak's memory
+pairs are **byte-identical `+1`/`−1` including the timestamp expression**; the send and its matching
+receive sit ~130 lines apart with *only other-pointer heap accesses* between them. `midRefuted`
+(line ~863) refutes an interleaved message as different-address only via `addrConstsNeq`, which needs
+**both** addresses to be literal constants — but heap pointers are expressions
+(`mem_ptr_limbs__0 + 65536·mem_ptr_limbs__1`), so no pair is ever cleared. The fix is to OR the
+**already-proven** `addrTwoRootNeq` (`AddrDiseq.lean`, built and used by `busUnify` since entry 71)
+into `midRefuted`:
 
-Effectiveness priority: **variables > bus interactions > constraints**. As of carry-branch
-resolution (log entry 57), on the full 100-case `openvm-eth` benchmark apc-optimizer *wins* variables on
-aggregate (4.135× vs 4.092×) and trails on geomean (3.706× vs 3.787×; per-case: 17 wins / 52
-losses / 31 ties — the losses are a few variables each, dominated by the sltu-compare
-`diff_marker` family below) and leads clearly on constraints; the remaining *systematic* gap is
-bus interactions. The bus gap decomposes as: (a) range-check packing via the tuple range checker,
-(b) memory-pointer-limb 13-bit checks on memory-heavy blocks, (c) residual bitwise checks that
-are not self-XOR byte checks, (d) occasional missed memory send↔receive cancellations. See the
-`docs/log.md` entry 42/46/49/57 discussion for measurements.
+```
+midRefuted shape busId S m :=
+      decide (m.busId ≠ busId)
+   || multConst m == some 0
+   || addrConstsNeq shape S m
+   || addrTwoRootNeq twoRootMap shape S m      -- NEW: two-root branch disequality
+```
 
-## Drop never-violating stateless lookups (close the residual pc-lookup bus gap)
+Thread the once-per-pass `TwoRootMap` in (as `busUnify` does) and add the `hsat` hypothesis to
+`midRefuted_sound` (the exact plumbing entry 71 added to `checkPair_sound`).
 
-After memory/exec send↔receive pair cancellation (log entry 46), apc-optimizer is at near-parity with powdr
-on bus interactions; the residual gap is essentially the **PC lookups** (bus 2): powdr removes them,
-apc-optimizer keeps them (never-violating model), so they inflate the bus count without affecting variables.
+**(b) Constraint-entailed payload matching** (apc_010 registers, the −32 chunk). Measured: apc_010's
+16 register pairs share the address, timestamp and last three data slots; slot 0 differs
+*syntactically* — send `(1−flag)·srd0 + flag·srd1`, receive `read_data__X` — even though `busUnify`
+**already added** the equality `read_data__X − ((1−flag)·srd0 + flag·srd1) = 0`. Gauss can't apply it
+(`read_data` occurs at degree 3 in the `write_data` constraints; substituting its degree-2 definition
+would hit degree 4 > the bound of 3, so `guardDegree` reverts). So generalize the match from
+syntactic to entailed:
 
-A `VerifiedPass` that drops a stateless bus interaction whose multiplicity is provably `0`, or that
-is proven never-violating via `BusFacts.neverViolates`, would be sound (removing a
-never-violating, non-stateful interaction changes no stateful side effect) and would raise bus
-effectiveness without regressing variables — a clean win under the priority order
-(variables > bus interactions > constraints). Check the existing zero-multiplicity drop in
-`cleanupCycle` first; this may be an extension of it rather than a new pass.
+```
+payloadsMatch cs S R :=
+    addrConstsEq shape S R                         -- unconditional address equality
+ && ∀ value-slot i:  S[i] == R[i]                  -- syntactic, OR
+       || (eqExpr S[i] R[i]).normalize ∈ cs.algebraicConstraints.map normalize   -- entailed
+```
 
-## Widening tuple packs: byte + byte → `TupleRangeChecker` (bus interactions)
+Re-key the receive index on `(address ++ tail-slots)` and weaken `dropPair_correct`'s hypothesis from
+`S.payload = R.payload` to the env-conditioned `evaluated payloads equal under the algebraic
+constraints`.
 
-`tupleRangePass` (log entry 71) packs a byte check with an **exact**-width range check
-(`2^bits = s2`) into one tuple interaction — an equivalence, so it needs no justification. powdr
-additionally packs two byte checks into a tuple `[x, y]` whose second slot only enforces
-`y < s2` (2048/8192) — a *widening*: the packed form loses `y`'s byte bound, so it is sound only
-when `y < 256` is re-derivable from the remaining system (the `byteJustified`/`deepBoundOk`
-machinery busPairCancel already uses). This is where powdr's remaining ~4-per-case tuple edge on
-register-only blocks (apc_003: powdr 8 tuples vs our 4) comes from. Same for packing the second
-slot of an existing `[x, y, 0, 0]` bitwise pair check into a tuple.
+**Why sound.** `sideEffects_dropPair_equiv` (already stated over *evaluated* payloads) gives net-zero
+cancellation once evaluated payloads are equal — discharged from the algebraic constraints, which
+hold in both `refines` directions. `admissible_dropPair` needs only address equality (unconditional).
+The dropped receive's byte obligation is discharged by the existing `recvSlotsJustified`
+(`byteJustified`/`deepBoundOk`) — which already covers apc_010's plain-var and `255·bit` single-var
+slots. No new `BusFacts`, no audited-surface change.
 
-## Extend byte-check packing to non-self and cross-form checks (bus interactions)
+**Expected impact.** keccak memory **534 → 258 = exact powdr parity (−276 bus)** via (a); apc_010
+**271 → 239** (now *beats* powdr on all three axes), `apc_014` 151→135, `apc_008` −2, and every other
+sign-extending-load / heap-heavy block via (b). ~120–150 bus across the memory-heavy eth cases.
+Strictly variable-neutral.
 
-`bytePackPass` (entry 49) recognises only the self-XOR byte check `[e, e, 0, 1]`. Some blocks
-(e.g. apc_008) keep bitwise interactions in other forms — genuine XOR `[x, y, z, 1]` with `x ≠ y`,
-or byte checks already half-packed — that it leaves alone, so its bitwise count stays above powdr's.
-Generalise the recogniser (and the `bytePairBus` fact) to pack any two messages that each impose a
-"this operand is a byte" obligation, regardless of the carrier form. Still a stateless, sound,
-variable-neutral bus win.
+---
 
-## Memory-pointer-limb residuals: cross-offset chaining and duplicate cleanup
+## 3. Bitwise-bus cleanup: extract result-zero equalities, then drop/pack redundant byte-checks  ·  *bus + variables*  ·  high confidence · low effort
 
-On memory-heavy blocks (e.g. apc_005) apc-optimizer keeps ~2× powdr's `mem_ptr_limbs` decompositions and
-their 13-bit range checks (the high/"page" limb is identical across same-base accesses but apc-optimizer
-re-decomposes and re-checks per access). The limbs are pinned by **degree-2 carry constraints**
-`(L₁)(L₂) = 0` whose roots are `base + offset` (parameterised by the base variable).
-**Update (log 57):** carry-branch resolution (`CarryBranch.lean`) is now landed and does *not*
-close this family — measured on apc_005, both factors' value intervals genuinely contain `0`
-(e.g. `300 + rs1₀ + 256·rs1₁ − mp₀` ranges over `[−65235, 65835]` with `mp₀ < 2^16`: the 16-bit
-wrap really happens on some traces), so no sound one-factor refutation exists and the constraint
-is irreducibly two-branched. Closing the gap instead needs **cross-access unification**: two
-accesses off the same base at close offsets have provably equal high limbs (`mp₁` differs only
-when the low-limb carry differs, a bounded-no-wrap argument in the style of
-`MemoryUnify.boundedSumMax`), so the duplicate decomposition + 13-bit check of the second access
-can be replaced by the first's limbs plus a small correction. Sound but needs the proven byte
-bounds on the base register word (present since the log-50 receive-byte spec change).
+**Gap:** the bitwise bus is the **sole reason apc loses bus in aggregate** on openvm-eth (net +440
+over 72 cases) and a third of the keccak bus gap (+327). It is *not* one thing:
+- Single-operand byte checks `[0,x,x,1]`, `[x,0,x,1]`, `[x,x,0,1]` (measured 221 on eth) that powdr
+  eliminates entirely, and two-byte `[x,y,0,0]` checks (+190) it packs.
+- Result-zero XORs `[x,y,0,1]` (50 on keccak, all `aᵢ ^ aⱼ = 0` with two bare vars) that encode a
+  plain equality `x = y` powdr's Gauss removes.
 
-## Widen `hintCollapse` to the sltu-style compare gadget (variables)
+**Mechanism** — three additions across the existing `xorEqExtract` / `redundantByteDrop` / `bytePack`
+family (all `ConstraintSystem.addConstraints_correct` / stateless-drop shapes):
 
-On comparison blocks powdr collapses the per-limb `diff_marker` witnesses into one inverse hint;
-`hintCollapse` (entry 52) does this only when the constraint matches its exact `Σ aᵢ·dimᵢ + t = 0`
-shape with byte-bounded single-variable coefficients. The sltu-style gadget (most-significant
-difference selection, one marker per limb) doesn't match yet — apc_018 measured after
-carry-branch resolution (entry 57): ours 43 vars vs powdr 34; this family is the bulk of the
-residual. Generalizing the matcher (coefficients that are *differences* of byte-bounded
-variables, sign-split like `CarryBranch.splitSumMax`) should capture it.
-**Update (log 57):** the equal-address half is landed — `rootPairUnifyPass` unifies duplicate
-same-address decompositions via the two-root/no-wrap argument (−128 vars on each of the
-apc_005-class blocks; apc-optimizer now leads powdr on aggregate variable effectiveness). Two
-residuals remain:
+```
+-- (i) result-zero equality extraction (variable win, sibling of the landed C4a):
+recognize bitwise [x, y, 0, 1]  ⟹  add  x − y = 0   (fact: Nat.xor a b = 0 ↔ a = b; no byte bound)
+    keep the interaction so its byteness obligation survives; Gauss eliminates one of x,y.
 
-1. **Duplicate-structure cleanup:** landed as `dedupPass` (log 58) and `flagUnifyPass`
-   (log 59). Remaining: per unified pair, one flag component relates to the survivor's
-   *non-componentwise* (the encodings differ), so the scaled check never becomes a syntactic
-   duplicate. Unifying it needs a derived-variable substitution `b := f(a₀, a₁)` — interpolate
-   the relation over the ≤ 4-point joint box (the certificate data already exposes it) and
-   substitute a degree-≤ 2 solution, degree-guarded. Would remove the last per-pair flag var
-   and (via dedup) the duplicate scaled check: another ~−64 vars and −64 bus on apc_005-class.
-2. **Cross-offset chaining** (`ptr` and `ptr+4` sharing the high limb): powdr-side this needs
-   reasoning that the low limb doesn't cross the 2¹⁶ page boundary, which is not statically
-   true — presumably a carry-witness argument. Harder, unclear value after (1).
+-- (ii) one canonical byte-check recognizer shared by RedundantByteDrop and BytePack:
+byteCheckOperands? [e1,e2,e3,op] :=
+    ([x,x,0,1] | [x,0,x,1] | [0,x,x,1])  ⟹ [x]        -- add the missing [0,x,x,1] mirror arm
+  | [x,y,0,0]                            ⟹ [x,y]
+-- (iii) drop a recognized byte-check whose operand(s) are byteJustified elsewhere;
+--       pack the survivors two-per interaction.
+```
 
-## Is-zero / is-equal witness reduction (variables)
+**Why sound.** (i) is equivalence-grade (`x^y=0 ⟺ x=y` for all naturals); adding an entailed equality
+keeps the satisfying set and the interaction is retained so no byte obligation is lost. (ii)/(iii)
+reuse the proven `redundantByteDrop`/`bytePack` machinery (`byteJustified`/`deepBoundOk`, the
+`mergeStateless2_correct` swap) — a byte check whose operand's byteness is re-derivable is a redundant
+stateless lookup; dropping it changes no stateful side effect. The mirror arm needs the symmetric
+`xorZeroCheck` fact from `Nat.zero_xor` (the lemma `xorEqExtract` already uses). Variable-neutral for
+(ii)/(iii); (i) removes variables.
 
-An equality/is-zero gadget `cmp = [vector ≠ 0]` is encoded with one inverse-marker witness per limb
-(`diff_inv_marker__i`, in the single constraint `−cmp + Σ (a_i − b_i)·inv_i = 0`); powdr collapses
-the `k` markers to **one** by combining the byte-bounded limbs into a single value whose zeroness is
-equivalent (a weighted sum `Σ 256ⁱ (a_i − b_i)` is zero iff all limbs are, given byte bounds so the
-sum can't wrap). Reduces `k−1` variables per comparison. Sound but byte-bound-dependent (needs the
-`boundedSumMax`-style no-wrap argument and a transport via `reencode_correct_D`). Note: `cmp` itself
-must become a derived column (powdr's `QuotientOrZero`/`IfEqZero`, already in `ComputationMethod`),
-since a free `cmp` with the certificate dropped would be under-constrained. Small per case, and
-variables are ~tied overall — do the cheaper bus wins first. **Update (log 50):** the `a_i` limbs
-are typically *received* register/memory words, which now carry proven byte bounds
-(multiplicity-aware `slotBound`); `byteJustified`/`deepBoundOk` in `BusPairCancel.lean` are
-reusable justification building blocks.
+**Expected impact.** eth bus: dropping the 221 single-operand checks takes aggregate 3.405× → ~3.45×;
+with the `[x,y,0,0]` packs (~190) → ~3.489×, **surpassing powdr's 3.480× and flipping the only losing
+axis to a win**. keccak: result-zero extraction removes ~50 variables (measured on `c007db0`:
+2028 → ~1978, which would put apc *below* powdr's 2021 on keccak variables); the collapsed interaction
+becomes a `[a,a,0,1]` self-check `bytePack` then absorbs. Do **not** target the keccak genuine-XOR gap
+directly — census shows it is a variable-representation artifact (XOR chaining), not redundant
+lookups; it is addressed at the root by #5. *(The `[x,255,z,1]` complement is a different pattern,
+landed as C4b — entry 74, #109.)*
 
-## Signed-comparison gadget: fold the msb flags into the comparison result (variables)
+---
 
-Log entry 62: on slt/blt-shaped blocks (apc_003 class) we keep `{a_msb_f, b_msb_f, cmp_lt}`
-where powdr keeps a single `{cmp_result}` — +2 vars per case, and these cases are the long-tail
-losses. The msb booleans are pinned by the sign-decomposition constraints; folding them needs
-either a derived-column substitution (each msb flag becomes a `ComputationMethod` over the
-operand limbs, with the pinning constraint dropped as entailed) or a `reencode`-style
-compression of the three-variable group. Diagnose the exact gadget constraints on apc_003
-before choosing.
+## 4. Collapse comparison / is-equal / is-zero gadget witnesses  ·  *variables*  ·  medium confidence · high effort
 
-## Read-read data sharing blocked on the last flag component (variables)
+**Gap:** the comparison gadgets are the broadest variable family — extra markers/flags in **43 of 100
+cases**: `diff_inv_marker` +61 (16 cases), `diff_marker` +24, `c_msb_f` +27, `b_msb_f` +19. This is
+the long `+3` per-case loss tail plus `apc_018` (+9) and `apc_037`'s marker block (+16). powdr keeps a
+single inverse-hint / comparison-result witness where apc keeps one per limb.
 
-Log entry 62: powdr keeps one copy of same-address read-data words across consecutive accesses
-(apc_047 class, ~+3 vars per case). **Log 63 correction:** apc_047's final output has *zero*
-scaled-check pairs, so this is *not* blocked on the flag residual there — the duplication needs
-its own diagnosis (render the accesses; the addresses presumably differ structurally). The
-flag→address→busUnify cascade may still apply on apc_005-class blocks.
+**Mechanism** — generalize `hintCollapse`'s matcher (which today needs single-variable byte-bounded
+coefficients) to the is-equal and signed-compare shapes:
 
-## Reuse the deep byte justification beyond pair cancellation
+```
+-- is-equal / is-zero (k inverse markers -> 1):
+gadget:  −cmp + Σ (aᵢ−bᵢ)·inv_markerᵢ = 0,   aᵢ,bᵢ byte-bounded
+replace by:   cmp·S = 0     and     inv·S + cmp − 1 = 0
+   where  S = Σ 256ⁱ·(aᵢ − bᵢ)      -- byte-weighted difference, no-wrap since k·255·256^{k-1} < p
+   cmp := ComputationMethod.QuotientOrZero/IfEqZero   (derived; avoids under-constraint)
+   drop every inv_markerᵢ         (−(k−1) vars per gadget)
 
-`deepBoundOk` (log 50) proves `x < 256` by enumerating the finite domains of a defining
-constraint's selector flags and checking each branch pins `x` to a byte constant or a
-byte-bounded variable. **Update (log 68):** part (a) — the redundant byte-check dropper — is
-**landed** as `redundantByteDropPass` (C2), consuming `byteJustified`/`deepBoundOk` to drop
-entailed bitwise byte checks in the coda. Remaining: (b) wider domains for `domainProp` (a
-deep-justified byte var gets a `[0,256)` domain even when no interaction carries it raw).
-Generalising the two-term branch to `x = c₀ + Σ cᵢ·yᵢ` with a no-wrap interval bound would
-subsume the is-zero and mem-ptr-limb ideas' bound side.
+-- signed / sltu:  fold {a_msb_f, b_msb_f} + per-limb diff_marker into the single result
+--   via sign-split byte-bounded coefficients (CarryBranch.splitSumMax style; accept coefficients
+--   that are DIFFERENCES of byte-bounded variables — the generalization hintCollapse currently lacks).
+```
 
-## Smarter witnesses for `disconnectedComponentPass` — measured empty (log 61)
+**Why sound.** `S = 0 ⟺ all limbs equal`, given byte bounds so the weighted sum cannot wrap
+(`boundedSumMax`-style no-wrap, already in `MemoryUnify`). The is-zero witness pair is standard;
+`cmp` must be a derived column (`QuotientOrZero`, already in `ComputationMethod`) to stay constrained.
+Proof risk: robustly matching the marker gadget and proving the consumer needs only equality (not
+signed `<`) is delicate — flagged medium.
 
-**Do not build without re-measuring.** As of log 61 the optimized outputs contain **zero**
-disconnected variables on every sampled case (the entry-43 orphan pattern was consumed by the
-entry-50/51 facts and the entry-57–59 cleanup chain), and the only single-occurrence variables
-are `hintCollapse`'s reciprocal hints, which are not unconditionally solvable and hence not
-removable under powdr's `remove_free_variables` rule either. The witness-finder generalization
-only becomes relevant again if a future pass starts stranding non-zero-satisfiable components.
+**Expected impact.** ~60–90 recoverable variables across the 43 affected cases (the whole `+3` tail
+plus `apc_018`/`apc_037`). Top-priority axis, broadest reach; higher proof cost than #1.
 
-## Batch pair cancellation in one traversal (performance)
+---
 
-`busPairCancelPass` (entry 46) drops one pair per invocation and is drained via `iterateToFixpoint`;
-`bytePackPass` (entry 49) is the same shape. On the largest blocks this is O(pairs·n). A
-single-traversal multi-drop would be O(n) but needs a multi-drop discipline lemma. As of entry 53
-it **is** a measured bottleneck: with the `hintCollapse`/`reencode` rescans fixed, `busPairCancel`
-is ~24 s of apc_005's 65 s optimizer time (second only to `domainBatch`, whose fix is sketched in
-entry 45's remaining-bottleneck note).
+## 5. Functional-dependence derived columns for read/write limbs  ·  *variables*  ·  medium–low confidence · high effort
 
-## Runtime: extend the covered-set inverted index (entry 72 / 73 follow-ups)
+**Gap:** limbs that are *functionally determined* but kept free. C4a/C4b (entry 70/74) already closed
+the affine constant-operand XOR cases, so keccak is now at variable near-parity (+7); the residual
+keccak XOR gap is the **pure-XOR intermediates** — `b`/`c` limbs that appear *only* as an XOR result
+then an XOR operand, which no equality extraction can reach. The larger remaining target is the
+**runtime portion of `rd_data`** (write result `= a op b`) on openvm-eth that #1's constant fold does
+not cover.
 
-Entry 72 added `CoveredIndex.lean` (a variable→positions index + `coveredIdx`) and wired it into
-`domainBatch` and `reencode`; entry 73 added `coveredIdx_eq_filter` (the completeness/equality
-lemma — `build` bucket completeness + `HashSet`/`mergeSort` collapse) and wired it into `domainFold`,
-and hashed `busUnify`'s `z ∈ cs.vars` membership (−72 % on that pass). Remaining keccak-profile hot
-spots, in rough priority:
+**Mechanism** — extend the `reencode` derived-column path with a functional-dependence source:
 
-- **`busUnify`'s `cs.algebraicConstraints.contains c` (residual, after entry 73).** The variable
-  membership is now O(1); the other per-equality scan is a structural `List.contains` over all
-  constraints. It is **not** load-bearing for correctness (only the kept-set effectiveness), so a
-  structHash-keyed `Std.HashSet` (heuristic; collision-safe re-verify to keep the output identical)
-  would cut it. Needs a `Hashable (Expression p)` instance (+ `LawfulHashable` via `structHash`) —
-  which would also unblock the `dedup` pass and `flagFold` below.
-- **`flagFold` (~51 s).** Same pattern as the old `busUnify`: per-candidate `z ∈ cs.vars` and
-  structural `contains`/dedup scans. A once-built `Std.HashSet Variable` for `cs.vars` membership
-  (as in entry 73) plus the `Hashable (Expression p)` index above would cut it.
-- **Finite-domain enumeration residual.** After indexing, `domainBatch`/`domainFold`'s remaining
-  cost is the box scan (`scanInit`/`scanForced`) and `constraintRedundant`; the `envOf` linear
-  lookup (log entry 45's note, `docs/log.md:1030`) — substitute pinned domain-1 constants and
-  enumerate only free vars — is the algorithmic follow-up (needs `forcedOver` soundness reproven
-  over the reduced box).
-- **`coveredIdx` on hub variables.** A variable shared across many constraints yields a large
-  candidate bucket; most candidates fail the `Q` (⊆xs) re-check. Cost is O(bucket) per target.
-  Acceptable while partitioned, but a conjunctive (smallest-bucket-first) gather could help if a
-  future circuit has heavy hubs.
+```
+-- z is the result slot of exactly one accepting bitwise [x,y,z,1] and not otherwise pinned:
+--   BusFacts.slotFun already proves  z = x ⊕ y   (soundness half)
+register  Derivation z := ComputationMethod computing xor(x,y) from input columns
+drop z from the free-variable set          (interaction retained for byteness)
+-- same device for a write-result limb pinned by  rd_data − f(inputs) = 0.
+```
+
+**Why sound.** Soundness is carried by `slotFun` (acceptance forces `z = x⊕y`). The real work is the
+completeness half: the reproduced witness must satisfy `derivesWitness` — `z` computed from input
+columns present in the input trace — which is exactly `reencode`'s `ComputationMethod` bookkeeping,
+but wiring a genuine XOR (a table lookup, not a polynomial) into `ComputationMethod` and discharging
+`derivesWitness` is nontrivial. Degree-guarded.
+
+**Expected impact.** Modest on keccak now (it is near variable-parity post-C4b; only the pure-XOR
+intermediate residual remains, part of the +7). Main value is the ~15–30 functional `rd_data` vars on
+eth that #1 does not fold, plus a small keccak tail. Top-priority axis but highest proof cost of the
+five — do it after #1 clears the constant cases.
+
+---
+
+## Smaller follow-ups (worth landing, lower ceiling)
+
+- **Width-1 range-check → booleanity constraint** (`ZeroWidthRange` width-0 → width-1). `[e,1]` on a
+  var-range bus ⟹ `e·(e−1)=0`, drop the interaction. Equivalence (uses the existing `varRangeBus`
+  fact; degree 2, within bound). **keccak −68 bus** (bus 3 → powdr parity), variable-neutral; trades
+  68 bus for 68 constraints — a strict lexicographic win (bus ≻ constraints, and apc has 10.6× agg
+  constraint headroom).
+- **Widening tuple-range packing + `mem_ptr` high-limb sharing** (`tupleRangePass` + `MemoryUnify`).
+  Pack `byte+byte`/`byte+over-wide` into one `TupleRangeChecker` guarded by `byteJustified` re-derival
+  of the narrowed slot; share the provably-equal 13-bit high limb across same-base accesses. **eth
+  tupleRange +160 over 22 cases** (`apc_006` +76). Bus-only.
+- **Affine/product no-wrap rule for `byteJustified`.** `e = c·y` (y boolean) or `e = c₀ + Σ cᵢ·yᵢ`
+  with `c₀ + Σ|cᵢ|(Bᵢ−1) < 256`, via `MemoryUnify.boundedSum_val`. A *helper*, not a headline: census
+  shows it is **not** the keccak memory blocker (idea #2a is), but it generalizes #2/#5 to affine
+  memory receives and rotation-carry data slots.
+
+## Rejected / measured dead-ends (do not re-propose without re-measuring)
+
+- **Constant-operand XOR extraction (`⊕0` C4a, `⊕255` C4b):** **landed** (entries 70 / 74, #109);
+  `{0, 255}` are the only operands making `x ⊕ c` affine, so the mechanism is **exhausted** — do not
+  re-propose a generic constant-operand XOR pass (result-zero `[x,y,0]⟹x=y` in #3 is a *different*
+  pattern and still open).
+- **Timestamp re-encoding** (`lower_decomp__1` vs `prev_timestamp`): measured **wash** — equal free-var
+  counts each side on every case.
+- **Carry-witness substitution** for genuine two-root carries: measured **wash** (log 67) — eliminating
+  a derived limb adds a carry witness, net 0 vars.
+- **Drop never-violating PC lookups:** **no gap remains** — exec/PC bus tied 200/200 on the benchmark.
+- **`disconnectedComponent` smarter witnesses:** measured **empty** (log 61) — outputs contain 0
+  disconnected vars.
+- **keccak genuine-XOR bus gap (+321) as a dedup pass:** **not removable** — no duplicate/ shared-pair
+  lookups; it is a variable-representation artifact (XOR chaining), addressed by #5, not a bus pass.
+- **`bit_shift_carry` elimination (+67):** keccak rho-rotation encoding — VM-specific / overfit, high
+  proof risk. Excluded by the generality rule.
+- **varRange bus / range-check packing as a *variables* lever:** apc already **wins** varRange bus net
+  −376; range packing is bus-only (a follow-up), not a variable opportunity.
+- **`b`/`c` per-family variable diffs:** a **naming artifact** (apc names read-data `b`/`c` where powdr
+  names it `read_data`); they cancel in net accounting. Only structurally-unique families
+  (`rd_data`, `diff_inv_marker`, `bit_shift_carry`, `msb_f`, intermediate `a`/`c`) are genuine.
+- **`apc_003` signed-compare:** no longer a loss — now a **tie** (tuple packing, entry 71, closed it).
