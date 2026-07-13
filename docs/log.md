@@ -2498,3 +2498,40 @@ Together with #105 (entry 71), the keccak variable gap to powdr collapses from +
 **+7** (post-both). The residual keccak variable families are the memory read/write-aux witnesses and
 `bit_shift_carry` (rotation-gadget carries) — separate mechanisms, not constant-operand XOR; see
 `docs/ideas.md`.
+
+## Ideas-file regeneration (2026-07-13, fresh baselines — no optimizer change)
+
+Rewrote `docs/ideas.md` from scratch into a ranked shortlist of 5 high-impact ideas after a
+multi-agent brainstorm (keccak + openvm-eth first-principles, powdr-gap census, pass generalization,
+prototype measurement). No code change; recording the baselines the ranking rests on. (This commit
+was rebased on top of C4b/#109 — entry 74 — so the ideas file's keccak figures reflect the post-C4b
+state: keccak **2028 v** / 118 c / ~2405 bus, variable gap to powdr now **+7 (near parity)**, leaving
+**bus (+671)** as keccak's dominant remaining loss.)
+
+**Baselines the brainstorm measured (on `c007db0`, pre-C4b).** keccak: 2224 v / 118 c / 2405 bus vs
+powdr 2021 / 186 / 1734. openvm-eth 100-case: apc vars 4.507× / 3.818× agg/geo, bus 3.405× / 2.707×,
+per-case **25 W / 42 L / 33 T**. apc_010: 466/251/**271** vs powdr 498/331/**239**.
+
+**Gap decomposition.** eth vars ~+243/42c: `rd_data` write-result limbs ~93 (23c, powdr keeps 0) ·
+comparison gadget markers/flags ~130 (43c) · `bit_shift_carry` +67 (13c) · `apc_071` intermediate
+address bytes. eth bus net +368: bitwise **+440** (72c) · tupleRange +160 (22c) · memory +144 (15c) ·
+varRange **−376** (apc *wins*). keccak bus +671: memory interior pairs +276 · bitwise +327 · width-1
+range +68.
+
+**Prototype measurement (memory interior-pair cancellation).** Simulated cancellation on the live apc
+renders: keccak has **138 byte-identical ±1 memory pairs (276 interactions)** → memory 534 → 258 =
+exact powdr parity; all 12 205 interleaved messages are other-address heap accesses (0 same-address),
+so the cancellation is valid and the real blocker is `busPairCancel.midRefuted`'s inability to prove
+symbolic heap addresses differ (fix = wire the proven `addrTwoRootNeq` in). Corrects the prior
+ideas.md item-1.2 framing: an affine `byteJustified` rule is **not** the keccak blocker (0 cancellable
+pairs contain rotation carries; data limbs already have a `slotBound` byte source). apc_010's −32 is a
+*different* problem — register-chain pairs whose value equality `busUnify` already adds but Gauss
+can't apply under the degree-3 bound (needs entailed-payload matching, not syntactic).
+
+**New top idea surfaced:** folding byte/limb decompositions of compile-time constants (JAL/JALR return
+addresses, jump targets) — the largest variable family (`rd_data`, ~93 vars/23 cases) — ranked #1.
+
+**Dead-ends confirmed** (see ideas.md): timestamp re-encoding wash, carry-witness wash, PC-lookup drop
+(no gap), disconnected-component (empty), keccak genuine-XOR bus gap (representation artifact),
+`bit_shift_carry` (VM-specific), varRange packing (apc already wins), `b`/`c` naming artifact,
+`apc_003` now a tie, constant-operand XOR exhausted (C4a/C4b landed).
