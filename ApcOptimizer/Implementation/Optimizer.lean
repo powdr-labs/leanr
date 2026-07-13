@@ -48,51 +48,85 @@ surface live in `ApcOptimizer/Optimizer.lean`; each theorem is a projection of t
 `optimizerWithBusFacts_correct` / `optimizerWithBusFacts_respectsDegree` proved here.
 
 **To add an optimization:** write a `VerifiedPass` (or fact-aware `VerifiedPassW`) in a new file
-under `ApcOptimizer/Implementation/OptimizerPasses/`, import it here, and `.andThen` it into `cleanupCycle`
-below. That is the only edit needed here; the correctness proof follows automatically from the
-pass's own `PassCorrect`. -/
+under `ApcOptimizer/Implementation/OptimizerPasses/`, import it here, and add one `(name, pass)`
+entry to the `cleanupPasses` list below. That is the only edit needed here; the correctness proof
+follows automatically from the pass's own `PassCorrect`. -/
 
-/-- The optimization pipeline: the sequence of verified passes that make up the optimizer.
-    Fold once, then iterate the cleanup cycle to a fixpoint (`iterateToFixpoint`, no budget):
-    batch-eliminate every variable solvable from a linear constraint with a unit-coefficient
-    pivot (`gaussElimPass` — one simultaneous substitution per cycle), normalize and fold,
-    substitute one variable forced by finite-domain enumeration (boolean/one-hot case
-    analysis, bus-fact domains, probed bus obligations; prime `p` only), re-normalize and
-    re-fold, drop trivially-true constraints, drop zero-multiplicity bus interactions, drop
-    stateless interactions whose constant message satisfies the bus table, and add the
-    receive-equals-send equations entailed by the memory discipline. Finally, canonicalize:
-    scale every constraint's affine factors to monic form (zero-set preserving) and re-fold.
-    Extend it by composing passes with `.andThen`. -/
+/-- The cleanup-cycle passes as a **labelled list** — the single source of truth for the sequence
+    of verified passes that make up the optimizer's cleanup cycle. Both `cleanupCycle` (below,
+    folded together with `.andThen`) and the `profile` CLI command's per-pass timer (`Main.lean`)
+    consume this one list, so a pass added here is picked up by both automatically; there is no
+    second copy to keep in sync. The `String` labels name each pass in the profiler's timing report
+    (they are irrelevant to the optimizer's behaviour).
+
+    Fold once (at the pipeline top), then iterate this cycle to a fixpoint (`iterateToFixpoint`, no
+    budget): batch-eliminate every variable solvable from a linear constraint with a
+    unit-coefficient pivot (`gaussElimPass` — one simultaneous substitution per cycle), normalize
+    and fold, substitute one variable forced by finite-domain enumeration (boolean/one-hot case
+    analysis, bus-fact domains, probed bus obligations; prime `p` only), re-normalize and re-fold,
+    drop trivially-true constraints, drop zero-multiplicity bus interactions, drop stateless
+    interactions whose constant message satisfies the bus table, and add the receive-equals-send
+    equations entailed by the memory discipline.
+
+    **To add an optimization:** write a `VerifiedPass` (or fact-aware `VerifiedPassW`) in a new file
+    under `ApcOptimizer/Implementation/OptimizerPasses/`, import it above, and add one
+    `(name, pass.….guardDegree)` entry to this list. That is the only edit needed here; the
+    correctness proof follows automatically from the pass's own `PassCorrect`, and the profiler
+    picks up the new label for free. -/
+def cleanupPasses : List (String × VerifiedPassW p) :=
+  [ ("zeroWidthRange", ZeroWidthRange.zeroWidthRangePass.guardDegree),
+    ("xorEqExtract", XorEqExtract.xorEqExtractPass.guardDegree),
+    ("carryBranch", carryBranchPass.guardDegree),
+    ("gauss", gaussElimPass.withFacts.guardDegree),
+    ("normalize1", normalizePass.withFacts.guardDegree),
+    ("constFold1", constantFoldPass.withFacts.guardDegree),
+    ("domainBatch", domainBatchPass.guardDegree),
+    ("normalize2", normalizePass.withFacts.guardDegree),
+    ("constFold2", constantFoldPass.withFacts.guardDegree),
+    ("zeroRegister", zeroRegisterPass.guardDegree),
+    ("hintCollapse", hintCollapsePass.guardDegree),
+    ("rootPairUnify", rootPairUnifyPass.guardDegree),
+    ("flagUnify", flagUnifyPass.guardDegree),
+    ("flagFold", flagFoldPass'.guardDegree),
+    ("dedup", dedupPass.withFacts.guardDegree),
+    ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree),
+    ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree),
+    ("tautoBus", tautoBusDropPass.withFacts.guardDegree),
+    ("domainFold", domainFoldPass.withFacts.guardDegree),
+    ("busUnify", busUnifyPass.guardDegree),
+    ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint busPairCancelPass)),
+    ("tupleRange", VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass)),
+    ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint bytePackPass)),
+    ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
+    ("reencode", reencodePass.withFacts.guardDegree) ]
+
+/-- Fold a list of passes into one sequential pass (`andThen` left to right; identity on `[]`). -/
+def chainPasses (l : List (VerifiedPassW p)) : VerifiedPassW p :=
+  l.foldl VerifiedPassW.andThen (fun cs bs _ => ⟨cs, [], PassCorrect.refl cs bs⟩)
+
+/-- The optimizer's cleanup cycle: the `cleanupPasses` folded together in order. See `cleanupPasses`
+    for what each pass does and how to extend the cycle. -/
 def cleanupCycle : VerifiedPassW p :=
-  ZeroWidthRange.zeroWidthRangePass.guardDegree
-    |>.andThen XorEqExtract.xorEqExtractPass.guardDegree
-    |>.andThen carryBranchPass.guardDegree
-    |>.andThen gaussElimPass.withFacts.guardDegree
-    |>.andThen normalizePass.withFacts.guardDegree
-    |>.andThen constantFoldPass.withFacts.guardDegree
-    |>.andThen domainBatchPass.guardDegree
-    |>.andThen normalizePass.withFacts.guardDegree
-    |>.andThen constantFoldPass.withFacts.guardDegree
-    |>.andThen zeroRegisterPass.guardDegree
-    |>.andThen hintCollapsePass.guardDegree
-    |>.andThen rootPairUnifyPass.guardDegree
-    |>.andThen flagUnifyPass.guardDegree
-    |>.andThen flagFoldPass'.guardDegree
-    |>.andThen dedupPass.withFacts.guardDegree
-    |>.andThen trivialConstraintDropPass.withFacts.guardDegree
-    |>.andThen zeroMultBusDropPass.withFacts.guardDegree
-    |>.andThen tautoBusDropPass.withFacts.guardDegree
-    |>.andThen domainFoldPass.withFacts.guardDegree
-    |>.andThen busUnifyPass.guardDegree
-    |>.andThen (VerifiedPassW.guardDegree (iterateToFixpoint busPairCancelPass))
-    |>.andThen (VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass))
-    |>.andThen (VerifiedPassW.guardDegree (iterateToFixpoint bytePackPass))
-    |>.andThen disconnectedComponentPass.withFacts.guardDegree
-    |>.andThen reencodePass.withFacts.guardDegree
+  chainPasses (cleanupPasses.map (·.2))
+
+/-- Folding degree-respecting passes with `andThen` yields a degree-respecting pass. -/
+theorem foldl_andThen_respectsDeg :
+    ∀ (l : List (VerifiedPassW p)) (init : VerifiedPassW p),
+      RespectsDeg init → (∀ f ∈ l, RespectsDeg f) →
+      RespectsDeg (l.foldl VerifiedPassW.andThen init)
+  | [], _, hinit, _ => by simpa using hinit
+  | g :: rest, init, hinit, hall => by
+      rw [List.foldl_cons]
+      exact foldl_andThen_respectsDeg rest (init.andThen g)
+        (VerifiedPassW.andThen_respectsDeg hinit (hall g (List.mem_cons_self ..)))
+        (fun f hf => hall f (List.mem_cons_of_mem _ hf))
 
 theorem cleanupCycle_respectsDeg : RespectsDeg (cleanupCycle (p := p)) := by
-  repeat' apply VerifiedPassW.andThen_respectsDeg
-  all_goals exact VerifiedPassW.guardDegree_respectsDeg _
+  unfold cleanupCycle chainPasses
+  refine foldl_andThen_respectsDeg _ _ (fun _ _ _ h => h) ?_
+  intro f hf
+  simp only [cleanupPasses, List.map_cons, List.map_nil] at hf
+  fin_cases hf <;> exact VerifiedPassW.guardDegree_respectsDeg _
 
 def pipeline : VerifiedPassW p :=
   constantFoldPass.withFacts.guardDegree
