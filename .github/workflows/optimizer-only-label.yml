@@ -3,7 +3,7 @@ name: Optimizer-only label
 # Auto-manage the `optimizer-only` label on pull requests. A PR earns the label when *every*
 # changed file lies within the AI-maintainable optimizer surface — i.e. it touches only the
 # optimization implementation and the append-only log / ideas notes, never the audited spec,
-# the CLI, CI, or benchmark fixtures. Per the repo policy (see CLAUDE.md / README.md), such a PR
+# the CLI, CI, or benchmark fixtures. Per the repo policy (see AGENTS.md / README.md), such a PR
 # needs no audit: its correctness is discharged by construction, so effectiveness is the only bar.
 #
 # The label is (re)computed on every push to the PR, so it is added the moment the diff qualifies
@@ -35,7 +35,7 @@ jobs:
               '(ApcOptimizer/Implementation/**, docs/log.md, docs/ideas.md) — no audit needed.';
 
             // The whitelist. A file qualifies if it matches ANY of these. Keep this list in sync
-            // with the "auditing surface" description in README.md / CLAUDE.md.
+            // with the "auditing surface" description in README.md / AGENTS.md.
             const ALLOWED = [
               /^ApcOptimizer\/Implementation\//, // the non-audited optimizer implementation
               /^docs\/log\.md$/,                 // append-only experiment log
