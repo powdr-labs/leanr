@@ -22,6 +22,12 @@ namespace ApcOptimizer.OpenVM
 
 variable {p : ℕ}
 
+/-- XOR-ing a byte with the all-ones byte `255` is the byte complement. Used by `xorComplEq_sound`
+    to linearize a bitwise interaction with a `255` operand into an affine equality. The 256-case
+    `decide` is a one-shot kernel check (no runtime cost). -/
+private theorem nat_xor_255 : ∀ n, n < 256 → Nat.xor n 255 = 255 - n := by
+  set_option maxRecDepth 4000 in decide
+
 private def slotBoundImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat) (mult : ZMod p)
     (pattern : List (Option (ZMod p))) (slot : Nat) : Option Nat :=
   match busMap busId, pattern, slot with
@@ -633,6 +639,49 @@ def openVmFacts (p : ℕ) [NeZero p]
       · simp only [h1, ZMod.val_zero, isByte, Bool.not_eq_false',
           Bool.and_eq_true, decide_eq_true_eq] at hviol
         exact valeq z x (hviol.2.trans (Nat.xor_zero x.val))
+  xorComplEq busId := match busMap busId with
+    | some .bitwiseLookup => decide (256 ≤ p)
+    | _ => false
+  xorComplEq_sound := by
+    intro busId h
+    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
+      revert h; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    have hple : 256 ≤ p := by
+      have h' : (match busMap busId with
+          | some OpenVmBusType.bitwiseLookup => decide (256 ≤ p) | _ => false) = true := h
+      rw [hbus] at h'; exact of_decide_eq_true h'
+    have hp2 : 1 < p := by omega
+    have h1val : (1 : ZMod p).val = 1 := by
+      rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_eq_of_lt hp2
+    have hcast255 : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
+    have h255val : (255 : ZMod p).val = 255 := by
+      rw [← hcast255, ZMod.val_natCast_of_lt (by omega : (255 : ℕ) < p)]
+    have hle_of : ∀ w : ZMod p, w.val < 256 → w.val ≤ 255 := fun w hw => Nat.le_of_lt_succ (by omega)
+    refine ⟨?_, ?_⟩
+    · intro x z hviol
+      replace hviol : violates busMap
+          { busId := busId, multiplicity := 1, payload := [x, 255, z, 1] } = false := hviol
+      unfold violates at hviol; rw [hbus] at hviol
+      simp only [h1val, isByte, Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq] at hviol
+      obtain ⟨⟨hxb, _⟩, hzxor⟩ := hviol
+      rw [h255val] at hzxor
+      have hzv : z.val = 255 - x.val := by rw [hzxor]; exact nat_xor_255 x.val hxb
+      have hz : z = ((z.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse z).symm
+      rw [hz, hzv, Nat.cast_sub (hle_of x hxb), ZMod.natCast_rightInverse x, hcast255]
+    · intro y z hviol
+      replace hviol : violates busMap
+          { busId := busId, multiplicity := 1, payload := [255, y, z, 1] } = false := hviol
+      unfold violates at hviol; rw [hbus] at hviol
+      simp only [h1val, isByte, Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq] at hviol
+      obtain ⟨⟨_, hyb⟩, hzxor⟩ := hviol
+      rw [h255val] at hzxor
+      have hzv : z.val = 255 - y.val := by
+        have hc : Nat.xor 255 y.val = Nat.xor y.val 255 := Nat.xor_comm 255 y.val
+        rw [hzxor, hc]; exact nat_xor_255 y.val hyb
+      have hz : z = ((z.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse z).symm
+      rw [hz, hzv, Nat.cast_sub (hle_of y hyb), ZMod.natCast_rightInverse y, hcast255]
   varRangeBus busId := match busMap busId with
     | some .variableRangeChecker => true
     | _ => false

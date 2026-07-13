@@ -2382,6 +2382,7 @@ case**; only the covered-set lookup differs. No audited surface; proof integrity
 (`{propext, Classical.choice, Quot.sound}`-only). Expected effect: keccak keeps its −13 % `domainFold`
 win; openvm-eth `domainFold` returns to baseline (no 1.24× regression); `busUnify`'s −66/−72 % win is
 unaffected.
+
 ## Entry 71: symbolic-timestamp forwarding — two-root address disequality
 
 **Idea.** `busUnifyPass` (`BusUnify.lean`) forwards read/`prev_data` limbs across a
@@ -2437,3 +2438,63 @@ Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound
 `busPairCancel` once `byteJustified` gets an affine no-wrap rule (ideas.md 1.2) — another ~−282 bus.
 (2) Wiring `addrTwoRootNeq` into `busPairCancel.midRefuted` could telescope the AS2 middle pairs
 (below powdr's 200 floor; ideas.md 2.2).
+
+### 74. Generalize `xorEqExtract` to the 255-complement (C4b) — keccak variable effectiveness
+
+**Idea.** `xorEqExtractPass` (entry 70, C4a) already recognizes the *zero*-operand bitwise-XOR
+interactions `[0, y, z, 1] ⟹ z = y` / `[x, 0, z, 1] ⟹ z = x` and adds the entailed equality so
+Gauss can eliminate the pinned intermediate byte. The other constant that makes `x ⊕ c` **affine**
+in `x` is `255`: XOR-ing a byte with the all-ones byte is the byte complement,
+`[x, 255, z, 1] ⟹ z = 255 − x` and `[255, y, z, 1] ⟹ z = 255 − y` (`n ⊕ 255 = 255 − n` for a byte
+`n`). `{0, 255}` are the *only* two affine constants, so this **completes** the constant-operand
+generalization rather than adding a new mechanism. Diagnosed on the keccak stress case: ~200 of its
+bitwise interactions have the form `[x, 255, z, 1]` with `z` a fresh NOT-result variable (the `c__*`
+family) that powdr does not materialize — apc kept the complement equality only on the bus, so Gauss
+never used it (196 of them are eliminable on the post-#105 base; see below).
+
+**Change (generalize the existing pass, no new pass, no pipeline edit).**
+- New proven `BusFacts` field `xorComplEq` (sibling of `xorZeroEq`): on the bitwise bus an accepted
+  `[x, 255, z, 1]` / `[255, y, z, 1]` gives `z = 255 − x` / `z = 255 − y`. Discharged for OpenVM
+  from the concrete `violates` (byte bound on the free operand + `z.val = x.val ⊕ 255`) via the nat
+  lemma `n ⊕ 255 = 255 − n` for `n < 256` (a one-shot 256-case `decide`, no runtime cost). Sound
+  only when `255` is a genuine byte of the field, so the OpenVM instance **gates the fact on
+  `256 ≤ p`** (true for BabyBear; a small field, and `trivial`, claim nothing — the pass stays a
+  no-op and VM-agnostic). Counterexample without the gate: `(255 : ZMod 3) = 0`, where the identity
+  is `z = x`, not `z = 255 − x`.
+- `xorEq?` extended from 2 to 4 constant-operand cases; the pass proof adds the two 255 branches via
+  `xorComplEq_sound`. Same shape as C4a — `addConstraints_correct` (soundness drops the added
+  equality; adding a constraint touches no interaction, so side effects / admissibility are
+  unchanged; the added equality's variables all come from the interaction's payload, so no new
+  variable is introduced).
+
+`lake build` green; the three `*_maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes (no
+`sorry`/`admit`/`axiom`/`native_decide`); keccak output within the degree bound.
+
+All numbers below are measured on the **post-#105 (entry-71 forwarding) base**, on which this pass
+stacks — C4b is orthogonal to the memory forwarding, so the two compose (a baseline vs. C4b A/B on
+one build; the two changes touch disjoint families).
+
+**Impact — keccak (post-#105 baseline → C4b, same build).**
+- **variables 2224 → 2028 (−196; 12.375× → 13.571×)** — the `[x, 255, z, 1]` NOT-results eliminated
+  by same-cycle Gauss (substituted `z := 255 − x`). This puts keccak at **2028 vs powdr 2021 — a +7
+  variable gap (near parity)**, closing the residual +203 gap that #105 left down to +7.
+- bus interactions 2405 → 2418 (+13), constraints 118 → 120 (+2) — small, and dominated by the −196
+  variables under the priority order (the 255-XOR interactions stay put, still byte-checking their
+  free operand; a few send/receive cancellations shift under the changed variable structure).
+- **Runtime not increased — FASTER: solo `run` 674.6 s → 633.5 s (−6 %)** — eliminating 196 variables
+  in the prelude of the cleanup cycle shrinks the system every downstream pass rescans (wall-clock is
+  noisy on this machine, but the direction is not increase).
+
+**Impact — openvm-eth (full 100-case benchmark.py sweep; post-#105 baseline → C4b, same build).**
+Variable-positive and per-case-neutral: variables 4.507× → **4.509×** agg (3.818× → 3.820× geo), bus
+interactions 3.405× → 3.401× agg (2.707× → 2.705× geo), constraints 10.595× → 10.590× agg
+(11.585× → 11.578× geo); the per-case standings vs powdr are **unchanged at 25 W / 42 L / 33 T**. The
+variable gain lands on the register/shift blocks carrying `255`-complement (NOT) results (the
+apc_071 / apc_037 cases `docs/ideas.md` flagged for C4b); the sub-0.01× bus/constraint movement is the
+255-XOR interactions staying put as a few downstream cancellations shift (aggregate-invisible).
+
+Together with #105 (entry 71), the keccak variable gap to powdr collapses from +1035 (pre-both) to
+**+7** (post-both). The residual keccak variable families are the memory read/write-aux witnesses and
+`bit_shift_carry` (rotation-gadget carries) — separate mechanisms, not constant-operand XOR; see
+`docs/ideas.md`.

@@ -9,6 +9,11 @@ expressions, not constants), so the send↔consumer slot equalities now fire on 
 **3056 → 2224 vars (−832), 2862 → 2411 bus**; `lower_decomp` 534→164, `prev_data` 448→148, width-12/17
 range checks → 129/129 (= powdr). Gap to powdr now +203 (was +1035).
 
+**Constant-operand XOR extraction: LANDED (C4a entry 70, C4b entry 74).** The affine constant-operand
+XORs (`⊕0`, `⊕255`) are done — see the dedicated section below. Stacked on the entry-71 forwarding
+baseline, C4b (`[x,255,z,1] ⟹ z=255−x`) eliminated the residual `c`-family NOT-results: keccak
+**2224 → 2028 vars (−196)**, so the gap to powdr collapsed to **+7** (2028 vs 2021 — near parity).
+
 The bitwise-**result** byte bound itself is now landed (`openVmFacts.slotBound` slot 2, entry 58) —
 do not re-propose it.
 
@@ -49,15 +54,19 @@ eliminating `a` as a derived column adds `carry`, a pure swap with no cascade. p
 these blocks (e.g. apc_061/003 var-identical). The ceiling was entirely unsound one-root collapse.
 Do not build a carry-witness pass; the residual C1 gap is not a real variable opportunity.
 
-## Bitwise-XOR equality extraction (C4a landed, entry 70; C4b = 255-operand follow-up)
+## Bitwise-XOR constant-operand equality extraction — COMPLETE (C4a entry 70, C4b entry 74)
 
-**Update (log 70):** the dominant residual mechanism turned out to be **bitwise XOR interactions
-with a constant operand** encoding equalities Gauss can't see. `[0,y,z,1] ⟹ z=y`, `[x,0,z,1] ⟹ z=x`
-(0-operand, `Nat.zero_xor`/`Nat.xor_zero`) landed as `xorEqExtractPass` (C4a) — adds the entailed
-equality, Gauss eliminates the `b`/`a`/`c` limbs. −449 vars / −554 bus over 16 cases, 0 regressions,
-runtime −3.9%. **Remaining C4b:** the 255-operand cases `[x,255,z,1] ⟹ z=255−x` (needs the
-byte-complement identity `Nat.xor n 255 = 255−n` for `n<256`, plus `x` byte from acceptance);
-+16 vars on apc_071, +3 on apc_037. Stacks directly on C4a via a second `xorZeroEq`-style fact.
+Both **affine** constant operands are now landed in `xorEqExtractPass`: the 0-operand
+(`[0,y,z,1] ⟹ z=y`, `[x,0,z,1] ⟹ z=x`, C4a entry 70, `Nat.zero_xor`/`Nat.xor_zero`) and the
+255-operand byte complement (`[x,255,z,1] ⟹ z=255−x`, `[255,y,z,1] ⟹ z=255−y`, C4b entry 74,
+`n ⊕ 255 = 255−n` for a byte `n`, `xorComplEq` fact gated on `256 ≤ p`). `{0, 255}` are the **only**
+constants for which `x ⊕ c` is affine in `x` (every other makes the XOR bit-dependent), so this
+mechanism is **exhausted — do not re-propose a generic constant-operand XOR pass.** C4b removed 196
+keccak variables on the post-#105 base (2224 → 2028, +7 from powdr parity), openvm-eth
+variable-positive / per-case-neutral. The remaining XOR-computation gap to powdr is the **pure-XOR
+intermediates** — `b`/`c` limbs that appear *only* as an XOR result then an XOR operand — which no
+affine extraction can reach: eliminating them needs turning the XOR result into a **derived column**
+(the XOR-result-derivation angle in the keccak idea below), not another equality.
 
 ## Intermediate effective-address elimination (deeper residual, after C4a/C4b)
 
