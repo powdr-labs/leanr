@@ -2708,7 +2708,7 @@ cases.
   vars**; bus and constraints byte-neutral corpus-wide. Aggregate variables **4.509× → 4.517×**
   (geo 3.820× → 3.835×); per-case vs powdr **25 W / 42 L / 33 T → 27 W / 29 L / 44 T** (13 losses
   flipped). `apc_072` 32 → 29 = exact powdr parity on all three axes.
-- keccak: **2028 → 2025 vars** (the one is-equal gadget the entry-75 audit had flagged), bus /
+- keccak: **2028 → 2025 vars** (keccak contains a single is-equal gadget), bus /
   constraints unchanged — gap to powdr now **+4**.
 - Runtime (solo A/B sweeps): total **+1.4%**, median case +0.3%; named outliers apc_044 +25%
   (24.6→30.8 s), apc_019 +19%, apc_080 +54% (1.1→1.7 s). Acceptable for a per-cycle pass; if a
