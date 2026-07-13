@@ -102,7 +102,7 @@ def bench(args):
         sys.exit(f"error: {binary} missing (build first, or pass --binary/--no-build correctly)")
 
     cases = sorted(f for f in bench_dir.glob("apc_*_pc*.json.gz")
-                   if not f.name.endswith(".powdr_opt.json.gz"))
+                   if not f.name.endswith((".powdr_opt.json.gz", ".apc_opt.json.gz")))
     if not cases:
         sys.exit(f"no benchmark cases in {bench_dir}")
     if args.n is not None:
@@ -222,6 +222,19 @@ def emit_compare_md(base, target):
     return "\n".join(lines) + "\n"
 
 
+def emit_pass_compare_md(base, target):
+    """Just the per-pass runtime table (main = baseline, this branch = target), for embedding as a
+    collapsed breakdown under the effectiveness table. Δ = this branch / main."""
+    all_passes = {**base["pass_ms"], **target["pass_ms"]}
+    lines = ["| pass | main | this branch | Δ |", "|---|---|---|---|"]
+    for name in sorted(all_passes, key=lambda n: -target["pass_ms"].get(n, 0)):
+        t, b = target["pass_ms"].get(name, 0), base["pass_ms"].get(name, 0)
+        if t == 0 and b == 0:
+            continue
+        lines.append(f"| {name} | {fmt_ms(b)} | {fmt_ms(t)} | {fmt_ratio(t, b)} |")
+    return "\n".join(lines) + "\n"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -246,11 +259,13 @@ def main():
                     help="also dump the raw per-case/per-pass results (input for --compare)")
     ap.add_argument("--compare", nargs=2, default=None, metavar=("BASE.json", "TARGET.json"),
                     help="don't bench; render a comparison of two --json dumps instead")
+    ap.add_argument("--passes-only", action="store_true",
+                    help="with --compare, emit only the per-pass table (main vs this branch)")
     args = ap.parse_args()
 
     if args.compare is not None:
         base, target = (json.loads(Path(p).read_text()) for p in args.compare)
-        md = emit_compare_md(base, target)
+        md = emit_pass_compare_md(base, target) if args.passes_only else emit_compare_md(base, target)
     else:
         data = bench(args)
         if args.json is not None:

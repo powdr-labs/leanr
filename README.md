@@ -70,7 +70,3 @@ workflow (`gh workflow run "Runtime Bench" -f pr=<N>`) benches the full set from
 OpenVmBenchmarks/runtime_bench.py            # all openvm-eth cases, serial (stable timings)
 OpenVmBenchmarks/runtime_bench.py --n 20 --repeat 3   # top 20, best-of-3 per case
 ```
-
-On top of that, every PR gets a quick top-10 bench of both — effectiveness and runtime, this PR's
-CI-built binary vs the binary from the latest main build (nothing is rebuilt) — posted as one
-sticky comment.

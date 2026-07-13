@@ -8,10 +8,12 @@
 Each benchmark is a subdirectory of OpenVmBenchmarks/ holding apc_<rank>_pc<pc>.json.gz
 case pairs (plus manifest.json / apc_candidates.json). The default and main benchmark
 used for optimization is `openvm-eth`. For each case, run `apc-optimizer compare` (the same
-optimizer run as the autoopt loop) and aggregate effectiveness -- distinct variables
-before / after -- for apc-optimizer vs powdr. Cases run in parallel with a progress bar. The
-optimizer takes no iteration count: its cleanup loop runs to a fixpoint on an
-input-derived budget.
+optimizer run as the autoopt loop) and aggregate effectiveness -- size before / after -- for
+apc-optimizer vs powdr. That run also reports the optimizer's own wall time, so effectiveness and
+runtime come from one pass (no separate timing run). Cases run in parallel by default with a progress
+bar, so the reported runtime is rough (cases contend for cores) -- a report-only regression signal,
+not a precise number; pass --jobs 1 for clean timings. The optimizer takes no iteration count: its
+cleanup loop runs to a fixpoint on an input-derived budget.
 
 Run it directly (uv installs tqdm automatically); the optional positional argument
 selects the benchmark by name (default: openvm-eth):
@@ -60,6 +62,23 @@ STAT_RE = {
 # Size measures, in priority order (variables > bus interactions > algebraic constraints).
 METRICS = ("vars", "bus", "constraints")
 METRIC_LABEL = {"vars": "variables", "bus": "bus interactions", "constraints": "constraints"}
+# The optimizer's own wall time, printed by `apc-optimizer run`/`compare`, e.g. "  (339 ms)".
+# Captured from the same run that measures sizes -- no separate timing pass. Only meaningful when
+# cases run serially (--jobs 1), so timings don't fight for cores.
+RUN_MS_RE = re.compile(r"\((\d+) ms\)")
+
+
+def _fmt_ms(ms):
+    return f"{ms / 1000:.1f} s" if ms >= 10_000 else f"{ms} ms"
+
+
+def _pick(main_str, branch_str, main_val, branch_val, higher_better):
+    """Bold whichever of the main / this-branch cells is better; no bold when they are equal.
+    `higher_better` toggles the direction (True for effectiveness factors, False for runtime)."""
+    if main_val == branch_val:
+        return main_str, branch_str
+    branch_better = branch_val > main_val if higher_better else branch_val < main_val
+    return (main_str, f"**{branch_str}**") if branch_better else (f"**{main_str}**", branch_str)
 
 
 def _ratio(before, after):
@@ -92,18 +111,19 @@ def _metrics_from_json(o):
 
 
 def run_one(binary, unopt, want_report):
-    """Run one case, returning (name, metrics, report_json, err). `metrics` is
-    {role: {vars, constraints, bus}} for role in before/apc-optimizer/powdr, or None on failure."""
+    """Run one case, returning (name, metrics, report_json, ms, err). `metrics` is
+    {role: {vars, constraints, bus}} for role in before/apc-optimizer/powdr, or None on failure;
+    `ms` is the optimizer's wall time from the same run (compare only; None otherwise)."""
     name = unopt.name
     opt = unopt.with_name(unopt.name.replace(".json.gz", ".powdr_opt.json.gz"))
     if not opt.exists():
-        return name, None, None, "no .powdr_opt"
+        return name, None, None, None, "no .powdr_opt"
     sub = "report" if want_report else "compare"
     try:
         out = subprocess.run([str(binary), sub, str(unopt), str(opt)],
                              capture_output=True, text=True, check=True).stdout
     except subprocess.CalledProcessError:
-        return name, None, None, "apc-optimizer failed"
+        return name, None, None, None, "apc-optimizer failed"
     if want_report:
         try:
             j = json.loads(out)
@@ -111,10 +131,12 @@ def run_one(binary, unopt, want_report):
                        "apc-optimizer": _metrics_from_json(j["apc-optimizer"]),
                        "powdr": _metrics_from_json(j["powdr"])}
         except Exception:
-            return name, None, None, "report parse failed"
-        return name, metrics, j, None
+            return name, None, None, None, "report parse failed"
+        return name, metrics, j, None, None
     parsed = parse_compare(out)
-    return name, parsed, None, None if parsed else "parse failed"
+    m = RUN_MS_RE.search(out)
+    ms = int(m.group(1)) if m else None
+    return name, parsed, None, ms, None if parsed else "parse failed"
 
 
 def load_asm(bench_dir):
@@ -196,6 +218,10 @@ def emit_summary_md(benchmark, summary, skipped):
     lines.append(f"Per-case (by variables): apc-optimizer wins {summary['wins']}, "
                  f"loses {summary['losses']}, "
                  f"ties {summary['n'] - summary['wins'] - summary['losses']}.")
+    if summary.get("runtime_ms_total") is not None:
+        lines.append("")
+        lines.append(f"Optimizer runtime (report-only): {_fmt_ms(summary['runtime_ms_total'])} "
+                     f"total over {summary['n']} cases.")
     if skipped:
         lines.append("")
         lines.append(f"Skipped {len(skipped)}: "
@@ -213,28 +239,35 @@ def emit_compare_md(base, target):
     ts, bs = summarize(t_results), summarize(b_results)
 
     lines = [f"### Effectiveness — {target['benchmark']}, {len(common)} cases, "
-             "target vs baseline", "",
-             "Effectiveness = size before / size after (larger is better); "
-             "priority: variables > bus interactions > constraints. "
-             "agg = Σbefore ⁄ Σafter, geo = geomean; powdr shown for reference.", "",
-             "| measure | target (agg / geo) | baseline (agg / geo) | Δ (agg) "
-             "| powdr (agg / geo) |",
+             "this branch vs main", "",
+             "| measure | main | this branch | Δ | powdr |",
              "|---|---|---|---|---|"]
     for mt in METRICS:
         ta, tg = ts[f"apc-optimizer_{mt}_agg"], ts[f"apc-optimizer_{mt}_geo"]
         ba, bg = bs[f"apc-optimizer_{mt}_agg"], bs[f"apc-optimizer_{mt}_geo"]
         pa, pg = ts[f"powdr_{mt}_agg"], ts[f"powdr_{mt}_geo"]
-        lines.append(f"| {METRIC_LABEL[mt]} | {ta:.3f}× / {tg:.3f}× | {ba:.3f}× / {bg:.3f}× "
+        main_c, branch_c = _pick(f"{ba:.3f}× / {bg:.3f}×", f"{ta:.3f}× / {tg:.3f}×",
+                                 ba, ta, higher_better=True)
+        lines.append(f"| {METRIC_LABEL[mt]} | {main_c} | {branch_c} "
                      f"| {ta - ba:+.3f}× | {pa:.3f}× / {pg:.3f}× |")
+
+    # Runtime as a table row: empty powdr cell, Δ as a percentage relative to main.
+    tb = sum(target.get("runtime_ms", {}).get(n, 0) for n in common)
+    bb = sum(base.get("runtime_ms", {}).get(n, 0) for n in common)
+    if tb or bb:
+        delta = f"{(tb - bb) / bb * 100:+.0f}%" if bb else "—"
+        main_c, branch_c = _pick(_fmt_ms(bb), _fmt_ms(tb), bb, tb, higher_better=False)
+        lines.append(f"| runtime | {main_c} | {branch_c} | {delta} | |")
 
     changed = [name for name in common
                if target["results"][name]["apc-optimizer"] != base["results"][name]["apc-optimizer"]]
     lines.append("")
     if not changed:
-        lines.append("Per-case circuit sizes are **identical** between target and baseline.")
+        lines.append("Per-case circuit sizes are **identical** between main and this branch.")
     else:
-        lines.append(f"Circuit sizes changed on {len(changed)} of {len(common)} cases "
-                     "(baseline → target):")
+        lines.append(f"Circuit sizes changed on {len(changed)} of {len(common)} cases.")
+        lines.append("")
+        lines.append("<details><summary>Per-case changes (main → this branch)</summary>")
         lines.append("")
         lines.append("| case | variables | bus interactions | constraints |")
         lines.append("|---|---|---|---|")
@@ -244,6 +277,8 @@ def emit_compare_md(base, target):
             for mt in METRICS:
                 cells.append(f"{b[mt]} → **{t[mt]}**" if t[mt] != b[mt] else str(t[mt]))
             lines.append(f"| {name} | {cells[0]} | {cells[1]} | {cells[2]} |")
+        lines.append("")
+        lines.append("</details>")
     if dropped:
         lines.append("")
         lines.append("Cases present on only one side (not compared): "
@@ -258,7 +293,8 @@ def main():
                     help=f"benchmark name -- a subdirectory of OpenVmBenchmarks/ "
                          f"(default: {DEFAULT_BENCHMARK})")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4,
-                    help="cases to run in parallel (default: number of cores)")
+                    help="cases to run in parallel (default: number of cores); with >1 the "
+                         "reported runtime is rough (cases contend for cores)")
     ap.add_argument("--n", type=int, default=None, metavar="N",
                     help="only the top N cases by cost rank (default: all)")
     ap.add_argument("--report", type=Path, default=None, metavar="OUT.html",
@@ -312,16 +348,18 @@ def main():
         cases = cases[: args.n]
 
     want_report = args.report is not None
-    results, reports, skipped = [], {}, []
+    results, reports, skipped, runtimes = [], {}, [], {}
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = [pool.submit(run_one, binary, c, want_report) for c in cases]
         for fut in tqdm(as_completed(futures), total=len(futures),
                         desc="apc-optimizer compare", unit="case"):
-            name, metrics, report, err = fut.result()
+            name, metrics, report, ms, err = fut.result()
             if metrics is None:
                 skipped.append((name, err))
                 continue
             results.append((name, metrics))  # (name, {role: {vars, constraints, bus}})
+            if ms is not None:
+                runtimes[name] = ms          # optimizer wall time (ms); trust only with --jobs 1
             if report is not None:
                 reports[name] = report
 
@@ -331,6 +369,7 @@ def main():
     n = len(results)
     # Wins/losses stay on the primary metric (variables).
     summary = summarize(results)
+    summary["runtime_ms_total"] = sum(runtimes.values()) if runtimes else None
 
     print(f"\n=== {args.benchmark}: apc-optimizer vs powdr over {n} cases ===")
     print("effectiveness = size before / size after (larger is better); "
@@ -351,6 +390,7 @@ def main():
     if args.json is not None:
         args.json.write_text(json.dumps({"benchmark": args.benchmark,
                                          "results": dict(results),
+                                         "runtime_ms": runtimes,
                                          "skipped": skipped}))
         print(f"wrote {args.json}", file=sys.stderr)
     if args.md is not None:
