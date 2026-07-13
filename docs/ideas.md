@@ -230,26 +230,23 @@ it **is** a measured bottleneck: with the `hintCollapse`/`reencode` rescans fixe
 is ~24 s of apc_005's 65 s optimizer time (second only to `domainBatch`, whose fix is sketched in
 entry 45's remaining-bottleneck note).
 
-## Runtime: extend the covered-set inverted index (entry 72 follow-ups)
+## Runtime: extend the covered-set inverted index (entry 72 / 73 follow-ups)
 
 Entry 72 added `CoveredIndex.lean` (a variable→positions index + `coveredIdx`) and wired it into
-`domainBatch` and `reencode`, killing their per-target O(#system) covered-set `filter`s. Remaining
-keccak-profile hot spots, in rough priority:
+`domainBatch` and `reencode`; entry 73 added `coveredIdx_eq_filter` (the completeness/equality
+lemma — `build` bucket completeness + `HashSet`/`mergeSort` collapse) and wired it into `domainFold`,
+and hashed `busUnify`'s `z ∈ cs.vars` membership (−72 % on that pass). Remaining keccak-profile hot
+spots, in rough priority:
 
-- **`domainFold` (~65 s).** Its `foldStep` feeds the covered set to `groupDoms` and then to
-  `foldOut_correct`, which is stated against `coveredCsOf cs xs`. Indexing the scrutinee therefore
-  needs a proven `coveredIdx (build varsOf items) items.toArray Q xs = items.filter Q` equality
-  (so `hdoms` transports), rather than the soundness-only `coveredIdx_mem` used elsewhere. The
-  equality needs `build`'s bucket/varless completeness (a `foldr`/`HashMap.getD_insert` invariant)
-  plus a sorted-nodup-perm argument that the deduped-sorted candidate indices equal
-  `(range n).filter …`.
-- **`flagFold` (~50 s), `busUnify` (~48 s).** Different pattern: per-candidate `z ∈ cs.vars`
-  (list membership over ~10⁴ occurrences) and `cs.algebraicConstraints.contains c`
-  (O(#constraints) structural compare). A once-built `Std.HashSet Variable` for `cs.vars`
-  membership (load-bearing: proves no new variable — needs a `mem` lemma) and a structHash-keyed
-  index for `contains` (heuristic; collision-safe re-verify) would cut both. No `Hashable
-  (Expression p)` instance exists yet — deriving one (+`LawfulHashable` via `structHash`) would
-  unblock HashSet-based dedup here and in the `dedup` pass.
+- **`busUnify`'s `cs.algebraicConstraints.contains c` (residual, after entry 73).** The variable
+  membership is now O(1); the other per-equality scan is a structural `List.contains` over all
+  constraints. It is **not** load-bearing for correctness (only the kept-set effectiveness), so a
+  structHash-keyed `Std.HashSet` (heuristic; collision-safe re-verify to keep the output identical)
+  would cut it. Needs a `Hashable (Expression p)` instance (+ `LawfulHashable` via `structHash`) —
+  which would also unblock the `dedup` pass and `flagFold` below.
+- **`flagFold` (~51 s).** Same pattern as the old `busUnify`: per-candidate `z ∈ cs.vars` and
+  structural `contains`/dedup scans. A once-built `Std.HashSet Variable` for `cs.vars` membership
+  (as in entry 73) plus the `Hashable (Expression p)` index above would cut it.
 - **Finite-domain enumeration residual.** After indexing, `domainBatch`/`domainFold`'s remaining
   cost is the box scan (`scanInit`/`scanForced`) and `constraintRedundant`; the `envOf` linear
   lookup (log entry 45's note, `docs/log.md:1030`) — substitute pinned domain-1 constants and
