@@ -262,37 +262,17 @@ def cmdProfile (fileName : String) : IO Unit := do
   let (cs, busMap) ← parseFile fileName
   let bs := openVmBusSemantics babyBear busMap.toBusMap
   let facts := openVmFacts babyBear busMap.toBusMap
-  let cleanupPasses : List (String × VerifiedPassW babyBear) :=
-    [ ("carryBranch", carryBranchPass.guardDegree),
-      ("gauss", gaussElimPass.withFacts.guardDegree),
-      ("normalize1", normalizePass.withFacts.guardDegree),
-      ("constFold1", constantFoldPass.withFacts.guardDegree),
-      ("domainBatch", domainBatchPass.guardDegree),
-      ("normalize2", normalizePass.withFacts.guardDegree),
-      ("constFold2", constantFoldPass.withFacts.guardDegree),
-      ("zeroRegister", zeroRegisterPass.guardDegree),
-      ("hintCollapse", hintCollapsePass.guardDegree),
-      ("rootPairUnify", rootPairUnifyPass.guardDegree),
-      ("flagUnify", flagUnifyPass.guardDegree),
-      ("flagFold", flagFoldPass'.guardDegree),
-      ("dedup", dedupPass.withFacts.guardDegree),
-      ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree),
-      ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree),
-      ("tautoBus", tautoBusDropPass.withFacts.guardDegree),
-      ("domainFold", domainFoldPass.withFacts.guardDegree),
-      ("busUnify", busUnifyPass.guardDegree),
-      ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint busPairCancelPass)),
-      ("tupleRange", VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass)),
-      ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint bytePackPass)),
-      ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
-      ("reencode", reencodePass.withFacts.guardDegree) ]
+  -- The cleanup-cycle passes come straight from `cleanupPasses`
+  -- (`ApcOptimizer/Implementation/Optimizer.lean`) — the same list `cleanupCycle` folds, so the
+  -- profiler cannot drift out of sync with the pipeline as passes are added.
   let t0 ← IO.monoMsNow
   -- pipeline prelude: constantFold
   let (cs, acc) ← runCycleTimed [("constFold0", constantFoldPass.withFacts.guardDegree)] cs bs facts ∅
-  let (cs, acc, iters) ← profileLoop cleanupPasses cs bs facts acc 0
-  -- pipeline coda: monicScale, constantFold
+  let (cs, acc, iters) ← profileLoop (cleanupPasses (p := babyBear)) cs bs facts acc 0
+  -- pipeline coda: redundantByteDrop, monicScale, constantFold
   let (_, acc) ← runCycleTimed
-    [("monicScale", monicScalePass.withFacts.guardDegree),
+    [("redundantByteDrop", RedundantByteDrop.redundantByteDropPass.guardDegree),
+     ("monicScale", monicScalePass.withFacts.guardDegree),
      ("constFoldEnd", constantFoldPass.withFacts.guardDegree)] cs bs facts acc
   let t1 ← IO.monoMsNow
   IO.println s!"profile {fileName}: {iters} cleanup iterations, {t1 - t0} ms total"

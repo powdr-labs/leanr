@@ -1,0 +1,93 @@
+name: Optimizer-only label
+
+# Auto-manage the `optimizer-only` label on pull requests. A PR earns the label when *every*
+# changed file lies within the AI-maintainable optimizer surface — i.e. it touches only the
+# optimization implementation and the append-only log / ideas notes, never the audited spec,
+# the CLI, CI, or benchmark fixtures. Per the repo policy (see CLAUDE.md / README.md), such a PR
+# needs no audit: its correctness is discharged by construction, so effectiveness is the only bar.
+#
+# The label is (re)computed on every push to the PR, so it is added the moment the diff qualifies
+# and removed again if a later push adds an out-of-scope file.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: optimizer-only-label-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const LABEL = 'optimizer-only';
+            const LABEL_COLOR = '0e8a16'; // green
+            const LABEL_DESCRIPTION =
+              'Changes only the AI-maintained optimizer surface ' +
+              '(ApcOptimizer/Implementation/**, docs/log.md, docs/ideas.md) — no audit needed.';
+
+            // The whitelist. A file qualifies if it matches ANY of these. Keep this list in sync
+            // with the "auditing surface" description in README.md / CLAUDE.md.
+            const ALLOWED = [
+              /^ApcOptimizer\/Implementation\//, // the non-audited optimizer implementation
+              /^docs\/log\.md$/,                 // append-only experiment log
+              /^docs\/ideas\.md$/,               // future-pass ideas
+            ];
+            const isAllowed = (filename) => ALLOWED.some((re) => re.test(filename));
+
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            // Collect every changed file (paginated).
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number, per_page: 100,
+            });
+
+            const disqualifying = files.filter((f) => !isAllowed(f.filename));
+            // An empty diff never qualifies (nothing to reward).
+            const qualifies = files.length > 0 && disqualifying.length === 0;
+
+            const labels = (context.payload.pull_request.labels || []).map((l) => l.name);
+            const hasLabel = labels.includes(LABEL);
+
+            core.info(`Changed files: ${files.length}`);
+            core.info(`Qualifies: ${qualifies}`);
+            if (!qualifies && disqualifying.length) {
+              core.info('Out-of-scope files:\n' +
+                disqualifying.map((f) => `  - ${f.filename}`).join('\n'));
+            }
+
+            if (qualifies && !hasLabel) {
+              // Ensure the label exists (with our color/description) before adding it.
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: LABEL });
+              } catch (e) {
+                if (e.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner, repo, name: LABEL, color: LABEL_COLOR,
+                    description: LABEL_DESCRIPTION,
+                  });
+                } else {
+                  throw e;
+                }
+              }
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: pull_number, labels: [LABEL],
+              });
+              core.info(`Added '${LABEL}'.`);
+            } else if (!qualifies && hasLabel) {
+              await github.rest.issues.removeLabel({
+                owner, repo, issue_number: pull_number, name: LABEL,
+              });
+              core.info(`Removed '${LABEL}'.`);
+            } else {
+              core.info('No label change needed.');
+            }
