@@ -227,12 +227,12 @@ def emit_detail_compare_md(base, target):
     this branch = target, for embedding under the effectiveness table. Δ = this branch / main."""
     common = sorted(set(base["run_ms"]) & set(target["run_ms"]))
     b_run, t_run = base["run_ms"], target["run_ms"]
-    lines = ["<details><summary>Slowest cases</summary>", "",
+    lines = ["<details><summary>Slowest cases (out of top 10)</summary>", "",
              "| case | main | this branch | Δ |", "|---|---|---|---|"]
     for name in sorted(common, key=lambda n: -t_run[n])[:10]:
         lines.append(f"| {name} | {fmt_ms(b_run[name])} | {fmt_ms(t_run[name])} "
                      f"| {fmt_ratio(t_run[name], b_run[name])} |")
-    lines += ["", "</details>", "<details><summary>Per-stage runtime breakdown</summary>", "",
+    lines += ["", "</details>", "<details><summary>Per-stage runtime breakdown (out of top 10)</summary>", "",
               "| pass | main | this branch | Δ |", "|---|---|---|---|"]
     all_passes = {**base["pass_ms"], **target["pass_ms"]}
     for name in sorted(all_passes, key=lambda n: -target["pass_ms"].get(n, 0)):
