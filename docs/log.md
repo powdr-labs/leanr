@@ -2672,21 +2672,21 @@ with two bare vars". The only z-slot-zero bitwise messages in the current output
 byte-pair checks (55 ≈ the claimed 50): `[x, y, 0, 0]` range-checks both operands and carries **no
 equality semantics**. The census evidently keyed on "slot 2 = 0" without requiring `op = 1` (or was
 taken pre-C4b and never re-checked). OpenVM circuits do not emit `x ⊕ y = 0` as an equality
-encoding — equality is the inverse-marker gadget family (ideas.md #4).
+encoding — equality is the inverse-marker gadget family (the comparison-gadget idea, now ideas.md #3).
 
 **Outcome: discarded; do not re-propose #3(i).** Worked: no — idea refuted for ~1 h of proof
 effort; the correct order would have been the 5-minute output census *first* (the standing
 what-if-before-build rule; the miss was trusting a recorded census instead of re-verifying it on
-current `main`). The live remainder of ideas.md #3 is unaffected and stays the top bus lever:
-(ii) one canonical byte-check recognizer (incl. the missing `[0, x, x, 1]` mirror arm) and
-(iii) redundant-byte drop + two-per-tuple packing of the measured 221 + 190 eth byte checks —
-those target exactly the op-0/self-check shapes that *do* exist.
+current `main`). The live remainder of ideas.md #3 — (ii) the canonical byte-check recognizer
+(incl. the `[0, x, x, 1]` mirror arm) and (iii) redundant-byte drop + packing — targeted exactly
+the op-0/self-check shapes that *do* exist, and landed independently as entry 75 (#113), which
+also reconfirmed this entry's result-zero dead-end on its own render census.
 
 **Impact: none (no code landed).**
 
-### 75. Is-equal gadget collapse via sum-of-squares — rebased onto #110 and landed
+### 76. Is-equal gadget collapse via sum-of-squares — landed
 
-**Idea (the is-equal slice of ideas.md #4).** The is-equal/is-zero gadget keeps one
+**Idea (the is-equal slice of the comparison-gadget idea, now ideas.md #3).** The is-equal/is-zero gadget keeps one
 inverse-marker witness per limb (`−cmp + Σ (aᵢ − bᵢ)·diff_inv_markerᵢ = 0`, four markers per
 comparison); powdr keeps a **single** witness. The linear collapse (`hintCollapse`) is unsound here
 because signed differences can cancel; the sound form is powdr's **sum-of-squares**:
@@ -2698,18 +2698,18 @@ per gadget. Reencode-class completeness handled by the derived-column bookkeepin
 
 **Provenance.** Built and measured on branch `c6-tuple-range-pack` (commit 05fd3a0, on the #97
 base): −48 vars / 16 cases / 0 regressions. This entry is the rebase onto current `main`
-(post-#98/#104/#105/#106/#109/#110): the 640-line `EqCollapse.lean` ported **unchanged** (two
-unused-simp-arg lint fixes only), wiring translated to one `cleanupPasses` entry after
-`hintCollapse`. Premise re-verified fresh: #110's census still lists `diff_inv_marker` +61 over 16
-cases.
+(finally onto #113): the 640-line `EqCollapse.lean` ported **unchanged** (two unused-simp-arg lint
+fixes only), wiring translated to one `cleanupPasses` entry after `hintCollapse`. Premise
+re-verified fresh: #110's census still lists `diff_inv_marker` +61 over 16 cases, and the per-case
+win reproduced identically on the #110 and #113 bases.
 
 **Measured on current `main` (per-case JSON diff, not aggregates):**
 - openvm-eth: **16 cases improved, every one exactly −3 vars, 0 regressions on any axis, net −48
-  vars**; bus and constraints byte-neutral corpus-wide. Aggregate variables **4.509× → 4.517×**
-  (geo 3.820× → 3.835×); per-case vs powdr **25 W / 42 L / 33 T → 27 W / 29 L / 44 T** (13 losses
+  vars**; bus and constraints byte-neutral corpus-wide. Aggregate variables **4.511× → 4.518×**
+  (geo 3.822× → 3.837×); per-case vs powdr **25 W / 42 L / 33 T → 27 W / 29 L / 44 T** (13 losses
   flipped). `apc_072` 32 → 29 = exact powdr parity on all three axes.
-- keccak: **2028 → 2025 vars** (keccak contains a single is-equal gadget), bus /
-  constraints unchanged — gap to powdr now **+4**.
+- keccak: **2028 → 2025 vars** (keccak contains a single is-equal gadget), bus (2348) /
+  constraints (120) unchanged — gap to powdr now **+4**.
 - Runtime (solo A/B sweeps): total **+1.4%**, median case +0.3%; named outliers apc_044 +25%
   (24.6→30.8 s), apc_019 +19%, apc_080 +54% (1.1→1.7 s). Acceptable for a per-cycle pass; if a
   future profile flags it, gate the collector on the presence of multi-marker hint constraints.
@@ -2717,7 +2717,7 @@ cases.
 Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only), zero lint
 warnings. **Worked: yes.**
 
-**Remaining from the same family (ideas.md #4):** the signed-compare / sltu slice
+**Remaining from the same family (ideas.md #3):** the signed-compare / sltu slice
 (`diff_marker` +24, `c_msb_f` +27, `b_msb_f` +19) — needs the sign-split byte-bounded-difference
 coefficients, a different matcher; the is-equal slice this entry lands covered the
 `diff_inv_marker` +61 chunk minus what hintCollapse already caught.

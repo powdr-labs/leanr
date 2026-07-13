@@ -5,18 +5,18 @@ constraints**, used as the tiebreak; the cheap high-confidence bus win #2 is ran
 is nearly free and closes part of the *only* axis on which apc-optimizer trails powdr in aggregate,
 plus keccak's dominant gap.
 
-## Where we stand (measured on `c007db0`; keccak/eth refreshed for merged C4b #109 and the bitwise byte-check cleanup, entry 75)
+## Where we stand (measured on `c007db0`; keccak/eth refreshed for merged C4b #109, the bitwise byte-check cleanup (entry 75), and the is-equal collapse (entry 76))
 
 | benchmark | apc-optimizer | powdr | apc gap |
 |---|---|---|---|
-| **keccak** (`apc_001_pckeccak`) | 2028 v / 120 c / 2348 bus | 2021 / 186 / 1734 | vars **+7 (near parity)**, **bus +614** (wins constraints) |
-| **openvm-eth** (100-case agg / geo) | vars 4.511× / 3.822× · bus 3.439× / 2.723× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo only +0.035); **trails bus by 0.040** |
+| **keccak** (`apc_001_pckeccak`) | 2025 v / 120 c / 2348 bus | 2021 / 186 / 1734 | vars **+4 (near parity)**, **bus +614** (wins constraints) |
+| **openvm-eth** (100-case agg / geo) | vars 4.518× / 3.837× · bus 3.439× / 2.723× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo +0.050); **trails bus by 0.040** |
 | **apc_010** (`pc0x200c18`) | 466 v / 251 c / 271 bus | 498 / 331 / 239 | wins vars+constraints, **bus +32** |
 
 C4b (#109, entry 74) closed the keccak *variable* gap to near-parity; the bitwise byte-check cleanup
-(entry 75) cut the bitwise-bus gap. **keccak's dominant remaining loss is bus (+614)**; on openvm-eth
-the story is unchanged except bus improved (per-case by variables **25 W / 42 L / 33 T**; variable
-losses total ~+243 over 42 cases, bus gap net now ≈ +300). Both gaps decompose into a *small* number of
+(entry 75) cut the bitwise-bus gap; the is-equal collapse (entry 76) flipped 13 variable losses
+(per-case by variables now **27 W / 29 L / 44 T**; residual variable losses concentrated in the
+signed-compare and constant-limb families, bus gap net ≈ +300). Both gaps decompose into a *small* number of
 structural families, each addressed by one idea below.
 
 - **keccak bus +614** = memory interior pairs +276 · bitwise (bus 6) ≈ +257 (post entry-75 pack) ·
@@ -127,7 +127,7 @@ Strictly variable-neutral.
 
 ## 3. Collapse comparison gadget witnesses — signed-compare slice (is-equal slice LANDED)  ·  *variables*  ·  medium confidence · high effort
 
-**Landed (entry 75, 2026-07-13): the is-equal / is-zero slice.** `EqCollapse.lean` (rebased from
+**Landed (entry 76, 2026-07-13): the is-equal / is-zero slice.** `EqCollapse.lean` (rebased from
 the `c6-tuple-range-pack` prototype) collapses the per-limb inverse-marker gadget
 `−cmp + Σ (aᵢ−bᵢ)·diff_inv_markerᵢ = 0` to powdr's single **sum-of-squares** witness
 `inv · Σ (aᵢ−bᵢ)² = cmp` (one derived `QuotientOrZero` column; sound because each `(aᵢ−bᵢ)²`
