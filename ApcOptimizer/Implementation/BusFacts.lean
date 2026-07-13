@@ -233,6 +233,24 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       (∀ (x z : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, 0, z, 1] }
           = false → z = x)
+  /-- Bitwise XOR-with-255 (byte complement): the sibling of `xorZeroEq`. On the same bitwise bus
+      where an accepted multiplicity-1 `[a, b, c, 1]` asserts `c = a ⊕ b` with byte operands, an
+      operand pinned to the all-ones byte `255` linearizes the XOR to the byte **complement** —
+      `[x, 255, z, 1]` accepted ⟹ `z = 255 − x`, and `[255, y, z, 1]` accepted ⟹ `z = 255 − y`
+      (`n ⊕ 255 = 255 − n` for a byte `n`). Together with `xorZeroEq` (operand 0 ⟹ identity) these
+      are exactly the two constant operands for which the XOR is *affine* in the other operand, so
+      Gauss can eliminate the pinned NOT-result — apc otherwise keeps these complement equalities
+      only on the bus. Sound only when `255` is a genuine byte of the field (`256 ≤ p`); a small
+      field, and `trivial`, set it `false`. -/
+  xorComplEq : (busId : Nat) → Bool
+  xorComplEq_sound :
+    ∀ (busId : Nat), xorComplEq busId = true →
+      (∀ (x z : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, 255, z, 1] }
+          = false → z = 255 - x) ∧
+      (∀ (y z : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [255, y, z, 1] }
+          = false → z = 255 - y)
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
@@ -265,3 +283,5 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   zeroRangeEq_sound := by intro _ h; exact absurd h (by simp)
   xorZeroEq _ := false
   xorZeroEq_sound := by intro _ h; exact absurd h (by simp)
+  xorComplEq _ := false
+  xorComplEq_sound := by intro _ h; exact absurd h (by simp)
