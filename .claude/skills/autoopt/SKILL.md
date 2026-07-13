@@ -1,7 +1,6 @@
 ---
 name: autoopt
-description: Improve apc-optimizer, the verified circuit optimizer — add an optimization pass, measure
-  effectiveness on the benchmark set, keep the correctness proof intact, and log the result.
+description: Improve apc-optimizer, the verified circuit optimizer.
   Use when asked to make the optimizer more effective or to run an autoopt iteration.
 ---
 
@@ -19,6 +18,7 @@ and recent commits to see what has already been tried. Run a case with, e.g.:
 
 ```
 lake exe apc-optimizer run OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz
+lake exe apc-optimizer run OpenVmBenchmarks/keccak/apc_001_pckeccak.json.gz
 ```
 
 It reports before/after counts and three effectiveness factors — **variables**, **bus
@@ -31,8 +31,7 @@ removes more bus interactions, and then the one that removes more constraints. A
 bus interactions or constraints without regressing variables is still an improvement worth
 landing. Report all three factors in the log.
 
-Optimization is slow; sampling a few of the 100 cases per iteration is fine. You can use the `*.powdr_opt.*` files for inspiration of new ideas that are possible. For the full picture, `OpenVmBenchmarks/benchmark.py` runs `apc-optimizer
-compare` over all 100 cases in parallel (or `--n N` for the top N by cost; `--report out.html` for a
+Optimization is slow; sampling a few cases per iteration might be fine. You can use the `*.powdr_opt.*` files for inspiration of new ideas that are possible. For the full picture, `OpenVmBenchmarks/benchmark.py` runs `apc-optimizer compare` over all 100 cases in parallel (or `--n N` for the top N by cost; `--report out.html` for a
 click-through comparison of the original / powdr / apc-optimizer circuits) and reports aggregate/geomean
 effectiveness against powdr — this is the final evaluation. It runs the main `openvm-eth` benchmark
 by default; a positional argument selects another set under `OpenVmBenchmarks/`. Report the result
@@ -76,3 +75,12 @@ For one autoopt iteration go through the following steps (using different subage
   - Out of all the ideas, pick the most promising one and proceed.
 - **Implementation**: Implement the idea and measure the increase in effectiveness.
 - **Evaluation**: If you succeed (= your optimization improves the benchmark + you can prove correctness), commit your changes and append to the log. If you fail, discard your changes and append to the log. Make sure the ideas does not contain ideas that have been implemented or are known to be impossible.
+
+## Idea guidelines
+
+When generating ideas, consider the following:
+- Think big: look for big improvements, don't get lost in ideas that improve a few test cases by a small amount.
+- Beat powdr: There is no reason we should be less effective than powdr. Check out what powdr does and make sure we can do at least as well.
+- Think from first principles: At the same time, don't just copy powdr. Think about what the spec allows and what is possible in general. We want the most optimal circuit optimizer possible.
+- "Manually" optimize single test cases, detect patterns: Think hard about what kind of optimizations the Spec allows for on specific test cases and try to generalize what you found by optimizing manually.
+- Prefer fewer, more general passes: Only add passes if you're adding a genuinely new optimization. If you can generalize or even combine existing passes, do that instead. That should help with maintainability and generalization.
