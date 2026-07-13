@@ -84,11 +84,16 @@ proven `BusFacts` instance. Both are parameterized by the bus map, defaulting to
 
 ## The pipeline (`ApcOptimizer/Implementation/Optimizer.lean`, theorems in `ApcOptimizer/Optimizer.lean`)
 
-`cleanupCycle` chains the passes — Gauss elimination, normalize, constant-fold, finite-domain
-propagation (boolean/one-hot case analysis and bus-fact domains; prime `p` only), trivial /
-zero-multiplicity / tautology drops, `busUnifyPass`, and re-encoding — each `guardDegree`-wrapped.
-`pipeline` folds once, runs `cleanupCycle` to a fixpoint (`iterateToFixpoint`), then monic-scales
-and folds. The loop takes **no** iteration bound: it recurses while each cycle strictly lowers the
+The pass sequence lives in three labelled lists — the **single source of truth**: `preludePasses`
+(a constant-fold) run once, `cleanupPasses` iterated to a fixpoint, and `codaPasses`
+(redundant-byte-drop, monic-scale, constant-fold) run once. `cleanupPasses` chains the passes —
+Gauss elimination, normalize, constant-fold, finite-domain propagation (boolean/one-hot case
+analysis and bus-fact domains; prime `p` only), trivial / zero-multiplicity / tautology drops,
+`busUnifyPass`, and re-encoding — each `guardDegree`-wrapped. `pipeline` folds `preludePasses`, runs
+the folded `cleanupPasses` cycle to a fixpoint (`iterateToFixpoint`), then folds `codaPasses`. The
+`profile` CLI command (`Main.lean`) times those same three lists (stepping the passes in `IO`, which
+the pure `pipeline` can't do), so the profiler cannot drift out of sync with the optimizer as passes
+are added, removed, or reordered. The loop takes **no** iteration bound: it recurses while each cycle strictly lowers the
 lexicographic size key `sizeKey = (distinct vars, bus interactions, constraints)` (variables most
 significant, matching the effectiveness priority) and stops otherwise. That key is well-founded
 (`sizeKey_wf`, the inverse image of `<` on `Nat ×ₗ Nat ×ₗ Nat`), so the loop is proven to terminate
@@ -107,6 +112,7 @@ and the OpenVM `openVmOptimizer` (with
 ## Adding a pass
 
 Write a `VerifiedPass` (or `VerifiedPassW`) in a new `ApcOptimizer/Implementation/OptimizerPasses/` file,
-import it in `ApcOptimizer/Implementation/Optimizer.lean`, and `.andThen … |>.guardDegree` it into
-`cleanupCycle`. Correctness follows from the pass's own `PassCorrect`; do not touch `Spec.lean`,
+import it in `ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass.….guardDegree)`
+entry to the `cleanupPasses` list. Correctness follows from the pass's own `PassCorrect`, and the
+profiler picks up the new pass for free since it consumes the same list; do not touch `Spec.lean`,
 the audited `ApcOptimizer/Optimizer.lean`, or the `Basic.lean` glue. Build with `lake build`.
