@@ -378,7 +378,7 @@ theorem domainByteJustified_sound [Fact p.Prime] (domCs : List (Expression p)) (
             intro y t hy
             by_cases hk : y = x
             · subst y
-              simp only [if_pos rfl] at hy
+              simp only [] at hy
               injection hy with hy'
               subst hy'
               rfl

@@ -40,7 +40,7 @@ theorem dedupStateless_subset (bs : BusSemantics p) :
       ∀ bi ∈ dedupStateless bs seen l, bi ∈ l := by
   intro seen l
   induction l generalizing seen with
-  | nil => intro bi h; simpa [dedupStateless] using h
+  | nil => intro bi h; simp [dedupStateless] at h
   | cons b rest ih =>
     intro bi h
     rw [dedupStateless] at h
