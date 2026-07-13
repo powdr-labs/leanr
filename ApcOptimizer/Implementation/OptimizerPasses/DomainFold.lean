@@ -388,28 +388,100 @@ def systemHasFoldable (cs : ConstraintSystem p) (xs : List Variable)
     cs.busInteractions.any (fun bi =>
       bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
 
+/-! ### Indexing the per-target covered-constraint scan
+
+`foldStep` gates every target on `groupDoms (coveredCsOf cs xs) xs`, whose `coveredCsOf` is a full
+`cs.algebraicConstraints.filter (coveredBy xs)` scan run **once per target** — an
+O(#targets × #system) cost that dominates this pass on large circuits (the keccak stress case).
+`domainBatch`/`reencode` (log 72) cut the same term with a variable→positions inverted index, but
+consumed only the soundness-only `coveredIdx_mem`. Here the covered set is threaded into
+`foldOut_correct`, whose statement pins it to `coveredCsOf cs xs` **exactly**, so we need the
+genuine equality `coveredIdx … = coveredCsOf cs xs` (`CoveredIndex.coveredIdx_eq_filter`, valid
+because a `coveredBy`-item always shares a variable with `xs`). The index is built once per pass
+and rebuilt only on an accepted fold (`cs` changes), carrying the proofs tying it to the current
+`cs` via `FoldIdx`. Effectiveness is bit-identical (the covered set is unchanged); only the scan is
+faster. -/
+
+/-- The prebuilt covered-constraint index for the current `cs`, with the proofs tying it to `cs` so
+    the covered set it yields is provably `coveredCsOf cs xs` (`coveredCsIdx_eq`). -/
+structure FoldIdx (cs : ConstraintSystem p) where
+  idx : CoveredIndex.CovIndex
+  hidx : idx = CoveredIndex.build Expression.vars cs.algebraicConstraints
+  arr : Array (Expression p)
+  harr : arr = cs.algebraicConstraints.toArray
+
+/-- Build the index for a system (by construction the equalities hold `rfl`). -/
+def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
+  idx := CoveredIndex.build Expression.vars cs.algebraicConstraints
+  hidx := rfl
+  arr := cs.algebraicConstraints.toArray
+  harr := rfl
+
+/-- An expression with any variable has a nonempty variable list. -/
+theorem hasVar_vars_ne_nil (c : Expression p) (h : c.hasVar = true) : c.vars ≠ [] := by
+  induction c with
+  | const n => simp [Expression.hasVar] at h
+  | var y => simp [Expression.vars]
+  | add a b iha ihb =>
+    intro hnil
+    rw [Expression.vars, List.append_eq_nil_iff] at hnil
+    simp only [Expression.hasVar, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact iha h hnil.1
+    · exact ihb h hnil.2
+  | mul a b iha ihb =>
+    intro hnil
+    rw [Expression.vars, List.append_eq_nil_iff] at hnil
+    simp only [Expression.hasVar, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact iha h hnil.1
+    · exact ihb h hnil.2
+
+/-- A `coveredBy`-item shares a variable with the target `xs` (`hasVar` gives one variable;
+    `varsInF` puts every one in `xs`) — the completeness hypothesis `coveredIdx_eq_filter` needs. -/
+theorem coveredBy_shares_var (xs : List Variable) (c : Expression p) (h : coveredBy xs c = true) :
+    ∃ v ∈ c.vars, v ∈ xs := by
+  rw [coveredBy, Bool.and_eq_true] at h
+  obtain ⟨hhv, hvin⟩ := h
+  obtain ⟨v, hmem⟩ := List.exists_mem_of_ne_nil c.vars (hasVar_vars_ne_nil c hhv)
+  exact ⟨v, hmem, Expression.varsIn_sound xs c (Expression.varsInF_eq xs c ▸ hvin) v hmem⟩
+
+/-- The index yields exactly `coveredCsOf cs xs` for every target — an equality (not just
+    soundness), so the domains it feeds and the `foldOut_correct` proof transport unchanged. -/
+theorem coveredCsIdx_eq (cs : ConstraintSystem p) (xs : List Variable) (fidx : FoldIdx cs) :
+    CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs = coveredCsOf cs xs := by
+  rw [fidx.hidx, fidx.harr, coveredCsOf]
+  exact CoveredIndex.coveredIdx_eq_filter Expression.vars cs.algebraicConstraints (coveredBy xs) xs
+    (fun i _hi hQ => coveredBy_shares_var xs cs.algebraicConstraints[i] hQ)
+
 /-- One checked fold for a candidate group (identity unless the group has a bounded domain, at least
-    one survivor, and some foldable subexpression). Prime `p`; the caller supplies `Fact p.Prime`. -/
-def foldStep [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (xs : List Variable) :
-    PassResult cs bs :=
-  match hdoms : groupDoms (coveredCsOf cs xs) xs with
-  | none => ⟨cs, [], PassCorrect.refl cs bs⟩
+    one survivor, and some foldable subexpression). The per-target covered scan is served from the
+    prebuilt index (`coveredCsIdx_eq`), rebuilt only when a fold rewrites `cs`. Prime `p`; the
+    caller supplies `Fact p.Prime`. -/
+def foldStep [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (fidx : FoldIdx cs)
+    (xs : List Variable) : Σ' (r : PassResult cs bs), FoldIdx r.out :=
+  let es := CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs
+  have hes : es = coveredCsOf cs xs := coveredCsIdx_eq cs xs fidx
+  match hdoms : groupDoms es xs with
+  | none => ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
   | some doms =>
     if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
       let survs := groupSurvivors cs xs doms
       if 1 ≤ survs.length && systemHasFoldable cs xs survs then
-        ⟨foldOut cs xs survs, [], foldOut_correct cs bs xs doms hdoms⟩
-      else ⟨cs, [], PassCorrect.refl cs bs⟩
-    else ⟨cs, [], PassCorrect.refl cs bs⟩
+        ⟨⟨foldOut cs xs survs, [], foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩,
+         FoldIdx.mk' (foldOut cs xs survs)⟩
+      else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
+    else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
 
-/-- Process the candidate groups sequentially (correctness composes; no derivations). -/
+/-- Process the candidate groups sequentially (correctness composes; no derivations). The index is
+    threaded and rebuilt by `foldStep` on each accepted fold. -/
 def foldLoop [Fact p.Prime] (bs : BusSemantics p) :
-    List (List Variable) → (cs : ConstraintSystem p) → PassResult cs bs
-  | [], cs => ⟨cs, [], PassCorrect.refl cs bs⟩
-  | xs :: rest, cs =>
-    let r1 := foldStep bs cs xs
-    let r2 := foldLoop bs rest r1.out
-    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
+    List (List Variable) → (cs : ConstraintSystem p) → FoldIdx cs → PassResult cs bs
+  | [], cs, _ => ⟨cs, [], PassCorrect.refl cs bs⟩
+  | xs :: rest, cs, fidx =>
+    let r1 := foldStep bs cs fidx xs
+    let r2 := foldLoop bs rest r1.1.out r1.2
+    ⟨r2.out, r1.1.derivs ++ r2.derivs, r1.1.correct.andThen r2.correct⟩
 
 /-- The domain-constant folding pass: for every constraint's (small) variable group, fold each
     subexpression that is constant on the group's surviving joint values to that constant — keeping
@@ -423,5 +495,5 @@ def domainFoldPass : VerifiedPass p := fun cs bsem =>
       let vs := c.vars.dedup
       if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
-    foldLoop bsem targets cs
+    foldLoop bsem targets cs (FoldIdx.mk' cs)
   else ⟨cs, [], PassCorrect.refl cs bsem⟩

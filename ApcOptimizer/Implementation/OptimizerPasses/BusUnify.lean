@@ -256,12 +256,15 @@ def busUnifyPass : VerifiedPassW p := fun cs bs facts =>
       ((cs.busInteractions.map (fun bi => bi.busId)).dedup)
     -- keep only equalities over existing columns, so the pass introduces no new variable
     -- (the real slot equalities are built from `cs`'s payloads, so none are dropped).
-    -- `csVars` is bound once here rather than recomputed for every variable of every candidate
-    -- (`cs.vars` rebuilds the whole occurrence list); the `let` zeta-reduces in the proof below.
-    let csVars := cs.vars
+    -- The membership test `z ∈ cs.vars` is the load-bearing "no new variable" check, run for
+    -- every variable of every candidate equality. `cs.vars` is the whole occurrence list (~10⁴
+    -- entries on large blocks), so the per-`z` **linear** list scan dominated this filter. Build a
+    -- `Std.HashSet` of it once and test membership in O(1); `Std.HashSet.contains_ofList` transports
+    -- the check back to genuine list membership `z ∈ cs.vars` (all the correctness proof needs).
+    let csVarSet := Std.HashSet.ofList cs.vars
     let new := eqs.filter
       (fun c => !c.normalize.fold.isConstZero && !cs.algebraicConstraints.contains c
-        && c.vars.all (fun z => decide (z ∈ csVars)))
+        && c.vars.all (fun z => csVarSet.contains z))
     if new.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else
       ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new }, [],
@@ -270,5 +273,7 @@ def busUnifyPass : VerifiedPassW p := fun cs bs facts =>
          (fun c hc z hz => by
            have hp := (List.mem_filter.1 hc).2
            simp only [Bool.and_eq_true, List.all_eq_true] at hp
-           exact of_decide_eq_true (hp.2 z hz))⟩
+           have hz' : csVarSet.contains z = true := hp.2 z hz
+           rw [Std.HashSet.contains_ofList] at hz'
+           exact List.contains_iff_mem.mp hz')⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩

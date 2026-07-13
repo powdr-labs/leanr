@@ -2319,3 +2319,47 @@ reliable signal; a solo `run` A/B measured 529 → 378 s.
 `coveredCsOf`), so indexing it needs a `coveredIdx = items.filter Q` equality lemma; the residual
 per-pass time is the finite-domain enumeration itself (box scanning); the next tier is `flagFold`
 and `busUnify` (per-target `cs.vars` / `List.contains` membership).
+
+### 73. Runtime: index the domain-fold covered-set scan; hash the busUnify variable-membership check
+
+**Context / profiling.** Building on the entry-72 inverted index (#104), the post-#104 keccak
+profile (`apc-optimizer profile`, 7 cleanup iterations, ~383 s total) leaves these finite-domain / bus
+hot spots: `domainBatch` 75.2 s, `domainFold` 54.6 s, `flagFold` 50.9 s, `reencode` 45.3 s,
+`busPairCancel` 45.2 s, `busUnify` 40.8 s. This entry attacks two of them, with **no effectiveness
+change**.
+
+**(a) `domainFold` covered-set index (`CoveredIndex.coveredIdx_eq_filter`).** `foldStep` gated every
+target on `groupDoms (coveredCsOf cs xs) xs`, whose `coveredCsOf` is a full
+`cs.algebraicConstraints.filter (coveredBy xs)` scan **per target** — the same O(#targets × #system)
+term #104 removed from `domainBatch` / `reencode`. Those passes consumed only the soundness-only
+`coveredIdx_mem`, but `domainFold` threads the covered set into `foldOut_correct`, whose statement
+pins it to `coveredCsOf cs xs` **exactly**, so soundness is not enough. New
+`CoveredIndex.coveredIdx_eq_filter`: `coveredIdx (build varsOf items) items.toArray Q xs =
+items.filter Q` whenever every `Q`-item shares a variable with `xs` (index *completeness* — the
+`build` buckets, `HashSet` dedup and `mergeSort` all collapse back to the plain filter). The
+hypothesis holds for `coveredBy` (`hasVar` yields a variable, `varsInF` puts every one in `xs`).
+Wired into `foldStep` via a `FoldIdx` structure carrying the index plus the `= build …` /
+`= …toArray` proofs, built once per pass and rebuilt only on an accepted fold; the step re-derives
+`foldOut_correct`'s `hdoms` by rewriting the equality.
+
+**(b) `busUnify` membership (`Std.HashSet`).** The pass's load-bearing "introduces no new variable"
+filter tests `z ∈ cs.vars` for every variable of every collected slot-equality; `cs.vars` is the
+whole ~27.5k-entry occurrence list, so each `z` paid a **linear** list scan. Replace it with a
+`Std.HashSet.ofList cs.vars` membership test (O(1)); `Std.HashSet.contains_ofList` transports the
+result back to genuine `z ∈ cs.vars` (all the correctness proof consumes). Output is bit-identical
+(the kept set `new` is unchanged).
+
+**Impact.** No audited surface touched; the three `*_maintainsCorrectness` theorems stay
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes. **Effectiveness
+unchanged** — keccak output bit-identical (3056 vars / 120 constraints / 2690 bus interactions), and
+the full openvm-eth sweep matches the entry-72 baseline exactly (variables 4.491× / 3.810× agg/geo,
+bus 3.398× / 2.705×, constraints 10.595× / 11.585×; per-case 25 W / 43 L / 32 T). **Runtime (keccak
+profile, per-pass):** `busUnify` 40.8 → 11.3 s (**−72 %**, −29.6 s) — the variable-membership scan was
+the dominant term; `domainFold` 54.6 → ~46–48 s (−~13 %). Every other pass is flat within the ~3 %
+cross-pass measurement noise; profiled total 383 → 356 s. As in #104 the `run` wall-clock is noisy on
+this machine, so the per-pass profile deltas are the reliable signal.
+
+**Remaining (see `docs/ideas.md`).** `busUnify`'s other per-equality scan,
+`cs.algebraicConstraints.contains c`, needs a `Hashable (Expression p)` instance to index; the next
+runtime tiers are `flagFold` (~51 s) and the finite-domain box enumeration inside
+`domainBatch` / `domainFold`.
