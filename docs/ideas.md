@@ -125,37 +125,37 @@ Strictly variable-neutral.
 
 ---
 
-## 3. Collapse comparison / is-equal / is-zero gadget witnesses  ·  *variables*  ·  medium confidence · high effort
+## 3. Collapse comparison gadget witnesses — signed-compare slice (is-equal slice LANDED)  ·  *variables*  ·  medium confidence · high effort
 
-**Gap:** the comparison gadgets are the broadest variable family — extra markers/flags in **43 of 100
-cases**: `diff_inv_marker` +61 (16 cases), `diff_marker` +24, `c_msb_f` +27, `b_msb_f` +19. This is
-the long `+3` per-case loss tail plus `apc_018` (+9) and `apc_037`'s marker block (+16). powdr keeps a
-single inverse-hint / comparison-result witness where apc keeps one per limb.
+**Landed (entry 75, 2026-07-13): the is-equal / is-zero slice.** `EqCollapse.lean` (rebased from
+the `c6-tuple-range-pack` prototype) collapses the per-limb inverse-marker gadget
+`−cmp + Σ (aᵢ−bᵢ)·diff_inv_markerᵢ = 0` to powdr's single **sum-of-squares** witness
+`inv · Σ (aᵢ−bᵢ)² = cmp` (one derived `QuotientOrZero` column; sound because each `(aᵢ−bᵢ)²`
+< 256² so the sum can't wrap — `sumSq_zero_all_eq`; the *byte-weighted* form sketched here
+previously was superseded by sum-of-squares, which needs no positional weighting). Measured:
+**16 cases × −3 vars = −48, 0 regressions, bus/constraints byte-neutral; keccak 2028 → 2025;
+vars agg 4.509× → 4.517×, W/L/T 25/42/33 → 27/29/44**. Runtime +1.4% total (outliers: apc_044
++25%, apc_019 +19% — gate the collector on multi-marker constraints if this ever matters).
 
-**Mechanism** — generalize `hintCollapse`'s matcher (which today needs single-variable byte-bounded
-coefficients) to the is-equal and signed-compare shapes:
+**Remaining gap (this idea):** the signed-compare / sltu families — `diff_marker` +24, `c_msb_f`
++27, `b_msb_f` +19 (plus `apc_018` +9 and `apc_037`'s marker block) — where powdr keeps a single
+comparison-result witness and apc keeps per-limb markers + msb flags.
+
+**Mechanism** — generalize the matcher to the signed-compare shape:
 
 ```
--- is-equal / is-zero (k inverse markers -> 1):
-gadget:  −cmp + Σ (aᵢ−bᵢ)·inv_markerᵢ = 0,   aᵢ,bᵢ byte-bounded
-replace by:   cmp·S = 0     and     inv·S + cmp − 1 = 0
-   where  S = Σ 256ⁱ·(aᵢ − bᵢ)      -- byte-weighted difference, no-wrap since k·255·256^{k-1} < p
-   cmp := ComputationMethod.QuotientOrZero/IfEqZero   (derived; avoids under-constraint)
-   drop every inv_markerᵢ         (−(k−1) vars per gadget)
-
 -- signed / sltu:  fold {a_msb_f, b_msb_f} + per-limb diff_marker into the single result
 --   via sign-split byte-bounded coefficients (CarryBranch.splitSumMax style; accept coefficients
 --   that are DIFFERENCES of byte-bounded variables — the generalization hintCollapse currently lacks).
 ```
 
-**Why sound.** `S = 0 ⟺ all limbs equal`, given byte bounds so the weighted sum cannot wrap
-(`boundedSumMax`-style no-wrap, already in `MemoryUnify`). The is-zero witness pair is standard;
-`cmp` must be a derived column (`QuotientOrZero`, already in `ComputationMethod`) to stay constrained.
-Proof risk: robustly matching the marker gadget and proving the consumer needs only equality (not
-signed `<`) is delicate — flagged medium.
+**Why sound.** Sign-split no-wrap over byte-bounded differences (`boundedSumMax`-style, already in
+`MemoryUnify`); the result witness must be a derived column to stay constrained. Proof risk:
+robustly matching the marker gadget and proving the consumer needs only the comparison result is
+delicate — flagged medium.
 
-**Expected impact.** ~60–90 recoverable variables across the 43 affected cases (the whole `+3` tail
-plus `apc_018`/`apc_037`). Top-priority axis, broadest reach.
+**Expected impact.** ~30–60 further variables across the signed-compare cases. Top-priority axis;
+higher proof cost than #1.
 
 ---
 

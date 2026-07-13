@@ -2636,3 +2636,41 @@ is the identity.
 `lake build` green; `check-proof-integrity.sh` passes (no `sorry`/`admit`/`axiom`/`native_decide`);
 the three `*_maintainsCorrectness` theorems still `{propext, Classical.choice, Quot.sound}`-only;
 keccak output within the degree bound.
+
+### 75. Is-equal gadget collapse via sum-of-squares (C5-eq) — rebased onto #110 and landed
+
+**Idea (roadmap §3.1 / the is-equal slice of ideas.md #4).** The is-equal/is-zero gadget keeps one
+inverse-marker witness per limb (`−cmp + Σ (aᵢ − bᵢ)·diff_inv_markerᵢ = 0`, four markers per
+comparison); powdr keeps a **single** witness. The linear collapse (`hintCollapse`) is unsound here
+because signed differences can cancel; the sound form is powdr's **sum-of-squares**:
+`inv · Σ (aᵢ − bᵢ)² = cmp` with one derived `inv = QuotientOrZero(...)` column — zero iff all limbs
+match, because each `(aᵢ − bᵢ)²` has value < 256² (byte-bounded limbs) so the sum cannot wrap `p`
+(`sumSq_zero_all_eq`; needs `65536 ≤ p` and `#limbs · 65536 < p`, both checked). Drops n−1 markers
+per gadget. Reencode-class completeness handled by the derived-column bookkeeping; no new
+`BusFacts`.
+
+**Provenance.** Built and measured on branch `c6-tuple-range-pack` (commit 05fd3a0, on the #97
+base): −48 vars / 16 cases / 0 regressions. This entry is the rebase onto current `main`
+(post-#98/#104/#105/#106/#109/#110): the 640-line `EqCollapse.lean` ported **unchanged** (two
+unused-simp-arg lint fixes only), wiring translated to one `cleanupPasses` entry after
+`hintCollapse`. Premise re-verified fresh: #110's census still lists `diff_inv_marker` +61 over 16
+cases.
+
+**Measured on current `main` (per-case JSON diff, not aggregates):**
+- openvm-eth: **16 cases improved, every one exactly −3 vars, 0 regressions on any axis, net −48
+  vars**; bus and constraints byte-neutral corpus-wide. Aggregate variables **4.509× → 4.517×**
+  (geo 3.820× → 3.835×); per-case vs powdr **25 W / 42 L / 33 T → 27 W / 29 L / 44 T** (13 losses
+  flipped). `apc_072` 32 → 29 = exact powdr parity on all three axes.
+- keccak: **2028 → 2025 vars** (the one is-equal gadget the entry-75 audit had flagged), bus /
+  constraints unchanged — gap to powdr now **+4**.
+- Runtime (solo A/B sweeps): total **+1.4%**, median case +0.3%; named outliers apc_044 +25%
+  (24.6→30.8 s), apc_019 +19%, apc_080 +54% (1.1→1.7 s). Acceptable for a per-cycle pass; if a
+  future profile flags it, gate the collector on the presence of multi-marker hint constraints.
+
+Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only), zero lint
+warnings. **Worked: yes.**
+
+**Remaining from the same family (ideas.md #4):** the signed-compare / sltu slice
+(`diff_marker` +24, `c_msb_f` +27, `b_msb_f` +19) — needs the sign-split byte-bounded-difference
+coefficients, a different matcher; the is-equal slice this entry lands covered the
+`diff_inv_marker` +61 chunk minus what hintCollapse already caught.
