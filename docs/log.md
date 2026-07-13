@@ -2684,7 +2684,7 @@ those target exactly the op-0/self-check shapes that *do* exist.
 
 **Impact: none (no code landed).**
 
-### 75. Is-equal gadget collapse via sum-of-squares (C5-eq) — rebased onto #110 and landed
+### 75. Is-equal gadget collapse via sum-of-squares — rebased onto #110 and landed
 
 **Idea (roadmap §3.1 / the is-equal slice of ideas.md #4).** The is-equal/is-zero gadget keeps one
 inverse-marker witness per limb (`−cmp + Σ (aᵢ − bᵢ)·diff_inv_markerᵢ = 0`, four markers per
