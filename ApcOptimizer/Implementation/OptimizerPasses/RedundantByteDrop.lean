@@ -42,9 +42,9 @@ variable {p : ℕ}
 /-! ## Recognizing pure byte-check interactions -/
 
 /-- The operands whose byte-ness *implies* this interaction's acceptance (for any multiplicity):
-    `some ops` for the self-check form `[x, x, 0, 1]` (`BusFacts.byteCheck`), the XOR-with-zero form
-    `[x, 0, x, 1]` (`BusFacts.xorZeroCheck`), and the packed-pair form `[x, y, 0, 0]`
-    (`BusFacts.bytePairBus` + `byteCheck`); `none` otherwise. -/
+    `some ops` for the self-check form `[x, x, 0, 1]` (`BusFacts.byteCheck`), the two XOR-with-zero
+    mirrors `[x, 0, x, 1]` and `[0, x, x, 1]` (`BusFacts.xorZeroCheck`), and the packed-pair form
+    `[x, y, 0, 0]` (`BusFacts.bytePairBus` + `byteCheck`); `none` otherwise. -/
 def byteCheckOperands? (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) : Option (List (Expression p)) :=
   match bi.payload with
@@ -55,6 +55,9 @@ def byteCheckOperands? (bs : BusSemantics p) (facts : BusFacts p bs)
     else if facts.xorZeroCheck bi.busId && e2.constValue? == some 0 && e1 == e3
         && e4.constValue? == some 1 then
       some [e1]
+    else if facts.xorZeroCheck bi.busId && e1.constValue? == some 0 && e2 == e3
+        && e4.constValue? == some 1 then
+      some [e2]
     else if facts.bytePairBus bi.busId && facts.byteCheck bi.busId
         && e3.constValue? == some 0 && e4.constValue? == some 0 then
       some [e1, e2]
@@ -67,16 +70,19 @@ theorem byteCheckOperands?_stateless (bs : BusSemantics p) (facts : BusFacts p b
     (h : byteCheckOperands? bs facts bi = some ops) : bs.isStateful bi.busId = false := by
   unfold byteCheckOperands? at h
   split at h
-  · split_ifs at h with h1 h2 h3
+  · split_ifs at h with h1 h2 h3 h4
     · exact (facts.byteCheck_sound bi.busId (by
         rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h1
         exact h1.1.1.1)).1
     · exact (facts.xorZeroCheck_sound bi.busId (by
         rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h2
         exact h2.1.1.1)).1
-    · exact (facts.bytePairBus_sound bi.busId (by
+    · exact (facts.xorZeroCheck_sound bi.busId (by
         rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h3
         exact h3.1.1.1)).1
+    · exact (facts.bytePairBus_sound bi.busId (by
+        rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h4
+        exact h4.1.1.1)).1
   · exact absurd h (by simp)
 
 /-- If every recognized operand evaluates to a byte, the evaluated message is accepted. -/
@@ -92,7 +98,7 @@ theorem byteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts p bs
   case h_1 e1 e2 e3 e4 hpay =>
     simp only at hpay
     subst hpay
-    split_ifs at h with h1 h2 h3
+    split_ifs at h with h1 h2 h3 h4
     · -- self-check form `[x, x, 0, 1]`
       rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h1
       obtain ⟨⟨⟨hfact, heq⟩, hz⟩, ho⟩ := h1
@@ -117,11 +123,24 @@ theorem byteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts p bs
         { busId := busId, multiplicity := mult.eval env,
           payload := [e1.eval env, e2.eval env, e1.eval env, e4.eval env] } = false
       rw [e2.constValue?_sound 0 hz' env, e4.constValue?_sound 1 ho' env]
-      exact ((facts.xorZeroCheck_sound busId hfact).2 (e1.eval env) (mult.eval env)).2
+      exact ((facts.xorZeroCheck_sound busId hfact).2.1 (e1.eval env) (mult.eval env)).2
         (hops e1 (by simp))
-    · -- packed-pair form `[x, y, 0, 0]`
+    · -- mirror XOR-with-zero form `[0, x, x, 1]`
       rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h3
-      obtain ⟨⟨⟨hpair, hfact⟩, hz⟩, ho⟩ := h3
+      obtain ⟨⟨⟨hfact, hz⟩, heq⟩, ho⟩ := h3
+      obtain rfl : [e2] = ops := by simpa using h
+      obtain rfl : e2 = e3 := eq_of_beq heq
+      have hz' : e1.constValue? = some 0 := by simpa using hz
+      have ho' : e4.constValue? = some 1 := by simpa using ho
+      show bs.violatesConstraint
+        { busId := busId, multiplicity := mult.eval env,
+          payload := [e1.eval env, e2.eval env, e2.eval env, e4.eval env] } = false
+      rw [e1.constValue?_sound 0 hz' env, e4.constValue?_sound 1 ho' env]
+      exact ((facts.xorZeroCheck_sound busId hfact).2.2 (e2.eval env) (mult.eval env)).2
+        (hops e2 (by simp))
+    · -- packed-pair form `[x, y, 0, 0]`
+      rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at h4
+      obtain ⟨⟨⟨hpair, hfact⟩, hz⟩, ho⟩ := h4
       obtain rfl : [e1, e2] = ops := by simpa using h
       have hz' : e3.constValue? = some 0 := by simpa using hz
       have ho' : e4.constValue? = some 0 := by simpa using ho

@@ -29,6 +29,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.BoxRewrite
 import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
+import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 
 set_option autoImplicit false
 
@@ -99,7 +100,7 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
     ("busUnify", busUnifyPass.guardDegree),
     ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint busPairCancelPass)),
     ("tupleRange", VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass)),
-    ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint bytePackPass)),
+    ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
     ("reencode", reencodePass.withFacts.guardDegree) ]
 

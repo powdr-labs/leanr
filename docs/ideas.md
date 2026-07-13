@@ -1,26 +1,28 @@
 # Ideas for future optimization passes
 
 Ranked by **expected benefit**. Effectiveness priority is **variables > bus interactions >
-constraints**, used as the tiebreak; the two cheap high-confidence bus wins (#2, #3) are ranked
-early because they are nearly free and close the *only* axis on which apc-optimizer trails powdr in
-aggregate, plus keccak's dominant gap.
+constraints**, used as the tiebreak; the cheap high-confidence bus win #2 is ranked early because it
+is nearly free and closes part of the *only* axis on which apc-optimizer trails powdr in aggregate,
+plus keccak's dominant gap.
 
-## Where we stand (measured on `c007db0`; keccak/eth figures refreshed for the merged C4b, #109)
+## Where we stand (measured on `c007db0`; keccak/eth refreshed for merged C4b #109 and the bitwise byte-check cleanup, entry 75)
 
 | benchmark | apc-optimizer | powdr | apc gap |
 |---|---|---|---|
-| **keccak** (`apc_001_pckeccak`) | 2028 v / 118 c / ~2405 bus | 2021 / 186 / 1734 | vars **+7 (near parity)**, **bus +671** (wins constraints) |
-| **openvm-eth** (100-case agg / geo) | vars 4.509× / 3.820× · bus 3.401× / 2.705× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo only +0.033); **trails bus** |
+| **keccak** (`apc_001_pckeccak`) | 2028 v / 120 c / 2348 bus | 2021 / 186 / 1734 | vars **+7 (near parity)**, **bus +614** (wins constraints) |
+| **openvm-eth** (100-case agg / geo) | vars 4.511× / 3.822× · bus 3.439× / 2.723× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo only +0.035); **trails bus by 0.040** |
 | **apc_010** (`pc0x200c18`) | 466 v / 251 c / 271 bus | 498 / 331 / 239 | wins vars+constraints, **bus +32** |
 
-C4b (#109, entry 74) closed the keccak *variable* gap to near-parity, so **keccak's dominant remaining
-loss is now bus (+671)**; on openvm-eth the story is unchanged (per-case by variables **25 W / 42 L /
-33 T**; variable losses total ~+243 over 42 cases, bus gap net +368). Both gaps decompose into a
-*small* number of structural families, each addressed by one idea below.
+C4b (#109, entry 74) closed the keccak *variable* gap to near-parity; the bitwise byte-check cleanup
+(entry 75) cut the bitwise-bus gap. **keccak's dominant remaining loss is bus (+614)**; on openvm-eth
+the story is unchanged except bus improved (per-case by variables **25 W / 42 L / 33 T**; variable
+losses total ~+243 over 42 cases, bus gap net now ≈ +300). Both gaps decompose into a *small* number of
+structural families, each addressed by one idea below.
 
-- **keccak bus +671** = memory interior pairs +276 · bitwise (bus 6) +327 · width-1 range (bus 3) +68.
-- **eth bus +368** = bitwise +440 (72 cases) · tupleRange +160 (22 cases) · memory +144 (15 cases) ·
-  varRange **−376** (apc already *wins* — do not touch).
+- **keccak bus +614** = memory interior pairs +276 · bitwise (bus 6) ≈ +257 (post entry-75 pack) ·
+  width-1 range (bus 3) +68.
+- **eth bus** = bitwise (reduced by entry 75, but genuine-XOR / non-packable checks remain) ·
+  tupleRange +160 (22 cases) · memory +144 (15 cases) · varRange **−376** (apc already *wins* — do not touch).
 - **eth vars ~+243** = `rd_data` write-result limbs ~93 (23 cases) · comparison gadget ~130 markers/flags
   (43 cases) · `bit_shift_carry` +67 (13 cases) · `apc_071` intermediate address bytes. (Per-case
   numbers below were measured on `c007db0`; C4b shifted only the `255`-XOR NOT cases on `apc_071`/`apc_037`,
@@ -123,53 +125,7 @@ Strictly variable-neutral.
 
 ---
 
-## 3. Bitwise-bus cleanup: extract result-zero equalities, then drop/pack redundant byte-checks  ·  *bus + variables*  ·  high confidence · low effort
-
-**Gap:** the bitwise bus is the **sole reason apc loses bus in aggregate** on openvm-eth (net +440
-over 72 cases) and a third of the keccak bus gap (+327). It is *not* one thing:
-- Single-operand byte checks `[0,x,x,1]`, `[x,0,x,1]`, `[x,x,0,1]` (measured 221 on eth) that powdr
-  eliminates entirely, and two-byte `[x,y,0,0]` checks (+190) it packs.
-- Result-zero XORs `[x,y,0,1]` (50 on keccak, all `aᵢ ^ aⱼ = 0` with two bare vars) that encode a
-  plain equality `x = y` powdr's Gauss removes.
-
-**Mechanism** — three additions across the existing `xorEqExtract` / `redundantByteDrop` / `bytePack`
-family (all `ConstraintSystem.addConstraints_correct` / stateless-drop shapes):
-
-```
--- (i) result-zero equality extraction (variable win, sibling of the landed C4a):
-recognize bitwise [x, y, 0, 1]  ⟹  add  x − y = 0   (fact: Nat.xor a b = 0 ↔ a = b; no byte bound)
-    keep the interaction so its byteness obligation survives; Gauss eliminates one of x,y.
-
--- (ii) one canonical byte-check recognizer shared by RedundantByteDrop and BytePack:
-byteCheckOperands? [e1,e2,e3,op] :=
-    ([x,x,0,1] | [x,0,x,1] | [0,x,x,1])  ⟹ [x]        -- add the missing [0,x,x,1] mirror arm
-  | [x,y,0,0]                            ⟹ [x,y]
--- (iii) drop a recognized byte-check whose operand(s) are byteJustified elsewhere;
---       pack the survivors two-per interaction.
-```
-
-**Why sound.** (i) is equivalence-grade (`x^y=0 ⟺ x=y` for all naturals); adding an entailed equality
-keeps the satisfying set and the interaction is retained so no byte obligation is lost. (ii)/(iii)
-reuse the proven `redundantByteDrop`/`bytePack` machinery (`byteJustified`/`deepBoundOk`, the
-`mergeStateless2_correct` swap) — a byte check whose operand's byteness is re-derivable is a redundant
-stateless lookup; dropping it changes no stateful side effect. The mirror arm needs the symmetric
-`xorZeroCheck` fact from `Nat.zero_xor` (the lemma `xorEqExtract` already uses). Variable-neutral for
-(ii)/(iii); (i) removes variables.
-
-**Expected impact.** eth bus: dropping the 221 single-operand checks takes aggregate 3.405× → ~3.45×;
-with the `[x,y,0,0]` packs (~190) → ~3.489×, **surpassing powdr's 3.480× and flipping the only losing
-axis to a win**. keccak: result-zero extraction removes ~50 variables (measured on `c007db0`:
-2028 → ~1978, which would put apc *below* powdr's 2021 on keccak variables); the collapsed interaction
-becomes a `[a,a,0,1]` self-check `bytePack` then absorbs. Do **not** target the keccak genuine-XOR gap
-directly — census shows it is a variable-representation artifact (XOR chaining), not redundant
-lookups, and it is **not removable at all** (see the dead-ends list: XOR is not a field polynomial, so
-an XOR-result limb can be neither substituted away nor expressed as a `ComputationMethod`, and powdr
-keeps the same limbs). *(The `[x,255,z,1]` complement is a different pattern, landed as C4b — entry
-74, #109.)*
-
----
-
-## 4. Collapse comparison / is-equal / is-zero gadget witnesses  ·  *variables*  ·  medium confidence · high effort
+## 3. Collapse comparison / is-equal / is-zero gadget witnesses  ·  *variables*  ·  medium confidence · high effort
 
 **Gap:** the comparison gadgets are the broadest variable family — extra markers/flags in **43 of 100
 cases**: `diff_inv_marker` +61 (16 cases), `diff_marker` +24, `c_msb_f` +27, `b_msb_f` +19. This is
@@ -199,7 +155,7 @@ Proof risk: robustly matching the marker gadget and proving the consumer needs o
 signed `<`) is delicate — flagged medium.
 
 **Expected impact.** ~60–90 recoverable variables across the 43 affected cases (the whole `+3` tail
-plus `apc_018`/`apc_037`). Top-priority axis, broadest reach; higher proof cost than #1.
+plus `apc_018`/`apc_037`). Top-priority axis, broadest reach.
 
 ---
 
@@ -217,14 +173,27 @@ plus `apc_018`/`apc_037`). Top-priority axis, broadest reach; higher proof cost 
 - **Affine/product no-wrap rule for `byteJustified`.** `e = c·y` (y boolean) or `e = c₀ + Σ cᵢ·yᵢ`
   with `c₀ + Σ|cᵢ|(Bᵢ−1) < 256`, via `MemoryUnify.boundedSum_val`. A *helper*, not a headline: census
   shows it is **not** the keccak memory blocker (idea #2a is), but it generalizes #2 to affine
-  memory receives and rotation-carry data slots.
+  memory receives and rotation-carry data slots. Would also let the entry-75 byte-check dropper drop
+  more mirror checks (currently many keccak `[0,x,x,1]` operands are only *packable*, not droppable,
+  because their byteness is not re-derivable from an affine memory receive).
 
 ## Rejected / measured dead-ends (do not re-propose without re-measuring)
 
+- **Result-zero XOR extraction (`[x,y,0,1] ⟹ x=y`):** **measured dead-end (entry 75).** The census
+  behind the old idea #3(i) was stale: the *optimized* keccak circuit contains **zero** `[x,y,0,1]`
+  interactions — every op-1 bitwise message carries a genuine XOR-result variable (XOR chaining), the
+  representation artifact recorded in the functional-dependence dead-end below, not a result-zero
+  equality. A proven `xorResultZeroEq` prototype left both benchmarks byte-identical and was dropped.
+- **Bitwise byte-check cleanup (mirror `[0,x,x,1]` drop + form-agnostic pack):** **landed** (entry 75).
+  The `[0,x,x,1]` XOR-with-zero mirror is now recognized by `RedundantByteDrop` (drop when justified)
+  and by the generalized `ByteCheckPack` packer (which packs single-value checks in *any* encoding —
+  `[x,x,0,1]`/`[x,0,x,1]`/`[0,x,x,1]` — via the existing `mergeStateless2_correct`, subsuming the old
+  `bytePackPass`). keccak bus 2418 → 2348; eth bus 3.401× → 3.439×; variable-/constraint-neutral. The
+  *non-packable* residue (genuine XORs, and pair-checks whose operands are not byte-justified) is not
+  removable — powdr keeps equivalent checks.
 - **Constant-operand XOR extraction (`⊕0` C4a, `⊕255` C4b):** **landed** (entries 70 / 74, #109);
   `{0, 255}` are the only operands making `x ⊕ c` affine, so the mechanism is **exhausted** — do not
-  re-propose a generic constant-operand XOR pass (result-zero `[x,y,0]⟹x=y` in #3 is a *different*
-  pattern and still open).
+  re-propose a generic constant-operand XOR pass.
 - **Timestamp re-encoding** (`lower_decomp__1` vs `prev_timestamp`): measured **wash** — equal free-var
   counts each side on every case.
 - **Carry-witness substitution** for genuine two-root carries: measured **wash** (log 67) — eliminating
@@ -236,7 +205,7 @@ plus `apc_018`/`apc_037`). Top-priority axis, broadest reach; higher proof cost 
   lookups; it is a variable-representation artifact (XOR chaining), and the artifact itself is not
   removable either (next bullet), so it is neither a bus pass nor a variable pass.
 - **Functional-dependence derived columns for read/write limbs (was idea #5):** **infeasible — measured
-  dead-end** (attempted 2026-07-13, entry below). The variable count (`ConstraintSystem.variables`,
+  dead-end** (attempted 2026-07-13, log entry above). The variable count (`ConstraintSystem.variables`,
   Size.lean) is purely syntactic: a name is counted iff it appears in some constraint/interaction, and
   `Derivations` are a *separate* list, so registering a `ComputationMethod` for a limb does **not**
   drop it — only substituting the name away (Gauss/Subst) or re-encoding a group into fewer fresh vars
