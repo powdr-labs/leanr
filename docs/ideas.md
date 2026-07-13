@@ -106,15 +106,16 @@ effectiveness without regressing variables — a clean win under the priority or
 (variables > bus interactions > constraints). Check the existing zero-multiplicity drop in
 `cleanupCycle` first; this may be an extension of it rather than a new pass.
 
-## Range-check packing via the tuple range checker (bus interactions)
+## Widening tuple packs: byte + byte → `TupleRangeChecker` (bus interactions)
 
-powdr merges a byte check and an N-bit range check into a single `TupleRangeChecker` interaction
-`[x, y]` (checking `x < s1 ∧ y < s2`); apc-optimizer keeps them as two separate `variableRangeChecker`
-lookups. This is the same shape as the byte-check packing already landed (entry 49): add a
-`BusFacts` fact that a tuple-range message `[x, y]` is accepted iff the two single range checks
-`[x, bits1]`, `[y, bits2]` are, then a pass that pairs a byte check with a matching-width range
-check into one tuple interaction. Sound (identical satisfying set), stateless, variable-neutral —
-a clean bus win. Modest per case (~2–8 interactions), but general.
+`tupleRangePass` (log entry 71) packs a byte check with an **exact**-width range check
+(`2^bits = s2`) into one tuple interaction — an equivalence, so it needs no justification. powdr
+additionally packs two byte checks into a tuple `[x, y]` whose second slot only enforces
+`y < s2` (2048/8192) — a *widening*: the packed form loses `y`'s byte bound, so it is sound only
+when `y < 256` is re-derivable from the remaining system (the `byteJustified`/`deepBoundOk`
+machinery busPairCancel already uses). This is where powdr's remaining ~4-per-case tuple edge on
+register-only blocks (apc_003: powdr 8 tuples vs our 4) comes from. Same for packing the second
+slot of an existing `[x, y, 0, 0]` bitwise pair check into a tuple.
 
 ## Extend byte-check packing to non-self and cross-form checks (bus interactions)
 

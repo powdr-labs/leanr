@@ -2241,3 +2241,43 @@ boundary-store-led chains.
 The remaining openvm-eth bus gap to powdr is now `−0.120×` agg (from `−0.156×` at clean main),
 narrowed by the two entries together. Residual: the AND-gadget byte source (`apc_037`) and
 range-check packing (see `docs/ideas.md`).
+
+### 71. Tuple-range packing (`TupleRange.lean`) — bus-interaction effectiveness
+
+powdr packs a byte check and an exact-width range check into a single `TupleRangeChecker (s1, s2)`
+interaction `[x, y]` (accepted iff `x < s1 ∧ y < s2`); apc-optimizer kept them as two stateless
+lookups. With `s1 = 256` and a range check `[y, bits]` of exactly `2^bits = s2`, the tuple check
+imposes the **identical** obligation as the two originals together — a pure two-for-one bus win
+(the byte + 13-bit `mem_ptr_limbs` pairing on memory blocks). `tupleRangePass` performs it.
+
+Why it is sound (no audited-surface change):
+- Two new proven `BusFacts` fields: `varRangeBus` (a variable-range-checker message `[x, b]` is
+  accepted **iff** `b.val ≤ 25 ∧ x.val < 2^b.val`) and `tupleRangeBus` (`[x, y]` accepted **iff**
+  `x < s1 ∧ y < s2`; multiplicity-1 messages break no invariant), both discharged for OpenVM
+  against the concrete `violates`/`breaksInvariant`; `trivial` claims nothing, so the pass is a
+  no-op without facts and stays VM-agnostic. Together with the existing `byteCheck` fact the
+  packed check's obligation is exactly the conjunction of the replaced pair's (`tupleKey`).
+- The correctness core is a **generic stateless two-for-one swap** (`mergeStateless2_correct`):
+  replacing stateless multiplicity-1 interactions `D₁, D₂` by a stateless `C` whose obligation is
+  their conjunction preserves the satisfying set, side effects, invariants and `admissible`
+  verbatim — the entry-49 `mergeBytePair_correct` is the same shape, now available generically.
+- The target tuple bus typically carries **no interaction in the input circuit** (powdr's
+  optimizer introduces it too), so its id cannot be read off the system; the pass probes the
+  `tupleRangeBus` fact over a bounded id range (max existing bus id + 65) instead.
+
+Wired into `cleanupCycle` between `busPairCancelPass` and `bytePackPass`, so byte singles are
+absorbed into tuple checks (saving 1 per single) before `bytePack` pairs the leftovers (saving 1
+per two); one pair packs per invocation, drained by `iterateToFixpoint`.
+
+`lake build` green; `optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`,
+`openVmOptimizer_maintainsCorrectness` still `{propext, Classical.choice, Quot.sound}`-only; no
+`sorry`/`admit`/`axiom`/`native_decide` (`check-proof-integrity.sh` passes); outputs within the
+degree bound (the packed check's operands are the originals').
+
+**Impact (bus interactions; variables and constraints unchanged on every sampled case; vs the
+entry-70 `main` baseline).** apc_003 90 → **85** (parity with powdr's 85), apc_010 276 → **271**,
+apc_014 156 → **151**, apc_008 63 → 62, apc_001 unchanged (its 17/12-bit checks fit no tuple
+bus); apc_005 701 → 702 (+1 — a packed tuple survives where the interplay with the later
+byte-check dropper would otherwise have removed a single; aggregate-invisible). The remaining
+tuple gap is the byte+byte *widening* pack (second slot only needs `< s2`), which needs a
+justification argument — see `docs/ideas.md`.
