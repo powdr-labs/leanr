@@ -302,8 +302,10 @@ def main():
     if not binary.exists():
         sys.exit(f"error: {binary} missing")
 
+    # `.powdr_opt` is each case's powdr pair; `.apc_opt` is an optional committed snapshot of
+    # apc-optimizer's own output (e.g. the keccak set) -- neither is itself a case to run.
     cases = sorted(f for f in bench_dir.glob("apc_*_pc*.json.gz")
-                   if not f.name.endswith(".powdr_opt.json.gz"))
+                   if not f.name.endswith((".powdr_opt.json.gz", ".apc_opt.json.gz")))
     if not cases:
         sys.exit(f"no benchmark cases in {bench_dir}")
     if args.n is not None:

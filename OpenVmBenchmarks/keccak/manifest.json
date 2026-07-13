@@ -7,10 +7,11 @@
   },
   "entries": [
     {
+      "rank": 1,
       "files": {
-        "unopt": "keccak_apc_pre_opt.json.gz",
-        "powdr_opt": "keccak_apc_pre_opt.powdr_opt.json.gz",
-        "apc_opt": "keccak_apc_pre_opt.apc_opt.json.gz"
+        "unopt": "apc_001_pckeccak.json.gz",
+        "powdr_opt": "apc_001_pckeccak.powdr_opt.json.gz",
+        "apc_opt": "apc_001_pckeccak.apc_opt.json.gz"
       },
       "stats": {
         "before": {
