@@ -2636,3 +2636,47 @@ is the identity.
 `lake build` green; `check-proof-integrity.sh` passes (no `sorry`/`admit`/`axiom`/`native_decide`);
 the three `*_maintainsCorrectness` theorems still `{propext, Classical.choice, Quot.sound}`-only;
 keccak output within the degree bound.
+
+## 76. Fold positional decompositions of a compile-time constant, gated to safe limbs (C5, idea #1)
+
+New `ApcOptimizer/Implementation/OptimizerPasses/ConstDecomp.lean` (`constDecompPass`, a `VerifiedPassW`).
+For an affine constraint `Σ cᵢ·xᵢ = K` (K a field literal) whose range-checked limbs form a
+**non-overlapping positional (mixed-radix) system** and whose total range cannot wrap the field
+(`Σ cᵢ·(Bᵢ−1) < p`), the limbs are uniquely the digits of `K`. The pass adds the entailed per-limb
+equalities `xᵢ = digitᵢ(K)` (iterated `div`/`mod`), which the affine/Gauss passes then eliminate — the
+nonlinear fact Gauss can't crack, that powdr folds to literals.
+
+**Gate (the key to making it a clean win).** Only fold a limb that does **not** feed a *stateful*
+(memory/exec) bus payload (`statefulPayloadVars`). Pinning such a limb to a constant strips the
+variable-shaped range check that memory send/receive **pair-cancellation** (`busPairCancel`/`busUnify`)
+relies on for byte-justification, so folding a block-output limb *breaks* cancellations. An ungated
+prototype cost **keccak +187 bus** (2348 → 2535) and eth −0.021× bus, and doubled runtime; the gate keeps
+the fold only where it is genuinely free (the limb's range check becomes a constant lookup the tautology
+pass drops). The gate makes `new` a *sublist* of the entailed constraints, so soundness/variable-subset
+carry over unchanged.
+
+**Proof.** One `ConstraintSystem.addConstraints_correct`; content is that each added equality holds on
+every satisfying assignment — mixed-radix uniqueness (`annDecode_forces`), lifted from ℕ to the field by
+the no-wrap `ZMod.val` lemma `annSum_val`. Bounds from the range-check facts via `MemoryUnify.BoundsMap`.
+Terms `mergeSort`ed by descending coefficient; both sign orientations tried. No primality, no
+`native_decide`; `check-proof-integrity.sh` passes and the three `*_maintainsCorrectness` theorems remain
+`{propext, Classical.choice, Quot.sound}`-only.
+
+**Pipeline.** `constDecomp` runs after `constFold1`, immediately before `gauss` — it must precede `gauss`
+(with `gauss` earlier it transforms the positional constraint before the pass sees it, making the pass a
+no-op, measured). `gauss` still runs before `domainBatch`, so there is no runtime regression (the failed
+ungated version had moved `gauss` fully late, which blew up `domainBatch` 4.7 s → 11.6 s).
+
+**Impact.**
+- **keccak (`apc_001_pckeccak`): 2028 → 2024 variables, 120 → 118 constraints, 2348 → 2339 bus — a clean
+  win on all three axes** (variables move toward powdr's 2021; bus and constraints both drop).
+- **openvm-eth (100-case sweep): neutral** — variables 4.511× / 3.822×, bus 3.439× / 2.723×, all unchanged.
+  eth's positional constants are block-output limbs (`rd_data`/PC) feeding memory/exec, which the gate
+  skips; that family remains, reachable only via idea #1 (memory pair-cancellation on constant data slots).
+- Per-case standings vs powdr unchanged (25 W / 42 L / 33 T); no case regresses.
+
+**Assessment.** A general, sound pass (fires on any safe positional-constant decomposition, not
+keccak-specific) that lands a strict keccak improvement and never regresses eth. The originally-targeted
+eth `rd_data`/PC families are out of reach: their limbs are stateful-connected (gated out to avoid the
+pair-cancellation regression), and the bulk surface as degree-2 disjunctions or 32-bit (wrapping)
+decompositions a sound uniqueness fold cannot reach. Recovering them is a follow-up on idea #1.

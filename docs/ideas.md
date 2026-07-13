@@ -1,7 +1,7 @@
 # Ideas for future optimization passes
 
 Ranked by **expected benefit**. Effectiveness priority is **variables > bus interactions >
-constraints**, used as the tiebreak; the cheap high-confidence bus win #2 is ranked early because it
+constraints**, used as the tiebreak; the cheap high-confidence bus win #1 is ranked early because it
 is nearly free and closes part of the *only* axis on which apc-optimizer trails powdr in aggregate,
 plus keccak's dominant gap.
 
@@ -24,47 +24,16 @@ structural families, each addressed by one idea below.
 - **eth bus** = bitwise (reduced by entry 75, but genuine-XOR / non-packable checks remain) ·
   tupleRange +160 (22 cases) · memory +144 (15 cases) · varRange **−376** (apc already *wins* — do not touch).
 - **eth vars ~+243** = `rd_data` write-result limbs ~93 (23 cases) · comparison gadget ~130 markers/flags
-  (43 cases) · `bit_shift_carry` +67 (13 cases) · `apc_071` intermediate address bytes. (Per-case
-  numbers below were measured on `c007db0`; C4b shifted only the `255`-XOR NOT cases on `apc_071`/`apc_037`,
-  otherwise per-case-neutral.)
+  (43 cases) · `bit_shift_carry` +67 (13 cases) · `apc_071` intermediate address bytes. The positional
+  constant-fold (C5, entry 76) is landed but is gated to limbs that do **not** feed a stateful payload, so it
+  leaves the eth `rd_data`/PC family untouched — those limbs are block outputs feeding memory/exec, and
+  folding them would break memory pair-cancellation; recovering them needs idea #1 (pair-cancellation on
+  constant data slots) first. (The bulk is also degree-2 disjunctions / 32-bit wrapping decompositions a
+  sound uniqueness fold cannot reach.)
 
 ---
 
-## 1. Fold byte/limb decompositions of compile-time constants  ·  *variables*  ·  high confidence · medium effort
-
-**Gap:** `rd_data`/PC-limb families are the single largest variable loss — ~93 vars over 23 cases,
-and **powdr keeps zero of them**. On JAL/JALR-terminated blocks the return address and jump target
-are compile-time constants, so powdr folds every limb to a literal; apc keeps them free because
-cracking `Σ 256ⁱ·byteᵢ = K` under byte bounds needs positional-uniqueness reasoning Gauss can't do
-(the 256³ combination space is too large for domain enumeration). Measured: `apc_045` +14 (all
-constant-PC limbs), `apc_026` +14, and the return-address part of the `+3` cluster
-(`apc_011/013/022/027/033/034/040/043`).
-
-**Mechanism** (new `VerifiedPass`; `ZeroWidthRange` is the `K=0`, single-term special case):
-
-```
-for each affine constraint  Σ cᵢ·xᵢ = K   (K a field constant):
-    require each xᵢ range-bounded 0 ≤ xᵢ < Bᵢ   (from its range-check bus fact / byteJustified)
-    sort terms by |cᵢ|; require a non-overlapping mixed-radix system:
-        cᵢ·(Bᵢ−1) < c_{i+1}   for all i,   and   Σ cᵢ·(Bᵢ−1) < p   (no wrap)
-    then the xᵢ are UNIQUELY forced:  xᵢ = digitᵢ(K)  by iterated div/mod
-    emit  Derivation xᵢ := ComputationMethod.Constant (digitᵢ K)
-    substitute the literal everywhere; drop the now-entailed range checks
-```
-
-**Why sound.** Soundness = uniqueness of a bounded mixed-radix representation (a `Nat.div`/`Nat.mod`
-digit lemma — no `native_decide`): the constraint already forces `xᵢ = digitᵢ(K)`, so substituting
-the constant preserves the satisfying set. Completeness: a real trace's column literally holds that
-constant, so the `Constant` method reproduces it (`derivesWitness` holds). Dropped range checks are
-entailed (`digitᵢ(K) < Bᵢ`).
-
-**Expected impact.** ~40–65 of the 103 extra vars across the losing cases; flips ~6–10 losses to
-ties/wins (roughly 25 W / 42 L → ~32 W / 34 L, and lifts the thin +0.031 geomean variable lead).
-Top-priority axis.
-
----
-
-## 2. Cancel interior memory send/receive pairs  ·  *bus*  ·  high confidence · low–medium effort
+## 1. Cancel interior memory send/receive pairs  ·  *bus*  ·  high confidence · low–medium effort
 
 **Gap:** the memory bus is where apc systematically trails on the memory-heavy blocks and on keccak.
 A register/heap cell accessed *N* times emits 2N memory interactions, but only the first receive and
@@ -125,7 +94,7 @@ Strictly variable-neutral.
 
 ---
 
-## 3. Collapse comparison / is-equal / is-zero gadget witnesses  ·  *variables*  ·  medium confidence · high effort
+## 2. Collapse comparison / is-equal / is-zero gadget witnesses  ·  *variables*  ·  medium confidence · high effort
 
 **Gap:** the comparison gadgets are the broadest variable family — extra markers/flags in **43 of 100
 cases**: `diff_inv_marker` +61 (16 cases), `diff_marker` +24, `c_msb_f` +27, `b_msb_f` +19. This is
@@ -172,7 +141,7 @@ plus `apc_018`/`apc_037`). Top-priority axis, broadest reach.
   tupleRange +160 over 22 cases** (`apc_006` +76). Bus-only.
 - **Affine/product no-wrap rule for `byteJustified`.** `e = c·y` (y boolean) or `e = c₀ + Σ cᵢ·yᵢ`
   with `c₀ + Σ|cᵢ|(Bᵢ−1) < 256`, via `MemoryUnify.boundedSum_val`. A *helper*, not a headline: census
-  shows it is **not** the keccak memory blocker (idea #2a is), but it generalizes #2 to affine
+  shows it is **not** the keccak memory blocker (idea #1a is), but it generalizes #1 to affine
   memory receives and rotation-carry data slots. Would also let the entry-75 byte-check dropper drop
   more mirror checks (currently many keccak `[0,x,x,1]` operands are only *packable*, not droppable,
   because their byteness is not re-derivable from an affine memory receive).
@@ -191,6 +160,16 @@ plus `apc_018`/`apc_037`). Top-priority axis, broadest reach.
   `bytePackPass`). keccak bus 2418 → 2348; eth bus 3.401× → 3.439×; variable-/constraint-neutral. The
   *non-packable* residue (genuine XORs, and pair-checks whose operands are not byte-justified) is not
   removable — powdr keeps equivalent checks.
+- **Fold positional decompositions of a compile-time constant (C5, `ConstDecomp`):** **landed**
+  (entry 76). For an affine `Σ cᵢ·xᵢ = K` whose range-checked limbs form a non-overlapping positional
+  system that cannot wrap the field, it adds the entailed `xᵢ = digitᵢ(K)` digit equalities (mixed-radix
+  uniqueness, `annDecode_forces`; no `native_decide`, 3-axiom clean) for Gauss to eliminate. **Gated** to
+  limbs that do not feed a stateful (memory/exec) payload: pinning such a limb to a constant strips the
+  variable range-check that memory pair-cancellation needs for byte-justification (an ungated prototype
+  cost keccak **+187 bus** and eth −0.021× bus, and doubled runtime). Gated, it is a **clean win on keccak**
+  (2028→2024 vars, 2348→2339 bus, 120→118 constraints — all three axes) and **neutral on openvm-eth**
+  (eth’s positional constants are all stateful-connected, so the gate skips them). The residual eth family
+  is idea #1 (memory pair-cancellation on constant data slots).
 - **Constant-operand XOR extraction (`⊕0` C4a, `⊕255` C4b):** **landed** (entries 70 / 74, #109);
   `{0, 255}` are the only operands making `x ⊕ c` affine, so the mechanism is **exhausted** — do not
   re-propose a generic constant-operand XOR pass.

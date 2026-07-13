@@ -30,6 +30,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
+import ApcOptimizer.Implementation.OptimizerPasses.ConstDecomp
 
 set_option autoImplicit false
 
@@ -81,9 +82,10 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
   [ ("zeroWidthRange", ZeroWidthRange.zeroWidthRangePass.guardDegree),
     ("xorEqExtract", XorEqExtract.xorEqExtractPass.guardDegree),
     ("carryBranch", carryBranchPass.guardDegree),
-    ("gauss", gaussElimPass.withFacts.guardDegree),
     ("normalize1", normalizePass.withFacts.guardDegree),
     ("constFold1", constantFoldPass.withFacts.guardDegree),
+    ("constDecomp", ConstDecomp.constDecompPass.guardDegree),
+    ("gauss", gaussElimPass.withFacts.guardDegree),
     ("domainBatch", domainBatchPass.guardDegree),
     ("normalize2", normalizePass.withFacts.guardDegree),
     ("constFold2", constantFoldPass.withFacts.guardDegree),
