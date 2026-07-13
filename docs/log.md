@@ -2586,3 +2586,53 @@ recorded under "Rejected / measured dead-ends" in `docs/ideas.md`.
 159 redundant range-checks on byte-guaranteed XOR results are a bus-only drop (width-1 range-check →
 booleanity / redundant-byte follow-ups), and the `[x,y,0,0]` byte-check packing (idea #3) is a bus
 win. These reduce bus interactions, not variables.
+
+## 75. Generalized single-value byte-check recognizer: `[0,x,x,1]` mirror drop + form-agnostic pack (idea #3)
+
+**Idea.** `docs/ideas.md` #3 ("bitwise-bus cleanup") had three parts: (i) result-zero equality
+extraction `[x,y,0,1] ⟹ x=y`, and (ii)/(iii) recognizing the missing XOR-with-zero mirror
+`[0,x,x,1]` so the byte-check dropper/packer reaches it. Measured on the current optimizer output:
+
+- **(i) result-zero is a measured dead-end.** Rendering the optimized keccak circuit shows **zero**
+  `[x,y,0,1]` interactions — every op-1 bitwise message carries a genuine XOR-result variable in the
+  result slot (XOR chaining), which idea #3 itself flags as *not* to target. A prototype pass
+  (`xorResultZeroEq` fact + a fifth `xorEq?` arm) built and proved clean but left both benchmarks
+  byte-identical, so it was dropped. Recorded as a dead-end.
+- **(ii)/(iii) is real.** Keccak's optimized bitwise bus has **68** `[0,x,x,1]` mirror byte-checks
+  (`0 ⊕ x = x`, i.e. "x is a byte" with the zero in the *first* operand slot). Neither
+  `RedundantByteDrop` (recognized `[x,x,0,1]`, `[x,0,x,1]`, `[x,y,0,0]`) nor `bytePackPass`
+  (recognized only `[x,x,0,1]`) could reach them.
+
+**Change.**
+- `BusFacts.xorZeroCheck` extended from `[x,0,x,1]` to *both* mirrors `[x,0,x,1]` / `[0,x,x,1]`
+  (discharged for OpenVM from `Nat.xor_zero` / `Nat.zero_xor`; the mirror is `256 ≤ p`-free, holding
+  even in the degenerate `p=1` case).
+- `RedundantByteDrop.byteCheckOperands?` gains the `[0,x,x,1]` arm (drop when the operand is
+  byte-justified elsewhere).
+- New `ByteCheckPack.lean`: one canonical single-value recognizer `svCheck?` for **all three**
+  encodings (`[x,x,0,1]`, `[x,0,x,1]`, `[0,x,x,1]`) → the checked value, and a packer that merges
+  any two into one pair check `[eA,eB,0,0]` via the *existing* general stateless two-for-one swap
+  `mergeStateless2_correct` (no new correctness lemma). This **subsumes** `bytePackPass`, which was
+  removed together with its helpers (`matchByteCheck` / `findSecond` / `findBytePackGo` /
+  `mergeBytePair_correct`); `BytePack.lean` now only exports the canonical `byteCheck1` / `byteCheck2`
+  message constructors reused by `ByteCheckPack` and `TupleRange`. The pipeline's `bytePack` slot now
+  runs the generalized packer.
+
+**Why sound.** A recognized single-value check is stateless, multiplicity-1, and accepted iff its
+value is a byte (`svCheck?_sound`, from `byteCheck` / `xorZeroCheck`); a pair check `[x,y,0,0]` is
+accepted iff both are bytes (`bytePairBus` + `byteCheck`). So the pair's obligation is exactly the
+conjunction — the hypothesis `mergeStateless2_correct` needs. All are stateless, so stateful side
+effects and `admissible` are untouched; variable-neutral (operands retained), degree-guarded.
+VM-agnostic: with `BusFacts.trivial` every fact is `false`, so `svCheck?` returns `none` and the pass
+is the identity.
+
+**Impact (variable-neutral bus win on both benchmarks; no constraint change).**
+- **keccak: bus 2418 → 2348 (−70)** — 15 mirror checks dropped (justified elsewhere), the rest packed
+  two-per; variables 2028 and constraints 120 unchanged.
+- **openvm-eth (100-case sweep): bus 3.401× → 3.439× agg (2.705× → 2.723× geo)** — closes ~half the
+  bus gap to powdr (diff −0.079× → −0.040×); variables 4.509× → 4.511× agg (non-regressing),
+  constraints ~flat, per-case standings vs powdr unchanged (25 W / 42 L / 33 T).
+
+`lake build` green; `check-proof-integrity.sh` passes (no `sorry`/`admit`/`axiom`/`native_decide`);
+the three `*_maintainsCorrectness` theorems still `{propext, Classical.choice, Quot.sound}`-only;
+keccak output within the degree bound.

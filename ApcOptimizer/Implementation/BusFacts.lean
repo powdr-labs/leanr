@@ -154,18 +154,23 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       ∀ (x mult : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, x, 0, 1] }
             = false ↔ x.val < 256
-  /-- Byte-check *via XOR-with-zero*: the check `[x, 0, x, 1]` (`x ⊕ 0 = x`, multiplicity any) on a
-      stateless bitwise-style bus is accepted **iff** `x` is a byte. The XOR-with-zero encoding is
-      how OpenVM materializes a bare "this operand is a byte" obligation that was not packed into a
-      pair; recognising it lets the redundant-byte-check dropper reach those interactions.
+  /-- Byte-check *via XOR-with-zero*: on a stateless bitwise-style bus the checks `[x, 0, x, 1]`
+      (`x ⊕ 0 = x`) and its mirror `[0, x, x, 1]` (`0 ⊕ x = x`) — multiplicity any — are each
+      accepted **iff** `x` is a byte. The XOR-with-zero encoding is how OpenVM materializes a bare
+      "this operand is a byte" obligation that was not packed into a pair; the zero can sit in
+      *either* operand slot (`Nat.xor_zero` / `Nat.zero_xor`). Recognising both mirrors lets the
+      redundant-byte-check dropper and the byte-check packer reach every such interaction.
       `trivial` sets it `false`. -/
   xorZeroCheck : (busId : Nat) → Bool
   xorZeroCheck_sound :
     ∀ (busId : Nat), xorZeroCheck busId = true →
       bs.isStateful busId = false ∧
-      ∀ (x mult : ZMod p),
+      (∀ (x mult : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, 0, x, 1] }
-            = false ↔ x.val < 256
+            = false ↔ x.val < 256) ∧
+      (∀ (x mult : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [0, x, x, 1] }
+            = false ↔ x.val < 256)
   /-- Variable-range-checker style *stateless* bus: the 2-ary message `[x, b]` is accepted
       **iff** the requested width is supported and `x` fits (`b.val ≤ 25 ∧ x.val < 2 ^ b.val`).
       `trivial` sets it `false`; the OpenVM instance proves it for the variable range checker. -/

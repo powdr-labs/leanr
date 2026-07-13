@@ -561,15 +561,15 @@ def openVmFacts (p : ℕ) [NeZero p]
       revert h; cases hb : busMap busId with
       | none => simp
       | some t => cases t <;> simp
-    refine ⟨?_, ?_⟩
+    have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
+    have h1le : (1 : ZMod p).val ≤ 1 := by
+      rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_le 1 p
+    refine ⟨?_, ?_, ?_⟩
     · show (match busMap busId with | some t => t.isStateful | none => false) = false
       rw [hbus]; rfl
     · intro x mult
       -- op 1 asserts `x ⊕ 0 = x` (true) plus byte-ness of `x`; the degenerate op-0 branch
       -- (`(1 : ZMod p).val = 0`, i.e. `p = 1`) makes every value the byte `0`.
-      have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
-      have h1le : (1 : ZMod p).val ≤ 1 := by
-        rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_le 1 p
       show violates busMap { busId := busId, multiplicity := mult, payload := [x, 0, x, 1] }
           = false ↔ x.val < 256
       unfold violates; rw [hbus]
@@ -580,6 +580,18 @@ def openVmFacts (p : ℕ) [NeZero p]
         have hx0 : x.val = 0 := Nat.lt_one_iff.1 (ZMod.val_lt x)
         simp [h1, hv0, hx0, isByte]
       · simp [h1, hv0, isByte, Nat.xor_zero]
+    · intro x mult
+      -- mirror: op 1 asserts `0 ⊕ x = x` (true) plus byte-ness of `x`; degenerate branch as above.
+      show violates busMap { busId := busId, multiplicity := mult, payload := [0, x, x, 1] }
+          = false ↔ x.val < 256
+      unfold violates; rw [hbus]
+      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1
+      · have hp1 : p = 1 := Nat.dvd_one.mp (Nat.dvd_of_mod_eq_zero (by
+          rwa [ZMod.val_one_eq_one_mod] at h1))
+        subst hp1
+        have hx0 : x.val = 0 := Nat.lt_one_iff.1 (ZMod.val_lt x)
+        simp [h1, hv0, hx0, isByte]
+      · simp [h1, hv0, isByte, Nat.zero_xor]
   zeroRangeEq busId := match busMap busId with
     | some .variableRangeChecker => true
     | _ => false
