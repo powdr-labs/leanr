@@ -2,24 +2,12 @@
 
 ## keccak: unify read-data limbs to close the variable gap (variables — top priority)
 
-On the keccak stress case, after the bitwise-result byte bound (log entry 58) cancelled the memory
-send/receive chains (bus 5206 → 3904), the **variable** gap is now the story: apc-optimizer 3622
-vs powdr 2021. The bulk is ~1200 read-data limbs (`b__*`, `c__*` classes — powdr has *none* of
-them) that survive because, although their memory interactions cancelled, the same limbs still
-occur as **operands/results of the XOR (bitwise) interactions**. powdr eliminates them by
-substituting each read limb by the value written to that cell (memory last-write-wins: a read
-returns the send's payload, so `read_limb = written_limb`) and/or by the XOR functional dependence
-(`slotFun` already proves `z = x ⊕ y` for the bitwise result). Two concrete angles:
-- **Read-value substitution.** When `busUnify` pairs a constant-address send `S` (writing value
-  `V`) with the next receive `R` (reading `W`), it already adds `W = V`; Gauss should then
-  substitute `W := V` and drop `W`. Check why this is not eliminating the keccak `b`/`c` limbs —
-  likely the chain's *first* receive reads a genuine pre-block value (no earlier send), so only
-  the initial limb is irreducible and the rest should collapse. If `busUnify`'s constant-address
-  gate or `findConsumer`'s mid-refutation is missing these, widening it is the win.
-- **XOR-result derivation.** A bitwise interaction `[x, y, z, 1]` functionally determines `z`
-  (`slotFun`, entry-for the XOR). A pass that turns `z` into a derived column
-  (`ComputationMethod`, like `reencode`) reading `x, y` would remove `z` as a free variable. Needs
-  the completeness `derivesWitness` bookkeeping, but `slotFun` already carries the soundness half.
+**Read-value substitution: LANDED (entry 71, symbolic-ts forwarding).** The "widen `findConsumer`'s
+mid-refutation" angle is done: `AddrDiseq.lean`'s two-root address-disequality (`addrTwoRootNeq`) lets
+`busUnify` step over interleaved other-pointer heap accesses (their addresses are `mem_ptr_limbs`
+expressions, not constants), so the send↔consumer slot equalities now fire on the heap. keccak
+**3056 → 2224 vars (−832), 2862 → 2411 bus**; `lower_decomp` 534→164, `prev_data` 448→148, width-12/17
+range checks → 129/129 (= powdr). Gap to powdr now +203 (was +1035).
 
 The bitwise-**result** byte bound itself is now landed (`openVmFacts.slotBound` slot 2, entry 58) —
 do not re-propose it.
@@ -31,6 +19,23 @@ do not re-propose it.
 `a + b − (a⊕b) = 2·(a∧b)` and `a∧b < 256`). Not a clean finite-domain shape; a dedicated
 AND-result recogniser would justify it, but it is one case and low priority — do the earliest-send
 relaxation first.
+
+**Remaining variable gap (≈203, the residual `b`/`c` read-data limbs).** powdr additionally eliminates
+each read limb via the **XOR functional dependence** (`slotFun` proves `z = x ⊕ y`): a bitwise
+`[x, y, z, 1]` determines `z`. A pass turning `z` into a derived column (`ComputationMethod`, like
+`reencode`) reading `x, y` removes `z` as a free variable. Needs the completeness `derivesWitness`
+bookkeeping, but `slotFun` already carries the soundness half. This is the reencode-class residual.
+
+**Two cheap bus follow-ups unlocked by entry 71:**
+- **1.2 identical-tuple cancellation (−≈282 bus).** The forwarding created 282 memory interactions in
+  syntactically-identical ±1 pairs (was 178) that `busPairCancel` cannot cancel: the dropped receive's
+  data slots are rotation *expressions* (`128·a__1 + bit_shift_carry__…`) and `byteJustified` has no
+  affine rule. Add a no-wrap affine byte rule: for `e = c₀ + Σ cᵢ·yᵢ` with every `yᵢ` bounded and
+  `c₀ + Σ cᵢ·(Bᵢ−1) < 256`, conclude `e < 256`. Shares the bound machinery with the shift-carry work.
+- **2.2 AS2 middle-pair telescoping (below powdr's 200 floor).** Wire `addrTwoRootNeq` into
+  `busPairCancel`'s `midRefuted` (same predicate) so the heap middle pairs telescope — AS2 count
+  (still 482 here) could drop toward / below powdr's 200.
+
 ## Genuine two-root carries: carry-witness substitution — MEASURED WASH, do not build
 
 **Measured a wash (faithful census what-if, 2026-07).** `carryCollapsePass` (log 67) collapses only
