@@ -2363,3 +2363,22 @@ this machine, so the per-pass profile deltas are the reliable signal.
 `cs.algebraicConstraints.contains c`, needs a `Hashable (Expression p)` instance to index; the next
 runtime tiers are `flagFold` (~51 s) and the finite-domain box enumeration inside
 `domainBatch` / `domainFold`.
+
+### 73a. Follow-up: size-gate the domain-fold index (avoid the small-circuit regression)
+
+The entry-73 `domainFold` index amortizes the covered-set scan across targets but pays a fixed
+per-invocation build (+ a rebuild per accepted fold) and a per-target `HashSet`/`mergeSort`. The #103
+CI bench (openvm-eth 100 cases + keccak) showed this is **net-slower on small circuits**: per-pass
+`domainFold` 5344 → 6639 ms (**1.24×**) on openvm-eth (largest block ~4.6k constraints), even though
+it wins on keccak (~28.6k constraints, −13 %). End-to-end the openvm-eth total was still flat (busUnify
+offsets it: 1870 → 644 ms, 0.34×), and keccak was −10 % overall — but the pass-level regression is
+avoidable.
+
+`domainFoldPass` now gates on `cs.algebraicConstraints.length`: ≥ `domainFoldIndexThreshold` (8192,
+comfortably above openvm-eth's ~4.6k and below keccak's ~28.6k) uses the indexed `foldLoop`; smaller
+systems use the new `foldLoopDirect` (recomputing `coveredCsOf` per target, as before the index).
+Both call the shared `foldStepWith` core, so the fold — hence effectiveness — is **identical on every
+case**; only the covered-set lookup differs. No audited surface; proof integrity unchanged
+(`{propext, Classical.choice, Quot.sound}`-only). Expected effect: keccak keeps its −13 % `domainFold`
+win; openvm-eth `domainFold` returns to baseline (no 1.24× regression); `busUnify`'s −66/−72 % win is
+unaffected.

@@ -483,6 +483,49 @@ def foldLoop [Fact p.Prime] (bs : BusSemantics p) :
     let r2 := foldLoop bs rest r1.1.out r1.2
     ⟨r2.out, r1.1.derivs ++ r2.derivs, r1.1.correct.andThen r2.correct⟩
 
+/-! ### Direct (unindexed) path for small systems
+
+The inverted index amortizes a full covered-set scan across many targets, but it pays a fixed
+per-invocation build (and a rebuild on each accepted fold) plus a per-target `HashSet`/`mergeSort`.
+On the *small* circuits (openvm-eth blocks, ≤ ~4.6k constraints) that overhead exceeds the saved
+scan — the plain `coveredCsOf` filter is cheaper — even though it wins decisively on the keccak
+stress case (~28.6k constraints). `domainFoldPass` therefore gates on system size: the direct loop
+below (recomputing `coveredCsOf` per target, as before this file's index change) runs on small
+systems, the indexed `foldLoop` on large ones. Both call the same `foldStepWith` core, so the fold
+semantics — hence effectiveness — are identical on every case; only the covered-set *lookup* differs. -/
+
+/-- One checked fold for a candidate group, given the covered set `es` (required to equal
+    `coveredCsOf cs xs`, so `foldOut_correct`'s `hdoms` transports). Used by the direct path with
+    `es := coveredCsOf cs xs`, `hes := rfl`; the indexed `foldStep` mirrors this same logic inline
+    (it additionally threads and rebuilds the covered-set index on each accepted fold, which the
+    dependent `Σ' r, FoldIdx r.out` return forces it to do branch-by-branch rather than delegate). -/
+def foldStepWith [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (xs : List Variable)
+    (es : List (Expression p)) (hes : es = coveredCsOf cs xs) : PassResult cs bs :=
+  match hdoms : groupDoms es xs with
+  | none => ⟨cs, [], PassCorrect.refl cs bs⟩
+  | some doms =>
+    if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
+      let survs := groupSurvivors cs xs doms
+      if 1 ≤ survs.length && systemHasFoldable cs xs survs then
+        ⟨foldOut cs xs survs, [], foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩
+      else ⟨cs, [], PassCorrect.refl cs bs⟩
+    else ⟨cs, [], PassCorrect.refl cs bs⟩
+
+/-- Direct-path fold loop: recompute `coveredCsOf cs xs` per target (no index). -/
+def foldLoopDirect [Fact p.Prime] (bs : BusSemantics p) :
+    List (List Variable) → (cs : ConstraintSystem p) → PassResult cs bs
+  | [], cs => ⟨cs, [], PassCorrect.refl cs bs⟩
+  | xs :: rest, cs =>
+    let r1 := foldStepWith bs cs xs (coveredCsOf cs xs) rfl
+    let r2 := foldLoopDirect bs rest r1.out
+    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
+
+/-- Systems at least this many algebraic constraints use the inverted index; smaller ones use the
+    direct per-target `coveredCsOf` scan. openvm-eth's largest block is ~4.6k constraints (index is
+    net-slower there); the keccak stress case is ~28.6k (index wins ~13 %). Purely a runtime gate —
+    both paths compute the identical fold. -/
+def domainFoldIndexThreshold : Nat := 8192
+
 /-- The domain-constant folding pass: for every constraint's (small) variable group, fold each
     subexpression that is constant on the group's surviving joint values to that constant — keeping
     the group's variables. Recovers the address-constant folding that unblocks memory chaining
@@ -495,5 +538,10 @@ def domainFoldPass : VerifiedPass p := fun cs bsem =>
       let vs := c.vars.dedup
       if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
-    foldLoop bsem targets cs (FoldIdx.mk' cs)
+    -- Runtime gate (effectiveness-identical): amortize the covered-set scan through the inverted
+    -- index only on large systems, where it wins; small systems use the cheaper direct filter.
+    if domainFoldIndexThreshold ≤ cs.algebraicConstraints.length then
+      foldLoop bsem targets cs (FoldIdx.mk' cs)
+    else
+      foldLoopDirect bsem targets cs
   else ⟨cs, [], PassCorrect.refl cs bsem⟩
