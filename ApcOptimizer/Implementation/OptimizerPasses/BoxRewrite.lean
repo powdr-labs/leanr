@@ -210,9 +210,9 @@ theorem brRw_sound [Fact p.Prime] (singles : List (Expression p)) (bound : Nat)
         match findDomainAlg (singles) v with
         | some d => d.length ≤ 2
         | none => false)) e with
-    | none => simp only [hr]
+    | none => simp only []
     | some e' =>
-      simp only [hr]
+      simp only []
       split_ifs with hok
       · rw [Bool.and_eq_true, Bool.and_eq_true] at hok
         exact (brCert_sound singles e e' hok.2 env hdom).symm
@@ -247,9 +247,9 @@ theorem brRw_singleVar (singles : List (Expression p)) (bound : Nat) (c : Expres
         match findDomainAlg (singles) v with
         | some d => d.length ≤ 2
         | none => false)) c with
-    | none => simp only [hr]
+    | none => simp only []
     | some e' =>
-      simp only [hr]
+      simp only []
       have hcert : brCert singles c e' = false := by
         unfold brCert
         have h2 : (2 ≤ c.vars.eraseDups.length : Bool) = false := by
