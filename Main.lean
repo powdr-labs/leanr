@@ -262,18 +262,14 @@ def cmdProfile (fileName : String) : IO Unit := do
   let (cs, busMap) ← parseFile fileName
   let bs := openVmBusSemantics babyBear busMap.toBusMap
   let facts := openVmFacts babyBear busMap.toBusMap
-  -- The cleanup-cycle passes come straight from `cleanupPasses`
-  -- (`ApcOptimizer/Implementation/Optimizer.lean`) — the same list `cleanupCycle` folds, so the
-  -- profiler cannot drift out of sync with the pipeline as passes are added.
+  -- `preludePasses` / `cleanupPasses` / `codaPasses` are the exact lists `pipeline` folds
+  -- (`ApcOptimizer/Implementation/Optimizer.lean`). Per-pass timing is an IO side-effect, so the
+  -- profiler steps the passes here instead of calling the pure `pipeline`; but it reads those same
+  -- three lists, so it cannot time a pass the optimizer does not run, nor drift out of sync.
   let t0 ← IO.monoMsNow
-  -- pipeline prelude: constantFold
-  let (cs, acc) ← runCycleTimed [("constFold0", constantFoldPass.withFacts.guardDegree)] cs bs facts ∅
+  let (cs, acc) ← runCycleTimed (preludePasses (p := babyBear)) cs bs facts ∅
   let (cs, acc, iters) ← profileLoop (cleanupPasses (p := babyBear)) cs bs facts acc 0
-  -- pipeline coda: redundantByteDrop, monicScale, constantFold
-  let (_, acc) ← runCycleTimed
-    [("redundantByteDrop", RedundantByteDrop.redundantByteDropPass.guardDegree),
-     ("monicScale", monicScalePass.withFacts.guardDegree),
-     ("constFoldEnd", constantFoldPass.withFacts.guardDegree)] cs bs facts acc
+  let (_, acc) ← runCycleTimed (codaPasses (p := babyBear)) cs bs facts acc
   let t1 ← IO.monoMsNow
   IO.println s!"profile {fileName}: {iters} cleanup iterations, {t1 - t0} ms total"
   let sorted := acc.toList.toArray.qsort (fun a b => a.2 > b.2)

@@ -33,10 +33,13 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
 - `ApcOptimizer/Implementation/OptimizerPasses/Basic.lean`, `FactPass.lean` — the framework: a `VerifiedPass` bundles its
   own `PassCorrect` proof, so a pass cannot be written without discharging it.
 - `ApcOptimizer/Implementation/OptimizerPasses/*.lean` — one file per optimization pass.
-- `ApcOptimizer/Implementation/Optimizer.lean` — assembles the passes into `optimizer` /
-  `optimizerWithBusFacts` (`cleanupCycle`, `pipelineIters`; the cleanup-cycle budget is derived
-  runs to a fixpoint by `iterateToFixpoint`, provably terminating on a lexicographic size measure,
-  with no iteration count passed in).
+- `ApcOptimizer/Implementation/Optimizer.lean` — assembles the passes into `optimizerWithBusFacts`.
+  The pass sequence lives in three labelled lists — `preludePasses` (run once), `cleanupPasses`
+  (iterated to a fixpoint), `codaPasses` (run once) — which are the single source of truth: both the
+  optimizer (`pipeline` folds them) and the `profile` CLI command (`Main.lean`, which times them)
+  consume the same lists, so they cannot drift apart. The cleanup cycle runs to a fixpoint via
+  `iterateToFixpoint`, provably terminating on a lexicographic size measure, with no iteration count
+  passed in.
 - `ApcOptimizer/Implementation/BusFacts.lean`, `ApcOptimizer/Implementation/OpenVmFacts.lean` — the proven
   `BusFacts` (design + OpenVM instance); zero audit surface.
 - `ApcOptimizer/Implementation/JsonParser.lean`, `Main.lean` — the powdr-export parser and the benchmark CLI (see
@@ -47,7 +50,8 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
 ## Adding an optimization
 
 Write a `VerifiedPass` in a new `ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
-`ApcOptimizer/Implementation/Optimizer.lean`, and `.andThen … |>.guardDegree` it into `cleanupCycle`. Do
+`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass.….guardDegree)` entry to the
+`cleanupPasses` list. That is the only edit needed; the profiler picks up the new pass for free. Do
 not touch the audited surface (`Spec.lean`, `OpenVmSemantics.lean`, `MemoryBus.lean`,
 `ApcOptimizer/Optimizer.lean`) or the glue in `Basic.lean`; correctness follows from the pass's own
 `PassCorrect`. Build and verify with `lake build`.
