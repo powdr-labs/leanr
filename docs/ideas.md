@@ -229,3 +229,33 @@ single-traversal multi-drop would be O(n) but needs a multi-drop discipline lemm
 it **is** a measured bottleneck: with the `hintCollapse`/`reencode` rescans fixed, `busPairCancel`
 is ~24 s of apc_005's 65 s optimizer time (second only to `domainBatch`, whose fix is sketched in
 entry 45's remaining-bottleneck note).
+
+## Runtime: extend the covered-set inverted index (entry 72 follow-ups)
+
+Entry 72 added `CoveredIndex.lean` (a variable→positions index + `coveredIdx`) and wired it into
+`domainBatch` and `reencode`, killing their per-target O(#system) covered-set `filter`s. Remaining
+keccak-profile hot spots, in rough priority:
+
+- **`domainFold` (~65 s).** Its `foldStep` feeds the covered set to `groupDoms` and then to
+  `foldOut_correct`, which is stated against `coveredCsOf cs xs`. Indexing the scrutinee therefore
+  needs a proven `coveredIdx (build varsOf items) items.toArray Q xs = items.filter Q` equality
+  (so `hdoms` transports), rather than the soundness-only `coveredIdx_mem` used elsewhere. The
+  equality needs `build`'s bucket/varless completeness (a `foldr`/`HashMap.getD_insert` invariant)
+  plus a sorted-nodup-perm argument that the deduped-sorted candidate indices equal
+  `(range n).filter …`.
+- **`flagFold` (~50 s), `busUnify` (~48 s).** Different pattern: per-candidate `z ∈ cs.vars`
+  (list membership over ~10⁴ occurrences) and `cs.algebraicConstraints.contains c`
+  (O(#constraints) structural compare). A once-built `Std.HashSet Variable` for `cs.vars`
+  membership (load-bearing: proves no new variable — needs a `mem` lemma) and a structHash-keyed
+  index for `contains` (heuristic; collision-safe re-verify) would cut both. No `Hashable
+  (Expression p)` instance exists yet — deriving one (+`LawfulHashable` via `structHash`) would
+  unblock HashSet-based dedup here and in the `dedup` pass.
+- **Finite-domain enumeration residual.** After indexing, `domainBatch`/`domainFold`'s remaining
+  cost is the box scan (`scanInit`/`scanForced`) and `constraintRedundant`; the `envOf` linear
+  lookup (log entry 45's note, `docs/log.md:1030`) — substitute pinned domain-1 constants and
+  enumerate only free vars — is the algorithmic follow-up (needs `forcedOver` soundness reproven
+  over the reduced box).
+- **`coveredIdx` on hub variables.** A variable shared across many constraints yields a large
+  candidate bucket; most candidates fail the `Q` (⊆xs) re-check. Cost is O(bucket) per target.
+  Acceptable while partitioned, but a conjunctive (smallest-bucket-first) gather could help if a
+  future circuit has heavy hubs.

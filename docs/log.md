@@ -2281,3 +2281,41 @@ bus); apc_005 701 → 702 (+1 — a packed tuple survives where the interplay wi
 byte-check dropper would otherwise have removed a single; aggregate-invisible). The remaining
 tuple gap is the byte+byte *widening* pack (second slot only needs `< s2`), which needs a
 justification argument — see `docs/ideas.md`.
+
+### 72. Runtime: inverted index for the domain-trio covered-set scans (`CoveredIndex.lean`)
+
+**Context / profiling.** On the keccak stress case (~28.6k constraints, 13.3k bus interactions,
+27.5k variables) the optimizer runs 7 cleanup-cycle iterations; `apc-optimizer profile` (accurate
+since the shared pass list of #102) attributes the bulk of the time to the three finite-domain
+passes, each doing an
+**O(#targets × #system)** covered-set rescan — for every target variable set `xs` (one per
+constraint and per bus interaction, ~42k on keccak) it `filter`s the *entire* system for the items
+whose variables all lie in `xs`: baseline `domainBatch` 127.0 s, `reencode` 88.7 s,
+`domainFold` 64.7 s (of a 494 s profiled total).
+
+**Change.** New audit-free `ApcOptimizer/Implementation/OptimizerPasses/CoveredIndex.lean`: a
+variable→positions inverted index (`CovIndex`, built once per pass invocation) plus
+`coveredIdx idx arr Q xs`, which gathers only the items sharing a variable with `xs` (plus the
+variable-less items), deduplicates the candidate positions through a `HashSet` (linear — a naive
+`List.dedup` is quadratic and blows up on widely-shared variables), sorts them ascending to keep the
+items' original order, and re-checks the exact predicate `Q`. Correctness needs only `coveredIdx_mem`
+(every returned item is a genuine system item satisfying `Q`); index *completeness* is not required
+for the proof, so the enumeration soundness lemmas are unchanged and completeness (hence
+effectiveness) is verified empirically. Wired into `domainBatch` (`forcedOver`; `cs` is immutable
+across the target loop, one build per invocation) and `reencode` (`buildReencode`, proof-free; the
+index is threaded through `reencodeLoop` and rebuilt only on the rare accepted rewrite).
+
+**Impact.** No audited surface touched; the three `*_maintainsCorrectness` theorems still
+`{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes. **Effectiveness
+unchanged** — full openvm-eth sweep bit-identical to `main` (variables 4.491× / 3.810× agg/geo,
+constraints 10.595× / 11.585×, per-case 25 W / 43 L / 32 T), keccak output identical
+(3056 vars / 120 constraints / 2690 bus). **Runtime (profile, per-pass):** `domainBatch`
+127.0 → 85.2 s, `reencode` 88.7 → 53.8 s (−77 s combined; every other pass flat, confirming no
+collateral change); profiled total 494 → 431 s. The `run` wall-clock timer is noisy on this machine
+(baseline solo 529 s vs concurrent 449 s — ~18 % variance), so the per-pass profile deltas are the
+reliable signal; a solo `run` A/B measured 529 → 378 s.
+
+**Remaining (see `docs/ideas.md`).** `domainFold`'s covered scan feeds `foldOut_correct` (tied to
+`coveredCsOf`), so indexing it needs a `coveredIdx = items.filter Q` equality lemma; the residual
+per-pass time is the finite-domain enumeration itself (box scanning); the next tier is `flagFold`
+and `busUnify` (per-target `cs.vars` / `List.contains` membership).
