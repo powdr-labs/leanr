@@ -2637,6 +2637,53 @@ is the identity.
 the three `*_maintainsCorrectness` theorems still `{propext, Classical.choice, Quot.sound}`-only;
 keccak output within the degree bound.
 
+## Result-zero XOR equality extraction (2026-07-13) — refuted by measurement; ideas.md #3(i) retired
+
+**Idea (ideas.md #3(i)).** Complete `xorEqExtract`'s constant-slot family with the *result-zero*
+arm: an accepted bitwise `[x, y, 0, 1]` (op 1, multiplicity 1) asserts `x ⊕ y = 0`, hence `x = y` —
+equivalence-grade (XOR-cancellation on `Nat`, no byte bound, no `256 ≤ p` gate, strictly simpler
+than the landed C4b). Add the entailed `x − y = 0` (guarded on syntactic `x ≠ y` so the canonical
+self-XOR byte checks `[e, e, 0, 1]` are skipped and the arm stops firing once Gauss renames), keep
+the interaction for byteness, let Gauss remove one operand. ideas.md #3 predicted ~50 keccak
+variables (2028 → ~1978, below powdr's 2021 for the first time).
+
+**Built and proven, then discarded.** Third conjunct on `xorZeroEq_sound` (`[x, y, 0, 1]` accepted
+→ `x = y`; OpenVM proof XORs `y.val` into both sides of `0 = x.val ^^^ y.val` and cancels), fifth
+`xorEq?` arm + spec disjunct, both pass proof obligations extended. `lake build` +
+`check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only). ~40 lines over
+`BusFacts.lean` / `OpenVmFacts.lean` / `XorEqExtract.lean`; trivially re-creatable from this entry.
+
+**Measured: exact no-op on the entire corpus.**
+- keccak: byte-identical **2028 v / 120 c / 2418 bus** (baseline re-measured in-session for a clean
+  A/B).
+- openvm-eth 100-case sweep: aggregates identical to baseline (vars 4.509×/3.820×, bus
+  3.401×/2.705×, constraints 10.590×/11.578×; per-case 25 W / 42 L / 33 T).
+- Render census of the current keccak *output*: **zero** `[x, y, 0, 1]` interactions. Bus 6 holds
+  1183 op-1 XORs — every one with a *variable* result slot — plus 55 **op-0** pair checks
+  `[x, y, 0, 0]`.
+- Instrumented pass (`dbg_trace` counter on the arm's exact match condition): **0 matches in every
+  cleanup cycle** — i.e. the shape is absent mid-pipeline too, not merely in final outputs — on
+  keccak and the XOR-heavy eth cases (apc_037/051/071/010). Positive control: the same channel
+  counting all-arm extractions prints the known C4a/C4b firings (112/96/72/24 per cycle on
+  apc_071), so the zero is real, not an instrumentation artifact.
+
+**Why the census was wrong.** ideas.md #3 claimed "50 result-zero XORs on keccak, all `aᵢ ^ aⱼ = 0`
+with two bare vars". The only z-slot-zero bitwise messages in the current output are the **op-0**
+byte-pair checks (55 ≈ the claimed 50): `[x, y, 0, 0]` range-checks both operands and carries **no
+equality semantics**. The census evidently keyed on "slot 2 = 0" without requiring `op = 1` (or was
+taken pre-C4b and never re-checked). OpenVM circuits do not emit `x ⊕ y = 0` as an equality
+encoding — equality is the inverse-marker gadget family (ideas.md #4).
+
+**Outcome: discarded; do not re-propose #3(i).** Worked: no — idea refuted for ~1 h of proof
+effort; the correct order would have been the 5-minute output census *first* (the roadmap's own
+what-if-before-build rule; the miss was trusting a recorded census instead of re-verifying it on
+current `main`). The live remainder of ideas.md #3 is unaffected and stays the top bus lever:
+(ii) one canonical byte-check recognizer (incl. the missing `[0, x, x, 1]` mirror arm) and
+(iii) redundant-byte drop + two-per-tuple packing of the measured 221 + 190 eth byte checks —
+those target exactly the op-0/self-check shapes that *do* exist.
+
+**Impact: none (no code landed).**
+
 ### 75. Is-equal gadget collapse via sum-of-squares (C5-eq) — rebased onto #110 and landed
 
 **Idea (roadmap §3.1 / the is-equal slice of ideas.md #4).** The is-equal/is-zero gadget keeps one

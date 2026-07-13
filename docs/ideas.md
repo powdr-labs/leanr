@@ -194,6 +194,10 @@ higher proof cost than #1.
 - **Constant-operand XOR extraction (`⊕0` C4a, `⊕255` C4b):** **landed** (entries 70 / 74, #109);
   `{0, 255}` are the only operands making `x ⊕ c` affine, so the mechanism is **exhausted** — do not
   re-propose a generic constant-operand XOR pass.
+- **Result-zero XOR equality extraction `[x,y,0,1] ⟹ x = y`:** built, proven, measured **exact
+  no-op** (2026-07-13) — the shape occurs nowhere in the corpus (0 in outputs, 0 mid-pipeline under
+  an instrumented counter with positive control); the old "50 on keccak" census had miscounted the
+  55 op-0 pair checks `[x,y,0,0]`. Change discarded; see the log entry.
 - **Timestamp re-encoding** (`lower_decomp__1` vs `prev_timestamp`): measured **wash** — equal free-var
   counts each side on every case.
 - **Carry-witness substitution** for genuine two-root carries: measured **wash** (log 67) — eliminating
