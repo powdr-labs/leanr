@@ -17,7 +17,7 @@ jobs:
       - uses: leanprover/lean-action@v1
       - name: Proof integrity (no sorry / new axioms)
         run: ./Scripts/check-proof-integrity.sh
-      # The optimizer binary, reused by the quick-bench job below (and, from main runs, as the
+      # The optimizer binary, reused by the bench jobs below (and, from main runs, as the
       # baseline binary for PR benches — so PRs never rebuild main).
       - uses: actions/upload-artifact@v4
         with:
@@ -25,64 +25,147 @@ jobs:
           path: .lake/build/bin/apc-optimizer
           retention-days: 30
 
-  # Quick bench on every PR: effectiveness (circuit metrics) and runtime over the top-10 cases,
-  # this PR's binary vs the binary from the latest successful main build (nothing is rebuilt),
-  # posted as one sticky comment. Full-set benches stay on demand via the Effectiveness Bench and
-  # Runtime Bench workflows.
-  quick-bench:
+  # Effectiveness over the full openvm-eth set and the keccak stress set: one job per side (this PR
+  # and the latest main build) in parallel on their own runners. Circuit sizes are deterministic, so
+  # the two sides needn't share a runner. `report` combines them. benchmark.py also captures a rough
+  # total runtime, used for the report-only runtime row.
+  effectiveness:
     if: github.event_name == 'pull_request'
     needs: build
     runs-on: warp-ubuntu-2404-x64-32x
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        side: [pr, main]
     permissions:
       contents: read
       actions: read
-      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: PR binary
+        if: matrix.side == 'pr'
+        uses: actions/download-artifact@v4
+        with:
+          name: apc-optimizer-bin
+          path: bin
+      - name: Latest-main binary
+        if: matrix.side == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list --workflow "Lean Action CI" --branch main --status success \
+            --limit 1 --json databaseId -q '.[0].databaseId // empty')
+          if [ -n "$run_id" ]; then
+            gh run download "$run_id" -n apc-optimizer-bin -D bin || true
+          fi
+          [ -f bin/apc-optimizer ] || echo "no latest-main binary; PR-only report"
+      - name: Effectiveness (openvm-eth + keccak)
+        run: |
+          [ -f bin/apc-optimizer ] || { echo "no binary for side '${{ matrix.side }}'"; exit 0; }
+          chmod +x bin/apc-optimizer
+          for set in openvm-eth keccak; do
+            python3 OpenVmBenchmarks/benchmark.py "$set" --binary bin/apc-optimizer \
+              --json "$set.json" --md "$set.md"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eff-${{ matrix.side }}
+          path: |
+            *.json
+            *.md
+          if-no-files-found: ignore
 
+  # Runtime detail, essentially the old quick-bench: the top-10 openvm-eth cases run sequentially
+  # with per-pass profiling, this PR and latest main on the SAME runner so the comparison is honest.
+  # Feeds the collapsed runtime detail (slowest cases + per-stage) in the report comment.
+  bench-runtime:
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: warp-ubuntu-2404-x64-32x
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: apc-optimizer-bin
           path: bin-target
-      - name: Fetch baseline binary (latest main build)
+      - run: chmod +x bin-target/apc-optimizer
+      - name: Latest-main binary
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "TARGET_SHA=$(cut -c1-7 <<< '${{ github.event.pull_request.head.sha }}')" \
-            >> "$GITHUB_ENV"
-          chmod +x bin-target/apc-optimizer
           run_id=$(gh run list --workflow "Lean Action CI" --branch main --status success \
             --limit 1 --json databaseId -q '.[0].databaseId // empty')
           if [ -n "$run_id" ] && gh run download "$run_id" -n apc-optimizer-bin -D bin-base; then
             chmod +x bin-base/apc-optimizer
-            echo "BASE_SHA=$(gh run view "$run_id" --json headSha -q .headSha | cut -c1-7)" \
-              >> "$GITHUB_ENV"
-          else
-            echo "no apc-optimizer-bin artifact on the latest main run; reporting this PR only"
           fi
-      - name: Effectiveness, top-10 vs main
+      - name: Runtime, top-10 sequential (per-stage + slowest)
         run: |
-          python3 OpenVmBenchmarks/benchmark.py --binary bin-target/apc-optimizer \
-            --n 10 --json eff-target.json --md eff.md
-          if [ -n "$BASE_SHA" ]; then
-            python3 OpenVmBenchmarks/benchmark.py --binary bin-base/apc-optimizer \
-              --n 10 --json eff-base.json
-            python3 OpenVmBenchmarks/benchmark.py \
-              --compare eff-base.json eff-target.json --md eff.md
+          python3 OpenVmBenchmarks/runtime_bench.py openvm-eth --n 10 \
+            --binary bin-target/apc-optimizer --json rt-pr.json
+          if [ -f bin-base/apc-optimizer ]; then
+            python3 OpenVmBenchmarks/runtime_bench.py openvm-eth --n 10 \
+              --binary bin-base/apc-optimizer --json rt-main.json
           fi
-      - name: Runtime, top-10 vs main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-runtime
+          path: rt-*.json
+          if-no-files-found: ignore
+
+  # One sticky comment: per set an effectiveness table (with a report-only runtime row) and, for
+  # openvm-eth, the collapsed runtime detail from bench-runtime. Runs even if a job was skipped.
+  report:
+    if: always() && github.event_name == 'pull_request'
+    needs: [effectiveness, bench-runtime]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: eff-pr, path: pr }
+      - uses: actions/download-artifact@v4
+        with: { name: eff-main, path: main }
+        continue-on-error: true
+      - uses: actions/download-artifact@v4
+        with: { name: bench-runtime, path: rt }
+        continue-on-error: true
+      - name: Baseline sha
+        id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 OpenVmBenchmarks/runtime_bench.py --binary bin-target/apc-optimizer \
-            --n 10 --json rt-target.json --md rt.md
-          if [ -n "$BASE_SHA" ]; then
-            python3 OpenVmBenchmarks/runtime_bench.py --binary bin-base/apc-optimizer \
-              --n 10 --json rt-base.json
-            python3 OpenVmBenchmarks/runtime_bench.py --compare rt-base.json rt-target.json --md rt.md
-          fi
-          # Effectiveness first: it is the merge criterion; runtime breaks ties.
-          cat eff.md > bench.md
-          printf '\n' >> bench.md
-          cat rt.md >> bench.md
+          rid=$(gh run list --workflow "Lean Action CI" --branch main --status success \
+            --limit 1 --json databaseId -q '.[0].databaseId // empty')
+          sha=""; [ -n "$rid" ] && sha=$(gh run view "$rid" --json headSha -q .headSha | cut -c1-7)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "psha=$(cut -c1-7 <<< '${{ github.event.pull_request.head.sha }}')" >> "$GITHUB_OUTPUT"
+      - name: Assemble comment
+        run: |
+          : > bench.md
+          for set in openvm-eth keccak; do
+            if [ -f "main/$set.json" ]; then
+              python3 OpenVmBenchmarks/benchmark.py --compare "main/$set.json" "pr/$set.json" \
+                --md "$set.md"
+              cat "$set.md" >> bench.md
+            elif [ -f "pr/$set.md" ]; then
+              cat "pr/$set.md" >> bench.md
+            fi
+            # openvm-eth only: collapsed runtime detail (slowest cases + per-stage) from bench-runtime.
+            if [ "$set" = openvm-eth ] && [ -f rt/rt-main.json ] && [ -f rt/rt-pr.json ]; then
+              python3 OpenVmBenchmarks/runtime_bench.py --details \
+                --compare rt/rt-main.json rt/rt-pr.json --md rt.md
+              cat rt.md >> bench.md
+            fi
+            printf '\n' >> bench.md
+          done
       - name: Report
         uses: ./.github/actions/report-bench
         with:
@@ -92,10 +175,9 @@ jobs:
           pr: ${{ github.event.pull_request.head.repo.full_name == github.repository
                   && github.event.number || '' }}
           note: >-
-            Top-10 quick bench on a CI runner
-            (${{ env.BASE_SHA && format('PR `{0}` vs main `{1}`', env.TARGET_SHA, env.BASE_SHA)
-                 || format('PR `{0}`, no main baseline binary available', env.TARGET_SHA) }}).
-            Circuit sizes are exact; for runtime, trust shares and orders of magnitude over exact
-            numbers. Full set: `gh workflow run "Effectiveness Bench" -f pr=${{ github.event.number }}`
-            or `gh workflow run "Runtime Bench" -f pr=${{ github.event.number }}`.
+            openvm-eth + keccak, PR `${{ steps.base.outputs.psha }}`
+            ${{ steps.base.outputs.sha && format('vs main `{0}`', steps.base.outputs.sha)
+                 || '(no main baseline binary)' }}.
+            Effectiveness is exact; the runtime row and detail are report-only. Full runtime detail:
+            `gh workflow run "Runtime Bench" -f pr=${{ github.event.number }}`.
           token: ${{ github.token }}
