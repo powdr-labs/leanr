@@ -1426,10 +1426,13 @@ def interpPoly (pz : List (List (Variable × ZMod p) × List (Variable × ZMod p
     (.const 0)
 
 /-- Construct the bits and the substitution map for a candidate group (proof-free — the
-    checked certificate re-verifies everything). -/
-def buildReencode (cs : ConstraintSystem p) (xs : List Variable) (freshBase : String) :
+    checked certificate re-verifies everything). The covered constraints come from a prebuilt
+    inverted index (`csIdx`/`arrCs`, built once per pass and rebuilt on each accepted rewrite)
+    instead of a full-system `filter` per candidate group — the dominant cost of this pass. -/
+def buildReencode (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p))
+    (xs : List Variable) (freshBase : String) :
     Option (List Variable × Std.HashMap Variable (Expression p)) :=
-  let es := coveredCsOf cs xs
+  let es := CoveredIndex.coveredIdx csIdx arrCs (coveredBy xs) xs
   match groupDoms es xs with
   | none => none
   | some doms =>
@@ -1452,11 +1455,13 @@ def buildReencode (cs : ConstraintSystem p) (xs : List Variable) (freshBase : St
     is all input columns and disjoint from the fresh bits, the bits carry no powdr ID) are only
     checked for the few groups that are actually re-encodable. The output-variable frame is proven
     by construction (`reencodeOut_vars_subset`), so no per-variable scan is needed. -/
-def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p)
-    (xs : List Variable) (freshBase : String) : PassResult cs bsem :=
+def reencodeStep [Fact p.Prime] (bsem : BusSemantics p)
+    (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p)) (cs : ConstraintSystem p)
+    (xs : List Variable) (freshBase : String) :
+    PassResult cs bsem × CoveredIndex.CovIndex × Array (Expression p) :=
   if hxs : xs.all (fun x => x.powdrId?.isSome) = true then
-  match hb : buildReencode cs xs freshBase with
-  | none => ⟨cs, [], PassCorrect.refl cs bsem⟩
+  match hb : buildReencode csIdx arrCs xs freshBase with
+  | none => ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs⟩
   | some (bits, hm) =>
     -- The group-membership scan is checked only for the few groups `buildReencode` accepts, and
     -- against a `cs.vars` bound once — the occurrence list is ~10⁴ entries, so materializing it
@@ -1468,30 +1473,35 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (cs : ConstraintSystem p
     if hchk : checkReencode cs xs bits hm = true then
       let ro := reencodeOut cs xs bits hm
       if ro.withinDegreeB bsem.degreeBound then
-        ⟨ro,
+        -- `cs` changed: rebuild the index for `ro` (accepts are rare, so this is cheap overall).
+        ⟨⟨ro,
          bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b)),
          checkReencode_sound_D cs bsem xs bits hm
            (fun x hx => by simpa using List.all_eq_true.mp hxs x hx)
            (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsCs x hx))
            (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsB x hx))
            (fun b hbm => of_decide_eq_true (List.all_eq_true.mp hbn b hbm))
-           hchk⟩
-      else ⟨cs, [], PassCorrect.refl cs bsem⟩
-    else ⟨cs, [], PassCorrect.refl cs bsem⟩
-    else ⟨cs, [], PassCorrect.refl cs bsem⟩
-    else ⟨cs, [], PassCorrect.refl cs bsem⟩
-    else ⟨cs, [], PassCorrect.refl cs bsem⟩
-  else ⟨cs, [], PassCorrect.refl cs bsem⟩
+           hchk⟩,
+         CoveredIndex.build Expression.vars ro.algebraicConstraints, ro.algebraicConstraints.toArray⟩
+      else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs⟩
+    else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs⟩
+    else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs⟩
+    else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs⟩
+    else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs⟩
+  else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs⟩
 
-/-- Process the candidate groups sequentially (correctness composes; derivations concatenate). -/
+/-- Process the candidate groups sequentially (correctness composes; derivations concatenate). The
+    inverted index (`csIdx`/`arrCs`, valid for the current `cs`) is threaded through and rebuilt by
+    `reencodeStep` whenever it rewrites `cs`. -/
 def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) :
-    List (List Variable) → Nat → (cs : ConstraintSystem p) → PassResult cs bsem
-  | [], _, cs => ⟨cs, [], PassCorrect.refl cs bsem⟩
-  | xs :: rest, idx, cs =>
-    let r1 := reencodeStep bsem cs xs
+    List (List Variable) → Nat → (cs : ConstraintSystem p) →
+    CoveredIndex.CovIndex → Array (Expression p) → PassResult cs bsem
+  | [], _, cs, _, _ => ⟨cs, [], PassCorrect.refl cs bsem⟩
+  | xs :: rest, idx, cs, csIdx, arrCs =>
+    let r1 := reencodeStep bsem csIdx arrCs cs xs
       (s!"rnc{cs.algebraicConstraints.length}_{cs.busInteractions.length}_{idx}")
-    let r2 := reencodeLoop bsem rest (idx + 1) r1.out
-    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
+    let r2 := reencodeLoop bsem rest (idx + 1) r1.1.out r1.2.1 r1.2.2
+    ⟨r2.out, r1.1.derivs ++ r2.derivs, r1.1.correct.andThen r2.correct⟩
 
 /-- `List.dedup` computed in linear time via a hash set, with the **identical** result: an element
     is kept at its last-occurrence position (exactly `List.dedup`'s order), so swapping this in is a
@@ -1514,4 +1524,5 @@ def reencodePass : VerifiedPass p := fun cs bsem =>
       let vs := c.vars.dedup
       if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt)) else none))
     reencodeLoop bsem targets 0 cs
+      (CoveredIndex.build Expression.vars cs.algebraicConstraints) cs.algebraicConstraints.toArray
   else ⟨cs, [], PassCorrect.refl cs bsem⟩

@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
+import ApcOptimizer.Implementation.OptimizerPasses.CoveredIndex
 
 set_option autoImplicit false
 
@@ -953,6 +954,23 @@ theorem scanNone_unsat {cs : ConstraintSystem p} {bs : BusSemantics p}
   rw [hsurv] at hdead
   exact absurd hdead (by simp)
 
+/-- Prebuilt inverted indices for `forcedOver`'s per-target covered-set scans, built **once** per
+    `domainBatch` invocation and threaded through the target loop (`cs`/`activeCs` are fixed across
+    it). Each item array is carried with the proof it is the corresponding list's `.toArray`, so the
+    scans get O(1) positional access while `forcedOver` still recovers list membership for its
+    soundness witnesses. Replaces the per-target full-system `filter`s (`coveredCs` / `coveredBis` /
+    `activeCs.filter`) — the dominant runtime cost on large circuits — with an O(local) lookup. -/
+structure ForcedIdx (cs : ConstraintSystem p) (activeCs : List (Expression p)) where
+  csIdx : CoveredIndex.CovIndex
+  arrCs : Array (Expression p)
+  harrCs : arrCs = cs.algebraicConstraints.toArray
+  bisIdx : CoveredIndex.CovIndex
+  arrBis : Array (BusInteraction (Expression p))
+  harrBis : arrBis = cs.busInteractions.toArray
+  activeIdx : CoveredIndex.CovIndex
+  arrActive : Array (Expression p)
+  harrActive : arrActive = activeCs.toArray
+
 /-- All checked forced constants over the variable set `xs` (the vars of one target
     constraint or interaction): scan the domain box once against everything the set
     covers (`scanInit`/`scanWith`), aborting early when nothing can be forced. Skips
@@ -969,6 +987,7 @@ theorem scanNone_unsat {cs : ConstraintSystem p} {bs : BusSemantics p}
 def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
     (T : DomainTable p cs bs)
     (activeCs : List (Expression p)) (hactiveCs : ∀ c ∈ activeCs, c ∈ cs.algebraicConstraints)
+    (fidx : ForcedIdx cs activeCs)
     (xs : List Variable) : List ((x : Variable) × { c : ZMod p //
       ∀ env, cs.satisfies bs env → env x = c }) :=
   match hdoms : T.doms xs with
@@ -984,20 +1003,24 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts
       -- analogous drop for *obligations* is not worthwhile: an interaction's sub-box is large and
       -- its payload evaluation costly, and it is covered by few targets, so verifying its
       -- redundancy costs about what it would save.)
-      let esFull := coveredCs cs xs
-      let bis := coveredBis bs cs xs
-      let es := activeCs.filter (fun c => c.varsInF xs)
+      let esFull := CoveredIndex.coveredIdx fidx.csIdx fidx.arrCs (fun c => c.varsInF xs) xs
+      let bis := CoveredIndex.coveredIdx fidx.bisIdx fidx.arrBis
+        (fun bi => bi.varsInF xs && !bs.isStateful bi.busId) xs
+      let es := CoveredIndex.coveredIdx fidx.activeIdx fidx.arrActive (fun c => c.varsInF xs) xs
       let informative := !esFull.isEmpty || bis.any (biInformative bs facts)
       if informative && boxSize * (esFull.length + bis.length) ≤ maxEnumWork then
-        have hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true :=
-          fun e he => ⟨hactiveCs e (List.mem_filter.1 he).1,
-            Expression.varsInF_eq xs e ▸ (List.mem_filter.1 he).2⟩
+        have hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true := by
+          intro e he
+          obtain ⟨hMem, hQ⟩ := CoveredIndex.coveredIdx_mem_of_eq fidx.activeIdx activeCs
+            fidx.arrActive fidx.harrActive (fun c => c.varsInF xs) xs he
+          refine ⟨hactiveCs e hMem, ?_⟩
+          rw [← Expression.varsInF_eq]; exact hQ
         have hbis : ∀ bi ∈ bis, bi ∈ cs.busInteractions ∧ bi.varsIn xs = true := by
           intro bi hbi
-          have hm := List.mem_filter.1 hbi
-          have h2 := hm.2
-          rw [Bool.and_eq_true] at h2
-          exact ⟨hm.1, BusInteraction.varsInF_eq xs bi ▸ h2.1⟩
+          obtain ⟨hMem, hQ⟩ := CoveredIndex.coveredIdx_mem_of_eq fidx.bisIdx cs.busInteractions
+            fidx.arrBis fidx.harrBis (fun bi => bi.varsInF xs && !bs.isStateful bi.busId) xs hbi
+          simp only [Bool.and_eq_true] at hQ
+          exact ⟨hMem, by rw [← BusInteraction.varsInF_eq]; exact hQ.1⟩
         let survC := compiledSurv bs es bis (doms.map Prod.fst)
         match hscan : scanInit survC.val (doms.map Prod.fst) (assignments doms) with
         | none =>
@@ -1023,15 +1046,15 @@ def varSetKey (xs : List Variable) : String :=
     membership witness are threaded to `forcedOver`. -/
 def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
     (T : DomainTable p cs bs) (activeCs : List (Expression p))
-    (hactiveCs : ∀ c ∈ activeCs, c ∈ cs.algebraicConstraints) :
+    (hactiveCs : ∀ c ∈ activeCs, c ∈ cs.algebraicConstraints) (fidx : ForcedIdx cs activeCs) :
     List (List Variable) → Std.HashSet String → Solved p cs bs → Solved p cs bs
   | [], _, σ => σ
   | xs :: rest, seen, σ =>
     let key := varSetKey xs
-    if seen.contains key then collectForced facts T activeCs hactiveCs rest seen σ
+    if seen.contains key then collectForced facts T activeCs hactiveCs fidx rest seen σ
     else
-      let found := forcedOver facts T activeCs hactiveCs xs
-      collectForced facts T activeCs hactiveCs rest (seen.insert key)
+      let found := forcedOver facts T activeCs hactiveCs fidx xs
+      collectForced facts T activeCs hactiveCs fidx rest (seen.insert key)
         (σ.insertAll (found.map (fun f => (f.1, .const f.2.val)))
           (by
             intro env hsat yt hyt
@@ -1057,7 +1080,14 @@ def domainBatchPass : VerifiedPassW p := fun cs bs facts =>
     let targets := cs.algebraicConstraints.map (fun e => e.vars.dedup) ++
       cs.busInteractions.map (fun bi => bi.vars.dedup)
     let activeCs := cs.algebraicConstraints.filter (fun c => !constraintRedundant T c)
-    let σ := collectForced facts T activeCs (fun _ h => (List.mem_filter.1 h).1) targets ∅
+    let fidx : ForcedIdx cs activeCs :=
+      { csIdx := CoveredIndex.build Expression.vars cs.algebraicConstraints,
+        arrCs := cs.algebraicConstraints.toArray, harrCs := rfl,
+        bisIdx := CoveredIndex.build BusInteraction.vars cs.busInteractions,
+        arrBis := cs.busInteractions.toArray, harrBis := rfl,
+        activeIdx := CoveredIndex.build Expression.vars activeCs,
+        arrActive := activeCs.toArray, harrActive := rfl }
+    let σ := collectForced facts T activeCs (fun _ h => (List.mem_filter.1 h).1) fidx targets ∅
       Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs.substF σ.fn, [],
