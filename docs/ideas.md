@@ -162,8 +162,10 @@ axis to a win**. keccak: result-zero extraction removes ~50 variables (measured 
 2028 → ~1978, which would put apc *below* powdr's 2021 on keccak variables); the collapsed interaction
 becomes a `[a,a,0,1]` self-check `bytePack` then absorbs. Do **not** target the keccak genuine-XOR gap
 directly — census shows it is a variable-representation artifact (XOR chaining), not redundant
-lookups; it is addressed at the root by #5. *(The `[x,255,z,1]` complement is a different pattern,
-landed as C4b — entry 74, #109.)*
+lookups, and it is **not removable at all** (see the dead-ends list: XOR is not a field polynomial, so
+an XOR-result limb can be neither substituted away nor expressed as a `ComputationMethod`, and powdr
+keeps the same limbs). *(The `[x,255,z,1]` complement is a different pattern, landed as C4b — entry
+74, #109.)*
 
 ---
 
@@ -201,38 +203,6 @@ plus `apc_018`/`apc_037`). Top-priority axis, broadest reach; higher proof cost 
 
 ---
 
-## 5. Functional-dependence derived columns for read/write limbs  ·  *variables*  ·  medium–low confidence · high effort
-
-**Gap:** limbs that are *functionally determined* but kept free. C4a/C4b (entry 70/74) already closed
-the affine constant-operand XOR cases, so keccak is now at variable near-parity (+7); the residual
-keccak XOR gap is the **pure-XOR intermediates** — `b`/`c` limbs that appear *only* as an XOR result
-then an XOR operand, which no equality extraction can reach. The larger remaining target is the
-**runtime portion of `rd_data`** (write result `= a op b`) on openvm-eth that #1's constant fold does
-not cover.
-
-**Mechanism** — extend the `reencode` derived-column path with a functional-dependence source:
-
-```
--- z is the result slot of exactly one accepting bitwise [x,y,z,1] and not otherwise pinned:
---   BusFacts.slotFun already proves  z = x ⊕ y   (soundness half)
-register  Derivation z := ComputationMethod computing xor(x,y) from input columns
-drop z from the free-variable set          (interaction retained for byteness)
--- same device for a write-result limb pinned by  rd_data − f(inputs) = 0.
-```
-
-**Why sound.** Soundness is carried by `slotFun` (acceptance forces `z = x⊕y`). The real work is the
-completeness half: the reproduced witness must satisfy `derivesWitness` — `z` computed from input
-columns present in the input trace — which is exactly `reencode`'s `ComputationMethod` bookkeeping,
-but wiring a genuine XOR (a table lookup, not a polynomial) into `ComputationMethod` and discharging
-`derivesWitness` is nontrivial. Degree-guarded.
-
-**Expected impact.** Modest on keccak now (it is near variable-parity post-C4b; only the pure-XOR
-intermediate residual remains, part of the +7). Main value is the ~15–30 functional `rd_data` vars on
-eth that #1 does not fold, plus a small keccak tail. Top-priority axis but highest proof cost of the
-five — do it after #1 clears the constant cases.
-
----
-
 ## Smaller follow-ups (worth landing, lower ceiling)
 
 - **Width-1 range-check → booleanity constraint** (`ZeroWidthRange` width-0 → width-1). `[e,1]` on a
@@ -246,7 +216,7 @@ five — do it after #1 clears the constant cases.
   tupleRange +160 over 22 cases** (`apc_006` +76). Bus-only.
 - **Affine/product no-wrap rule for `byteJustified`.** `e = c·y` (y boolean) or `e = c₀ + Σ cᵢ·yᵢ`
   with `c₀ + Σ|cᵢ|(Bᵢ−1) < 256`, via `MemoryUnify.boundedSum_val`. A *helper*, not a headline: census
-  shows it is **not** the keccak memory blocker (idea #2a is), but it generalizes #2/#5 to affine
+  shows it is **not** the keccak memory blocker (idea #2a is), but it generalizes #2 to affine
   memory receives and rotation-carry data slots.
 
 ## Rejected / measured dead-ends (do not re-propose without re-measuring)
@@ -263,7 +233,24 @@ five — do it after #1 clears the constant cases.
 - **`disconnectedComponent` smarter witnesses:** measured **empty** (log 61) — outputs contain 0
   disconnected vars.
 - **keccak genuine-XOR bus gap (+321) as a dedup pass:** **not removable** — no duplicate/ shared-pair
-  lookups; it is a variable-representation artifact (XOR chaining), addressed by #5, not a bus pass.
+  lookups; it is a variable-representation artifact (XOR chaining), and the artifact itself is not
+  removable either (next bullet), so it is neither a bus pass nor a variable pass.
+- **Functional-dependence derived columns for read/write limbs (was idea #5):** **infeasible — measured
+  dead-end** (attempted 2026-07-13, entry below). The variable count (`ConstraintSystem.variables`,
+  Size.lean) is purely syntactic: a name is counted iff it appears in some constraint/interaction, and
+  `Derivations` are a *separate* list, so registering a `ComputationMethod` for a limb does **not**
+  drop it — only substituting the name away (Gauss/Subst) or re-encoding a group into fewer fresh vars
+  (Reencode) can. But the functional dependences that keep limbs alive are all **XOR/bitwise**
+  (`z = x⊕y`), which is **not a low-degree `ZMod p` polynomial** (no `Expression` to substitute) and
+  **not expressible as a `ComputationMethod`** (only `const`/`quotientOrZero`/`ifEqZero`); `slotFun`
+  gives only the *value-level* soundness function, not a substitutable expression. The affine
+  functional dependences (ADD/SUB carry limbs) are already eliminated by Gauss (degree-1 subst into
+  stateful memory payloads). Measured on the live renders: keccak's surviving functional limbs are 359
+  pure-XOR chain intermediates + 458 XOR-results in memory + 159 redundant range-checks on XOR results
+  — **all XOR, none affine** — and **powdr keeps the same limbs** (1 derived column total on keccak, via
+  `QuotientOrZero`), consistent with keccak's +7 variable near-parity. So there is no sound,
+  effectiveness-improving pass here. (The redundant range-checks on byte-guaranteed XOR results *are* a
+  separate bus-only opportunity — see the width-1 / redundant-byte follow-ups above.)
 - **`bit_shift_carry` elimination (+67):** keccak rho-rotation encoding — VM-specific / overfit, high
   proof risk. Excluded by the generality rule.
 - **varRange bus / range-check packing as a *variables* lever:** apc already **wins** varRange bus net

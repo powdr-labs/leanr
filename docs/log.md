@@ -2535,3 +2535,54 @@ addresses, jump targets) — the largest variable family (`rd_data`, ~93 vars/23
 (no gap), disconnected-component (empty), keccak genuine-XOR bus gap (representation artifact),
 `bit_shift_carry` (VM-specific), varRange packing (apc already wins), `b`/`c` naming artifact,
 `apc_003` now a tie, constant-operand XOR exhausted (C4a/C4b landed).
+
+## Idea #5 attempt — functional-dependence derived columns for read/write limbs — FAILED (measured dead-end, no optimizer change)
+
+**Idea (ideas.md #5).** Make a functionally-determined limb (a bitwise-XOR result `z = x⊕y`, or a
+write-result limb `rd_data = f(inputs)`) a *derived* column — register a `ComputationMethod` for it
+and "drop it from the free-variable set" — to cut the variable count. Rated medium–low confidence,
+high effort; flagged as the highest proof cost of the five.
+
+**Result: infeasible.** It cannot reduce the primary (variable) metric, for a structural reason, so
+there is nothing to prove and no pass was added. The chain, each link checked against the code and the
+live benchmark renders:
+
+1. **The variable count is purely syntactic.** `ConstraintSystem.variables` (`ApcOptimizer/Utils/Size.lean`)
+   is the dedup of every name appearing in a constraint or bus interaction. `Derivations` are a
+   *separate* output list (`Spec.lean`), not subtracted from `.variables`. So registering a
+   `ComputationMethod` for `z` does **not** drop `z` from the count — a derived column that still
+   appears in the system is still counted. The only levers that remove a name are **substitution**
+   (`Subst`/`Gauss`, replace the name by an `Expression` everywhere) and **re-encoding** a group into
+   fewer fresh vars (`Reencode`). "Drop `z` from the free-variable set (interaction retained for
+   byteness)" as written is a contradiction: if the interaction is retained, `z` is still counted.
+
+2. **XOR is not substitutable and not `ComputationMethod`-expressible.** `z = x ⊕ y` is not a
+   low-degree `ZMod p` polynomial, so there is no `Expression` to substitute for `z`; and
+   `ComputationMethod` offers only `const`/`quotientOrZero`/`ifEqZero`, none of which computes XOR
+   (encoding it bit-wise would first require bit columns the byte-level circuits don't have, adding far
+   more variables than it removes). `BusFacts.slotFun` provides only the *value-level* soundness
+   function `List (ZMod p) → ZMod p`, not a substitutable expression. `Reencode` can't reach it either:
+   it reads algebraic constraints (the XOR relation is a *bus*), and the group `{x,y,z}` has 65536
+   joint values → 16 fresh bits to replace 3 vars (a regression).
+
+3. **Every surviving functional-dependence limb is XOR-based; the affine ones are already gone.**
+   Measured on the live renders. keccak apc output: **359 pure-XOR chain intermediates** (`a=b⊕c`, then
+   `a` is an operand of another XOR), **458 XOR-results written to memory** (`rd_data`), **159 redundant
+   range-checks on XOR results** — all XOR, none affine. The affine functional dependences (ADD/SUB
+   carry limbs) are already eliminated by `Gauss` (degree-1 substitution, including into stateful memory
+   payloads; `Gauss` only *declines* to substitute raw payload slots of **stateless** buses, to
+   preserve range knowledge). eth apc-only variables (vs powdr) are dominated by idea #1 (constant
+   PC/immediate/return-address limbs), idea #4 (comparison markers), and the documented timestamp /
+   `b`,`c` naming artifacts — not a runtime-`rd_data` functional slice.
+
+4. **powdr does not beat apc here.** powdr keeps the same XOR limbs — **1** derived column total on
+   keccak, via `QuotientOrZero` — consistent with keccak's +7 variable near-parity. There is no
+   competitive gap for idea #5 to close.
+
+**Impact: none** (no code changed; `lake build` unaffected). Idea #5 removed from the active list and
+recorded under "Rejected / measured dead-ends" in `docs/ideas.md`.
+
+**Adjacent real wins surfaced while investigating** (already tracked in ideas.md, *not* idea #5): the
+159 redundant range-checks on byte-guaranteed XOR results are a bus-only drop (width-1 range-check →
+booleanity / redundant-byte follow-ups), and the `[x,y,0,0]` byte-check packing (idea #3) is a bus
+win. These reduce bus interactions, not variables.
