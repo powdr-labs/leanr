@@ -2636,3 +2636,88 @@ is the identity.
 `lake build` green; `check-proof-integrity.sh` passes (no `sorry`/`admit`/`axiom`/`native_decide`);
 the three `*_maintainsCorrectness` theorems still `{propext, Classical.choice, Quot.sound}`-only;
 keccak output within the degree bound.
+
+## Result-zero XOR equality extraction (2026-07-13) — refuted by measurement; ideas.md #3(i) retired
+
+**Idea (ideas.md #3(i)).** Complete `xorEqExtract`'s constant-slot family with the *result-zero*
+arm: an accepted bitwise `[x, y, 0, 1]` (op 1, multiplicity 1) asserts `x ⊕ y = 0`, hence `x = y` —
+equivalence-grade (XOR-cancellation on `Nat`, no byte bound, no `256 ≤ p` gate, strictly simpler
+than the landed C4b). Add the entailed `x − y = 0` (guarded on syntactic `x ≠ y` so the canonical
+self-XOR byte checks `[e, e, 0, 1]` are skipped and the arm stops firing once Gauss renames), keep
+the interaction for byteness, let Gauss remove one operand. ideas.md #3 predicted ~50 keccak
+variables (2028 → ~1978, below powdr's 2021 for the first time).
+
+**Built and proven, then discarded.** Third conjunct on `xorZeroEq_sound` (`[x, y, 0, 1]` accepted
+→ `x = y`; OpenVM proof XORs `y.val` into both sides of `0 = x.val ^^^ y.val` and cancels), fifth
+`xorEq?` arm + spec disjunct, both pass proof obligations extended. `lake build` +
+`check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only). ~40 lines over
+`BusFacts.lean` / `OpenVmFacts.lean` / `XorEqExtract.lean`; trivially re-creatable from this entry.
+
+**Measured: exact no-op on the entire corpus.**
+- keccak: byte-identical **2028 v / 120 c / 2418 bus** (baseline re-measured in-session for a clean
+  A/B).
+- openvm-eth 100-case sweep: aggregates identical to baseline (vars 4.509×/3.820×, bus
+  3.401×/2.705×, constraints 10.590×/11.578×; per-case 25 W / 42 L / 33 T).
+- Render census of the current keccak *output*: **zero** `[x, y, 0, 1]` interactions. Bus 6 holds
+  1183 op-1 XORs — every one with a *variable* result slot — plus 55 **op-0** pair checks
+  `[x, y, 0, 0]`.
+- Instrumented pass (`dbg_trace` counter on the arm's exact match condition): **0 matches in every
+  cleanup cycle** — i.e. the shape is absent mid-pipeline too, not merely in final outputs — on
+  keccak and the XOR-heavy eth cases (apc_037/051/071/010). Positive control: the same channel
+  counting all-arm extractions prints the known C4a/C4b firings (112/96/72/24 per cycle on
+  apc_071), so the zero is real, not an instrumentation artifact.
+
+**Why the census was wrong.** ideas.md #3 claimed "50 result-zero XORs on keccak, all `aᵢ ^ aⱼ = 0`
+with two bare vars". The only z-slot-zero bitwise messages in the current output are the **op-0**
+byte-pair checks (55 ≈ the claimed 50): `[x, y, 0, 0]` range-checks both operands and carries **no
+equality semantics**. The census evidently keyed on "slot 2 = 0" without requiring `op = 1` (or was
+taken pre-C4b and never re-checked). OpenVM circuits do not emit `x ⊕ y = 0` as an equality
+encoding — equality is the inverse-marker gadget family (the comparison-gadget idea, now ideas.md #3).
+
+**Outcome: discarded; do not re-propose #3(i).** Worked: no — idea refuted for ~1 h of proof
+effort; the correct order would have been the 5-minute output census *first* (the standing
+what-if-before-build rule; the miss was trusting a recorded census instead of re-verifying it on
+current `main`). The live remainder of ideas.md #3 — (ii) the canonical byte-check recognizer
+(incl. the `[0, x, x, 1]` mirror arm) and (iii) redundant-byte drop + packing — targeted exactly
+the op-0/self-check shapes that *do* exist, and landed independently as entry 75 (#113), which
+also reconfirmed this entry's result-zero dead-end on its own render census.
+
+**Impact: none (no code landed).**
+
+### 76. Is-equal gadget collapse via sum-of-squares — landed
+
+**Idea (the is-equal slice of the comparison-gadget idea, now ideas.md #3).** The is-equal/is-zero gadget keeps one
+inverse-marker witness per limb (`−cmp + Σ (aᵢ − bᵢ)·diff_inv_markerᵢ = 0`, four markers per
+comparison); powdr keeps a **single** witness. The linear collapse (`hintCollapse`) is unsound here
+because signed differences can cancel; the sound form is powdr's **sum-of-squares**:
+`inv · Σ (aᵢ − bᵢ)² = cmp` with one derived `inv = QuotientOrZero(...)` column — zero iff all limbs
+match, because each `(aᵢ − bᵢ)²` has value < 256² (byte-bounded limbs) so the sum cannot wrap `p`
+(`sumSq_zero_all_eq`; needs `65536 ≤ p` and `#limbs · 65536 < p`, both checked). Drops n−1 markers
+per gadget. Reencode-class completeness handled by the derived-column bookkeeping; no new
+`BusFacts`.
+
+**Provenance.** Built and measured on branch `c6-tuple-range-pack` (commit 05fd3a0, on the #97
+base): −48 vars / 16 cases / 0 regressions. This entry is the rebase onto current `main`
+(finally onto #113): the 640-line `EqCollapse.lean` ported **unchanged** (two unused-simp-arg lint
+fixes only), wiring translated to one `cleanupPasses` entry after `hintCollapse`. Premise
+re-verified fresh: #110's census still lists `diff_inv_marker` +61 over 16 cases, and the per-case
+win reproduced identically on the #110 and #113 bases.
+
+**Measured on current `main` (per-case JSON diff, not aggregates):**
+- openvm-eth: **16 cases improved, every one exactly −3 vars, 0 regressions on any axis, net −48
+  vars**; bus and constraints byte-neutral corpus-wide. Aggregate variables **4.511× → 4.518×**
+  (geo 3.822× → 3.837×); per-case vs powdr **25 W / 42 L / 33 T → 27 W / 29 L / 44 T** (13 losses
+  flipped). `apc_072` 32 → 29 = exact powdr parity on all three axes.
+- keccak: **2028 → 2025 vars** (keccak contains a single is-equal gadget), bus (2348) /
+  constraints (120) unchanged — gap to powdr now **+4**.
+- Runtime (solo A/B sweeps): total **+1.4%**, median case +0.3%; named outliers apc_044 +25%
+  (24.6→30.8 s), apc_019 +19%, apc_080 +54% (1.1→1.7 s). Acceptable for a per-cycle pass; if a
+  future profile flags it, gate the collector on the presence of multi-marker hint constraints.
+
+Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only), zero lint
+warnings. **Worked: yes.**
+
+**Remaining from the same family (ideas.md #3):** the signed-compare / sltu slice
+(`diff_marker` +24, `c_msb_f` +27, `b_msb_f` +19) — needs the sign-split byte-bounded-difference
+coefficients, a different matcher; the is-equal slice this entry lands covered the
+`diff_inv_marker` +61 chunk minus what hintCollapse already caught.
