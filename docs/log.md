@@ -2675,7 +2675,7 @@ taken pre-C4b and never re-checked). OpenVM circuits do not emit `x ⊕ y = 0` a
 encoding — equality is the inverse-marker gadget family (ideas.md #4).
 
 **Outcome: discarded; do not re-propose #3(i).** Worked: no — idea refuted for ~1 h of proof
-effort; the correct order would have been the 5-minute output census *first* (the roadmap's own
+effort; the correct order would have been the 5-minute output census *first* (the standing
 what-if-before-build rule; the miss was trusting a recorded census instead of re-verifying it on
 current `main`). The live remainder of ideas.md #3 is unaffected and stays the top bus lever:
 (ii) one canonical byte-check recognizer (incl. the missing `[0, x, x, 1]` mirror arm) and
@@ -2686,7 +2686,7 @@ those target exactly the op-0/self-check shapes that *do* exist.
 
 ### 75. Is-equal gadget collapse via sum-of-squares — rebased onto #110 and landed
 
-**Idea (roadmap §3.1 / the is-equal slice of ideas.md #4).** The is-equal/is-zero gadget keeps one
+**Idea (the is-equal slice of ideas.md #4).** The is-equal/is-zero gadget keeps one
 inverse-marker witness per limb (`−cmp + Σ (aᵢ − bᵢ)·diff_inv_markerᵢ = 0`, four markers per
 comparison); powdr keeps a **single** witness. The linear collapse (`hintCollapse`) is unsound here
 because signed differences can cancel; the sound form is powdr's **sum-of-squares**:
