@@ -9,18 +9,18 @@ this regeneration was in flight, **#117 (entry 77) and #119 (entry 78) merged**,
 on rebase from the entries' measured numbers. Older write-ups had stale or wrong gap
 attributions; re-measure before trusting anything, including this file.
 
-## Where we stand (main `9c92008`, post-#117/#119)
+## Where we stand (post-#117/#119 + entry 80 = idea 4(b)+(c))
 
 Absolute output totals (identical inputs, so `agg` effectiveness follows directly):
 
 | benchmark | axis | apc | powdr | apc − powdr |
 |---|---|---|---|---|
 | openvm-eth (100) | variables | 27,967 | 30,885 | **−2,918 (lead)** |
-| | bus interactions | 16,727 | 16,722 | **+5 (agg deficit −0.001)** |
-| | constraints | 11,213 | 20,299 | −9,086 (lead) |
+| | bus interactions | 16,595 | 16,722 | **−127 (lead; was +5)** |
+| | constraints | 11,303 | 20,299 | −8,996 (lead) |
 | keccak | variables | 2,025 | 2,021 | +4 |
-| | bus interactions | 2,027 | 1,734 | **+293** |
-| | constraints | 120 | 186 | −66 |
+| | bus interactions | 1,959 | 1,734 | **+225 (was +293)** |
+| | constraints | 188 | 186 | +2 (was −66; the width-1→booleanity trade) |
 
 Per-case standings on eth: variables **27 W / 29 L / 44 T** (+172 total over the losing cases).
 Bus per-case was **7 W / 67 L / 26 T** (+588 over losing cases) at the measurement base;
@@ -38,14 +38,16 @@ LANDED are done — the remainder still adds up to the current gaps):
 - **eth variables +172** = M1 constant decompositions **+135** · M2 comparison gadgets residue
   **≈ +57** (of the original +105, #114 landed −48) · M3 dead `bit_multiplier` **+14** ·
   everything else nets in apc's favor (−114 value cluster).
-- **eth bus** (was +588 over losing cases; −191 landed) = width-1 range checks **90** ·
-  ~~cancellable memory pairs 78~~ + op-0 coverage waste (**LANDED**: #117 −76, #119 −115) ·
-  long same-address chains **64** (apc_010 still 247 vs 239) · constant-family checks **~126**
-  (84 solvable directly) · tuple-slot coverage waste (**remainder of the ≥112 bucket**) ·
-  subsumed range checks **22** · NOT-form byte checks **23** · residual scattered.
-- **keccak bus +293** (was +614; #117 −276 memory = exact powdr parity, #119 −45 op-0 waste) =
-  NOT-form byte checks **200** · width-1 checks **68** · ~25 misc — the bus-3 width histograms
-  are otherwise *identical* to powdr's.
+- **eth bus** (was +588 over losing cases; −191 + −132 landed) = ~~width-1 range checks 90~~
+  (**LANDED**: entry 80 −89) · ~~cancellable memory pairs 78~~ + op-0 coverage waste
+  (**LANDED**: #117 −76, #119 −115) · long same-address chains **64** (apc_010 still 247 vs 239) ·
+  constant-family checks **~126** (84 solvable directly) · tuple-slot coverage waste
+  (**remainder of the ≥112 bucket**) · ~~subsumed range checks 22~~ (**LANDED**: entry 80 ≈ −43,
+  the base also catches byte/memory-subsumed wide checks) · NOT-form byte checks **23** ·
+  residual scattered.
+- **keccak bus +293** (was +614; #117 −276 memory = exact powdr parity, #119 −45 op-0 waste,
+  entry 80 −68 width-1) = NOT-form byte checks **200** · ~~width-1 checks 68~~ (**LANDED**) ·
+  ~25 misc — the bus-3 width histograms are otherwise *identical* to powdr's.
 
 ## In flight / recently landed — check `git log origin/main` and open PRs before picking anything up
 
@@ -181,8 +183,9 @@ none (its one gadget landed with #114).
 ## 4. Stateless-check hygiene: recognize, justify, repack  ·  *bus, both benchmarks*  ·  high value / low-medium effort per item
 
 Four convergent fixes to how byte/range obligations are recognized and laid out; (d)'s op-0
-half already landed as #119. The remainder is worth ~**270 keccak** (lands it on powdr's 1734
-floor) + ~**135+ eth** bus interactions. Independent items — land separately.
+half already landed as #119, and **(b)+(c) landed together** (entry 80): keccak −68, eth −132
+bus, 0 variable/bus regressions. The remainder — (a) NOT-form byte checks and (d)'s tuple half —
+is worth ~**270 keccak** + a few dozen eth bus interactions. Independent items — land separately.
 
 **(a) NOT-form byte checks** (keccak **200**, eth **23**). After C4b substitutes `z := 255 − x`,
 the interaction remains as `[x, 255, 255 − x, 1]` — semantically just "x is a byte" — but
@@ -196,22 +199,25 @@ genuine-XOR slot (96 as x, 8 as y, 12 as z, 84 via "255−v occurs as an XOR ope
 23 sit on raw memory-receive slots (slotBound-justified). Expected: keccak −200, eth −23, both
 variable-neutral.
 
-**(b) Width-≤1 range checks → booleanity** (keccak **68**, eth **90**). `[e, 1]` on the
-var-range bus ⟺ `e ∈ {0,1}` ⟺ `e·(e−1) = 0` (degree 2 ≤ 3; all current instances have e of
-degree 1). Extend `ZeroWidthRange.lean` (width-0 → equality) with a width-1 arm: same two-step
-proof — ADD the booleanity constraint via `PassCorrect.ofEnvEq` (an accepted `[e,1]` forces
-`e.val < 2`), then DROP the interaction via `filterBusEntailed_correct` (booleanity + `p` prime
-⟹ value < 2 ⟹ accepted). New `BusFacts` field `oneRangeBool` mirroring `zeroRangeEq`. Trades
-bus −1 for constraints +1: a strict lexicographic win, compatible with the fixpoint `sizeKey`.
-On eth, powdr additionally *eliminates* the freed boolean via the new constraint + an affine
-relation (e.g. the SRL-by-1 `bit_shift_carry` vars vanish entirely) — Gauss gets that for free
-once the equality is algebraic. Worked example (keccak, 68×): `[bit_shift_marker_k, 1]` →
-`bit_shift_marker_k² − bit_shift_marker_k = 0`.
+**(b) Width-1 range checks → booleanity — LANDED (entry 80).** `[e, 1]` on the var-range bus ⟺
+`e ∈ {0,1}` ⟺ `e·(e−1) = 0` (degree 2 ≤ 3). `ZeroWidthRange.lean` grew a width-1 arm: ADD the
+booleanity via `PassCorrect.ofEnvEq` (accepted `[e,1]` forces `e.val < 2`), DROP the interaction
+via `filterBusEntailed_correct`. **No new `BusFacts` field was needed** — the width-1 iff comes
+straight from the existing mult-generic `varRangeBus` fact, so the idea's proposed `oneRangeBool`
+was redundant. Gated on `p` prime (backward direction needs an integral domain) with a
+per-candidate degree gate (`e.degree ≤ 1`) so it never trips the whole-pass `guardDegree` revert.
+Measured: keccak −68 bus / +68 con, eth −89 bus / +90 con, **0 variable regressions**.
 
-**(c) Subsumed range checks** (eth **22**). apc keeps `[v, 13]` on bus 3 while the same `v`
-also sits in a tuple v2 slot (< 2048 ⊂ < 8192). Drop any bus-3 check whose bound is already
-entailed by a *stronger* retained check on the canonically-equal value (BoundsMap lookup; the
-drop is `filterBusEntailed_correct` again). Keep direction strict: only drop the *weaker* check.
+**(c) Subsumed range checks — LANDED (entry 80).** `SubsumedRange.lean` (coda) drops a var-range
+check `[x, w]` when the **non-circular base** (interactions this pass never drops) already bounds
+`x` by `b' ≤ 2^w`, via the proven `findVarBound` (`slotBound`-derived: tuple slots, byte-limb
+memory receives, any retained range check) + `filterBusEntailed_correct` — the exact structure of
+`RedundantByteDrop`. Two corrections to the original write-up: the direction is **`≤`, not strict
+`<`** (apc_038's `mem_ptr_limbs__1` sits in a `[256, 8192]` tuple slot bounding it by exactly
+`2^13`, which a strict test would miss; the non-circular base — not strictness — is what prevents
+mutual-subsumption double-drops), and because the base subsumes byte/memory sources too it reaches
+**~43 eth interactions**, not 22. Measured: eth ≈ −43 bus, **0 variable/bus regressions**; keccak
+has no such pairs (0).
 
 **(d) Coverage repack after unification — tuple-slot half** (op-0 half **LANDED as #119**,
 entry 78: explode `[a,b,0,0]` into single-value checks in the coda, dedup, drop justified
