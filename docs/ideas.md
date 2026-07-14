@@ -30,37 +30,28 @@ structural families, each addressed by one idea below.
 
 ---
 
-## 1. Fold byte/limb decompositions of compile-time constants  ·  *variables*  ·  high confidence · medium effort
+## 1. Fold constant limb decompositions — **RE-SCOPED (entry 78): needs chain reasoning, not a digit lemma**  ·  *variables*  ·  high effort
 
-**Gap:** `rd_data`/PC-limb families are the single largest variable loss — ~93 vars over 23 cases,
-and **powdr keeps zero of them**. On JAL/JALR-terminated blocks the return address and jump target
-are compile-time constants, so powdr folds every limb to a literal; apc keeps them free because
-cracking `Σ 256ⁱ·byteᵢ = K` under byte bounds needs positional-uniqueness reasoning Gauss can't do
-(the 256³ combination space is too large for domain enumeration). Measured: `apc_045` +14 (all
-constant-PC limbs), `apc_026` +14, and the return-address part of the `+3` cluster
-(`apc_011/013/022/027/033/034/040/043`).
+**Mechanism correction (measured, entry 78).** The sketched pass — fold affine
+`Σ cᵢ·xᵢ = K` under range bounds — measures **−2 / −3 / 0 vars** on apc_045/apc_026/apc_013
+(faithful pin-and-reoptimize what-if): the clean equations exist only in the raw input, cover
+only the `imm_limbs` slice, and constant-seeding does **not** cascade. (An optimistic what-if
+claiming −54/−141/−154 was traced to unsoundly pinning `Σ flagᵢ = 1` one-hot selector sums —
+excluded.) Do not build the affine-only pass.
 
-**Mechanism** (new `VerifiedPass`; `ZeroWidthRange` is the `K=0`, single-term special case):
+**Where the (still-real) gap lives** — apc_045/apc_026 remain +14 vars each vs powdr, which
+folds every one of these limbs to literals:
+- **Bounded-payload idiom** (~3 vars/case): memory payload `K − Σ 256ⁱ⁺¹·rdᵢ` asserted a byte by
+  a bitwise pair check; with the limbs' range checks the digits are forced (hand-verified =
+  powdr's values). Recognizer needs payload linearization + bus-side byte facts; a contained
+  sub-pass, worth building if the census over the ~20 affected cases justifies it.
+- **Guarded two-root carry chains** (~11 vars/case): `(L−r₁)(L−r₂) = 0` with both roots inside
+  the operands' interval per-constraint — only the joint chain + range facts disambiguate.
+  Requires multi-constraint interval/relational reasoning (idea #6-class saturation), not a
+  mixed-radix lemma. carryBranch cannot be unblocked by constant seeding (measured).
 
-```
-for each affine constraint  Σ cᵢ·xᵢ = K   (K a field constant):
-    require each xᵢ range-bounded 0 ≤ xᵢ < Bᵢ   (from its range-check bus fact / byteJustified)
-    sort terms by |cᵢ|; require a non-overlapping mixed-radix system:
-        cᵢ·(Bᵢ−1) < c_{i+1}   for all i,   and   Σ cᵢ·(Bᵢ−1) < p   (no wrap)
-    then the xᵢ are UNIQUELY forced:  xᵢ = digitᵢ(K)  by iterated div/mod
-    emit  Derivation xᵢ := ComputationMethod.Constant (digitᵢ K)
-    substitute the literal everywhere; drop the now-entailed range checks
-```
-
-**Why sound.** Soundness = uniqueness of a bounded mixed-radix representation (a `Nat.div`/`Nat.mod`
-digit lemma — no `native_decide`): the constraint already forces `xᵢ = digitᵢ(K)`, so substituting
-the constant preserves the satisfying set. Completeness: a real trace's column literally holds that
-constant, so the `Constant` method reproduces it (`derivesWitness` holds). Dropped range checks are
-entailed (`digitᵢ(K) < Bᵢ`).
-
-**Expected impact.** ~40–65 of the 103 extra vars across the losing cases; flips ~6–10 losses to
-ties/wins (roughly 25 W / 42 L → ~32 W / 34 L, and lifts the thin +0.031 geomean variable lead).
-Top-priority axis.
+Census refresh needed before any build: the "+93 vars / 23 cases" figure predates #114/#117
+(apc_013 is now a variable tie).
 
 ---
 

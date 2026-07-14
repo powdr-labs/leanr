@@ -2814,3 +2814,46 @@ bytePackLate → …`): the split transiently *increases* the bus count, so it m
 the size-decreasing cleanup fixpoint. No new `BusFacts`; the pass reuses the `bytePairBus`/
 `byteCheck` facts that `bytePackPass` was proven from. Build + proof integrity green
 ({propext, Classical.choice, Quot.sound}-only).
+### 79. Constant limb-decomposition folding (ideas.md #1): mechanism refuted by what-if — re-scoped, no pass built
+
+**Idea (ideas.md #1, the ranked-top variable lever).** Fold `rd_data`/PC-limb decompositions of
+compile-time constants: for an affine `Σ cᵢ·xᵢ = K` with range-bounded `xᵢ` and non-overlapping
+mixed-radix coefficients, the `xᵢ` are uniquely `K`'s digits — substitute and drop the range
+checks. Predicted ~40–65 vars over 23 cases.
+
+**Premise check (renders + a scratch `whatif41` pin-and-reoptimize command, since reverted).**
+The clean affine shape exists **only in the raw input** (e.g. apc_045's
+`imm_limbs__0 + 256·imm__1 + 65536·imm__2 = 16777200`) — Gauss consumes it in the first cycle,
+so a cycle-placed pass never sees it and a prelude-placed pass sees *only* that slice. The
+faithful what-if (pin the strictly-decreasing-coefficient digit solutions, re-run the full
+pipeline): **apc_045 −2 vars, apc_026 −3, apc_013 0** — against powdr gaps of +14/+14/0 on those
+cases. An optimistic first cut had claimed −54/−141/−154, which decomposed into exactly 8
+equations × 5 pins of `Σ flagᵢ = 1` **one-hot selector sums** (all-(−1) coefficients — not
+uniquely forced; pinning them is unsound and collapses the selector logic). Filter those and the
+mechanism is nearly empty.
+
+**Where the +14-per-case really lives** (apc_045 anatomy, confirmed against powdr's render,
+which folds every one of these limbs to literals — write payload `[…, 20, 66, 41, 0, …]`, jump
+target `2701288`):
+- ~3 vars: a *bounded-payload* idiom — the memory write carries
+  `2703892 − 256·rd₀ − 65536·rd₁ − 16777216·rd₂` and a bitwise pair check asserts it is a byte;
+  with the limbs' range checks this forces the digits (verified by hand: exactly powdr's values).
+  A recognizer needs bus-side byte facts + payload linearization, not constraint matching.
+- ~11 vars: **guarded two-root carry chains** (`is_valid·(L)·(c·L − 1) = 0` in the input,
+  normalized mid-pipeline to `(L − r₁)(L − r₂) = 0` with **both roots inside the operands'
+  interval** — e.g. roots −200/+56 for `b − a ∈ (−256, 256)`). No single constraint
+  disambiguates; only the joint chain plus the range facts does. Measured: seeding the constants
+  from the affine slice does **not** cascade (pinned apc_045 stays at 93 vars — `carryBranch`
+  cannot use the tighter constants because per-constraint both roots stay feasible). This is
+  multi-constraint interval/relational reasoning — ideas.md #6-class (finite-domain relational
+  saturation), not a digit lemma.
+
+**Outcome: no pass built; idea re-scoped in ideas.md** (the affine slice is not worth a pass at
+−2/−3/0; the real lever is re-classified as high-effort chain reasoning). The census total
+(~93 vars / 23 cases) also needs a refresh — apc_013 is a variable *tie* with powdr post-#114.
+Worked: the premise check did — mechanism refuted for the cost of a render + a ~40-line scratch
+command, before any proof work. Second instance of the pattern from the result-zero entry:
+**recorded mechanisms go stale or were never render-verified; check the shape on current output
+first.**
+
+**Impact: none (no code landed).**
