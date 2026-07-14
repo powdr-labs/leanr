@@ -3015,3 +3015,57 @@ fold, so deferred — recorded in ideas.md #3 with the corrected mechanism.
 Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only).
 **Worked: yes.**
 
+### 82. NOT-form byte checks: recognize `[x, 255, 255 − x, 1]` as a byte check (idea 4a) — keccak −200 bus, eth −20 bus, 0 regressions
+
+**Idea (ideas.md #4a).** `xorEqExtractPass` (C4b) linearizes a `255`-operand bitwise XOR
+`[x, 255, z, 1]` into `z = 255 − x`; Gauss substitutes the NOT-result, leaving `[x, 255, 255 − x, 1]`
+on the bitwise-lookup bus — semantically just "x is a byte", but no recognizer matched the shape, so
+it was neither dropped nor packed (keccak keeps 200 of these; eth 23). It is the largest remaining
+keccak bus family: after #117/#119/#122/#120, the keccak bus gap decomposes to "NOT-form byte checks
+200 · ~18 misc".
+
+**Mechanism.**
+- New proven fact `BusFacts.xorComplCheck` (OpenVM instance: bitwise-lookup bus, gated `256 ≤ p`
+  exactly like its sibling `xorComplEq`): `[x, 255, 255 − x, 1]` and mirror `[255, x, 255 − x, 1]`
+  (any multiplicity) are accepted **iff** `x.val < 256`. `trivial` sets it `false`, so the pass is
+  VM-agnostic; zero audit surface.
+- Both single-value byte-check recognizers gain the two NOT arms. The third slot is decided to be
+  `255 − x` by folding `e3 − (255 − e1)` and checking it is the constant `0` via
+  `normalize`/`constValue?` (`isByteCompl`; sound by `normalize_eval`):
+  - `RedundantByteDrop.byteCheckOperands?` returns `[x]`, so the existing `byteJustified` machinery
+    **drops** the interaction (coda) when `x` is byte-justified from the rest of the system;
+  - `ByteCheckPack.svCheck?` recognizes it as a single-value check, so `byteCheckPackPass` **packs**
+    it (with any other single byte check) into a pair `[x, y, 0, 0]` in the cleanup cycle.
+
+**The "reflection / AND-OR justification rule" ideas.md #4a demanded is NOT needed — stale
+attribution.** The file claimed 84 of the 200 keccak operands would need a `255 − v` reflection rule
+in `byteJustified`. Re-measured: every one of the 200 NOT-form operands `x` *also* occurs as a raw
+variable in a genuine-XOR slot (0/1/2) of a *retained* interaction, and `slotBound` already bounds
+those slots to 256, so `findVarBound`/`byteJustified` justify all 200 with the existing machinery —
+the coda drop alone removes exactly 200 keccak bitwise interactions. The 84-via-reflection figure
+was a stale attribution from base 656a9d8; **no reflection/AND-OR rule was added** (it would be dead
+code).
+
+**Why `svCheck?` (cycle packing) too, not just the coda drop.** Coda-drop-only regressed two eth
+cases by +1 bus each: recognizing a NOT-form removes it from `RedundantByteDrop`'s non-circular
+justification base, so a *second* byte-check on the same operand — previously dropped because the
+NOT-form (then in the base) bounded the operand — no longer drops when the operand is not otherwise
+justified. Recognizing the NOT-form in `svCheck?` fixes this: the cleanup-cycle packer folds the
+operand's two checks into one pair, which the coda `splitBytePair`/`dedupLate` collapse to a single
+retained check (net "drop one", not "drop none"). With it both cases become **improvements**.
+(On the pre-#120 base the cycle packing also unlocked a −4-var keccak cascade; #120's digit fold now
+owns those variables — keccak is already at 2021-var parity — so on this base the change is
+variable-neutral and, unlike the pre-#120 measurement, adds **no** keccak runtime.)
+
+**Measured (per-case JSON A/B vs main 851198d; effectiveness is deterministic):**
+- keccak: vars 2021 (unchanged, = powdr parity), **bus 1952 → 1752 (−200)**, constraints 186
+  (unchanged); bus effectiveness 6.794× → 7.569×. Runtime neutral (587 s vs 619 s back-to-back
+  single-threaded — noise on a transiently-slow runner).
+- openvm-eth (100 cases): vars agg **4.545× (identical)**, constraints **10.544× (identical)**, bus
+  agg 3.536× → **3.541×** (geo 2.796× → 2.799×; powdr 3.480× — the eth bus aggregate leads powdr by
+  +0.061×). **3 cases improved (apc_071 −16, apc_037 −2, apc_064 −2) = −20 bus, 0 regressions**;
+  per-case W/L/T vs powdr 30/11/59 unchanged; runtime +3% (rough, parallel-contended).
+
+Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only); audited
+surface untouched. **Worked: yes.**
+

@@ -694,6 +694,61 @@ def openVmFacts (p : ℕ) [NeZero p]
         rw [hzxor, hc]; exact nat_xor_255 y.val hyb
       have hz : z = ((z.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse z).symm
       rw [hz, hzv, Nat.cast_sub (hle_of y hyb), ZMod.natCast_rightInverse y, hcast255]
+  xorComplCheck busId := match busMap busId with
+    | some .bitwiseLookup => decide (256 ≤ p)
+    | _ => false
+  xorComplCheck_sound := by
+    intro busId h
+    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
+      revert h; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    have hple : 256 ≤ p := by
+      have h' : (match busMap busId with
+          | some OpenVmBusType.bitwiseLookup => decide (256 ≤ p) | _ => false) = true := h
+      rw [hbus] at h'; exact of_decide_eq_true h'
+    have hp2 : 1 < p := by omega
+    have h1val : (1 : ZMod p).val = 1 := by
+      rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_eq_of_lt hp2
+    have hcast255 : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
+    have h255val : (255 : ZMod p).val = 255 := by
+      rw [← hcast255, ZMod.val_natCast_of_lt (by omega : (255 : ℕ) < p)]
+    -- `(255 − x).val = 255 − x.val` when `x` is a byte (no wrap: `x.val ≤ 255 < p`).
+    have hsubval : ∀ x : ZMod p, x.val < 256 → (255 - x).val = 255 - x.val := by
+      intro x hx
+      have hxle : x.val ≤ 255 := Nat.le_of_lt_succ (by omega)
+      have hx' : x = ((x.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse x).symm
+      calc (255 - x).val
+          = ((255 : ZMod p) - ((x.val : ℕ) : ZMod p)).val := by rw [← hx']
+        _ = (((255 - x.val : ℕ) : ZMod p)).val := by
+              rw [Nat.cast_sub hxle, hcast255]
+        _ = 255 - x.val := ZMod.val_natCast_of_lt (by omega)
+    -- both checks reduce to "`x` is a byte": op = 1, `255` is a byte, and `255 − x = x ⊕ 255`.
+    refine ⟨?_, ?_, ?_⟩
+    · show (match busMap busId with | some t => t.isStateful | none => false) = false
+      rw [hbus]; rfl
+    · intro x mult
+      show violates busMap { busId := busId, multiplicity := mult, payload := [x, 255, 255 - x, 1] }
+          = false ↔ x.val < 256
+      unfold violates; rw [hbus]
+      simp only [h1val, h255val, isByte, Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq]
+      constructor
+      · rintro ⟨⟨hxb, _⟩, _⟩; exact hxb
+      · intro hxb
+        refine ⟨⟨hxb, by omega⟩, ?_⟩
+        rw [hsubval x hxb, ← nat_xor_255 x.val hxb]
+    · intro x mult
+      show violates busMap { busId := busId, multiplicity := mult, payload := [255, x, 255 - x, 1] }
+          = false ↔ x.val < 256
+      unfold violates; rw [hbus]
+      simp only [h1val, h255val, isByte, Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq]
+      constructor
+      · rintro ⟨⟨_, hxb⟩, _⟩; exact hxb
+      · intro hxb
+        refine ⟨⟨by omega, hxb⟩, ?_⟩
+        have hc : Nat.xor 255 x.val = Nat.xor x.val 255 := Nat.xor_comm 255 x.val
+        rw [hsubval x hxb, hc]
+        exact (nat_xor_255 x.val hxb).symm
   varRangeBus busId := match busMap busId with
     | some .variableRangeChecker => true
     | _ => false

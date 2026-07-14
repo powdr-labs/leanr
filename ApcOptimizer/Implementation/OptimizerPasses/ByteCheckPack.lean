@@ -1,14 +1,19 @@
 import ApcOptimizer.Implementation.OptimizerPasses.TupleRange
+import ApcOptimizer.Implementation.OptimizerPasses.Normalize
+import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
 
 set_option autoImplicit false
 
 /-! # Generalized single-value byte-check packing (`byteCheckPackPass`)
 
-On a bitwise-style lookup bus a single value is byte-range-checked in one of three multiplicity-1
+On a bitwise-style lookup bus a single value is byte-range-checked in one of several multiplicity-1
 encodings that all impose exactly "this value is a byte":
 
 * the self-check `[x, x, 0, 1]` (`BusFacts.byteCheck`),
-* the XOR-with-zero form `[x, 0, x, 1]` and its mirror `[0, x, x, 1]` (`BusFacts.xorZeroCheck`).
+* the XOR-with-zero form `[x, 0, x, 1]` and its mirror `[0, x, x, 1]` (`BusFacts.xorZeroCheck`),
+* the NOT (XOR-with-255) form `[x, 255, 255 − x, 1]` and its mirror `[255, x, 255 − x, 1]`
+  (`BusFacts.xorComplCheck`, where the third slot normalizes to `255 − x`) — the shape
+  `xorEqExtractPass` (C4b) + Gauss leave when a `255`-operand XOR's NOT-result is substituted.
 
 Two such single-value checks — in *any* combination of these forms — pack into **one** pair check
 `[eA, eB, 0, 0]` (`BusFacts.bytePairBus`), which imposes the identical obligation "both operands are
@@ -29,11 +34,34 @@ namespace ByteCheckPack
 
 variable {p : ℕ}
 
+/-! ## Recognizing the NOT-form complement -/
+
+/-- `255 − e` as an expression. -/
+def complExpr (e : Expression p) : Expression p := .add (.const 255) (.mul (.const (-1)) e)
+
+/-- Does `b` evaluate to the byte complement `255 − a` under every assignment? Decided by folding
+    `b − (255 − a)` to a constant and checking it is `0`. Recognizes the third slot of the NOT-form
+    byte check `[a, 255, 255 − a, 1]` that `xorEqExtractPass` (C4b) + Gauss leave on the bus. -/
+def isByteCompl (a b : Expression p) : Bool :=
+  (Expression.add b (.mul (.const (-1)) (complExpr a))).normalize.constValue? == some 0
+
+theorem isByteCompl_sound (a b : Expression p) (h : isByteCompl a b = true)
+    (env : Variable → ZMod p) : b.eval env = 255 - a.eval env := by
+  unfold isByteCompl at h
+  have hc : (Expression.add b (.mul (.const (-1)) (complExpr a))).normalize.constValue? = some 0 := by
+    simpa using h
+  have h0 : (Expression.add b (.mul (.const (-1)) (complExpr a))).eval env = 0 := by
+    have := Expression.constValue?_sound _ (0 : ZMod p) hc env
+    rwa [Expression.normalize_eval] at this
+  simp only [complExpr, Expression.eval] at h0
+  linear_combination h0
+
 /-! ## Recognizing a single-value byte check in any encoding -/
 
 /-- The value byte-checked by a multiplicity-1 single-value bitwise byte check: the self-check
-    `[x, x, 0, 1]` (`byteCheck`) and the two XOR-with-zero mirrors `[x, 0, x, 1]` / `[0, x, x, 1]`
-    (`xorZeroCheck`) all return `some x`; `none` otherwise. -/
+    `[x, x, 0, 1]` (`byteCheck`), the two XOR-with-zero mirrors `[x, 0, x, 1]` / `[0, x, x, 1]`
+    (`xorZeroCheck`), and the two NOT (XOR-with-255) forms `[x, 255, 255 − x, 1]` /
+    `[255, x, 255 − x, 1]` (`xorComplCheck`) all return `some x`; `none` otherwise. -/
 def svCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) : Option (Expression p) :=
   match bi.payload with
@@ -42,6 +70,8 @@ def svCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
       if facts.byteCheck bi.busId = true ∧ e1 = e2 ∧ e3 = Expression.const 0 then some e1
       else if facts.xorZeroCheck bi.busId = true ∧ e2 = Expression.const 0 ∧ e1 = e3 then some e1
       else if facts.xorZeroCheck bi.busId = true ∧ e1 = Expression.const 0 ∧ e2 = e3 then some e2
+      else if facts.xorComplCheck bi.busId = true ∧ e2 = Expression.const 255 ∧ isByteCompl e1 e3 = true then some e1
+      else if facts.xorComplCheck bi.busId = true ∧ e1 = Expression.const 255 ∧ isByteCompl e2 e3 = true then some e2
       else none
     else none
   | _ => none
@@ -66,7 +96,7 @@ theorem svCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     -- payload shape and multiplicity
     have hmem : ∀ x ∈ ([e1, e2, e3, e4] : List (Expression p)), x ∈ bi.payload := by
       intro x hx; rw [hpay]; exact hx
-    split_ifs at h with hmo hA hB hC
+    split_ifs at h with hmo hA hB hC hD hE
     · -- self-check `[x, x, 0, 1]`
       obtain ⟨hm, he4⟩ := hmo; obtain ⟨hfact, he12, he3⟩ := hA
       obtain rfl : e1 = e := by simpa using h
@@ -97,6 +127,30 @@ theorem svCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
         rw [hm, hpay, he1, ← he23, he4]; simp [Expression.eval]
       rw [heq]
       exact ((facts.xorZeroCheck_sound bi.busId hfact).2.2 (e2.eval env) 1)
+    · -- NOT-form `[x, 255, 255 - x, 1]`
+      obtain ⟨hm, he4⟩ := hmo; obtain ⟨hfact, he2, hcompl⟩ := hD
+      obtain rfl : e1 = e := by simpa using h
+      refine ⟨(facts.xorComplCheck_sound bi.busId hfact).1, hm, hmem e1 (by simp), fun env => ?_⟩
+      have he3 : e3.eval env = 255 - e1.eval env := isByteCompl_sound e1 e3 hcompl env
+      have heq : bi.eval env
+          = { busId := bi.busId, multiplicity := 1,
+              payload := [e1.eval env, 255, 255 - e1.eval env, 1] } := by
+        unfold BusInteraction.eval
+        rw [hm, hpay, he2, he4]; simp [Expression.eval, he3]
+      rw [heq]
+      exact ((facts.xorComplCheck_sound bi.busId hfact).2.1 (e1.eval env) 1)
+    · -- mirror NOT-form `[255, x, 255 - x, 1]`
+      obtain ⟨hm, he4⟩ := hmo; obtain ⟨hfact, he1, hcompl⟩ := hE
+      obtain rfl : e2 = e := by simpa using h
+      refine ⟨(facts.xorComplCheck_sound bi.busId hfact).1, hm, hmem e2 (by simp), fun env => ?_⟩
+      have he3 : e3.eval env = 255 - e2.eval env := isByteCompl_sound e2 e3 hcompl env
+      have heq : bi.eval env
+          = { busId := bi.busId, multiplicity := 1,
+              payload := [255, e2.eval env, 255 - e2.eval env, 1] } := by
+        unfold BusInteraction.eval
+        rw [hm, hpay, he1, he4]; simp [Expression.eval, he3]
+      rw [heq]
+      exact ((facts.xorComplCheck_sound bi.busId hfact).2.2 (e2.eval env) 1)
 
 /-! ## Acceptance of a pair check -/
 

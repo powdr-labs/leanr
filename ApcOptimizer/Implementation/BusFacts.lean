@@ -256,6 +256,24 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       (∀ (y z : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [255, y, z, 1] }
           = false → z = 255 - y)
+  /-- Byte-check *via XOR-with-255* (the NOT form): the sibling of `xorZeroCheck`. On a stateless
+      bitwise-style bus the checks `[x, 255, 255 − x, 1]` (`x ⊕ 255 = 255 − x`) and its mirror
+      `[255, x, 255 − x, 1]` — multiplicity any — are each accepted **iff** `x` is a byte. After
+      `xorEqExtractPass` (C4b) linearizes a `255`-operand XOR and Gauss substitutes the NOT-result
+      `z := 255 − x`, exactly this shape is left on the bus; its sole obligation is "`x` is a byte"
+      (the third slot being `255 − x` is then vacuous), so the redundant-byte-check dropper and the
+      byte-check packer should treat it as a single-value byte check on `x`. Sound only when `255`
+      is a genuine byte of the field (`256 ≤ p`); a small field, and `trivial`, set it `false`. -/
+  xorComplCheck : (busId : Nat) → Bool
+  xorComplCheck_sound :
+    ∀ (busId : Nat), xorComplCheck busId = true →
+      bs.isStateful busId = false ∧
+      (∀ (x mult : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, 255, 255 - x, 1] }
+            = false ↔ x.val < 256) ∧
+      (∀ (x mult : ZMod p),
+        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [255, x, 255 - x, 1] }
+            = false ↔ x.val < 256)
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
@@ -290,3 +308,5 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   xorZeroEq_sound := by intro _ h; exact absurd h (by simp)
   xorComplEq _ := false
   xorComplEq_sound := by intro _ h; exact absurd h (by simp)
+  xorComplCheck _ := false
+  xorComplCheck_sound := by intro _ h; exact absurd h (by simp)
