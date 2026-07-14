@@ -643,11 +643,14 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     (hsplit : cs.busInteractions = A ++ S :: B ++ R :: C)
     (hSbus : S.busId = busId) (hRbus : R.busId = busId)
     (hSm : S.multiplicity.constValue? = some 1) (hRm : R.multiplicity.constValue? = some (-1))
-    (hpay : S.payload = R.payload)
-    (hmidEval : ∀ (env : Variable → ZMod p), ∀ m0 ∈ B, (m0.eval env).busId = busId →
+    (hpayEval : ∀ (env : Variable → ZMod p), (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
+      (S.eval env).payload = (R.eval env).payload)
+    (hmidEval : ∀ (env : Variable → ZMod p), (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
+        ∀ m0 ∈ B, (m0.eval env).busId = busId →
         (m0.eval env).multiplicity ≠ 0 →
         shape.address (m0.eval env) = shape.address (S.eval env) → False)
-    (hpreEval : ∀ (env : Variable → ZMod p) (A_pre : List (BusInteraction (Expression p)))
+    (hpreEval : ∀ (env : Variable → ZMod p), (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
+        ∀ (A_pre : List (BusInteraction (Expression p)))
         (m0 : BusInteraction (Expression p)) (A_suf : List (BusInteraction (Expression p))),
         A = A_pre ++ m0 :: A_suf → (m0.eval env).busId = busId →
         (m0.eval env).multiplicity ≠ 0 →
@@ -675,10 +678,9 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
   have hSactive : ∀ env, (S.eval env).multiplicity ≠ 0 := fun env => by rw [hSmEv env]; exact hp1
   have hRactive : ∀ env, (R.eval env).multiplicity ≠ 0 :=
     fun env => by rw [hRmEv env]; exact neg_ne_zero.mpr hp1
-  have hpayEv : ∀ env, (S.eval env).payload = (R.eval env).payload := fun env => by
-    show S.payload.map (fun e => e.eval env) = R.payload.map (fun e => e.eval env); rw [hpay]
-  have haddrEv : ∀ env, shape.address (S.eval env) = shape.address (R.eval env) := fun env => by
-    simp only [MemoryBusShape.address, hpayEv env]
+  have haddrEv : ∀ env, (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
+      shape.address (S.eval env) = shape.address (R.eval env) := fun env hcon => by
+    simp only [MemoryBusShape.address, hpayEval env hcon]
   -- Membership: the kept core `A ++ B ++ C` is among `cs`'s interactions.
   have hmem_core : ∀ bi, bi ∈ A ++ B ++ C → bi ∈ cs.busInteractions := by
     intro bi hbi
@@ -697,9 +699,12 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
       (hbyte env (fun c hc => hsat.1 c hc) ?_)
     intro bi hbi hne
     exact hsat.2 bi (by rw [houtb]; exact hbi) hne
-  -- Side effects are `≈`-equal (the pair contributes `0` net; the checks are stateless).
-  have hSE : ∀ env, cs.sideEffects bs env ≈ out.sideEffects bs env := by
-    intro env
+  -- Side effects are `≈`-equal (the pair contributes `0` net; the checks are stateless). The
+  -- evaluated-payload equality is discharged from the constraints, which hold in **both**
+  -- refinement directions — a drop leaves `algebraicConstraints` untouched.
+  have hSE : ∀ env, (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
+      cs.sideEffects bs env ≈ out.sideEffects bs env := by
+    intro env hcon
     have e1 : cs.sideEffects bs env = toBusState bs env (A ++ S :: B ++ R :: C) := by
       show toBusState bs env cs.busInteractions = toBusState bs env (A ++ S :: B ++ R :: C)
       rw [hsplit]
@@ -710,7 +715,7 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     rw [e1, e2]
     exact sideEffects_dropPair_equiv bs env A B C S R hSstate hRstate (hSmEv env) (hRmEv env)
       (by rw [show (S.eval env).busId = busId from hSbus, show (R.eval env).busId = busId from hRbus])
-      (hpayEv env)
+      (hpayEval env hcon)
   -- `cs.satisfies` implies `out.satisfies` (the kept core has fewer obligations; each emitted
   -- check is implied by `R`'s own obligation, which `cs.satisfies` includes).
   have hsat_cs_out : ∀ env, cs.satisfies bs env → out.satisfies bs env := by
@@ -734,9 +739,11 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     · exact hsat.2 bi (by rw [houtb]; simp only [List.mem_append]; tauto)
     · exact fun _ => hnvR env hsat
     · exact hsat.2 bi (by rw [houtb]; simp only [List.mem_append]; tauto)
-  -- `admissible` is preserved (completeness).
-  have hadm_cs_out : ∀ env, cs.admissible bs env → out.admissible bs env := by
-    intro env hadm
+  -- `admissible` is preserved (completeness; the constraint satisfaction feeds the two-root
+  -- address-disequality certificates inside the region tests).
+  have hadm_cs_out : ∀ env, cs.admissible bs env →
+      (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) → out.admissible bs env := by
+    intro env hadm hcon
     have hSsurv : (decide ((S.eval env).multiplicity ≠ 0) && bs.isStateful (S.eval env).busId) = true := by
       rw [show bs.isStateful (S.eval env).busId = true from hSstate, Bool.and_true, decide_eq_true_eq]
       exact hSactive env
@@ -764,10 +771,10 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     show bs.admissible (activeStatefulMsgs bs env out.busInteractions)
     rw [hasmOut]
     refine facts.admissible_dropPair hp1 busId shape hshape _ _ _ (S.eval env) (R.eval env)
-      hSbus hRbus (hSmEv env) (hRmEv env) (haddrEv env) ?_ ?_ hadm'
+      hSbus hRbus (hSmEv env) (hRmEv env) (haddrEv env hcon) ?_ ?_ hadm'
     · intro m hm hbid hmne hmaddr
       obtain ⟨m0, hm0, rfl⟩ := mem_activeStatefulMsgs bs env B m hm
-      exact hmidEval env m0 hm0 hbid hmne hmaddr
+      exact hmidEval env hcon m0 hm0 hbid hmne hmaddr
     · -- shield: lift the split of `activeStatefulMsgs A` to a syntactic split of `A`, apply the
       -- syntactic shield `hpreEval`, then push the resulting receive back into the filtered tail.
       intro A₁ Sx A₂ hAsplit hbid hne haddr hmult
@@ -775,7 +782,7 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
         activeStatefulMsgs_split bs env A A₁ A₂ Sx hAsplit
       subst hm0
       obtain ⟨Rp, hRpmem, hRpbid, hRpne, hRpaddr, hRpmult⟩ :=
-        hpreEval env A_pre m0 A_suf hAeq hbid hne haddr hmult
+        hpreEval env hcon A_pre m0 A_suf hAeq hbid hne haddr hmult
       refine ⟨Rp.eval env, ?_, hRpbid, hRpne, hRpaddr, hRpmult⟩
       rw [← hAsuf]
       unfold activeStatefulMsgs
@@ -805,13 +812,13 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
           exact Or.inr ⟨e, he, hve⟩
   -- Assemble via `ofEnvEq` (completeness witness is the input assignment; no derivations).
   exact PassCorrect.ofEnvEq
-    (fun env hsat => ⟨env, hsat_out_cs env hsat, BusState.equiv_symm (hSE env)⟩)
+    (fun env hsat => ⟨env, hsat_out_cs env hsat, BusState.equiv_symm (hSE env hsat.1)⟩)
     (fun hinv env hsat bi hbi => by
       rcases List.mem_append.1 (by rw [houtb] at hbi; exact hbi) with hbi' | hbi'
       · exact hinv env (hsat_out_cs env hsat) bi (hmem_core bi hbi')
       · exact fun _ => (hchecks bi hbi').2.2.1 env)
     hsub
-    (fun env hadm hsat => ⟨hsat_cs_out env hsat, hadm_cs_out env hadm, hSE env⟩)
+    (fun env hadm hsat => ⟨hsat_cs_out env hsat, hadm_cs_out env hadm hsat.1, hSE env hsat.1⟩)
 
 /-! ## The pass: detect and drop matched pairs -/
 
@@ -837,57 +844,212 @@ def Expression.structHash : Expression p → UInt64
 def payloadHash (pl : List (Expression p)) : UInt64 :=
   pl.foldl (fun h e => mixHash h e.structHash) 7
 
-/-- Positions (ascending) of the candidate receives (constant `-1` multiplicity, on `busId`),
-    keyed by payload hash. -/
-def recvIndex (busId : Nat) (arr : Array (BusInteraction (Expression p))) :
+/-- Structural hash of the address slots of a payload (order-sensitive over
+    `shape.addressFields`) — the receive-index key for entailed payload matching: value slots
+    may differ syntactically, addresses must not. -/
+def addrHash (shape : MemoryBusShape) (pl : List (Expression p)) : UInt64 :=
+  shape.addressFields.foldl (fun h slot => mixHash h ((pl[slot]?).elim 5 Expression.structHash)) 7
+
+/-- Positions (ascending) of the candidate receives (constant `-1` multiplicity, on `busId`).
+    In the cycle (`aggressive = false`) the key is the exact payload hash — tiny buckets, cheap
+    syntactic probes. In the coda (`aggressive = true`) it is the *address-slot* hash
+    (`addrHash`), a coarsening under which entailed-equal value slots still land in the probed
+    bucket while addresses must agree syntactically to be found at all. -/
+def recvIndex (busId : Nat) (shape : MemoryBusShape) (aggressive : Bool)
+    (arr : Array (BusInteraction (Expression p))) :
     Std.HashMap UInt64 (List Nat) :=
   (arr.toList.zipIdx).foldr (fun bij m =>
     if decide (multConst bij.1 = some (-1)) && decide (bij.1.busId = busId) then
-      let h := payloadHash bij.1.payload
+      let h := if aggressive then addrHash shape bij.1.payload else payloadHash bij.1.payload
       m.insert h (bij.2 :: m.getD h [])
     else m) ∅
 
-/-- The first indexed position strictly after `i` whose payload equals `S.payload` (positions
-    ascending; the hash bucket pre-filters, the structural comparison decides). -/
-def firstMatchAt (arr : Array (BusInteraction (Expression p)))
+/-! ### Constraint-entailed payload matching
+
+A send and its matching receive can carry *syntactically different* value slots that the
+algebraic constraints force equal — e.g. `busUnify` adds the slot equality
+`read_data − ((1−flag)·srd0 + flag·srd1) = 0` but Gauss cannot apply it within the degree
+bound, so the payloads never become syntactically identical. The pair still cancels: the
+net-zero side-effect argument needs only *evaluated* payload equality, which the constraints
+force — and constraint satisfaction is available in **both** refinement directions because a
+drop leaves `algebraicConstraints` untouched. `EqConstraintMap` indexes the normalized
+constraints by structural hash, so a slot difference is decided by one `normalize` and a hash
+probe (mirroring `TwoRootMap`'s once-per-invocation, proof-carrying design). -/
+
+/-- Normalized constraint forms, bucketed by structural hash; every bucket entry is witnessed
+    as the normalization of an actual constraint. -/
+structure EqConstraintMap (p : ℕ) (constraints : List (Expression p)) where
+  map : Std.HashMap UInt64 (List (Expression p))
+  sound : ∀ (h : UInt64) (ns : List (Expression p)), map[h]? = some ns →
+    ∀ n ∈ ns, ∃ c ∈ constraints, c.normalize = n
+
+namespace EqConstraintMap
+
+variable {constraints : List (Expression p)}
+
+def empty : EqConstraintMap p constraints where
+  map := ∅
+  sound := by
+    intro h ns hns
+    rw [Std.HashMap.getElem?_empty] at hns
+    exact absurd hns (by simp)
+
+/-- Prepend a witnessed normalized form to its hash bucket. -/
+def insertNorm (M : EqConstraintMap p constraints) (n : Expression p)
+    (hw : ∃ c ∈ constraints, c.normalize = n) : EqConstraintMap p constraints where
+  map := M.map.insert n.structHash (n :: (M.map[n.structHash]?).getD [])
+  sound := by
+    intro h ns hns m hm
+    rw [Std.HashMap.getElem?_insert] at hns
+    by_cases hh : (n.structHash == h) = true
+    · rw [if_pos hh] at hns
+      have hns' : n :: (M.map[n.structHash]?).getD [] = ns := by simpa using hns
+      rw [← hns'] at hm
+      rcases List.mem_cons.1 hm with rfl | hm'
+      · exact hw
+      · cases hb : M.map[n.structHash]? with
+        | none => rw [hb] at hm'; simp at hm'
+        | some old =>
+          rw [hb] at hm'
+          exact M.sound n.structHash old hb m (by simpa using hm')
+    · rw [if_neg hh] at hns
+      exact M.sound h ns hns m hm
+
+/-- Fold the normalizations of `pending` (all members of `constraints`) into the map. -/
+def addAll : EqConstraintMap p constraints → (pending : List (Expression p)) →
+    (∀ c ∈ pending, c ∈ constraints) → EqConstraintMap p constraints
+  | M, [], _ => M
+  | M, c :: rest, hmem =>
+    addAll (M.insertNorm c.normalize ⟨c, hmem c (List.mem_cons_self ..), rfl⟩) rest
+      (fun c' h => hmem c' (List.mem_cons_of_mem _ h))
+
+/-- Build the map for a constraint list. -/
+def build (constraints : List (Expression p)) : EqConstraintMap p constraints :=
+  addAll empty constraints (fun _ h => h)
+
+/-- Is (the normalized) `d` one of the normalized constraints? -/
+def test (M : EqConstraintMap p constraints) (d : Expression p) : Bool :=
+  match M.map[d.structHash]? with
+  | some ns => ns.any (fun n => decide (n = d))
+  | none => false
+
+/-- A passing `test d` means `d` evaluates to zero whenever the constraints hold. -/
+theorem test_sound (M : EqConstraintMap p constraints) (d : Expression p)
+    (h : M.test d = true) (env : Variable → ZMod p)
+    (hcon : ∀ c ∈ constraints, c.eval env = 0) : d.eval env = 0 := by
+  unfold test at h
+  cases hb : M.map[d.structHash]? with
+  | none => rw [hb] at h; exact absurd h (by simp)
+  | some ns =>
+    rw [hb] at h
+    obtain ⟨n, hn, heq⟩ := List.any_eq_true.1 h
+    obtain ⟨c, hc, hcn⟩ := M.sound d.structHash ns hb n hn
+    have hnd : n = d := of_decide_eq_true heq
+    rw [← hnd, ← hcn, Expression.normalize_eval]
+    exact hcon c hc
+
+end EqConstraintMap
+
+/-- `e − e'` as an expression (`e + (−1)·e'`). -/
+def diffE (e e' : Expression p) : Expression p := .add e (.mul (.const (-1)) e')
+
+theorem diffE_eval (e e' : Expression p) (env : Variable → ZMod p) :
+    (diffE e e').eval env = e.eval env - e'.eval env := by
+  simp only [diffE, Expression.eval]; ring
+
+/-- Slot-wise payload match with the entailed-equality escape hatch: each slot pair is
+    syntactically equal, or its (normalized) difference — in either orientation — is a
+    normalized constraint. The `Thunk` is forced only at the first syntactic mismatch, so
+    fully-identical payloads never pay for the map. -/
+def payloadEntailedEq {constraints : List (Expression p)}
+    (M : Thunk (EqConstraintMap p constraints)) :
+    List (Expression p) → List (Expression p) → Bool
+  | [], [] => true
+  | e :: es, e' :: es' =>
+    (decide (e = e') || M.get.test (diffE e e').normalize
+      || M.get.test (diffE e' e).normalize) && payloadEntailedEq M es es'
+  | _, _ => false
+
+/-- A passing match makes the *evaluated* payloads equal whenever the constraints hold. -/
+theorem payloadEntailedEq_sound {constraints : List (Expression p)}
+    (M : Thunk (EqConstraintMap p constraints)) :
+    ∀ (pl pl' : List (Expression p)), payloadEntailedEq M pl pl' = true →
+    ∀ (env : Variable → ZMod p), (∀ c ∈ constraints, c.eval env = 0) →
+      pl.map (fun e => e.eval env) = pl'.map (fun e => e.eval env)
+  | [], [], _, _, _ => rfl
+  | e :: es, e' :: es', h, env, hcon => by
+    rw [payloadEntailedEq, Bool.and_eq_true, Bool.or_eq_true, Bool.or_eq_true] at h
+    obtain ⟨hslot, hrest⟩ := h
+    have hev : e.eval env = e'.eval env := by
+      rcases hslot with (hs | hs) | hs
+      · rw [of_decide_eq_true hs]
+      · have := M.get.test_sound _ hs env hcon
+        rw [Expression.normalize_eval, diffE_eval] at this
+        exact sub_eq_zero.mp this
+      · have := M.get.test_sound _ hs env hcon
+        rw [Expression.normalize_eval, diffE_eval] at this
+        exact (sub_eq_zero.mp this).symm
+    simp only [List.map_cons, hev,
+      payloadEntailedEq_sound M es es' hrest env hcon]
+  | [], _ :: _, h, _, _ => by simp [payloadEntailedEq] at h
+  | _ :: _, [], h, _, _ => by simp [payloadEntailedEq] at h
+
+/-- The first indexed position strictly after `i` whose payload matches `S.payload` (positions
+    ascending; the hash bucket pre-filters, the slot-wise entailed comparison decides). -/
+def firstMatchAt {constraints : List (Expression p)}
+    (M : Thunk (EqConstraintMap p constraints)) (arr : Array (BusInteraction (Expression p)))
     (S : BusInteraction (Expression p)) (i : Nat) : List Nat → Option Nat
   | [] => none
   | j :: rest =>
     if i < j then
       match arr[j]? with
-      | some R => if decide (S.payload = R.payload) then some j else firstMatchAt arr S i rest
-      | none => firstMatchAt arr S i rest
-    else firstMatchAt arr S i rest
+      | some R =>
+        if payloadEntailedEq M S.payload R.payload then some j
+        else firstMatchAt M arr S i rest
+      | none => firstMatchAt M arr S i rest
+    else firstMatchAt M arr S i rest
 
-/-- Refute `m` as an active same-address message on `busId` (the "between" region test). -/
-def midRefuted (shape : MemoryBusShape) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
+/-- Refute `m` as an active same-address message on `busId` (the "between" region test). The
+    two-root address-disequality (`addrTwoRootNeq`) lets this step over interleaved other-pointer
+    heap accesses whose addresses are pointer *expressions* rather than constants — the enabler
+    for interior-pair telescoping on the heap. Sound under the constraints `T` was built from
+    (`midRefuted_sound` takes their satisfaction). -/
+def midRefuted (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
   decide (m.busId ≠ busId) || decide (multConst m = some 0) || addrConstsNeq shape S m
+    || addrTwoRootNeq shape T.get S m
 
 /-- Refute `m` as an active same-address *send* on `busId` (the "before" region test: earliest-send). -/
-def preRefuted (shape : MemoryBusShape) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
-  midRefuted shape busId S m ||
+def preRefuted (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
+  midRefuted shape T busId S m ||
     (match multConst m with | some c => decide (c ≠ 1) | none => false)
 
-theorem midRefuted_sound (shape : MemoryBusShape) (busId : Nat) (S m : BusInteraction (Expression p))
-    (h : midRefuted shape busId S m = true) (env : Variable → ZMod p)
+theorem midRefuted_sound (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p))
+    (h : midRefuted shape T busId S m = true) (env : Variable → ZMod p)
+    (hcon : ∀ c ∈ constraints, c.eval env = 0)
     (hbid : (m.eval env).busId = busId) (hmne : (m.eval env).multiplicity ≠ 0)
     (hmaddr : shape.address (m.eval env) = shape.address (S.eval env)) : False := by
   unfold midRefuted at h
-  rw [Bool.or_eq_true, Bool.or_eq_true] at h
-  rcases h with (h | h) | h
+  rw [Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true] at h
+  rcases h with ((h | h) | h) | h
   · exact absurd hbid (of_decide_eq_true h)
   · exact hmne (m.multiplicity.constValue?_sound 0 (of_decide_eq_true h) env)
   · exact addrConstsNeq_sound shape S m h env hmaddr.symm
+  · exact addrTwoRootNeq_sound shape T.get S m h env hcon hmaddr.symm
 
-theorem preRefuted_sound (shape : MemoryBusShape) (busId : Nat) (S m : BusInteraction (Expression p))
-    (h : preRefuted shape busId S m = true) (env : Variable → ZMod p)
+theorem preRefuted_sound (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p))
+    (h : preRefuted shape T busId S m = true) (env : Variable → ZMod p)
+    (hcon : ∀ c ∈ constraints, c.eval env = 0)
     (hbid : (m.eval env).busId = busId) (hmne : (m.eval env).multiplicity ≠ 0)
     (hmaddr : shape.address (m.eval env) = shape.address (S.eval env)) :
     (m.eval env).multiplicity ≠ 1 := by
   unfold preRefuted at h
   rw [Bool.or_eq_true] at h
   rcases h with h | h
-  · exact (midRefuted_sound shape busId S m h env hbid hmne hmaddr).elim
+  · exact (midRefuted_sound shape T busId S m h env hcon hbid hmne hmaddr).elim
   · cases hc : multConst m with
     | none => rw [hc] at h; exact absurd h (by simp)
     | some c =>
@@ -917,44 +1079,48 @@ theorem provRecv_sound (shape : MemoryBusShape) (busId : Nat) (hp1 : (1 : ZMod p
 /-- Single right-to-left pass returning `(hasRecvSoFar, ok)`: `hasRecvSoFar` is whether the tail
     processed so far (everything to the right) contains a provable active same-address receive; `ok`
     is whether every not-`preRefuted` message so far is followed by such a receive. O(n). -/
-def shieldScan (shape : MemoryBusShape) (busId : Nat) (S : BusInteraction (Expression p)) :
+def shieldScan (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S : BusInteraction (Expression p)) :
     List (BusInteraction (Expression p)) → Bool × Bool
   | [] => (false, true)
   | m0 :: rest =>
-    let r := shieldScan shape busId S rest
-    (r.1 || provRecv shape busId S m0, r.2 && (preRefuted shape busId S m0 || r.1))
+    let r := shieldScan shape T busId S rest
+    (r.1 || provRecv shape busId S m0, r.2 && (preRefuted shape T busId S m0 || r.1))
 
 /-- The *shield* check on the before-region: every message that is **not** provably a
     non-(active-same-address-send) (`¬preRefuted`) is followed by a provable active same-address
     receive (`provRecv`). Certifies "every active same-address send in the region has an active
     same-address receive after it" — the relaxed completeness side condition that admits chains led
     by a boundary store. Computed in one O(n) pass (`shieldScan`). -/
-def shieldOk (shape : MemoryBusShape) (busId : Nat) (S : BusInteraction (Expression p))
+def shieldOk (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S : BusInteraction (Expression p))
     (l : List (BusInteraction (Expression p))) : Bool :=
-  (shieldScan shape busId S l).2
+  (shieldScan shape T busId S l).2
 
 /-- If the scan's `hasRecv` flag is set, the list contains a provable receive. -/
-theorem shieldScan_hasRecv (shape : MemoryBusShape) (busId : Nat)
+theorem shieldScan_hasRecv (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (busId : Nat)
     (S : BusInteraction (Expression p)) :
-    ∀ (l : List (BusInteraction (Expression p))), (shieldScan shape busId S l).1 = true →
+    ∀ (l : List (BusInteraction (Expression p))), (shieldScan shape T busId S l).1 = true →
       ∃ Rp ∈ l, provRecv shape busId S Rp = true
   | [], h => by simp [shieldScan] at h
   | m0 :: rest, h => by
       rw [shieldScan] at h
       dsimp only at h
       rcases Bool.or_eq_true _ _ |>.mp h with h1 | h1
-      · obtain ⟨Rp, hRp, hprov⟩ := shieldScan_hasRecv shape busId S rest h1
+      · obtain ⟨Rp, hRp, hprov⟩ := shieldScan_hasRecv shape T busId S rest h1
         exact ⟨Rp, List.mem_cons_of_mem _ hRp, hprov⟩
       · exact ⟨m0, List.mem_cons_self .., h1⟩
 
 /-- From a passing `shieldOk` and a syntactic split `A_pre ++ m0 :: A_suf` whose `m0` is not
     provably excluded (`¬preRefuted`), the suffix `A_suf` carries a provable active same-address
     receive. -/
-theorem shieldOk_sound (shape : MemoryBusShape) (busId : Nat)
+theorem shieldOk_sound (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (busId : Nat)
     (S m0 : BusInteraction (Expression p)) (A_suf : List (BusInteraction (Expression p))) :
     ∀ (A_pre : List (BusInteraction (Expression p))),
-      shieldOk shape busId S (A_pre ++ m0 :: A_suf) = true →
-      preRefuted shape busId S m0 = false →
+      shieldOk shape T busId S (A_pre ++ m0 :: A_suf) = true →
+      preRefuted shape T busId S m0 = false →
       ∃ Rp ∈ A_suf, provRecv shape busId S Rp = true
   | [], h, hpre => by
       unfold shieldOk at h
@@ -963,13 +1129,13 @@ theorem shieldOk_sound (shape : MemoryBusShape) (busId : Nat)
       rw [Bool.and_eq_true] at h
       obtain ⟨_, h2⟩ := h
       rw [hpre, Bool.false_or] at h2
-      exact shieldScan_hasRecv shape busId S A_suf h2
+      exact shieldScan_hasRecv shape T busId S A_suf h2
   | a :: A_pre', h, hpre => by
       unfold shieldOk at h
       rw [List.cons_append, shieldScan] at h
       dsimp only at h
       rw [Bool.and_eq_true] at h
-      exact shieldOk_sound shape busId S m0 A_suf A_pre' h.1 hpre
+      exact shieldOk_sound shape T busId S m0 A_suf A_pre' h.1 hpre
 
 /-! ## Emitted byte checks
 
@@ -1098,7 +1264,8 @@ def unjustifiedSlots (deep : Bool) (all : List (Expression p)) (bs : BusSemantic
     whole-list comparison per candidate. The justification scans are the last conjuncts, so
     they only run for candidates that already match. -/
 def checkCancel (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (shape : MemoryBusShape)
+    (facts : BusFacts p bs) (T : Thunk (TwoRootMap p all))
+    (M : Thunk (EqConstraintMap p all)) (shape : MemoryBusShape)
     (busId : Nat) (slots : List Nat)
     (A : List (BusInteraction (Expression p))) (S : BusInteraction (Expression p))
     (B : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p))
@@ -1106,9 +1273,9 @@ def checkCancel (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
     (checks : List (BusInteraction (Expression p))) : Bool :=
   decide (S.busId = busId) && decide (R.busId = busId) &&
   decide (multConst S = some 1) && decide (multConst R = some (-1)) &&
-  decide (S.payload = R.payload) &&
-  B.all (midRefuted shape busId S) &&
-  shieldOk shape busId S A &&
+  payloadEntailedEq M S.payload R.payload &&
+  B.all (midRefuted shape T busId S) &&
+  shieldOk shape T busId S A &&
   checks.all (emitOk bs facts busId slots R) &&
   recvSlotsJustified deep all bs facts (A ++ B ++ C ++ checks) slots R
 
@@ -1118,12 +1285,14 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
     (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
+    (T : Thunk (TwoRootMap p cs.algebraicConstraints))
+    (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (A : List (BusInteraction (Expression p))) (S : BusInteraction (Expression p))
     (B : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p))
     (C : List (BusInteraction (Expression p)))
     (checks : List (BusInteraction (Expression p)))
     (hsplit : cs.busInteractions = A ++ S :: B ++ R :: C)
-    (h : checkCancel deep cs.algebraicConstraints bs facts shape busId slots A S B R C checks
+    (h : checkCancel deep cs.algebraicConstraints bs facts T M shape busId slots A S B R C checks
       = true) :
     PassCorrect cs { cs with busInteractions := A ++ B ++ C ++ checks } [] bs := by
   unfold checkCancel at h
@@ -1138,15 +1307,17 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
       (A ++ B ++ C ++ checks) slots R hdeep hjust env hall hbus)
     hsplit
     (of_decide_eq_true hSb) (of_decide_eq_true hRb)
-    (of_decide_eq_true hSm) (of_decide_eq_true hRm) (of_decide_eq_true hpay) ?_ ?_
-  · intro env m0 hm0 hbid hmne hmaddr
-    exact midRefuted_sound shape busId S m0 (List.all_eq_true.mp hmid m0 hm0) env hbid hmne hmaddr
-  · intro env A_pre m0 A_suf hAeq hbid hmne hmaddr hmult
-    have hnp : preRefuted shape busId S m0 = false := by
+    (of_decide_eq_true hSm) (of_decide_eq_true hRm)
+    (fun env hcon => payloadEntailedEq_sound M S.payload R.payload hpay env hcon) ?_ ?_
+  · intro env hcon m0 hm0 hbid hmne hmaddr
+    exact midRefuted_sound shape T busId S m0 (List.all_eq_true.mp hmid m0 hm0) env hcon
+      hbid hmne hmaddr
+  · intro env hcon A_pre m0 A_suf hAeq hbid hmne hmaddr hmult
+    have hnp : preRefuted shape T busId S m0 = false := by
       by_contra hp'
       rw [Bool.not_eq_false] at hp'
-      exact (preRefuted_sound shape busId S m0 hp' env hbid hmne hmaddr) hmult
-    obtain ⟨Rp, hRpmem, hRpprov⟩ := shieldOk_sound shape busId S m0 A_suf A_pre (hAeq ▸ hpre) hnp
+      exact (preRefuted_sound shape T busId S m0 hp' env hcon hbid hmne hmaddr) hmult
+    obtain ⟨Rp, hRpmem, hRpprov⟩ := shieldOk_sound shape T busId S m0 A_suf A_pre (hAeq ▸ hpre) hnp
     exact ⟨Rp, hRpmem, provRecv_sound shape busId hp1 S Rp hRpprov env⟩
 
 /-- Indexed left-to-right scan for the first droppable pair on `busId`, starting at position `i`:
@@ -1158,19 +1329,25 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     to resume the enclosing fixpoint). -/
 def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (aggressive : Bool)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
     (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
+    (T : Thunk (TwoRootMap p cs.algebraicConstraints))
+    (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (bcBus? : Option Nat)
     (arr : Array (BusInteraction (Expression p))) (idx : Std.HashMap UInt64 (List Nat))
-    (i : Nat) : Option (PassResult cs bs × Nat × Bool) :=
+    (i : Nat) :
+    Option ({ r : PassResult cs bs // r.out.algebraicConstraints = cs.algebraicConstraints }
+      × Nat × Bool) :=
   if hi : i < arr.size then
     let S := arr[i]
     -- (thunked: Lean is strict, and the continuation must not run once a pair is accepted)
-    let next := fun (_ : Unit) => findCancelGoIdx cs bs facts hp1 deep hdeep busId shape hshape
-      slots hslots bcBus? arr idx (i + 1)
+    let next := fun (_ : Unit) => findCancelGoIdx cs bs facts hp1 deep hdeep aggressive busId shape hshape
+      slots hslots T M bcBus? arr idx (i + 1)
     if decide (multConst S = some 1) && decide (S.busId = busId) then
-      match firstMatchAt arr S i (idx.getD (payloadHash S.payload) []) with
+      match firstMatchAt M arr S i (idx.getD
+          (if aggressive then addrHash shape S.payload else payloadHash S.payload) []) with
       | some j =>
         match arr[j]? with
         | some R =>
@@ -1179,20 +1356,20 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
           -- tests accept, not for every payload match; only an otherwise-valid candidate pays
           -- the byte justification scan (`checkCancel` re-verifies everything).
           let A := (arr.extract 0 i).toList
-          if arr.all (midRefuted shape busId S) (i + 1) j
-              && shieldOk shape busId S A then
+          if arr.all (midRefuted shape T busId S) (i + 1) j
+              && shieldOk shape T busId S A then
           let B := (arr.extract (i + 1) j).toList
           let C := (arr.extract (j + 1) arr.size).toList
           -- Try the certificate with no emitted checks first: every non-justification conjunct
           -- of `checkCancel` is guaranteed by the scan's own gates, so it passes iff every
           -- declared byte slot is justified — the same predicate `unjustifiedSlots` decides —
           -- and the common fully-justified drop pays the justification scan **once**.
-          if hchk0 : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
+          if hchk0 : checkCancel deep cs.algebraicConstraints bs facts T M shape busId slots
               A S B R C [] = true then
             if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
-              some (⟨{ cs with busInteractions := A ++ B ++ C ++ [] }, [],
+              some (⟨⟨{ cs with busInteractions := A ++ B ++ C ++ [] }, [],
                     checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
-                      A S B R C [] hsplit hchk0⟩, i, false)
+                      T M A S B R C [] hsplit hchk0⟩, rfl⟩, i, false)
             else next ()
           else
           -- Some slot is unjustified. Such slots are materialized as a single explicit
@@ -1208,13 +1385,20 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
                 [{ busId := bcBus, multiplicity := .const 1,
                    payload := [e, e, .const 0, .const 1] }])
             | _, _ => []
-          if !checks.isEmpty then
-          if hchk : checkCancel deep cs.algebraicConstraints bs facts shape busId slots
+          -- Emission-path drops are restricted to *syntactically* equal payloads unless
+          -- `aggressive`: an entailed-matched pair otherwise fires only when every byte slot
+          -- is already justified (`checks = []`). Measured (apc_005 class): mid-cycle entailed
+          -- drops on unjustified receives trade one emitted self-check per pair for
+          -- obligations the deferred syntactic cancellation discharges for free — a net bus
+          -- regression. The `aggressive` form runs once, in the coda, where the race is over:
+          -- each drop is then locally net −1 bus at worst (2 dropped, ≤1 emitted).
+          if !checks.isEmpty && (aggressive || decide (S.payload = R.payload)) then
+          if hchk : checkCancel deep cs.algebraicConstraints bs facts T M shape busId slots
               A S B R C checks = true then
             if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
-              some (⟨{ cs with busInteractions := A ++ B ++ C ++ checks }, [],
+              some (⟨⟨{ cs with busInteractions := A ++ B ++ C ++ checks }, [],
                     checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
-                      A S B R C checks hsplit hchk⟩, i, true)
+                      T M A S B R C checks hsplit hchk⟩, rfl⟩, i, true)
             else next ()
           else next ()
           else next ()
@@ -1229,14 +1413,18 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
     per invocation). Returns the result together with the drop position and emitted flag. -/
 def findCancelForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (aggressive : Bool)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
     (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
+    (T : Thunk (TwoRootMap p cs.algebraicConstraints))
+    (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (bcBus? : Option Nat) (startPos : Nat) :
-    Option (PassResult cs bs × Nat × Bool) :=
+    Option ({ r : PassResult cs bs // r.out.algebraicConstraints = cs.algebraicConstraints }
+      × Nat × Bool) :=
   let arr := cs.busInteractions.toArray
-  findCancelGoIdx cs bs facts hp1 deep hdeep busId shape hshape slots hslots bcBus?
-    arr (recvIndex busId arr) startPos
+  findCancelGoIdx cs bs facts hp1 deep hdeep aggressive busId shape hshape slots hslots T M bcBus?
+    arr (recvIndex busId shape aggressive arr) startPos
 
 /-- Search declared buses from list index `curIdx` for a droppable pair, honouring a resume hint:
     buses before `resumeIdx` are skipped (they were exhausted on the previous sweep and — since a
@@ -1246,24 +1434,29 @@ def findCancelForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
     send and whether a byte check was emitted. -/
 def findCancel (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (aggressive : Bool)
+    (T : Thunk (TwoRootMap p cs.algebraicConstraints))
+    (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (bcBus? : Option Nat) (resumeIdx resumePos : Nat) :
-    Nat → List Nat → Option (PassResult cs bs × Nat × Nat × Bool)
+    Nat → List Nat →
+      Option ({ r : PassResult cs bs // r.out.algebraicConstraints = cs.algebraicConstraints }
+        × Nat × Nat × Bool)
   | _, [] => none
   | curIdx, busId :: rest =>
     if curIdx < resumeIdx then
-      findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos (curIdx + 1) rest
+      findCancel cs bs facts hp1 deep hdeep aggressive T M bcBus? resumeIdx resumePos (curIdx + 1) rest
     else
       let startPos := if curIdx = resumeIdx then resumePos else 0
       match hshape : facts.memShape busId with
       | some shape =>
         match hslots : facts.recvByteSlots busId with
         | some slots =>
-          match findCancelForBus cs bs facts hp1 deep hdeep busId shape hshape slots hslots
-              bcBus? startPos with
+          match findCancelForBus cs bs facts hp1 deep hdeep aggressive busId shape hshape slots hslots
+              T M bcBus? startPos with
           | some (r, pos, emitted) => some (r, curIdx, pos, emitted)
-          | none => findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos (curIdx + 1) rest
-        | none => findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos (curIdx + 1) rest
-      | none => findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos (curIdx + 1) rest
+          | none => findCancel cs bs facts hp1 deep hdeep aggressive T M bcBus? resumeIdx resumePos (curIdx + 1) rest
+        | none => findCancel cs bs facts hp1 deep hdeep aggressive T M bcBus? resumeIdx resumePos (curIdx + 1) rest
+      | none => findCancel cs bs facts hp1 deep hdeep aggressive T M bcBus? resumeIdx resumePos (curIdx + 1) rest
 
 /-- A `PassResult` is inhabited by the identity pass (its input, unchanged) — needed so the
     fixpoint loop below can be a `partial def`. -/
@@ -1280,13 +1473,19 @@ instance instInhabitedPassResult (cs : ConstraintSystem p) (bs : BusSemantics p)
     justifiable (the check joins the remaining interactions), so the scan restarts from the top. -/
 partial def cancelLoop (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (aggressive : Bool)
+    (T : Thunk (TwoRootMap p cs.algebraicConstraints))
+    (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (bcBus? : Option Nat) (busIds : List Nat) (resumeIdx resumePos : Nat) : PassResult cs bs :=
-  match findCancel cs bs facts hp1 deep hdeep bcBus? resumeIdx resumePos 0 busIds with
+  match findCancel cs bs facts hp1 deep hdeep aggressive T M bcBus? resumeIdx resumePos 0 busIds with
   | none => ⟨cs, [], PassCorrect.refl cs bs⟩
-  | some (r, dropIdx, dropPos, emitted) =>
+  | some (⟨r, hpres⟩, dropIdx, dropPos, emitted) =>
     let nextIdx := if emitted then 0 else dropIdx
     let nextPos := if emitted then 0 else dropPos
-    let r2 := cancelLoop r.out bs facts hp1 deep hdeep bcBus? busIds nextIdx nextPos
+    -- A drop changes only `busInteractions` (`hpres`), so the two maps — built once per pass
+    -- invocation — transport to the recursive call instead of being rebuilt per drop.
+    let r2 := cancelLoop r.out bs facts hp1 deep hdeep aggressive (hpres.symm ▸ T) (hpres.symm ▸ M)
+      bcBus? busIds nextIdx nextPos
     ⟨r2.out, r.derivs ++ r2.derivs, r.correct.andThen r2.correct⟩
 
 /-- Drop every matched consecutive send/receive pair on the declared memory buses with a
@@ -1295,10 +1494,20 @@ partial def cancelLoop (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : 
     prime `p`), or materializing it as one explicit byte check on a `byteCheck` bus already
     present in the system. Runs its own cancellation fixpoint (`cancelLoop`), so a whole access
     chain is cancelled in a single invocation. -/
-def busPairCancelPass : VerifiedPassW p := fun cs bs facts =>
+def busPairCancelPass (aggressive : Bool) : VerifiedPassW p := fun cs bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then
     let busIds := (cs.busInteractions.map (fun bi => bi.busId)).dedup
     let deep : Bool := decide p.Prime
-    cancelLoop cs bs facts hp1 deep (fun h => of_decide_eq_true h)
+    -- Two-root decomposition data (address disequality) and normalized-constraint index
+    -- (entailed payload equality): `Thunk`s, so each map is built at most once per invocation —
+    -- on the first candidate that actually consults it — and reused across every drop (drops
+    -- leave `algebraicConstraints` untouched, so `cancelLoop` transports them).
+    let T : Thunk (TwoRootMap p cs.algebraicConstraints) :=
+      Thunk.mk fun _ => TwoRootMap.build cs.algebraicConstraints
+    let M : Thunk (EqConstraintMap p cs.algebraicConstraints) :=
+      Thunk.mk fun _ =>
+        if aggressive then EqConstraintMap.build cs.algebraicConstraints
+        else EqConstraintMap.empty
+    cancelLoop cs bs facts hp1 deep (fun h => of_decide_eq_true h) aggressive T M
       (busIds.find? facts.byteCheck) busIds 0 0
   else ⟨cs, [], PassCorrect.refl cs bs⟩

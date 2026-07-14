@@ -2721,3 +2721,60 @@ warnings. **Worked: yes.**
 (`diff_marker` +24, `c_msb_f` +27, `b_msb_f` +19) — needs the sign-split byte-bounded-difference
 coefficients, a different matcher; the is-equal slice this entry lands covered the
 `diff_inv_marker` +61 chunk minus what hintCollapse already caught.
+
+### 77. Interior memory pair cancellation: two-root step-over + coda-phase entailed payload matching
+
+**Idea (ideas.md #2).** A cell accessed N times emits 2N memory interactions; only the first
+receive and last send are observable — the N−1 interior `+1`/`−1` pairs cancel, but
+`busPairCancel` could not *recognize* them. Two independent recognizer gaps, both fixed in
+`BusPairCancel.lean` with no new `BusFacts` and no audited-surface change:
+
+**(a) Symbolic-address step-over.** `midRefuted` refuted an interleaved message as
+different-address only via `addrConstsNeq` (both addresses literal constants) — heap pointers are
+`mem_ptr_limbs` *expressions*, so keccak's 137 byte-identical interior pairs never cleared. Fix:
+OR the proven `addrTwoRootNeq` (`AddrDiseq.lean`, upstream since #105) into
+`midRefuted`/`preRefuted`/`shieldScan`; the `TwoRootMap` is a `Thunk` built **at most once per
+pass invocation** — forced only when a candidate survives the constant-address tests, so
+register-only systems never pay — and transported across `cancelLoop`'s drop recursion via a
+constraint-preservation equality returned with each `PassResult` (drops leave
+`algebraicConstraints` untouched). This is the §3.3-prototype design with its documented
+per-drop-rebuild runtime bug fixed.
+
+**(b) Constraint-entailed payload matching.** apc_010-class pairs share address, timestamp and
+three data slots; slot 0 differs *syntactically* (send `(1−flag)·srd0 + flag·srd1`, receive
+`read_data`) even though `busUnify` already added the slot equality — Gauss can never apply it
+(degree 4 > 3), so the payloads never become identical. New `EqConstraintMap` indexes the
+*normalized* constraints by structural hash; `payloadEntailedEq` decides each slot pair
+syntactically first, then by one `normalize` + hash probe per orientation.
+`dropPair_correct`'s syntactic payload hypothesis weakens to *evaluated* equality under the
+constraints — sound in **both** refinement directions because a drop leaves the constraint list
+untouched (`hSE`/`haddrEv` discharge from `hsat.1` on either side).
+
+**The phase lesson (measured, not designed up front).** Running (b) inside the cleanup cycle is
+a net **loss**: entailed drops fire before the justification machinery has caught up, taking the
+byte-check-emission path on pairs the deferred syntactic cancellation would later drop for free
+(apc_005 class: +66 emitted checks vs −32 varRange, **+34 bus each**; 31 cases regressed), and
+the per-cycle map builds + coarse address-hash index buckets cost **keccak 2.4× runtime**
+(687 s vs 291 s). Gating entailed matches to emission-free drops kills the wins instead —
+apc_010's equality is degree-blocked *forever*, so its pairs need emission. Resolution: **phase
+separation.** The cycle invocation stays purely syntactic (exact-payload-hash index, `M` empty);
+a new **aggressive coda invocation** (`busPairCancelLate`, followed by `bytePackLate` to pack the
+emitted survivors) runs entailed matching once, after the fixpoint, where the race is over and
+each drop is locally net −1 bus at worst. Deliberately forgone: −6 keccak / −6 apc_100 bus that
+only mid-cycle entailed matching reaches — recorded here so the trade is visible.
+
+**Measured vs `main` = #114 (per-case JSON A/B; solo runtime runs):**
+- keccak: bus **2348 → 2072 (−276)** — memory **534 → 258 = exact powdr parity**; vars 2025 /
+  constraints 120 unchanged; bus effectiveness 5.648× → **6.400×**; runtime 291 → 295 s (+1.3%).
+- openvm-eth: bus agg **3.439× → 3.455×** (geo 2.723× → 2.735×), powdr gap −0.041 → **−0.025**;
+  **10 cases improved / −76 bus / 0 regressions** (apc_010 271 → 247 vs powdr 239, apc_042 −16,
+  apc_014 −12, apc_051 −8, apc_031 −6, apc_097 −3, apc_008/019/100 −2, apc_091 −1); variables
+  and constraints byte-neutral (4.518× / 10.595×, W/L/T 27/29/44 unchanged); runtime **−2.5%**
+  total, median case −3.8% (earlier cancellation shrinks the systems downstream passes see).
+
+Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only).
+**Worked: yes.**
+
+**Remaining on this front:** keccak bus gap now **+338** (was +614): bitwise ≈ +257 (genuine-XOR
+representation, no current lever) + width-1 range +68 (convertible to booleanity constraints —
+ideas.md follow-up) + ~13 misc. The eth bus gap −0.025 is the last aggregate deficit on any axis.
