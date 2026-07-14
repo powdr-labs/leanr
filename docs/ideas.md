@@ -9,20 +9,20 @@ this regeneration was in flight, **#117 (entry 77) and #119 (entry 78) merged**,
 on rebase from the entries' measured numbers. Older write-ups had stale or wrong gap
 attributions; re-measure before trusting anything, including this file.
 
-## Where we stand (post-#117/#119 + entry 80 = idea 4(b)+(c))
+## Where we stand (post-#117/#119 + entry 80 = idea 4(b)+(c) + entry 81 = the digit fold)
 
 Absolute output totals (identical inputs, so `agg` effectiveness follows directly):
 
 | benchmark | axis | apc | powdr | apc − powdr |
 |---|---|---|---|---|
-| openvm-eth (100) | variables | 27,967 | 30,885 | **−2,918 (lead)** |
-| | bus interactions | 16,595 | 16,722 | **−127 (lead; was +5)** |
-| | constraints | 11,303 | 20,299 | −8,996 (lead) |
-| keccak | variables | 2,025 | 2,021 | +4 |
-| | bus interactions | 1,959 | 1,734 | **+225 (was +293)** |
-| | constraints | 188 | 186 | +2 (was −66; the width-1→booleanity trade) |
+| openvm-eth (100) | variables | 27,802 | 30,885 | **−3,083 (lead)** |
+| | bus interactions | 16,454 | 16,722 | **−268 (lead; was +5)** |
+| | constraints | 11,267 | 20,299 | −9,032 (lead) |
+| keccak | variables | 2,021 | 2,021 | **exact parity** |
+| | bus interactions | 1,952 | 1,734 | **+218 (was +293)** |
+| | constraints | 186 | 186 | **exact parity** |
 
-Per-case standings on eth: variables **27 W / 29 L / 44 T** (+172 total over the losing cases).
+Per-case standings on eth: variables **30 W / 11 L / 59 T** (+56 total over the losing cases).
 Bus per-case was **7 W / 67 L / 26 T** (+588 over losing cases) at the measurement base;
 #117/#119 improved 37 case-measurements with 0 regressions (agg 3.439× → 3.479×, geo 2.723× →
 2.753×; powdr 3.480× / 2.822×) — re-measure the standings before quoting them. The reported
@@ -35,19 +35,20 @@ both benchmarks except keccak, where the identified fixes land exactly on powdr'
 Exact gap decomposition (verified on the live circuits at the measurement base; buckets marked
 LANDED are done — the remainder still adds up to the current gaps):
 
-- **eth variables +172** = M1 constant decompositions **+135** · M2 comparison gadgets residue
-  **≈ +57** (of the original +105, #114 landed −48) · M3 dead `bit_multiplier` **+14** ·
-  everything else nets in apc's favor (−114 value cluster).
-- **eth bus** (was +588 over losing cases; −191 + −132 landed) = ~~width-1 range checks 90~~
-  (**LANDED**: entry 80 −89) · ~~cancellable memory pairs 78~~ + op-0 coverage waste
-  (**LANDED**: #117 −76, #119 −115) · long same-address chains **64** (apc_010 still 247 vs 239) ·
-  constant-family checks **~126** (84 solvable directly) · tuple-slot coverage waste
+- **eth variables +56 over 11 cases** (was +172 over 29) = ~~M1 constant decompositions +135~~
+  (**LANDED**: entry 81 −165 incl. cascades; residual = full-byte-top `rd_data` ladders,
+  apc_034/066 +3 each) · M2 comparison gadgets residue (apc_037 +14, apc_018 +9 — idea 3) ·
+  M3 dead `bit_multiplier` **+14** · everything else nets in apc's favor.
+- **eth bus** (was +588 over losing cases; −191 + −132 + −141 landed) = ~~width-1 range checks
+  90~~ (**LANDED**: entry 80 −89) · ~~cancellable memory pairs 78~~ + op-0 coverage waste
+  (**LANDED**: #117 −76, #119 −115) · ~~constant-family checks ~126~~ (**LANDED**: entry 81
+  −141) · long same-address chains **64** (apc_010 still 247 vs 239) · tuple-slot coverage waste
   (**remainder of the ≥112 bucket**) · ~~subsumed range checks 22~~ (**LANDED**: entry 80 ≈ −43,
   the base also catches byte/memory-subsumed wide checks) · NOT-form byte checks **23** ·
   residual scattered.
-- **keccak bus +293** (was +614; #117 −276 memory = exact powdr parity, #119 −45 op-0 waste,
-  entry 80 −68 width-1) = NOT-form byte checks **200** · ~~width-1 checks 68~~ (**LANDED**) ·
-  ~25 misc — the bus-3 width histograms are otherwise *identical* to powdr's.
+- **keccak bus +218** (was +614; #117 −276 memory = exact powdr parity, #119 −45 op-0 waste,
+  entry 80 −68 width-1, entry 81 −7) = NOT-form byte checks **200** · ~18 misc — the bus-3
+  width histograms are otherwise *identical* to powdr's.
 
 ## In flight / recently landed — check `git log origin/main` and open PRs before picking anything up
 
@@ -55,72 +56,47 @@ LANDED are done — the remainder still adds up to the current gaps):
   parity, eth −76. Only sub-items (c) and (d) of idea 2 remain.
 - **#119 merged** (coda byte-pair splitting): the op-0 explode/dedup/drop/repack half of
   idea 4(d); keccak −45, eth −115. The tuple-slot half of 4(d) remains.
-- **#114 merged** (is-equal sum-of-squares collapse). **#112 open** — reworked from a duplicate into
-  a consolidation: generalizes `hintCollapse` to subsume the collapse and removes the standalone
-  `EqCollapse` pass; effectiveness-neutral vs main, ~half the combined collapse-stage runtime
-  (no separate per-cycle scan). A structural cleanup, not a new win — take it or leave it.
+- **#114 merged** (is-equal sum-of-squares collapse). **#112 merged** (entry 79) — consolidated
+  the collapse into a generalized `hintCollapse`, removing the standalone `EqCollapse` pass;
+  effectiveness-neutral, ~half the collapse-stage runtime.
+- **#122 merged** (entry 80 = idea 4(b)+(c)): width-1 → booleanity + subsumed range-check drop;
+  eth bus −132 (aggregate flips to a lead), keccak bus −68.
+- **Entry 81 (this branch): the bounded-payload digit fold** — lands the payload-ladder core of
+  idea 1 below; see the re-scoped idea 1.
 - **#116 open** (gated constant-decomposition fold): eth-neutral because its gate skips every
-  profitable case. Idea 1 below subsumes it; reuse its proven digit-uniqueness core.
+  profitable case; the digit fold (entry 81) lands the same family from the payload side, so
+  #116 is now fully subsumed — close it, but its proven digit-uniqueness core (`annDecode_forces`,
+  `annSum_val`) remains the natural starting point for the constraint-side remainder of idea 1.
 
 ---
 
-## 1. Constant-decomposition folding, done right  ·  *variables (top axis) + bus*  ·  high value / medium-high effort
+## 1. Constant-decomposition folding — **CORE LANDED (entry 81, the bounded-payload digit fold)**
 
-**Gap.** The single biggest eth variable family: **+135 vars** (6 AUIPC+JALR chains ×14:
-apc_026/045/051/055/085/094; 17 `rd = pc+4` link-register writes ×3: apc_011/024/025/034/042/043/
-048/050/058/066/071/074/077/078/084/087/096) **plus ~126 bus interactions** (their range/byte
-checks, e.g. apc_042 keeps the op-0 check `(3559368 − 256·rd0 − 65536·rd1 − …, rd0)` on a JALR
-return address that is just the digits of 3559368). powdr ships literal constants — payloads like
-`[1, 4, 20, 66, 41, 0, ts+26]` and a constant exec-bridge target.
+**What landed.** `DigitFold.lean` (cleanup cycle): a bitwise pair check asserting an affine
+mixed-radix ladder `K ± (g·v₀ + 256g·v₁ + …)` is a byte, plus each ladder variable's own range
+check, force the digits — after **wrap analysis** (BabyBear `p ≡ 1 (mod 256)` admits a phantom
+digit vector per wrap count; the narrow top-limb range checks, e.g. the 6-bit PC limb, kill
+them). The pass enumerates the whole (byte, wrap) grid and substitutes constants only on a
+singleton solution set; one substitution per invocation, the cleanup fixpoint cascades (the
+pinned digits resolve the adder carry disjunctions downstream — constant seeding *does* cascade
+when the seed is the byte-check digits). Measured (entry 81): **eth −165 vars / −141 bus / −36
+constraints over 33 cases, 0 regressions; keccak −4 vars = exact powdr variable parity.** This
+covered the AUIPC+JALR ×14 chains (apc_026/045/055/085/094) and most of the `rd = pc+4`
+link-register family; no keccak pair-matching regression (unlike #116's ungated constraint-side
+attempt).
 
-**Why apc misses it.** The input contains pure-affine seeds, e.g. apc_045:
-`imm_limbs__0 + 256·imm_limbs__1 + 65536·imm_limbs__2 = 16777200` with byte-checked limbs — the
-digits (240,255,255) are *uniquely forced* (mixed-radix uniqueness). But Gauss consumes the seed
-first: it unit-pivots ONE limb away and leaves quadratics, so no later pass ever sees the
-decomposition. The constants then need to cascade through the adder carry disjunctions
-`(A)·(A−256) = 0`: with A's variables pinned, exactly one root is feasible — pruning it yields a
-new affine equation, which unlocks the next fold, etc.
-
-**Mechanism** (extend #116's `ConstDecomp.lean`, which already proves digit uniqueness
-`annDecode_forces` + the no-wrap lemma `annSum_val`):
-
-```
-repeat (within the pass, to a local fixpoint):
-  1. for each affine constraint Σ cᵢ·xᵢ = K with every xᵢ range-bounded (BoundsMap:
-     bus-3 checks, bitwise op-0/op-1 slots, tuple slots) and non-overlapping positional
-     coefficients (sorted, cᵢ·(Bᵢ−1) < c_{i+1}, Σ cᵢ·(Bᵢ−1) < p):
-       substitute ALL xᵢ := digitᵢ(K) at once (SubstMap, like Gauss — not one equality
-       at a time; that is what #116 got wrong operationally and why it needed Gauss)
-  2. for each constraint (A)·(A − k) = 0 with A affine over now-pinned/bounded vars:
-       if interval analysis (CarryBranch.splitSumMax machinery) refutes one root,
-       replace by the affine constraint of the live root; goto 1
-```
-
-Run it in `cleanupPasses` **before `gauss`** (as #116 does). Drop the `statefulPayloadVars` gate
-entirely.
-
-**The #116 keccak regression, diagnosed.** The gate was added because ungated folding cost keccak
-+187 bus. The stated rationale (folding strips byte-justification) is wrong —
-`byteJustified` already accepts constants < 256 (BusPairCancel.lean ~line 399). The real
-mechanism is almost certainly **pair matching**: a folded (constant) send payload no longer
-*syntactically* matches the unfolded receive side, so `busUnify`/`busPairCancel` miss pairs.
-First implementation step: reproduce ungated, `opt-export` keccak, diff the missed pairs against
-the 142 known-cancellable ones, and make the matcher compare **constant-folded normal forms** of
-payload slots (or match slots up to entailed constant equality). Do not re-add the gate.
-
-**Two more gotchas.** (a) A paired op-0 check `[folded_limb, live_expr, 0, 0]` must survive with
-a constant arg unless the partner folds too (powdr drops all 6 per chain because *everything*
-folds — expect that after the disjunction cascade). (b) Runtime: #116 measured +16% (gauss 3.2×)
-because it added equalities for Gauss to rediscover; substituting directly via `SubstMap` avoids
-the extra fixpoint pressure.
-
-**Why sound.** Digit uniqueness is proven in #116; substitution of entailed constants is the
-standard `Subst` correctness; root pruning replaces a constraint by one it entails on the
-satisfying set (interval refutation of the other root — `CarryBranch` precedent).
-
-**Expected impact.** eth: −135 vars (flips the six +14 cases and most +3 cases; ~29 L → ~10 L),
-−84..126 bus; keccak: −4 v / −9 b / −2 c (#116's measured numbers, kept by the ungated version);
-the +187 regression must be gone (the 142 pairs still cancel).
+**Remaining slices of this idea:**
+- **Shifted `rd_data__{1,2,3}` ladders whose top limb is a full byte** (apc_034/066 +3 each,
+  parts of apc_038/042/064): all-byte bounds genuinely admit wrap phantoms; needs a tighter
+  top-limb bound from another constraint, if one exists. Low ceiling (~6–15 vars).
+- **Constraint-side affine seeds** (`Σ cᵢ·xᵢ = K` as an algebraic constraint rather than a
+  payload ladder), which Gauss unit-pivots away before any digit solver sees them. #116's
+  `ConstDecomp.lean` proves the digit-uniqueness core (`annDecode_forces`, `annSum_val`); if
+  built, substitute all digits at once via `SubstMap` *before* `gauss`, and heed #116's measured
+  traps: the ungated version cost keccak +187 bus (folded constant send payloads stop matching
+  unfolded receives in `busUnify`/`busPairCancel` — fix the matcher, don't re-add the gate) and
+  +16% runtime (don't emit equalities for Gauss to rediscover). Unclear residual value now that
+  the payload side landed — re-census first.
 
 ---
 
