@@ -1,16 +1,16 @@
 # Ideas for future optimization passes
 
 Ranked by **expected benefit**. Effectiveness priority is **variables > bus interactions >
-constraints**, used as the tiebreak. With #2 landed (entry 77), the eth bus deficit (−0.025, the
-only trailing axis) and keccak's bus gap (+338) are the remaining aggregate gaps; both decompose
-into the smaller items below.
+constraints**, used as the tiebreak. With #2 landed (entry 77) and the coda byte-pair splitting
+(entry 78), the eth bus deficit (−0.001, the only trailing axis) and keccak's bus gap (+293) are
+the remaining aggregate gaps; both decompose into the smaller items below.
 
-## Where we stand (measured on `c007db0`; keccak/eth refreshed for merged C4b #109, the bitwise byte-check cleanup (entry 75), and the is-equal collapse (entry 76))
+## Where we stand (measured on `c007db0`; keccak/eth refreshed for merged C4b #109, the bitwise byte-check cleanup (entry 75), the is-equal collapse (entry 76), and the coda byte-pair splitting (entry 78))
 
 | benchmark | apc-optimizer | powdr | apc gap |
 |---|---|---|---|
-| **keccak** (`apc_001_pckeccak`) | 2025 v / 120 c / 2072 bus | 2021 / 186 / 1734 | vars **+4 (near parity)**, **bus +338** (memory at parity; wins constraints) |
-| **openvm-eth** (100-case agg / geo) | vars 4.518× / 3.837× · bus 3.455× / 2.735× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo +0.050); **trails bus by 0.025** |
+| **keccak** (`apc_001_pckeccak`) | 2025 v / 120 c / 2027 bus | 2021 / 186 / 1734 | vars **+4 (near parity)**, **bus +293** (memory at parity; wins constraints) |
+| **openvm-eth** (100-case agg / geo) | vars 4.518× / 3.837× · bus 3.479× / 2.753× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo +0.050); **trails bus by 0.001** |
 | **apc_010** (`pc0x200c18`) | 466 v / 251 c / 247 bus | 498 / 331 / 239 | wins vars+constraints, **bus +8** |
 
 C4b (#109, entry 74) closed the keccak *variable* gap to near-parity; the bitwise byte-check cleanup
@@ -19,9 +19,9 @@ C4b (#109, entry 74) closed the keccak *variable* gap to near-parity; the bitwis
 signed-compare and constant-limb families, bus gap net ≈ +300). Both gaps decompose into a *small* number of
 structural families, each addressed by one idea below.
 
-- **keccak bus +614** = memory interior pairs +276 · bitwise (bus 6) ≈ +257 (post entry-75 pack) ·
-  width-1 range (bus 3) +68.
-- **eth bus** = bitwise (reduced by entry 75, but genuine-XOR / non-packable checks remain) ·
+- **keccak bus +614** = memory interior pairs +276 (landed, entry 77) · bitwise (bus 6) ≈ +212
+  (post entry-75 pack and entry-78 pair splitting) · width-1 range (bus 3) +68.
+- **eth bus** = bitwise (reduced by entries 75/78; genuine-XOR checks remain) ·
   tupleRange +160 (22 cases) · memory +144 (15 cases) · varRange **−376** (apc already *wins* — do not touch).
 - **eth vars ~+243** = `rd_data` write-result limbs ~93 (23 cases) · comparison gadget ~130 markers/flags
   (43 cases) · `bit_shift_carry` +67 (13 cases) · `apc_071` intermediate address bytes. (Per-case

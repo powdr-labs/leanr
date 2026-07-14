@@ -2778,3 +2778,39 @@ Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound
 **Remaining on this front:** keccak bus gap now **+338** (was +614): bitwise ≈ +257 (genuine-XOR
 representation, no current lever) + width-1 range +68 (convertible to booleanity constraints —
 ideas.md follow-up) + ~13 misc. The eth bus gap −0.025 is the last aggregate deficit on any axis.
+
+### 78. Coda byte-pair splitting: operand-granular redundant-byte drop (−45 keccak / −115 eth bus)
+
+**Idea.** `RedundantByteDrop` works pair-at-a-time on packed bitwise byte checks `[a, b, 0, 0]`:
+a pair drops only when *both* operands are byte-justified elsewhere, so a justified operand
+trapped in a pair with a fresh one keeps its redundant obligation; and the same value
+byte-checked in two *different* pairs (`[0, b, 0, 0]` vs `[0, c, 0, 0]`) is not a syntactic
+duplicate, so `dedup` keeps both. Fix: a coda pass `splitBytePairPass`
+(`OptimizerPasses/SplitBytePair.lean`) explodes every packed pair into the two single-value
+checks `[a, a, 0, 1]`, `[b, b, 0, 1]` — obligation-identical by the proven `bytePairBus` fact —
+then a coda `dedupLate` collapses duplicated byte-values, `redundantByteDrop` drops justified
+singles operand-granularly, and the existing `bytePackLate` re-packs the survivors two per
+interaction. A pair with nothing to shed round-trips unchanged.
+
+**Provenance.** Built and proven 2026-07-11 against a pre-`ByteCheckPack` pipeline, where it
+measured −89 eth bus; shelved for re-measurement because the generalized byte-check recognizer
+(entry 75) and the coda pair cancellation (entry 77) touch the same byte-check stock. Re-measured
+now on current `main` (`6e91df2`): **not subsumed — the win grew** (the entry-77 coda emits byte
+checks whose redundancy the split can now shed).
+
+**Measured (this branch vs `main` `6e91df2`).**
+- openvm-eth (100 cases): bus 16842 → 16727 (**−115 over 27 cases, 0 regressions**); aggregate
+  bus effectiveness 3.455× → **3.479×** (geo 2.735× → 2.753×; powdr 3.480× — the aggregate bus
+  deficit is now −0.001). Variables and constraints bit-identical (agg vars 4.518×, per-case
+  W/L/T 27/29/44 unchanged). Biggest movers: apc_037 −30, apc_100 −28, apc_022/apc_027 −7.
+- keccak: bus 2072 → **2027 (−45)**; vars 2025 / constraints 120 unchanged; runtime
+  294.7s → 285.8s (−3%, i.e. flat).
+- **Attribution ablation:** running the coda with `dedupLate` alone (split disabled) is
+  bit-identical to `main` on all 100 cases and in aggregate — the entire win is the split;
+  none of it comes from the extra coda dedup.
+
+**Wiring.** Coda only (`busPairCancelLate → splitBytePair → dedupLate → redundantByteDrop →
+bytePackLate → …`): the split transiently *increases* the bus count, so it must never run inside
+the size-decreasing cleanup fixpoint. No new `BusFacts`; the pass reuses the `bytePairBus`/
+`byteCheck` facts that `bytePackPass` was proven from. Build + proof integrity green
+({propext, Classical.choice, Quot.sound}-only).

@@ -31,6 +31,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.EqCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
 
 set_option autoImplicit false
 
@@ -111,6 +112,11 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
     monic form, and one final constant-fold. -/
 def codaPasses : List (String × VerifiedPassW p) :=
   [ ("busPairCancelLate", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass true))),
+    -- Explode packed pair byte checks into singles so `dedupLate` collapses the same value
+    -- byte-checked in several pairs and `redundantByteDrop` becomes operand-granular; the
+    -- survivors are re-packed by `bytePackLate` below (a pair with nothing to shed round-trips).
+    ("splitBytePair", SplitBytePair.splitBytePairPass.guardDegree),
+    ("dedupLate", dedupPass.withFacts.guardDegree),
     ("redundantByteDrop", RedundantByteDrop.redundantByteDropPass.guardDegree),
     ("bytePackLate", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("monicScale", monicScalePass.withFacts.guardDegree),
