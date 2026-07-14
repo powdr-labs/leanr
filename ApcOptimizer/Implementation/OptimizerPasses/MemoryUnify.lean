@@ -164,6 +164,23 @@ def insertEntry (T : BoundsMap p cs bs) (x : Variable) (b : Nat)
 private def rawVarsOf (bi : BusInteraction (Expression p)) : List Variable :=
   bi.payload.filterMap (fun e => match e with | .var x => some x | _ => none)
 
+/-- Cheap once-per-interaction pre-scan for probed-bound candidates: an output slot `j` whose
+    content is affine in a single variable `y` can only ever bound `y`, so the expensive
+    `probedSlotBoundAt` (which rebuilds the pattern and probes up to 256 values) runs only on
+    these `(y, j)` pairs instead of every (variable, slot) combination. -/
+private def probeCandidatesOf (bi : BusInteraction (Expression p)) : List (Variable × Nat) :=
+  if (bi.multiplicity.constValue?).isSome then
+    (List.range bi.payload.length).filterMap (fun j =>
+      match bi.payload[j]? with
+      | some e =>
+        match linearize e with
+        | some l => match l.terms with
+          | [(y, _)] => some (y, j)
+          | _ => none
+        | none => none
+      | none => none)
+  else []
+
 /-- Collect bounds from all interactions' fact-bounded raw payload slots. -/
 def addAll (facts : BusFacts p bs) :
     (pending : List (BusInteraction (Expression p))) →
@@ -172,15 +189,32 @@ def addAll (facts : BusFacts p bs) :
   | bi :: rest, hmem, T =>
     let hbi := hmem bi (List.mem_cons_self ..)
     let hrest := fun bi' h => hmem bi' (List.mem_cons_of_mem _ h)
+    let cands := probeCandidatesOf bi
     let rec addVars (xs : List Variable) (T : BoundsMap p cs bs) : BoundsMap p cs bs :=
       match xs with
       | [] => T
       | x :: xs =>
-        match hr : interactionBound bs facts bi x with
-        | some b =>
-            addVars xs (T.insertEntry x b
-              (fun env hbus => interactionBound_sound bs facts bi x b hr env (hbus bi hbi)))
-        | none => addVars xs T
+        let T1 := match hr : interactionBound bs facts bi x with
+          | some b =>
+              T.insertEntry x b
+                (fun env hbus => interactionBound_sound bs facts bi x b hr env (hbus bi hbi))
+          | none => T
+        -- Also try the probed bounds (slotFun consistency; e.g. the XOR-mask 6-bit top-limb
+        -- bound `[x, 192, 192 + x, 1]` ⟹ `x < 64`); `insertEntry` keeps the smaller bound.
+        -- Only slots the pre-scan names for `x` are tried; the recognizer re-checks everything.
+        let rec goCands (cl : List (Variable × Nat)) (T : BoundsMap p cs bs) :
+            BoundsMap p cs bs :=
+          match cl with
+          | [] => T
+          | (y, j) :: cl =>
+            if y = x then
+              match hr2 : probedSlotBoundAt bs facts bi x j with
+              | some b =>
+                  goCands cl (T.insertEntry x b (fun env hbus =>
+                    probedSlotBoundAt_sound bs facts bi x j b hr2 env (hbus bi hbi)))
+              | none => goCands cl T
+            else goCands cl T
+        addVars xs (goCands cands T1)
     addAll facts rest hrest (addVars (rawVarsOf bi) T)
 
 /-- Build the bounds map for a system (one pass over the interactions). -/

@@ -15,14 +15,15 @@ Absolute output totals (identical inputs, so `agg` effectiveness follows directl
 
 | benchmark | axis | apc | powdr | apc − powdr |
 |---|---|---|---|---|
-| openvm-eth (100) | variables | 27,768 | 30,885 | **−3,117 (lead; entry 83 seqz −20, entry 84 one-hot −14)** |
-| | bus interactions | 16,429 | 16,722 | **−293 (lead)** |
+| openvm-eth (100) | variables | 27,762 | 30,885 | **−3,123 (lead; entry 85 JAL ladders −6)** |
+| | bus interactions | 16,424 | 16,722 | **−298 (lead)** |
 | | constraints | 10,955 | 20,299 | −9,344 (lead; entry 83 −60, entry 84 −252) |
 | keccak | variables | 2,021 | 2,021 | **exact parity** |
 | | bus interactions | 1,752 | 1,734 | **+18 (was +218; entry 82 −200)** |
 | | constraints | 186 | 186 | **exact parity** |
 
-Per-case standings on eth: variables **31 W / 9 L / 60 T** (entries 83/84 flipped 2 losses).
+Per-case standings on eth: variables **31 W / 7 L / 62 T** (entries 83/84 flipped 2 losses;
+entry 85 flipped apc_034/066 to exact parity).
 Bus per-case was **7 W / 67 L / 26 T** (+588 over losing cases) at the measurement base;
 #117/#119 improved 37 case-measurements with 0 regressions (agg 3.439× → 3.479×, geo 2.723× →
 2.753×; powdr 3.480× / 2.822×) — re-measure the standings before quoting them. The reported
@@ -35,9 +36,10 @@ both benchmarks except keccak, where the identified fixes land exactly on powdr'
 Exact gap decomposition (verified on the live circuits at the measurement base; buckets marked
 LANDED are done — the remainder still adds up to the current gaps):
 
-- **eth variables ~+28 over 8 cases** (was +172 over 29) = ~~M1 constant decompositions +135~~
-  (**LANDED**: entry 81 −165 incl. cascades; residual = full-byte-top `rd_data` ladders,
-  apc_034/066 +3 each) · ~~M2 comparison gadgets (apc_037 +14, apc_018 +9)~~ (**LANDED**: entry 83
+- **eth variables ~+22 over 7 cases** (was +172 over 29) = ~~M1 constant decompositions +135~~
+  (**LANDED**: entry 81 −165 incl. cascades; entry 85 −6 = the mask-bounded `JAL` ladders,
+  apc_034/066 now exact parity; residual = ladders with no mask check on the top limb, parts of
+  apc_038/042/064) · ~~M2 comparison gadgets (apc_037 +14, apc_018 +9)~~ (**LANDED**: entry 83
   seqz collapse) · ~~M3 dead `bit_multiplier` +14~~ (**LANDED**: entry 84 −14, apc_038/051) ·
   everything else nets in apc's favor.
 - **eth bus** (was +588 over losing cases; −191 + −132 + −141 landed) = ~~width-1 range checks
@@ -62,12 +64,16 @@ LANDED are done — the remainder still adds up to the current gaps):
   effectiveness-neutral, ~half the collapse-stage runtime.
 - **#122 merged** (entry 80 = idea 4(b)+(c)): width-1 → booleanity + subsumed range-check drop;
   eth bus −132 (aggregate flips to a lead), keccak bus −68.
-- **Entry 81 (this branch): the bounded-payload digit fold** — lands the payload-ladder core of
+- **Entry 81 (#120 merged): the bounded-payload digit fold** — lands the payload-ladder core of
   idea 1 below; see the re-scoped idea 1.
-- **#116 open** (gated constant-decomposition fold): eth-neutral because its gate skips every
-  profitable case; the digit fold (entry 81) lands the same family from the payload side, so
-  #116 is now fully subsumed — close it, but its proven digit-uniqueness core (`annDecode_forces`,
-  `annSum_val`) remains the natural starting point for the constraint-side remainder of idea 1.
+- **Entry 85 (PR #123): probed slot bounds** — reads the XOR-mask range facts
+  (`[x, 192, 192 + x, 1]` ⟺ `x < 64`) into `BoundsMap`, closing idea 1's mask-bounded `JAL`
+  ladder slice (apc_034/066 to exact parity). The same session built and *withdrew* the
+  constraint-side fold after measuring it at +0 vars / +12 bus on top of the digit fold —
+  see idea 1's closed slice and the dead ends.
+- **#116 open** (gated constant-decomposition fold): fully subsumed — the digit fold (entry 81)
+  lands the family from the payload side, and the ungated constraint-side angle measured at
+  zero residual value (idea 1's closed slice). Close it.
 
 ---
 
@@ -87,17 +93,23 @@ link-register family; no keccak pair-matching regression (unlike #116's ungated 
 attempt).
 
 **Remaining slices of this idea:**
-- **Shifted `rd_data__{1,2,3}` ladders whose top limb is a full byte** (apc_034/066 +3 each,
-  parts of apc_038/042/064): all-byte bounds genuinely admit wrap phantoms; needs a tighter
-  top-limb bound from another constraint, if one exists. Low ceiling (~6–15 vars).
+- ~~**Mask-bounded `JAL` link ladders** (apc_034/066 +3 each)~~ (**LANDED**: entry 85 — the
+  "missing" top-limb bound existed as the genuine-XOR identity `[rd₃, 192, 192 + rd₃, 1]`
+  ⟺ `rd₃ < 64`; the probed slot bound (`probedSlotBoundAt`) reads it into `BoundsMap` and the
+  entry-81 fold does the rest. Both cases at exact powdr parity.)
+- **Ladders with no mask check on the top limb** (parts of apc_038/042/064, ≲ +10 vars): the
+  mod-p alias (digits of `K + p`) is then a satisfying *admissible* assignment, so no per-check
+  fold is sound (`isCompleteReplacementOf` quantifies over all admissible assignments) — see
+  dead ends. The only route is joint multi-constraint refutation (enumerate the adder cluster's
+  carry booleans against the range facts, fold on a singleton). Census the exact residue before
+  building anything; low ceiling.
 - **Constraint-side affine seeds** (`Σ cᵢ·xᵢ = K` as an algebraic constraint rather than a
-  payload ladder), which Gauss unit-pivots away before any digit solver sees them. #116's
-  `ConstDecomp.lean` proves the digit-uniqueness core (`annDecode_forces`, `annSum_val`); if
-  built, substitute all digits at once via `SubstMap` *before* `gauss`, and heed #116's measured
-  traps: the ungated version cost keccak +187 bus (folded constant send payloads stop matching
-  unfolded receives in `busUnify`/`busPairCancel` — fix the matcher, don't re-add the gate) and
-  +16% runtime (don't emit equalities for Gauss to rediscover). Unclear residual value now that
-  the payload side landed — re-census first.
+  payload ladder): **measured dead end** — built in full (entry 82's session: ungated batch
+  `SubstMap` fold before `gauss` + seed-aware pivot declining + slot-form decode with remainder
+  bound) and A/B'd on top of the digit fold at **+0 vars on all 100 eth cases / +12 bus**.
+  Gauss's pivot mangling is what *feeds* the payload-side fold (`g`-scaled slot ladders are
+  more rigid than raw seeds: `M % g = 0` kills wrap phantoms); protecting seeds starves it.
+  Do not rebuild; close #116.
 
 ---
 
@@ -247,6 +259,18 @@ and accepts both closer signs (mid-cycle the optimizer holds the negated `(1 −
 
 ## Measured dead ends (all re-verified this session — do not re-propose without new evidence)
 
+- **Constraint-side digit folding / pre-Gauss seed protection** (entry 85's session): the
+  complete mechanism (ungated batch `SubstMap` fold before `gauss`, seed-aware pivot
+  declining/deferral under optimistic bounds, slot-form decode with a remainder bound) measures
+  **+0 vars on all 100 eth cases / +12 bus** on top of the payload-side digit fold. Pivot
+  mangling *feeds* the digit fold; protecting seeds starves it. Also learned: `BoundsMap` is
+  empty in cleanup cycle 1 (every multiplicity is validity-flag-guarded until the first `gauss`
+  pins the flag), so bounds-gated passes are inert there.
+- **Per-check folding of ladders whose limbs are genuinely all-byte**: the mod-p alias (digits
+  of `K + p`) is a satisfying, admissible assignment, so a per-constraint/per-check fold breaks
+  `isCompleteReplacementOf` — not merely unproven, *incorrect*. Check for a mask/range fact on
+  the top limb first (entry 85 reads the XOR-mask encoding); only genuinely uncovered ladders
+  need joint refutation.
 - **Keccak below powdr**: nothing exists. XOR dag is *perfectly clean* — 0 duplicate operand
   pairs, 0 trivial identities, 0 dead results, 0 collapsible `(a⊕b)⊕a` chains; apc's 862 genuine
   XORs ≡ powdr's 862 (87 differ only in inlining depth). Memory: no semantic pairs beyond the
