@@ -564,22 +564,6 @@ theorem probedSlotBoundAt_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     rw [beq_iff_eq, henvx, ← hpay, ← hfun, heval]
   exact probeMax_lt _ B₀ (env x).val hbase htest
 
-/-- The probed bound for `x` from interaction `bi`: the first output slot that yields one. -/
-def probedSlotBound (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) (x : Variable) : Option Nat :=
-  ((List.range bi.payload.length).filterMap (probedSlotBoundAt bs facts bi x)).head?
-
-theorem probedSlotBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) (x : Variable) (bound : Nat)
-    (h : probedSlotBound bs facts bi x = some bound) (env : Variable → ZMod p)
-    (hob : (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false) :
-    (env x).val < bound := by
-  unfold probedSlotBound at h
-  have hmem : bound ∈ (List.range bi.payload.length).filterMap
-      (probedSlotBoundAt bs facts bi x) := List.mem_of_mem_head? h
-  obtain ⟨j, _, hAt⟩ := List.mem_filterMap.1 hmem
-  exact probedSlotBoundAt_sound bs facts bi x j bound hAt env hob
-
 /-- The value bound of `x` derived from the first bus obligation that bounds it. -/
 def findVarBound (bs : BusSemantics p) (facts : BusFacts p bs) :
     List (BusInteraction (Expression p)) → Variable → Option Nat
