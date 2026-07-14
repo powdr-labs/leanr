@@ -27,13 +27,21 @@ variable {p : ℕ}
 
 /-! ## The domain-constant check -/
 
-/-- `some c` if `e` evaluates to the same constant `c` on every survivor, else `none`. -/
+/-- `some c` if `e` evaluates to the same constant `c` on every survivor, else `none`.
+
+    Two output-preserving speedups over the naive `e.eval (envOf s) = e.eval (envOf s₀)` form
+    (both extensionally equal, so the fold decision and the folded constant are unchanged):
+    evaluate through `Expression.evalFast` (field operations derived once per call rather than per
+    expression node, `evalFast_eq` — the entry-54 treatment the rest of the pass already uses), and
+    compute the reference value `e.evalFast (envOf s₀)` **once** with a `let` instead of
+    re-evaluating it against every survivor inside the `.all`. -/
 def constOnSurvs (survs : List (List (Variable × ZMod p))) (e : Expression p) : Option (ZMod p) :=
   match survs with
   | [] => none
   | s₀ :: rest =>
-    if (s₀ :: rest).all (fun s => decide (e.eval (envOf s) = e.eval (envOf s₀))) then
-      some (e.eval (envOf s₀))
+    let v₀ := e.evalFast (envOf s₀)
+    if (s₀ :: rest).all (fun s => decide (e.evalFast (envOf s) = v₀)) then
+      some v₀
     else none
 
 /-- If `constOnSurvs` accepts `e` with value `c`, then `e` evaluates to `c` on every survivor. -/
@@ -46,10 +54,10 @@ theorem constOnSurvs_sound (survs : List (List (Variable × ZMod p))) (e : Expre
     simp only [constOnSurvs] at h
     split at h
     · next hall =>
-        have hc : e.eval (envOf s₀) = c := Option.some.inj h
+        have hc : e.evalFast (envOf s₀) = c := Option.some.inj h
         have hthis := List.all_eq_true.mp hall s hs
         rw [decide_eq_true_iff] at hthis
-        rw [hthis, hc]
+        rw [← Expression.evalFast_eq, hthis]; exact hc
     · next => exact absurd h (by simp)
 
 /-! ## The fold rewrite -/
