@@ -28,6 +28,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
 import ApcOptimizer.Implementation.OptimizerPasses.BoxRewrite
 import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
+import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRange
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
@@ -116,6 +117,7 @@ def codaPasses : List (String × VerifiedPassW p) :=
     ("splitBytePair", SplitBytePair.splitBytePairPass.guardDegree),
     ("dedupLate", dedupPass.withFacts.guardDegree),
     ("redundantByteDrop", RedundantByteDrop.redundantByteDropPass.guardDegree),
+    ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
     ("bytePackLate", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("monicScale", monicScalePass.withFacts.guardDegree),
     ("constFoldEnd", constantFoldPass.withFacts.guardDegree) ]

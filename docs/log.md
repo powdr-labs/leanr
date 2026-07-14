@@ -2857,6 +2857,7 @@ measurement).
 *(Rebase note: entries 77 (#117, interior memory pair cancellation = the file's idea 2 items (a)+(b))
 and 78 (#119, coda byte-pair splitting = the op-0 half of idea 4d) merged while this regeneration was
 in flight; the ideas file's baselines and ideas 2/4 were refreshed accordingly on rebase.)*
+
 ### 79. Consolidate the is-equal collapse into a generalization of `hintCollapse` (supersedes the standalone `EqCollapse` pass)
 
 **Context.** Entry 76 (#114) landed the is-equal / is-zero sum-of-squares collapse as a **separate**
@@ -2891,3 +2892,57 @@ constraints **10.595× / 11.585×**, per-case **27 W / 29 L / 44 T**; `apc_033` 
 `lake build` green; `check-proof-integrity.sh` passes (the three `*_maintainsCorrectness` theorems
 `{propext, Classical.choice, Quot.sound}`-only); audited surface untouched. **Worked: yes** (same
 effectiveness as entry 76, fewer passes, ~half the collapse-stage runtime).
+
+## Entry 80: Width-1 range check → booleanity + subsumed range-check drop (idea 4(b)+(c))
+
+Bundled the two stateless-range-hygiene items from `docs/ideas.md` idea 4. Both are pure bus wins
+(variable-neutral), proven with **no new `BusFacts` and no audited-surface change**; correctness
+follows from each pass's own `PassCorrect`.
+
+**4(b) — width-1 → booleanity** (`ZeroWidthRange.lean`, cleanup cycle). A range check `[e, 1]` on
+the variable range checker is accepted iff `e < 2` — booleanity — so `zeroWidthRangePass` grew a
+width-1 arm alongside its width-0 arm: ADD the degree-2 constraint `e·(e−1) = 0` via
+`PassCorrect.ofEnvEq`, then DROP the interaction via `filterBusEntailed_correct`. The width-1 iff
+comes straight from the **existing mult-generic `varRangeBus` fact** — the ideas file's proposed
+new `oneRangeBool` field was redundant. The backward direction (`e·(e−1)=0 → e < 2`) needs an
+integral domain, so the arm gates on `decide (Nat.Prime p)` (the `deep` pattern); a per-candidate
+degree gate (`e.degree ≤ 1`) keeps every emitted constraint ≤ 2, so it can never trip the
+whole-pass `guardDegree` revert. Trades bus −1 for constraint +1 — a strict lexicographic win
+(bus ≻ constraints), compatible with the fixpoint `sizeKey`.
+
+**4(c) — subsumed range checks** (`SubsumedRange.lean`, new pass, coda). Drops a var-range check
+`[x, w]` when a **retained** interaction already bounds `x` by `b' ≤ 2^w`. Structure mirrors
+`RedundantByteDrop` exactly: a **non-circular justification base** (interactions this pass never
+drops = everything not recognized as a single-variable range check) plus the proven `findVarBound`,
+whose `slotBound`-derived bounds cover tuple-range slots, byte-limb memory receives, and any
+retained range check. The drop is `filterBusEntailed_correct` again (each base interaction survives
+the filter, so a satisfying assignment of the output accepts it, forcing `x` into range). Two
+corrections to the ideas-file write-up:
+- the bound test is **`≤`, not strict `<`**: apc_038's `mem_ptr_limbs__1` sits in a `[256, 8192]`
+  tuple slot bounding it by *exactly* `2^13`, which a strict test would miss. The non-circular
+  base — not strictness — is what prevents two equal-width checks from dropping each other.
+- the base subsumes byte/memory sources too, so it reaches **~43 eth interactions**, not the
+  estimated 22 (the extra hits are wide range checks on byte-guaranteed / smaller-tuple-slot vars).
+
+**Wiring.** 4(b) stays in the cleanup cycle (the booleanity feeds the finite-domain passes); 4(c)
+runs once in the coda after `redundantByteDrop` (a run-once, variable-neutral drop, so it never
+starves the mid-loop enumeration of a variable's range bound — the same discipline as
+`RedundantByteDrop`).
+
+**Measured (A/B: this branch vs `main` `5bcbb85`, full `benchmark.py` + keccak `run`).**
+- **openvm-eth (100 cases):** bus 16727 → **16595 (−132, 18 cases improved, 0 regressions)**;
+  aggregate bus effectiveness 3.479× → **3.506×** — the last trailing eth aggregate axis **flips
+  to a lead over powdr** (16595 vs 16722, was +5 → −127). Variables **bit-identical** (27967,
+  per-case W/L/T 27/29/44 unchanged — 0 regressions). Constraints 11213 → 11303 (+90, the
+  width-1→booleanity trade; still 10.5× vs powdr's 5.85×). Split: ≈ −89 bus is width-1 (con
+  +90), ≈ −43 bus is subsumed-range drops (constraint-neutral: apc_049 −9, apc_042 −6,
+  apc_005/009/015/036/044/067/068 −3 each, apc_038 −2, …). Biggest movers apc_100 −40,
+  apc_037 −25, apc_038 −14, apc_051 −12.
+- **keccak:** bus 2027 → **1959 (−68)** — all 68 width-1 checks (4(c) finds 0 subsumed pairs, as
+  predicted); vars **2025 unchanged**; constraints 120 → 188 (+68). Bus effectiveness 6.543× →
+  6.770×; gap to powdr +293 → +225.
+
+Build green; `Scripts/check-proof-integrity.sh` passes — the correctness theorems
+(`optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`,
+`openVmOptimizer_maintainsCorrectness`) depend only on `{propext, Classical.choice, Quot.sound}`.
+Worked: yes.
