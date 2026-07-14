@@ -2946,3 +2946,72 @@ Build green; `Scripts/check-proof-integrity.sh` passes — the correctness theor
 (`optimizerWithBusFacts_maintainsCorrectness`, `simpleOptimizer_maintainsCorrectness`,
 `openVmOptimizer_maintainsCorrectness`) depend only on `{propext, Classical.choice, Quot.sound}`.
 Worked: yes.
+### 81. Bounded-payload digit fold: byte-checked mixed-radix ladders force constant limbs (−165 eth vars, keccak variable parity)
+
+**Idea (the bounded-payload slice of ideas.md idea 1, constant-decomposition folding).** A bitwise pair check asserts an
+affine operand `E = K ± (g·v₀ + 256g·v₁ + 65536g·v₂ + …)` is a byte, and each ladder variable
+carries its own range check `vᵢ < Bᵢ ≤ 256` — together these can force every `vᵢ` to a
+compile-time constant (the digits of the byte-checked value). The census on current output
+(renders, all 100 cases): **42 such checks over 35 cases**, two shapes — the `rd_data` return
+address `K − 256·rd₀ − 65536·rd₁ − 16777216·rd₂`, and a scaled `K + 480·rd₀ + 122880·pc₀ +
+31457280·pc₁` PC-limb form — 2–3 pinnable vars each, far above the recorded "~3 vars over ~20
+cases" estimate.
+
+**The wrap analysis is the crux.** BabyBear `p ≡ 1 (mod 256)`, so `S = tval(b) + m·p` admits a
+phantom digit vector for every wrap count `m ≤ maxΣ/p` (≈ 2 for the rd_data shape): the digits
+are *not* forced by byte bounds alone. What kills the phantoms is the **narrow top-limb range
+check** (e.g. the 6-bit top PC limb: phantom tops 120/240 ≥ 64) — a first solver assuming
+all-byte bounds found unique solutions on only 6/35 cases; with the true per-variable widths,
+33/35. The what-if (solve digits offline, pin via a scratch `whatif-pin` subcommand, re-run the
+full pipeline): **−165 vars / −141 bus / −36 constraints over 33 cases, 0 regressions** —
+including a −14-var cascade on the apc_045/026/051/055/085/094 family where pinned digits enable
+folds an earlier affine-seed what-if had measured as non-cascading (that experiment seeded only
+the `imm_limbs` constraint slice; seeding the byte-check digits is what cascades).
+
+**Pass (`DigitFold.lean`, cleanup cycle).** Recognize `[x, y, 0, 0]` pair checks (mult 1,
+`bytePairBus` + `byteCheck` facts), `linearize` each operand, sort terms into a `g·256^i`
+coefficient ladder (both sign interpretations), read per-variable bounds from the proof-carrying
+`BoundsMap` (`varRangeBus`/bitwise slot facts), then **enumerate the whole (byte, wrap) grid**
+(`solutions`, ≤ 256·(maxΣ/p+1) points) and decode each admissible value as a bounded ladder.
+Fires only on a **singleton** solution set: `solutions_complete` proves any satisfying
+assignment's digit vector is enumerated (mixed-radix uniqueness `unpack?_ladderVal` + the
+ZMod→ℕ residue bridge), so the singleton forces `env v₀ = d₀`, discharged into
+`ConstraintSystem.subst_correct`. One substitution per invocation; the cleanup fixpoint
+re-solves the shrunken ladder. The enumeration is generic — no OpenVM constants, no
+`native_decide`; it fires exactly when the facts force uniqueness.
+
+**Perf lesson (measured, then fixed).** A first cut hit **+174% eth runtime**: a length-1
+"ladder" is every plain byte-checked variable, and each paid the 256-point grid with
+runtime-`p` ZMod ops (profile: digitFold 19.0s of 28s on apc_019). A `terms.length ≥ 2` guard
+(the idiom is multi-digit by nature) dropped it to **36 ms** on the same case; full-corpus
+runtime is now **−1% eth / −2% keccak** vs main.
+
+**Measured (per-case JSON A/B, exactly matching the what-if; first measured vs `9c92008` = #119,
+re-measured with identical deltas after rebasing onto `71330d5` = #122 — the fold is independent
+of the width-1/subsumed-range and hintCollapse-consolidation landings):**
+- openvm-eth (vs `71330d5`): vars agg **4.518× → 4.545×** (geo 3.837× → 3.878×), bus
+  **3.506× → 3.536×** (geo 2.762× → 2.796×), constraints 10.511× → 10.544×; 33 cases improved,
+  **−165 vars / −141 bus / −36 constraints / 0 regressions** (totals 27967 → 27802 vars,
+  16595 → 16454 bus, 11303 → 11267 constraints). Per-case variable W/L/T vs powdr
+  **27/29/44 → 30/11/59** — 18 losses flip (apc_045/055/094/026/085 −14 each to parity or win);
+  the aggregate bus lead over powdr widens (16454 vs 16722).
+- keccak (vs `71330d5`): vars **2025 → 2021 = exact powdr variable parity** (13.618× both), bus
+  1959 → 1952 (gap +218), constraints 188 → 186 = **exact powdr constraint parity**, runtime flat
+  (273.3s vs 275.8s solo) — the same fold fires on a keccak address ladder and cascades.
+- Residual eth variable losses: **11 cases / +56 vars** (was 29 / ~150): apc_037 +14,
+  apc_051/018 +9, apc_038 +7, apc_064/042 +4, apc_066/034 +3 (shifted `rd_data__{1,2,3}`
+  ladders whose top limb is a full byte — genuinely not forced by the present facts), 3× +1.
+
+**Also measured this iteration (what-if only, no pass): the signed-compare collapse re-scoped.**
+The ideas.md #3 remaining slice assumed powdr keeps "a single comparison-result witness" —
+render diffs show **powdr has no generic signed-compare collapse either** (it keeps the marker
+gadgets on apc_037/100/027; the apparent msb-flag gap is a var-neutral naming difference, flag
+vs top limb). Its real lever is **compare-against-constant → is-zero-of-limb-sum** (per-case
+renders: `cmp·Σlimbs = 0` + inv witness replacing 4 markers + diff_val). Census on our output:
+118 surviving marker-gadget instances, **11 unsigned-vs-constant → est −44 vars / −11 bus over
+8 cases** (plus a few signed-vs-constant, e.g. apc_018's second gadget). Smaller than the digit
+fold, so deferred — recorded in ideas.md #3 with the corrected mechanism.
+
+Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only).
+**Worked: yes.**
+

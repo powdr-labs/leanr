@@ -32,6 +32,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRange
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
+import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 
 set_option autoImplicit false
 
@@ -90,6 +91,7 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
     ("normalize2", normalizePass.withFacts.guardDegree),
     ("constFold2", constantFoldPass.withFacts.guardDegree),
     ("zeroRegister", zeroRegisterPass.guardDegree),
+    ("digitFold", DigitFold.digitFoldPass.guardDegree),
     ("hintCollapse", hintCollapsePass.guardDegree),
     ("rootPairUnify", rootPairUnifyPass.guardDegree),
     ("flagUnify", flagUnifyPass.guardDegree),
