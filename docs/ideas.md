@@ -126,6 +126,13 @@ higher proof cost than #1.
 
 ## Rejected / measured dead-ends (do not re-propose without re-measuring)
 
+- **Degree-bounded witness inlining + per-candidate degree planning (roadmap 4.7/4.10):** measured
+  **zero** corpus-wide (entry 79, alternation what-if through the real optimizer, cascade-capable).
+  Constant-coefficient nonlinear pivots barely exist post-optimization (4 on apc_051, 1 on keccak)
+  and all are blocked by the **bus payload bound** — the inlined variable is the bus-facing value,
+  beyond any booleanity legalization. The audit's deg-4 "near-misses" are conditional pivots
+  (already measured dead). Do not build; 4.10 only ever with a measured consumer.
+
 - **Result-zero XOR extraction (`[x,y,0,1] ⟹ x=y`):** **measured dead-end (entry 75).** The census
   behind the old idea #3(i) was stale: the *optimized* keccak circuit contains **zero** `[x,y,0,1]`
   interactions — every op-1 bitwise message carries a genuine XOR-result variable (XOR chaining), the

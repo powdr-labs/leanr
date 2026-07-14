@@ -2857,3 +2857,46 @@ command, before any proof work. Second instance of the pattern from the result-z
 first.**
 
 **Impact: none (no code landed).**
+
+### 79. Degree-bounded witness inlining + per-candidate degree planning: measured zero — dead-end
+
+**Idea (roadmap 4.7 + 4.10; Dead-ends §9's re-measure caveat).** Inline a variable with a
+constant-coefficient linear pivot whose solved RHS is nonlinear (`c := a·b`), per-candidate
+degree-gated, with `BoxRewrite` legalization (`b² → b`) re-opening previously degree-blocked
+substitutions. Historically "the biggest sound variable gap", parked pending re-measurement on
+top of the legalizer.
+
+**Instrument: an alternation what-if, not a static census** (a survivor count would be blind to
+mid-pipeline shapes and cascades). Scratch `whatif47` (since reverted): find constant-coefficient
+pivots with RHS degree ≥ 2 (affine RHS is Gauss's territory; where Gauss declines it is
+deliberate range-knowledge policy), substitute system-wide, legalize with the *proven*
+`ConstraintSystem.boxRewrite`, accept iff `withinDegreeB` — then alternate with the full real
+optimizer to a joint fixpoint, so any accepted inlining seeds another optimization round.
+
+**Result: zero accepted inlinings on all 100 openvm-eth cases and keccak.** The candidate
+population is itself nearly empty:
+- apc_051 (flagship degree-blocked case): **4 candidates** — `write_data` limbs with deg-3 mux
+  RHS — all rejected because the substitution lands in a **memory-bus payload (bound 2)**, a
+  structural wall no booleanity rewrite can cross: the variable being inlined *is* the
+  bus-facing value. (This family's bus-side cost was already addressed by #117's entailed
+  matching; the variable itself is not eliminable.)
+- keccak: **1 candidate** (the is-equal `cmp_result`, deg-3 sum-of-squares RHS) — same rejection.
+- The audit's 98 deg-4-vs-3 "near-misses" never appear as candidates: their pivot coefficients
+  are *expressions* (the conditional/mux class), excluded from 4.7 by definition and measured
+  unexploitable by the entry-75 cond sweep (all deg-4-blocked, powdr keeps them all).
+
+**Blind spots, stated:** (a) conditional/expression-coefficient pivots — covered by the prior
+cond-exploitability sweep (mux/inv/nzk = 0); (b) multi-constraint pivot synthesis beyond mux —
+uncharted, no positive signal anywhere; (c) mid-cycle-transient definitions — small by
+construction here, since nonlinear definitions are precisely what no cycle pass consumes.
+(A first instinct — counting legalizable pivots on final outputs — was rejected during design
+review as false-negative-prone; the alternation harness closes the survivor-bias and cascade
+gaps.)
+
+**Conclusion: do not build 4.7; do not build 4.10 without a consumer** (its standalone value —
+rescuing other passes' whole-pass `guardDegree` reverts — remains unmeasured, but framework
+without a beneficiary is not effectiveness work). The degree-blocked survivor band is
+payload-bound and conditional-pivot mass, not legalizable witness definitions.
+
+**Impact: none (no code landed).** Worked: the measurement did — a corpus-wide refutation with
+explicit blind-spot accounting, for the cost of a ~100-line scratch harness.
