@@ -348,6 +348,238 @@ theorem interactionBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
         (bi.payload.map Expression.constValue?) slot bound (env x) h
         (matches_evalPattern bi.payload env) hviol hget
 
+/-! ## Probed slot bounds
+
+A bound for `x` that no single `slotBound` fact states, derived by *probing* a functional
+dependence (`slotFun`) against the payload's own syntax. The motivating instance is OpenVM's
+6-bit top-limb bound on pc-derived byte decompositions, which ships as a genuine-XOR identity
+`[x, 192, 192 + x, 1]` rather than a range check: the accepted message forces
+`x ⊕ 192 = x + 192`, which only bytes `< 64` satisfy. Generically: if payload slot `j` is an
+affine function `l.const + c·x` of a variable `x` sitting raw in slot `i`, every other slot is
+a constant, and a `slotFun` fact computes slot `j` from the rest of the payload, then `x`'s
+value must be a *survivor* of the probe `f (payload with x := v, slot j zeroed) = l.const + c·v`
+over `v < B₀` (the slot-fact bound for `x` itself, capped at 256 probes). The returned bound is
+one plus the largest survivor. No bus specifics — any `slotFun` instance works. -/
+
+/-- One plus the largest `v < n` passing `test` (`0` if none) — the least strict upper bound on
+    the survivors of a probe. -/
+def probeMax (test : Nat → Bool) : Nat → Nat
+  | 0 => 0
+  | n + 1 => if test n then n + 1 else probeMax test n
+
+theorem probeMax_lt (test : Nat → Bool) :
+    ∀ (n v : Nat), v < n → test v = true → v < probeMax test n
+  | 0, v, hv, _ => absurd hv (by omega)
+  | n + 1, v, hv, htest => by
+    rw [probeMax]
+    split
+    · omega
+    · rename_i hn
+      have hvn : v ≠ n := fun h => by rw [h] at htest; rw [htest] at hn; exact hn rfl
+      exact probeMax_lt test n v (by omega) htest
+
+/-- The probe payload: constant slots at their constants, slot `i` at the candidate value,
+    non-constant slots at `0`. -/
+def probeBase (payload : List (Expression p)) (i : Nat) (v : ZMod p) : List (ZMod p) :=
+  (payload.map (fun e => (e.constValue?).getD 0)).set i v
+
+/-- With slot `i` a raw variable, slot `j` arbitrary, and every other slot a constant, the
+    evaluated payload with slot `j` zeroed *is* the probe payload at `env x`. -/
+theorem probeBase_eq_set (payload : List (Expression p)) (env : Variable → ZMod p)
+    (i j : Nat) (hij : i ≠ j) (x : Variable)
+    (hi : payload[i]? = some (.var x))
+    (hconst : ∀ k, k ≠ i → k ≠ j → ∀ e', payload[k]? = some e' → (e'.constValue?).isSome) :
+    ((payload.map (fun e => e.eval env)).set j 0)
+      = (probeBase payload i (env x)).set j 0 := by
+  have hilen : i < payload.length := by
+    by_contra hge
+    rw [List.getElem?_eq_none (by omega)] at hi
+    exact absurd hi (by simp)
+  apply List.ext_getElem?
+  intro k
+  by_cases hkj : k = j
+  · subst hkj
+    rw [List.getElem?_set, List.getElem?_set]
+    simp [probeBase]
+  · rw [List.getElem?_set_ne (fun h => hkj h.symm), List.getElem?_set_ne (fun h => hkj h.symm)]
+    by_cases hki : k = i
+    · subst hki
+      rw [List.getElem?_map, hi, probeBase, List.getElem?_set, if_pos rfl]
+      rw [List.length_map, if_pos hilen]
+      rfl
+    · rw [List.getElem?_map, probeBase, List.getElem?_set_ne (fun h => hki h.symm),
+        List.getElem?_map]
+      cases hk : payload[k]? with
+      | none => rfl
+      | some e' =>
+        have hcv := hconst k hki hkj e' hk
+        obtain ⟨cv, hcveq⟩ := Option.isSome_iff_exists.1 hcv
+        simp only [Option.map_some]
+        rw [e'.constValue?_sound cv hcveq env, hcveq]
+        rfl
+
+/-- `some bnd` exactly when it strictly improves on the base bound. -/
+def capBound (bnd B₀ : Nat) : Option Nat := if bnd < B₀ then some bnd else none
+
+/-- The probed bound for `x` from interaction `bi` with output slot `j` (see the section
+    header): the capped `probeMax` when the shape matches. -/
+def probedSlotBoundAt (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : Variable) (j : Nat) : Option Nat :=
+  if p = 0 then none
+  else
+  match bi.multiplicity.constValue? with
+  | none => none
+  | some mval =>
+    if mval = 0 then none
+    else
+      match varSlot x bi.payload with
+      | none => none
+      | some i =>
+        if i = j then none
+        else
+          match facts.slotBound bi.busId mval (bi.payload.map Expression.constValue?) i with
+          | none => none
+          | some B₀ =>
+            if 256 < B₀ then none
+            else
+              match facts.slotFun bi.busId (bi.payload.map Expression.constValue?) j with
+              | none => none
+              | some f =>
+                match bi.payload[j]? with
+                | none => none
+                | some e =>
+                  match linearize e with
+                  | none => none
+                  | some l =>
+                    match l.terms with
+                    | [(y, c)] =>
+                      if y = x ∧ (List.range bi.payload.length).all (fun k =>
+                          k == i || k == j ||
+                            ((bi.payload[k]?.map
+                              (fun e' => (e'.constValue?).isSome)).getD false)) then
+                        capBound (probeMax (fun v =>
+                          f ((probeBase bi.payload i ((v : ℕ) : ZMod p)).set j 0)
+                            == l.const + c * ((v : ℕ) : ZMod p)) B₀) B₀
+                      else none
+                    | _ => none
+
+theorem probedSlotBoundAt_sound (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : Variable) (j : Nat) (bound : Nat)
+    (h : probedSlotBoundAt bs facts bi x j = some bound) (env : Variable → ZMod p)
+    (hob : (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false) :
+    (env x).val < bound := by
+  unfold probedSlotBoundAt at h
+  split_ifs at h with hp0
+  haveI : NeZero p := ⟨hp0⟩
+  split at h
+  any_goals simp only [reduceCtorEq] at h
+  rename_i mval hm
+  split_ifs at h with hmz
+  split at h
+  any_goals simp only [reduceCtorEq] at h
+  rename_i i hslot
+  split_ifs at h with hij
+  split at h
+  any_goals simp only [reduceCtorEq] at h
+  rename_i B₀ hB
+  split_ifs at h with hcap
+  split at h
+  any_goals simp only [reduceCtorEq] at h
+  rename_i f hf
+  split at h
+  any_goals simp only [reduceCtorEq] at h
+  rename_i e hj
+  split at h
+  any_goals simp only [reduceCtorEq] at h
+  rename_i l hlin
+  split at h
+  any_goals simp only [reduceCtorEq] at h
+  rename_i y c heq_terms
+  split_ifs at h with hcond
+  obtain ⟨hyx, hall⟩ := hcond
+  rw [hyx] at heq_terms
+  unfold capBound at h
+  split_ifs at h with hbnd
+  simp only [Option.some.injEq] at h
+  subst h
+  -- the obligation is active
+  have hmeval : (bi.eval env).multiplicity = mval :=
+    bi.multiplicity.constValue?_sound mval hm env
+  have hviol : bs.violatesConstraint (bi.eval env) = false := by
+    apply hob; rw [hmeval]; exact hmz
+  have hpat : Matches (bi.eval env).payload
+      (bi.payload.map Expression.constValue?) :=
+    matches_evalPattern bi.payload env
+  -- base bound for x
+  have hgeti : bi.payload[i]? = some (.var x) := varSlot_sound x bi.payload i hslot
+  have hgetiE : (bi.eval env).payload[i]? = some (env x) := by
+    show (bi.payload.map (fun e' => e'.eval env))[i]? = some (env x)
+    rw [List.getElem?_map, hgeti]
+    rfl
+  have hB' : facts.slotBound (bi.eval env).busId (bi.eval env).multiplicity
+      (bi.payload.map Expression.constValue?) i = some B₀ := by
+    rw [hmeval]; exact hB
+  have hbase : (env x).val < B₀ :=
+    facts.slotBound_sound (bi.eval env) (bi.payload.map Expression.constValue?)
+      i B₀ (env x) hB' hpat hviol hgetiE
+  -- functional dependence at slot j
+  have hgetjE : (bi.eval env).payload[j]? = some (e.eval env) := by
+    show (bi.payload.map (fun e' => e'.eval env))[j]? = some (e.eval env)
+    rw [List.getElem?_map, hj]
+    rfl
+  have hf' : facts.slotFun (bi.eval env).busId
+      (bi.payload.map Expression.constValue?) j = some f := hf
+  have hfun : e.eval env = f ((bi.eval env).payload.set j 0) :=
+    facts.slotFun_sound (bi.eval env) (bi.payload.map Expression.constValue?)
+      j f (e.eval env) hf' hpat hviol hgetjE
+  -- the zeroed evaluated payload is the probe payload at env x
+  have hconst : ∀ k, k ≠ i → k ≠ j → ∀ e',
+      bi.payload[k]? = some e' → (e'.constValue?).isSome := by
+    intro k hki hkj e' hk
+    have hklen : k < bi.payload.length := by
+      by_contra hge
+      rw [List.getElem?_eq_none (by omega)] at hk
+      exact absurd hk (by simp)
+    have := List.all_eq_true.1 hall k (List.mem_range.2 hklen)
+    simp only [beq_iff_eq, Bool.or_eq_true] at this
+    rcases this with (h' | h') | h'
+    · exact absurd h' hki
+    · exact absurd h' hkj
+    · rw [hk] at h'
+      simpa using h'
+  have hpay : ((bi.eval env).payload).set j 0
+      = (probeBase bi.payload i (env x)).set j 0 := by
+    show ((bi.payload.map (fun e' => e'.eval env)).set j 0)
+        = (probeBase bi.payload i (env x)).set j 0
+    exact probeBase_eq_set bi.payload env i j hij x hgeti hconst
+  -- the value equation e = l.const + c·x
+  have heval : e.eval env = l.const + c * env x := by
+    rw [linearize_eval e l hlin]
+    simp [LinExpr.eval, heq_terms]
+  -- the test passes at v = (env x).val
+  have henvx : (((env x).val : ℕ) : ZMod p) = env x :=
+    ZMod.natCast_rightInverse (env x)
+  have htest : (f ((probeBase bi.payload i (((env x).val : ℕ) : ZMod p)).set j 0)
+      == l.const + c * (((env x).val : ℕ) : ZMod p)) = true := by
+    rw [beq_iff_eq, henvx, ← hpay, ← hfun, heval]
+  exact probeMax_lt _ B₀ (env x).val hbase htest
+
+/-- The probed bound for `x` from interaction `bi`: the first output slot that yields one. -/
+def probedSlotBound (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : Variable) : Option Nat :=
+  ((List.range bi.payload.length).filterMap (probedSlotBoundAt bs facts bi x)).head?
+
+theorem probedSlotBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : Variable) (bound : Nat)
+    (h : probedSlotBound bs facts bi x = some bound) (env : Variable → ZMod p)
+    (hob : (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false) :
+    (env x).val < bound := by
+  unfold probedSlotBound at h
+  have hmem : bound ∈ (List.range bi.payload.length).filterMap
+      (probedSlotBoundAt bs facts bi x) := List.mem_of_mem_head? h
+  obtain ⟨j, _, hAt⟩ := List.mem_filterMap.1 hmem
+  exact probedSlotBoundAt_sound bs facts bi x j bound hAt env hob
+
 /-- The value bound of `x` derived from the first bus obligation that bounds it. -/
 def findVarBound (bs : BusSemantics p) (facts : BusFacts p bs) :
     List (BusInteraction (Expression p)) → Variable → Option Nat

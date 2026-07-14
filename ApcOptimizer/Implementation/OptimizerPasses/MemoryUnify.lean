@@ -176,11 +176,18 @@ def addAll (facts : BusFacts p bs) :
       match xs with
       | [] => T
       | x :: xs =>
-        match hr : interactionBound bs facts bi x with
+        let T1 := match hr : interactionBound bs facts bi x with
+          | some b =>
+              T.insertEntry x b
+                (fun env hbus => interactionBound_sound bs facts bi x b hr env (hbus bi hbi))
+          | none => T
+        -- Also try the probed bound (slotFun consistency; e.g. the XOR-mask 6-bit top-limb
+        -- bound `[x, 192, 192 + x, 1]` ⟹ `x < 64`); `insertEntry` keeps the smaller bound.
+        match hr2 : probedSlotBound bs facts bi x with
         | some b =>
-            addVars xs (T.insertEntry x b
-              (fun env hbus => interactionBound_sound bs facts bi x b hr env (hbus bi hbi)))
-        | none => addVars xs T
+            addVars xs (T1.insertEntry x b
+              (fun env hbus => probedSlotBound_sound bs facts bi x b hr2 env (hbus bi hbi)))
+        | none => addVars xs T1
     addAll facts rest hrest (addVars (rawVarsOf bi) T)
 
 /-- Build the bounds map for a system (one pass over the interactions). -/
