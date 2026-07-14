@@ -53,7 +53,10 @@ LANDED are done — the remainder still adds up to the current gaps):
   parity, eth −76. Only sub-items (c) and (d) of idea 2 remain.
 - **#119 merged** (coda byte-pair splitting): the op-0 explode/dedup/drop/repack half of
   idea 4(d); keccak −45, eth −115. The tuple-slot half of 4(d) remains.
-- **#114 merged** (is-equal sum-of-squares collapse). #112 is a slower duplicate — ignore it.
+- **#114 merged** (is-equal sum-of-squares collapse). **#112 open** — reworked from a duplicate into
+  a consolidation: generalizes `hintCollapse` to subsume the collapse and removes the standalone
+  `EqCollapse` pass; effectiveness-neutral vs main, ~half the combined collapse-stage runtime
+  (no separate per-cycle scan). A structural cleanup, not a new win — take it or leave it.
 - **#116 open** (gated constant-decomposition fold): eth-neutral because its gate skips every
   profitable case. Idea 1 below subsumes it; reuse its proven digit-uniqueness core.
 

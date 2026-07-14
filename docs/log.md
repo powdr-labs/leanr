@@ -2857,3 +2857,37 @@ measurement).
 *(Rebase note: entries 77 (#117, interior memory pair cancellation = the file's idea 2 items (a)+(b))
 and 78 (#119, coda byte-pair splitting = the op-0 half of idea 4d) merged while this regeneration was
 in flight; the ideas file's baselines and ideas 2/4 were refreshed accordingly on rebase.)*
+### 79. Consolidate the is-equal collapse into a generalization of `hintCollapse` (supersedes the standalone `EqCollapse` pass)
+
+**Context.** Entry 76 (#114) landed the is-equal / is-zero sum-of-squares collapse as a **separate**
+640-line pass `EqCollapse.lean`, wired as its own `cleanupPasses` entry right after `hintCollapse`.
+Independently (PR #112) the *same* collapse was built as a **generalization of `hintCollapse`**:
+`collapse_correct` takes the soundness reassignment as a parameter, so one proven theorem backs both
+the plain-sum collapse (single byte-bounded coefficients, `is-zero`/`seqz`, `tryOne`) and the
+sum-of-squares collapse (byte-bounded *difference* coefficients `aᵢ − bᵢ`, `is-equal`, `tryOneSq`);
+both shapes are offered in a **single** `hintCollapse` scan that computes the per-constraint witness
+set once (`witnessesOf`) and shares it. This entry consolidates onto that generalization and
+**removes** `EqCollapse.lean` and its pass-list entry.
+
+**Why.** Two motivations, matching the two questions raised on #112:
+- *More generic* (repo principle "prefer fewer, more general passes"): one collapse framework and one
+  proven `collapse_correct` theorem for both the linear and the quadratic (sum-of-squares) witness
+  shapes, versus a second standalone 640-line pass. Net −270 lines for identical behaviour.
+- *Lower runtime*: on `main` the is-equal work runs as a separate `eqCollapse` pass **in addition to**
+  `hintCollapse` every cleanup iteration — a second whole-system witness scan. Folding it into
+  `hintCollapse`'s single shared scan makes the sum-of-squares case cost only a cheap coefficient
+  re-check on the rare multi-marker candidates. Measured per-pass with `profile` (combined
+  collapse-stage time, `main`'s `hintCollapse` + `eqCollapse` vs the consolidated `hintCollapse`):
+  apc_044 401 → 187 ms, apc_037 1261 → 631 ms, apc_006 834 → 411 ms — roughly **halved**, and it
+  removes entry 76's named runtime outliers (apc_044 +25%, apc_080 +54%) since there is no longer a
+  second pass.
+
+**Effectiveness — byte-neutral vs `main` (this is a consolidation, not a new win).** The −48 eth
+vars / −3 keccak vars already landed via entry 76; the generalized `hintCollapse` reproduces them
+exactly. Full 100-case sweep matches `main`: variables **4.518× / 3.837×**, bus **3.479× / 2.753×**,
+constraints **10.595× / 11.585×**, per-case **27 W / 29 L / 44 T**; `apc_033` 121, `apc_072` 29
+(powdr parity). `apc-optimizer run` output byte-identical to `main` on the spot-checked cases.
+
+`lake build` green; `check-proof-integrity.sh` passes (the three `*_maintainsCorrectness` theorems
+`{propext, Classical.choice, Quot.sound}`-only); audited surface untouched. **Worked: yes** (same
+effectiveness as entry 76, fewer passes, ~half the collapse-stage runtime).
