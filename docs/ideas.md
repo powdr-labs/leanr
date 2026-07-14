@@ -9,17 +9,17 @@ this regeneration was in flight, **#117 (entry 77) and #119 (entry 78) merged**,
 on rebase from the entries' measured numbers. Older write-ups had stale or wrong gap
 attributions; re-measure before trusting anything, including this file.
 
-## Where we stand (post-#117/#119 + entry 80 = idea 4(b)+(c) + entry 81 = the digit fold)
+## Where we stand (post-#117/#119 + entry 80 = idea 4(b)+(c) + entry 81 = digit fold + entry 82 = NOT-form byte checks)
 
 Absolute output totals (identical inputs, so `agg` effectiveness follows directly):
 
 | benchmark | axis | apc | powdr | apc − powdr |
 |---|---|---|---|---|
 | openvm-eth (100) | variables | 27,802 | 30,885 | **−3,083 (lead)** |
-| | bus interactions | 16,454 | 16,722 | **−268 (lead; was +5)** |
+| | bus interactions | 16,434 | 16,722 | **−288 (lead; entry 82 −20)** |
 | | constraints | 11,267 | 20,299 | −9,032 (lead) |
 | keccak | variables | 2,021 | 2,021 | **exact parity** |
-| | bus interactions | 1,952 | 1,734 | **+218 (was +293)** |
+| | bus interactions | 1,752 | 1,734 | **+18 (was +218; entry 82 −200)** |
 | | constraints | 186 | 186 | **exact parity** |
 
 Per-case standings on eth: variables **30 W / 11 L / 59 T** (+56 total over the losing cases).
@@ -44,11 +44,11 @@ LANDED are done — the remainder still adds up to the current gaps):
   (**LANDED**: #117 −76, #119 −115) · ~~constant-family checks ~126~~ (**LANDED**: entry 81
   −141) · long same-address chains **64** (apc_010 still 247 vs 239) · tuple-slot coverage waste
   (**remainder of the ≥112 bucket**) · ~~subsumed range checks 22~~ (**LANDED**: entry 80 ≈ −43,
-  the base also catches byte/memory-subsumed wide checks) · NOT-form byte checks **23** ·
-  residual scattered.
-- **keccak bus +218** (was +614; #117 −276 memory = exact powdr parity, #119 −45 op-0 waste,
-  entry 80 −68 width-1, entry 81 −7) = NOT-form byte checks **200** · ~18 misc — the bus-3
-  width histograms are otherwise *identical* to powdr's.
+  the base also catches byte/memory-subsumed wide checks) · ~~NOT-form byte checks 23~~
+  (**LANDED**: entry 82 −20) · residual scattered.
+- **keccak bus +218 → +18** (was +614; #117 −276 memory = exact powdr parity, #119 −45 op-0 waste,
+  entry 80 −68 width-1, entry 81 −7, **entry 82 −200 NOT-form**) = ~18 misc — the bus-3
+  width histograms are otherwise *identical* to powdr's, and NOT-form byte checks are gone.
 
 ## In flight / recently landed — check `git log origin/main` and open PRs before picking anything up
 
@@ -159,21 +159,21 @@ none (its one gadget landed with #114).
 ## 4. Stateless-check hygiene: recognize, justify, repack  ·  *bus, both benchmarks*  ·  high value / low-medium effort per item
 
 Four convergent fixes to how byte/range obligations are recognized and laid out; (d)'s op-0
-half already landed as #119, and **(b)+(c) landed together** (entry 80): keccak −68, eth −132
-bus, 0 variable/bus regressions. The remainder — (a) NOT-form byte checks and (d)'s tuple half —
-is worth ~**270 keccak** + a few dozen eth bus interactions. Independent items — land separately.
+half landed as #119, **(b)+(c)** as entry 80, and **(a)** as entry 82 (below). The remainder —
+(d)'s tuple half — is worth a few dozen eth bus interactions. Independent items — land separately.
 
-**(a) NOT-form byte checks** (keccak **200**, eth **23**). After C4b substitutes `z := 255 − x`,
-the interaction remains as `[x, 255, 255 − x, 1]` — semantically just "x is a byte" — but
-`RedundantByteDrop.byteCheckOperands?` / `ByteCheckPack.svCheck?` only match
-`[x,x,0,1] / [x,0,x,1] / [0,x,x,1] / [x,y,0,0]`. Add the two NOT arms: payload `(x, 255, z, 1)`
-(or mirrored) where `z` normalizes to `255 − x`. Fact side: mirror `xorZeroCheck` as
-`xorComplCheck` (needs `256 ≤ p` like C4b — over small fields `255 − x` is not the complement).
-On keccak **all 200 are droppable outright** — every checked operand is already forced < 256 by a
-genuine-XOR slot (96 as x, 8 as y, 12 as z, 84 via "255−v occurs as an XOR operand and
-`255−v ∈ [0,256) ⟺ v ∈ [0,256)`" — add that reflection rule to `byteJustified` too). On eth the
-23 sit on raw memory-receive slots (slotBound-justified). Expected: keccak −200, eth −23, both
-variable-neutral.
+**(a) NOT-form byte checks — LANDED (entry 82).** New fact `BusFacts.xorComplCheck` (bitwise bus,
+gated `256 ≤ p`); `RedundantByteDrop.byteCheckOperands?` and `ByteCheckPack.svCheck?` gained the two
+NOT arms `[x, 255, 255 − x, 1]` / `[255, x, 255 − x, 1]` (third slot decided `= 255 − x` by
+`normalize`/`constValue?`), so the coda drops them when the operand is byte-justified and the
+cleanup-cycle packer folds them into pairs. **keccak −200 bus** (1952 → 1752; variables and
+constraints unchanged — DigitFold/#120 already reached 2021-var parity, so no further var cascade
+and no runtime cost); **eth −20 bus over 3 cases, 0 regressions, variable-neutral** (bus agg
+3.536× → 3.541×). *The "reflection / AND-OR justification rule" the earlier write-up demanded (84
+keccak operands via a `255 − v` rule in `byteJustified`) was unnecessary: re-measured, every one of
+the 200 NOT-form operands also occurs as a raw variable in a genuine-XOR slot that `slotBound`
+already bounds to 256, so `byteJustified` justifies all 200 with the existing machinery — the
+84-via-reflection figure was a stale attribution from base 656a9d8.*
 
 **(b) Width-1 range checks → booleanity — LANDED (entry 80).** `[e, 1]` on the var-range bus ⟺
 `e ∈ {0,1}` ⟺ `e·(e−1) = 0` (degree 2 ≤ 3). `ZeroWidthRange.lean` grew a width-1 arm: ADD the
