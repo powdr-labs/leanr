@@ -1,16 +1,17 @@
 # Ideas for future optimization passes
 
 Ranked by **expected benefit**. Effectiveness priority is **variables > bus interactions >
-constraints**, used as the tiebreak. With #2 landed (entry 77) and the coda byte-pair splitting
-(entry 78), the eth bus deficit (−0.001, the only trailing axis) and keccak's bus gap (+293) are
-the remaining aggregate gaps; both decompose into the smaller items below.
+constraints**, used as the tiebreak. With #2 landed (entry 77), the coda byte-pair splitting
+(entry 78), and the width-1→booleanity conversion (entry 81, which flipped the eth bus axis to a
+lead), keccak's bus gap (+225) is the remaining aggregate gap; it decomposes into the smaller
+items below.
 
-## Where we stand (measured on `c007db0`; keccak/eth refreshed for merged C4b #109, the bitwise byte-check cleanup (entry 75), the is-equal collapse (entry 76), and the coda byte-pair splitting (entry 78))
+## Where we stand (measured on `c007db0`; keccak/eth refreshed for merged C4b #109, the bitwise byte-check cleanup (entry 75), the is-equal collapse (entry 76), the coda byte-pair splitting (entry 78), and the width-1→booleanity conversion (entry 81))
 
 | benchmark | apc-optimizer | powdr | apc gap |
 |---|---|---|---|
-| **keccak** (`apc_001_pckeccak`) | 2025 v / 120 c / 2027 bus | 2021 / 186 / 1734 | vars **+4 (near parity)**, **bus +293** (memory at parity; wins constraints) |
-| **openvm-eth** (100-case agg / geo) | vars 4.518× / 3.837× · bus 3.479× / 2.753× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo +0.050); **trails bus by 0.001** |
+| **keccak** (`apc_001_pckeccak`) | 2025 v / 188 c / 1959 bus | 2021 / 186 / 1734 | vars **+4 (near parity)**, **bus +225** (memory at parity; constraints ~tied) |
+| **openvm-eth** (100-case agg / geo) | vars 4.518× / 3.837× · bus 3.497× / 2.759× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo +0.050); **leads bus agg by 0.018** |
 | **apc_010** (`pc0x200c18`) | 466 v / 251 c / 247 bus | 498 / 331 / 239 | wins vars+constraints, **bus +8** |
 
 C4b (#109, entry 74) closed the keccak *variable* gap to near-parity; the bitwise byte-check cleanup
@@ -20,7 +21,8 @@ signed-compare and constant-limb families, bus gap net ≈ +300). Both gaps deco
 structural families, each addressed by one idea below.
 
 - **keccak bus +614** = memory interior pairs +276 (landed, entry 77) · bitwise (bus 6) ≈ +212
-  (post entry-75 pack and entry-78 pair splitting) · width-1 range (bus 3) +68.
+  (post entry-75 pack and entry-78 pair splitting) · width-1 range **CONVERTED to booleanity
+  constraints (entry 81: −68 keccak / −89 eth bus)**.
 - **eth bus** = bitwise (reduced by entries 75/78; genuine-XOR checks remain) ·
   tupleRange +160 (22 cases) · memory +144 (15 cases) · varRange **−376** (apc already *wins* — do not touch).
 - **eth vars ~+243** = `rd_data` write-result limbs ~93 (23 cases) · comparison gadget ~130 markers/flags
@@ -67,8 +69,9 @@ net loss (premature emission racing the justification machinery, apc_005 class +
 keccak 2.4× runtime) while at the coda each drop is net ≤ −1 bus by construction. eth: **bus agg
 3.439× → 3.455×, 10 cases / −76 bus / 0 regressions** (apc_010 271 → 247 vs powdr 239);
 vars/constraints byte-neutral; runtime eth −2.5%, keccak +1.3%. Deliberately forgone: −6 keccak /
-−6 apc_100 reachable only by mid-cycle entailed matching. Residual keccak bus gap +338 = bitwise
-≈257 (genuine-XOR representation) + width-1 range 68 (→ booleanity conversion, see below) + ~13.
+−6 apc_100 reachable only by mid-cycle entailed matching. Residual keccak bus gap +225 (post
+entry-78 pair splitting and entry 81's width-1→booleanity conversion) = bitwise ≈212
+(genuine-XOR representation) + ~13.
 
 ---
 
@@ -108,11 +111,10 @@ higher proof cost than #1.
 
 ## Smaller follow-ups (worth landing, lower ceiling)
 
-- **Width-1 range-check → booleanity constraint** (`ZeroWidthRange` width-0 → width-1). `[e,1]` on a
-  var-range bus ⟹ `e·(e−1)=0`, drop the interaction. Equivalence (uses the existing `varRangeBus`
-  fact; degree 2, within bound). **keccak −68 bus** (bus 3 → powdr parity), variable-neutral; trades
-  68 bus for 68 constraints — a strict lexicographic win (bus ≻ constraints, and apc has 10.6× agg
-  constraint headroom).
+- **Width-1 range-check → booleanity constraint** — **LANDED (entry 81)**: `ZeroWidthRange`
+  width-0 → width-1, `[e,1]` on a var-range bus ⟹ `e·(e−1)=0`, drop the interaction.
+  **keccak −68 bus** (bus 3 → powdr parity) / **eth −89 bus**, variable-neutral; a strict
+  lexicographic win (bus ≻ constraints, and apc has ~2× agg constraint headroom).
 - **Widening tuple-range packing + `mem_ptr` high-limb sharing** (`tupleRangePass` + `MemoryUnify`).
   Pack `byte+byte`/`byte+over-wide` into one `TupleRangeChecker` guarded by `byteJustified` re-derival
   of the narrowed slot; share the provably-equal 13-bit high limb across same-base accesses. **eth
@@ -127,7 +129,7 @@ higher proof cost than #1.
 ## Rejected / measured dead-ends (do not re-propose without re-measuring)
 
 - **Degree-bounded witness inlining + per-candidate degree planning (roadmap 4.7/4.10):** measured
-  **zero** corpus-wide (entry 79, alternation what-if through the real optimizer, cascade-capable).
+  **zero** corpus-wide (entry 80, alternation what-if through the real optimizer, cascade-capable).
   Constant-coefficient nonlinear pivots barely exist post-optimization (4 on apc_051, 1 on keccak)
   and all are blocked by the **bus payload bound** — the inlined variable is the bus-facing value,
   beyond any booleanity legalization. The audit's deg-4 "near-misses" are conditional pivots

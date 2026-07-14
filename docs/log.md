@@ -2858,7 +2858,7 @@ first.**
 
 **Impact: none (no code landed).**
 
-### 79. Degree-bounded witness inlining + per-candidate degree planning: measured zero — dead-end
+### 80. Degree-bounded witness inlining + per-candidate degree planning: measured zero — dead-end
 
 **Idea (roadmap 4.7 + 4.10; Dead-ends §9's re-measure caveat).** Inline a variable with a
 constant-coefficient linear pivot whose solved RHS is nonlinear (`c := a·b`), per-candidate
@@ -2900,3 +2900,34 @@ payload-bound and conditional-pivot mass, not legalizable witness definitions.
 
 **Impact: none (no code landed).** Worked: the measurement did — a corpus-wide refutation with
 explicit blind-spot accounting, for the cost of a ~100-line scratch harness.
+
+### 81. Width-1 range check → booleanity constraint
+
+**Idea (the first slice of lookup→constraint conversion; ideas.md follow-up of entry 77).** A
+width-1 range check `[e, 1]` on the variable range checker asserts `e < 2` — booleanity. Convert
+it to the degree-2 algebraic constraint `e·(e−1) = 0` and drop the interaction: a strict
+lexicographic win (bus ≻ constraints, and constraint headroom is ~2× powdr), and the booleanity
+feeds the finite-domain passes.
+
+**Change (extend `zeroWidthRangePass`; no new pass, no new facts).** `ZeroWidthRange.lean`'s
+recognizer generalizes to `rangeEq?` with a width-1 arm built on the *existing* mult-generic
+`BusFacts.varRangeBus` iff. The equivalence's backward direction (`x·(x−1) = 0 → x.val < 2`,
+`val_lt_two_iff`) needs an integral domain, so the arm is gated on `decide (Nat.Prime p)` per
+invocation (the `deep`/`hdeep` pattern), and a **per-candidate degree gate** (`e.degree ≤ 1`, so
+the emitted constraint is degree ≤ 2) ensures the arm can never trip the whole-pass
+`guardDegree` revert — the transactional-degree lesson from entry 80 applied preemptively.
+
+**Measured vs `main` = #119 (`9c92008`, per-case JSON A/B; re-measured after rebase over the
+entry-78 byte-pair splitting — per-case deltas identical to the pre-rebase measurement vs #117,
+the two are fully independent):**
+- keccak: bus **2027 → 1959 (−68)**, constraints 120 → 188 (+68), vars 2025 unchanged — bus
+  effectiveness 6.543× → **6.770×**; bus gap to powdr now **+225** (memory at parity since entry
+  77; the residual is genuine-XOR bitwise ≈212 + ~13 misc). Runtime flat (−0%).
+- openvm-eth: bus agg **3.479× → 3.497×** (geo 2.753× → 2.759×) — powdr bus gap
+  **−0.001 → +0.018: the last trailing aggregate axis flips to a lead** (apc 16638 vs powdr
+  16722 total bus); 4 cases improved (apc_100 −40, apc_037 −25, apc_038/051 −12), −89 bus /
+  +90 constraints / **0 regressions**; variables byte-neutral (4.518×, W/L/T 27/29/44
+  unchanged); constraints agg 10.595× → 10.511× (powdr 5.853×).
+
+Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only).
+**Worked: yes.**
