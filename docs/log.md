@@ -3127,3 +3127,40 @@ result/limbs carrying powdr IDs (so witgen can compute `inv`). Wired coda-only, 
 surface touched, no new `BusFacts` (reuses the OpenVM `bytePairBus`/`byteCheck` instances). `lake
 build` green; proof integrity green (no `sorry`/`admit`/`axiom`/`native_decide`; the top-level
 theorems still depend only on `{propext, Classical.choice, Quot.sound}`).
+
+### 84. One-hot annihilation: eliminate dead shift-multiplier variables (idea 5) — −14 eth vars / −252 constraints, 0 regressions
+
+**Idea.** A shift chip with a runtime shift amount but a fixed direction keeps *both*
+`bit_multiplier_left` and `bit_multiplier_right`; one is dead. It is forced to `0` by the existing
+constraints, but only through a linear combination *across the one-hot marker family* that Gauss
+cannot see (the constraints are the nonlinear products `markerᵢ · x`). For a marker set `{mᵢ}` the
+block keeps `mᵢ · x = 0` for every `i` plus the closer `±(Σ mᵢ − 1) · x = 0`; writing `s = Σ mᵢ`,
+the products give `s·x = 0` and the closer `(s−1)·x = 0` (or `(1−s)·x = 0`), which together force
+`x = 0`.
+
+**Pass (`OneHotAnnihilate.lean`, cleanup cycle).** Recognize a closer constraint `A · x` whose
+affine cofactor `A` linearizes to `±(Σ mᵢ − 1)` (all coefficients a common unit `k ∈ {1, −1}`,
+constant `−k`), and check that every marker's product `mᵢ · x = 0` is present; then **add the
+entailed constraint `x = 0`** (`ConstraintSystem.addConstraints_correct`) and let the existing
+Gaussian elimination substitute the dead variable away and cascade (each eliminated multiplier
+collapses ~18 product constraints). Purely equational — no `BusFacts`, no field/primality
+assumption; the added constraint is degree 1. Soundness does not depend on the recognizer being
+precise (the added `x = 0` is a linear combination of constraints already present).
+
+*Sign subtlety, found by measurement:* the recognizer initially matched only `(Σmᵢ − 1)·x`
+(`const −1`, `coeff 1`), but mid-cycle the optimizer holds the **negated** form `(1 − Σmᵢ)·x`
+(`const 1`, `coeff −1 = p−1`) — a later pass flips the sign, so the final render's `(−1 + Σmᵢ)` was
+misleading. The recognizer now accepts both signs; both entail the same `x = 0`.
+
+**Measured (per-case JSON A/B vs `main` = #125 `bd367dd`; delta identical when first measured vs
+#124 — fully independent of the seqz collapse, which touches different cases).**
+- openvm-eth (100 cases): **2 cases improved (apc_038, apc_051), 0 regressions**; each −7 vars /
+  −126 constraints, bus-neutral. Corpus totals: vars 27782 → **27768 (−14)**, constraints
+  11207 → **10955 (−252)**, bus 16429 unchanged. Aggregate variable effectiveness 4.548× →
+  **4.551×**; per-case variables W/L/T vs powdr 31/10/59 → **31/9/60** (one loss flips to a tie).
+- keccak: **unchanged** (2021 v / 186 c / 1752 bus) — the pass finds no dead shift-multiplier there
+  (the ρ-rotations are encoded differently); it is a no-op, `profile` shows `oneHotAnnihilate` at
+  726 ms of ~420 s (0.17%, machine-noise territory). Runtime neutral on both benchmarks.
+
+Build + `Scripts/check-proof-integrity.sh` green — the correctness theorems depend only on
+`{propext, Classical.choice, Quot.sound}`. **Worked: yes.**

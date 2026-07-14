@@ -15,14 +15,14 @@ Absolute output totals (identical inputs, so `agg` effectiveness follows directl
 
 | benchmark | axis | apc | powdr | apc − powdr |
 |---|---|---|---|---|
-| openvm-eth (100) | variables | 27,802 | 30,885 | **−3,083 (lead)** |
-| | bus interactions | 16,434 | 16,722 | **−288 (lead; entry 82 −20)** |
-| | constraints | 11,267 | 20,299 | −9,032 (lead) |
+| openvm-eth (100) | variables | 27,768 | 30,885 | **−3,117 (lead; entry 83 seqz −20, entry 84 one-hot −14)** |
+| | bus interactions | 16,429 | 16,722 | **−293 (lead)** |
+| | constraints | 10,955 | 20,299 | −9,344 (lead; entry 83 −60, entry 84 −252) |
 | keccak | variables | 2,021 | 2,021 | **exact parity** |
 | | bus interactions | 1,752 | 1,734 | **+18 (was +218; entry 82 −200)** |
 | | constraints | 186 | 186 | **exact parity** |
 
-Per-case standings on eth: variables **30 W / 11 L / 59 T** (+56 total over the losing cases).
+Per-case standings on eth: variables **31 W / 9 L / 60 T** (entries 83/84 flipped 2 losses).
 Bus per-case was **7 W / 67 L / 26 T** (+588 over losing cases) at the measurement base;
 #117/#119 improved 37 case-measurements with 0 regressions (agg 3.439× → 3.479×, geo 2.723× →
 2.753×; powdr 3.480× / 2.822×) — re-measure the standings before quoting them. The reported
@@ -35,10 +35,11 @@ both benchmarks except keccak, where the identified fixes land exactly on powdr'
 Exact gap decomposition (verified on the live circuits at the measurement base; buckets marked
 LANDED are done — the remainder still adds up to the current gaps):
 
-- **eth variables +56 over 11 cases** (was +172 over 29) = ~~M1 constant decompositions +135~~
+- **eth variables ~+28 over 8 cases** (was +172 over 29) = ~~M1 constant decompositions +135~~
   (**LANDED**: entry 81 −165 incl. cascades; residual = full-byte-top `rd_data` ladders,
-  apc_034/066 +3 each) · M2 comparison gadgets residue (apc_037 +14, apc_018 +9 — idea 3) ·
-  M3 dead `bit_multiplier` **+14** · everything else nets in apc's favor.
+  apc_034/066 +3 each) · ~~M2 comparison gadgets (apc_037 +14, apc_018 +9)~~ (**LANDED**: entry 83
+  seqz collapse) · ~~M3 dead `bit_multiplier` +14~~ (**LANDED**: entry 84 −14, apc_038/051) ·
+  everything else nets in apc's favor.
 - **eth bus** (was +588 over losing cases; −191 + −132 + −141 landed) = ~~width-1 range checks
   90~~ (**LANDED**: entry 80 −89) · ~~cancellable memory pairs 78~~ + op-0 coverage waste
   (**LANDED**: #117 −76, #119 −115) · ~~constant-family checks ~126~~ (**LANDED**: entry 81
@@ -219,21 +220,18 @@ keccak are exactly 8 bits).
 
 ---
 
-## 5. One-hot annihilation  ·  *variables*  ·  small, clean / low effort
+## 5. One-hot annihilation — **LANDED (entry 84, `OneHotAnnihilate.lean`)**  ·  *variables*
 
-**Gap (+14 eth vars: apc_051 +7, apc_038 +7).** Shift chips with a runtime shift amount but a
-fixed direction keep BOTH `bit_multiplier_left` and `bit_multiplier_right`; one of them is dead —
-forced to 0 by the existing constraints, but only through a *linear combination across the
-one-hot family*: with markers `Σ mᵢ = 1`, `mᵢ · x = 0` for all i ⟹ `x = 0`. Gauss can't see it
-(the products are nonlinear); powdr's monomial-level elimination does.
-
-**Mechanism.** A small pass (or a `domainBatch` rule): find a variable `x` such that for a
-marker set {mᵢ} with a proven `Σ mᵢ = 1` constraint, every `mᵢ·x = 0` is present (syntactically,
-after normalize); add `x = 0` and let constant-fold cascade. Soundness: summing the constraints
-gives `x·Σmᵢ = x = 0` — a one-line entailed equality (`addConstraints_correct`).
-
-**Expected impact.** −14 vars, a few dropped checks; flips apc_051/apc_038 closer to parity.
-Check the census for non-shift instances of the same pattern before scoping.
+`OneHotAnnihilate.lean` (cleanup cycle): a dead shift-multiplier `x` is kept alongside
+`mᵢ · x = 0` (for each one-hot marker) and the closer `±(Σ mᵢ − 1) · x = 0`; these force `x = 0`
+(`s·x = 0` from the products, `(s∓1)·x = 0` from the closer). The pass recognizes the closer's
+affine cofactor `±(Σ mᵢ − 1)`, checks each marker product is present, and adds the entailed
+`x = 0` (`addConstraints_correct`); Gauss then eliminates `x` and its ~18 product constraints.
+Measured (vs #125): **eth −14 vars / −252 constraints over 2 cases (apc_038, apc_051), 0
+regressions** (agg vars 4.548× → 4.551×, W/L/T 31/10/59 → 31/9/60); keccak unchanged (no-op),
+runtime neutral.
+The `Σ mᵢ = 1` need not be a standalone constraint — the recognizer works from the closer alone,
+and accepts both closer signs (mid-cycle the optimizer holds the negated `(1 − Σ mᵢ)·x` form).
 
 ---
 
