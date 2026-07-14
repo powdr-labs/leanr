@@ -3214,3 +3214,57 @@ Needs `p ≠ 0` only (val/cast round-trip); no primality.
 
 Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only).
 **Worked: yes.**
+
+### 86. Optimizer runtime: hoist `domainFold`'s constant-on-survivors evaluation (effectiveness unchanged)
+
+Pure **performance** work in the entry-45/54 style — output-preserving, so effectiveness is
+untouched and only wall-clock cost drops. Closes entry 54's documented `domainFold` leftover
+("`domainFold` evaluates through the plain per-node-instance `Expression.eval` — the `evalFast`
+treatment applies almost verbatim"). Entry 54 had upgraded `domainFold`'s survivor *filter*
+(`groupSurvivorsE`) to `evalFast`, but the fold-decision core `constOnSurvs` was still on the slow
+path.
+
+**The two fixes (both extensionally equal to the old form, so the fold decision and the folded
+constant are unchanged):**
+1. Evaluate through `Expression.evalFast` (field operations derived once per call instead of
+   re-projecting the `ZMod p` `CommRing` instance chain at every expression node — the entry-54
+   tax), via the existing `Expression.evalFast_eq`.
+2. Compute the reference value `e.evalFast (envOf s₀)` **once** with a `let` rather than
+   re-evaluating it against every survivor inside the `.all` (the old
+   `fun s => e.eval (envOf s) = e.eval (envOf s₀)` recomputed the `s₀` value once per survivor).
+
+Only `constOnSurvs` and its soundness lemma `constOnSurvs_sound` change; `foldRewrite` /
+`foldRewrite_agree` consume `constOnSurvs` abstractly (via the soundness lemma and a `cases` on its
+`Option` result), so they are untouched. The folded constant is numerically identical
+(`evalFast_eq`), so the circuit the pass emits is unchanged.
+
+**Measured (clean A/B, both binaries built from the current source; the session's pre-built binary
+turned out to be stale — an older commit with a slower `domainBatch` — so it is not a valid
+baseline and was discarded).** Output byte-for-byte identical (`vars/constraints/bus`) on
+apc_001/005/006/009/012. `domainFold` per-pass time (profiler, same-process, so binary-load is
+amortised):
+- apc_005 / apc_009 (same load/store block, the heaviest fold case): **6221 → 4691 ms (−25 %)**.
+- apc_006: 2416 → 2274 ms (−6 %); apc_012: 1767 → 1732 ms (−2 %).
+
+The win is concentrated on the constant-fold-heavy load/store cases (where `constOnSurvs` runs over
+many survivors × many fold candidates) and is within noise on the rest; whole-optimizer totals move
+only within run-to-run noise. keccak is unaffected in practice (186 constraints — `domainFold` does
+little there). The change never does *more* work in `domainFold`.
+
+`lake build` green; `Scripts/check-proof-integrity.sh` green — the correctness theorems still depend
+only on `{propext, Classical.choice, Quot.sound}`; no `sorry`/`admit`/`axiom`/`native_decide`; no
+audited surface, `Basic.lean`/`FactPass.lean`, or pass-pipeline change. **Worked: yes (modest).**
+
+**Runtime picture / bigger levers (measured this session; documented for future work).** Per-pass
+share over the top-12 eth cases: `busPairCancel` 31 %, `domainBatch` 24 %, `domainFold` 14 %,
+`reencode` 13 % (top-4 = 82 %; the finite-domain family alone = 51 %); the cleanup cycle iterates
+4–7× on the expensive cases. The two largest remaining levers both need real proof effort, not just
+a hoist: (a) the **pinned-variable box reduction** in the finite-domain enumeration (entries 45 &
+54) — substitute the domain-1 (pinned) variables as constants and enumerate/compile only the free
+vars, shrinking every enumerated point; attacks the dominant 51 % directly, self-contained in
+`DomainBatch.lean`, needs `forcedOver`'s soundness re-proven against the reduced box. (b)
+`busPairCancel` (top on eth, and dominant on memory-heavy keccak) — already heavily tuned
+(entries 55/56); the residual is the deep byte-justification's per-candidate `findVarBound` rescan
+and per-point `substF`/`linearize`. A cheaper extension of *this* entry: index-compile
+`constOnSurvs` (à la `domainBatch`'s `IExpr`) to also drop the `envOf` linear scan, which would help
+the cases where the `evalFast` hoist alone barely moved.
