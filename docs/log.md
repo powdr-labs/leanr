@@ -3164,3 +3164,53 @@ misleading. The recognizer now accepts both signs; both entail the same `x = 0`.
 
 Build + `Scripts/check-proof-integrity.sh` green — the correctness theorems depend only on
 `{propext, Classical.choice, Quot.sound}`. **Worked: yes.**
+### 85. Probed slot bounds: reading the XOR-mask range facts (idea 1's residual `JAL` ladders) — −6 eth vars, 2 losses flip to powdr parity, 0 regressions
+
+**The gap.** After entry 81 the residual eth variable losses attributed to constant
+decompositions were the `JAL` link ladders (apc_034/066 +3 vars each): the digit fold saw the
+byte-checked ladder `[K − 256·rd₁ − 65536·rd₂ − 16777216·rd₃, rd₁, 0, 0]`, but with all-byte
+limb bounds the (byte, wrap) grid admits a mod-p phantom digit vector per wrap count and never
+collapses to a singleton. Entry 81 recorded "needs a tighter top-limb bound from another
+constraint, if one exists". **Rendering the residue shows it exists in every instance** — as
+the genuine-XOR check `[rd₃, 192, 192 + rd₃, 1]`: an accepted message forces
+`rd₃ ⊕ 192 = rd₃ + 192`, i.e. `rd₃ ∧ 0b11000000 = 0`, i.e. `rd₃ < 64` — OpenVM's 6-bit
+top-limb bound for `pc < 2³⁰`, shipped as bit-disjointness rather than a range check. No bound
+recognizer read that encoding.
+
+**Mechanism (`probedSlotBoundAt`, DomainProp.lean — generic: no XOR, mask, or OpenVM
+specifics).** For an interaction with constant nonzero multiplicity, a variable `x` raw in slot
+`i` with a `slotBound` fact `x < B₀ ≤ 256`, a slot `j ≠ i` whose content linearizes to
+`l.const + c·x`, a `slotFun` fact computing slot `j` from the rest of the payload, and every
+other slot constant: probe all `v < B₀` for `f(payload[x := v, j := 0]) = l.const + c·v` and
+bound `x` by one plus the largest survivor (`probeMax`), kept only when it strictly improves on
+`B₀`. For the mask check the survivors are exactly `[0, 64)`; for the NOT-form checks
+`[x, 255, 255 − x, 1]` every byte survives and nothing is inserted. `BoundsMap.addAll` feeds the
+probed bound through the existing `insertEntry` (keeping the smaller); `digitFold`'s grid then
+collapses to a singleton and the existing cascade folds the ladder — **no new pass, no
+`digitFold` change**. A once-per-interaction pre-scan (`probeCandidatesOf`: a slot affine in a
+single variable `y` can only ever bound `y`) keeps the recognizer off the hot path; the first
+cut without it re-linearized per (variable, slot) pair and looked like +37% keccak runtime —
+which turned out to be measurement error against entry 81's runtime from a different machine
+(see below), but the pre-scan is the right shape regardless.
+
+**Why sound.** `slotFun_sound` pins the evaluated slot `j` to `f` of the zeroed payload; with
+slots `≠ i, j` constant and slot `i` a raw variable, that zeroed payload *is* the probe payload
+at `v = x.val` (`probeBase_eq_set`, a `getElem?`-extensionality argument); `linearize` pins slot
+`j`'s value to `l.const + c·x`; so `x.val` survives the probe and `probeMax_lt` bounds it.
+Needs `p ≠ 0` only (val/cast round-trip); no primality.
+
+**Measured (per-case JSON A/B vs main `2b1e5c1`, all 100 eth cases + keccak):**
+- openvm-eth: vars **27,768 → 27,762 (−6)**, bus 16,429 → 16,424 (−5), constraints unchanged;
+  exactly two cases move — apc_034 −3 vars/−3 bus → **105/22/80 = exact powdr parity**, apc_066
+  −3 vars/−2 bus → **49/10/37 = exact powdr parity** — and nothing else changes. Variable
+  W/L/T vs powdr **31/9/60 → 31/7/62**; agg vars 4.551× → 4.552× (geo 3.884× → 3.887×), bus
+  3.542× → 3.543× (geo 2.800× → 2.803×).
+- keccak: bit-identical (2021 / 1752 / 186); runtime 369 s vs main 383 s **solo on the same
+  container** (parity). Note for future entries: entry 81's ~275 s keccak runtime was measured
+  on different hardware — always re-measure the baseline on the machine at hand before calling
+  a runtime regression (this iteration chased a phantom +37% for one round because of it).
+- The remaining "parts of apc_038/042/064" residue did not move — their ladders lack a mask
+  check on the top limb; they stay with the joint-refutation slice in ideas.md.
+
+Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only).
+**Worked: yes.**
