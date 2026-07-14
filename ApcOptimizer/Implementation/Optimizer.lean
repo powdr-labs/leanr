@@ -33,6 +33,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
+import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
 
 set_option autoImplicit false
 
@@ -122,7 +123,11 @@ def codaPasses : List (String × VerifiedPassW p) :=
     ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
     ("bytePackLate", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("monicScale", monicScalePass.withFacts.guardDegree),
-    ("constFoldEnd", constantFoldPass.withFacts.guardDegree) ]
+    ("constFoldEnd", constantFoldPass.withFacts.guardDegree),
+    -- Collapse recognised `sltu x, 1` (seqz) LessThan gadgets to the two-line is-zero gadget,
+    -- dropping the four `diff_marker`s + `diff_val`. Runs after `monicScale`, where the cluster
+    -- has reached the recognised form.
+    ("seqzCollapse", VerifiedPassW.guardDegree (iterateToFixpoint SeqzCollapse.seqzCollapsePass)) ]
 
 /-- Fold a list of passes into one sequential pass (`andThen` left to right; identity on `[]`). -/
 def chainPasses (l : List (VerifiedPassW p)) : VerifiedPassW p :=

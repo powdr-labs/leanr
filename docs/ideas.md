@@ -128,31 +128,38 @@ apc_100 bus (documented there) — check whether (d) or a cheaper tweak recovers
 
 ---
 
-## 3. Comparison-gadget completion: the seqz idiom  ·  *variables*  ·  medium value / medium effort
+## 3. Comparison-gadget completion: the seqz idiom  ·  *variables*  ·  **LANDED (entry 83, `SeqzCollapse.lean`)**
 
 **Gap (post-#114 residue ≈ +57 vars).** `sltu rd, x, 1` ("set if x < 1", i.e. x == 0): powdr
 recognizes the constant operand and replaces OpenVM's whole LessThan machinery — 4 `diff_marker`
-booleans + `diff_val` + msb flags + the `[diff_val − 1, 0, 0, 0]` bitwise send — with the
-two-line is-zero gadget `cmp·(Σ 256ⁱ·xᵢ) = 0 ∧ inv·(Σ 256ⁱ·xᵢ) + cmp = 1` (byte limbs ⟹ the
-weighted sum can't wrap). apc keeps 5–6 witnesses per instance; instances: apc_037 ×4, apc_018
-×2, and the `+3..+7` tail cases (apc_013/022/027/040/099…). Plus ~+3/case of boolean dataflow
-vars powdr inlines as expressions (`cmp1 + cmp2 − cmp1·cmp2` directly in payloads/multiplicities).
+booleans + `diff_val` + the `[diff_val − 1, 0, 0, 0]` bitwise send — with the two-line is-zero
+gadget `cmp·(Σ xᵢ) = 0 ∧ inv·(Σ xᵢ) + cmp − 1 = 0` (byte limbs ⟹ `Σ xᵢ = 0 ⇔ x == 0`, no wrap).
+apc kept 5 private witnesses per instance; instances: apc_037 ×4, apc_018 ×2, and a `+3..+7` tail.
 
-**Mechanism.** A recognizer for the LessThan gadget *with a constant comparand* (the
-`diff_marker`/`diff_val` cluster is identified by its constraint shapes; the constant side makes
-the comparison collapsible): for `x < 1`, emit the is-zero pair with one fresh
-`QuotientOrZero`-derived `inv` (exact `hintCollapse`/#114 machinery — reuse `collapse_correct`'s
-parameterized reassignment), substitute `cmp` consumers, drop the marker vars, their booleanity
-constraints, their bus interactions. Generalize to other constant comparands only if the census
-finds any (this session found only `< 1`).
+**What actually landed.** A structural recognizer for the post-`monicScale` cluster (14 constraints
++ the range-check bus + the five private witnesses `m0..m3, diff_val`) collapses it to the two
+is-zero constraints, dropping the five witnesses and introducing one `QuotientOrZero`-derived `inv`.
+Runs in the coda after `monicScale` (so it matches the stabilised `-1 + x` serialisation and the
+monic constant `2K = −1`); field-independent (matches the constants structurally), identity under
+`BusFacts.trivial`.
 
-**Why sound.** Same proof pattern as #114 (which is in-tree): the collapsed witness set
-reproduces exactly the is-zero semantics; completeness via the derived-column bookkeeping;
-no-wrap from byte bounds (`boundedSumMax`-style, in `MemoryUnify`).
+**The previous mechanism note was wrong.** It claimed we could "reuse `collapse_correct`'s
+parameterized reassignment" (#114). We can't: `collapse_correct` collapses **one** bilinear
+reciprocal-witness constraint with **bus-free** witnesses, and `reencode_correct` keeps **every**
+bus. Here the cluster is **14** constraints and one witness (`diff_val`) lives **inside a bus
+interaction** (the range check), so neither framing applies. It needed a **bespoke ~500-line
+`PassCorrect`**: a value-level characterization of the gadget (`seqz_forward` for completeness,
+`seqz_reconstruct` for soundness — a per-limb case analysis rebuilding the markers), a template↔value
+bridge (`clusterEval_iff`), the absolute byte law for the range bus (chaining `bytePairBus` with
+`byteCheck`), and stateless-bus-drop framing for side effects / admissibility (`admissible_filterBus`).
+It is emphatically **not impossible** under the current spec — the transformation is a genuine
+refinement (powdr performs it) and is now fully machine-checked with no new axioms — just far larger
+than the one-liner the earlier note imagined.
 
-**Expected impact.** eth −40..57 vars concentrated on the remaining loss cases (apc_037 +14 →
-~+3, apc_018 +9 → ~+2), plus the freed bitwise/range interactions (−1..3/instance). Keccak:
-none (its one gadget landed with #114).
+**Impact (measured).** apc_037 706 → 690 vars (now below powdr's 692); the pass fires on every
+recognised `sltu x, 1` instance across eth. See entry 83 for aggregate figures. Keccak: none (its
+one gadget landed with #114). Residual `+3/case` of inlined boolean-dataflow vars (powdr writes
+`cmp1 + cmp2 − cmp1·cmp2` directly into payloads) is a separate, still-open idiom.
 
 ---
 

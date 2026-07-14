@@ -3069,3 +3069,61 @@ variable-neutral and, unlike the pre-#120 measurement, adds **no** keccak runtim
 Build + `check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound}-only); audited
 surface untouched. **Worked: yes.**
 
+---
+
+### 83. Seqz comparison-gadget collapse: `sltu x, 1` → two-line is-zero gadget (`SeqzCollapse.lean`)
+
+**Idea (ideas.md #3).** OpenVM lowers `sltu rd, x, 1` (i.e. `rd = (x == 0)`) through its generic
+`LessThanCoreChip`: per instance, four `diff_marker` booleans + a `diff_val`, tied by a
+14-constraint cluster plus a range-check bus interaction `[diff_val − 1, 0, 0, 0]`. powdr recognises
+the constant comparand and replaces all of it with the two-line is-zero gadget
+`cmp·S = 0 ∧ inv·S + cmp − 1 = 0` (`S = x₀+x₁+x₂+x₃`), keeping one derived `inv =
+QuotientOrZero(1 − cmp, S)`. Because the limbs are byte-range-checked, `S = 0 ⇔ x == 0`, so both
+gadgets compute exactly `cmp = [x == 0]`. This pass performs that collapse: it drops the five
+private witnesses (`m0..m3`, `diff_val`) and the range bus, and introduces the single `inv`.
+
+**Why the earlier "reuse #114" plan was wrong.** ideas.md #3 proposed reusing
+`HintCollapse.collapse_correct`'s parameterized reassignment. That does not apply: `collapse_correct`
+collapses **one** bilinear reciprocal-witness constraint whose witnesses are **bus-free**, and
+`reencode_correct` keeps **every** bus. Here the cluster is **14** constraints and one witness
+(`diff_val`) lives **inside** the range-check bus, so both framings are structurally inapplicable.
+The transformation is nonetheless a genuine refinement (powdr does it) and provable directly — it
+just needs a bespoke ~500-line `PassCorrect`, not a one-liner. It is **not impossible** under the
+current spec; the whole file is machine-checked with no new axioms.
+
+**Proof shape.** The semantic core is two value-level lemmas over the 14 constraint-values (needing
+byte bounds on the limbs, `1024 ≤ p`, and the monic constant `2K = −1`): `seqz_forward` derives
+`cmp = [S == 0]` (completeness engine) and `seqz_reconstruct` rebuilds the markers/`diff_val` by a
+per-limb case analysis (soundness engine; the range check pins the reconstruction to the byte
+range). `clusterEval_iff` bridges the serialised constraint templates to those clean value forms.
+The framing (`seqzCollapse_correct`) discharges `PassCorrect`: soundness reconstructs a `cs`-model
+via `setFive` + `seqz_reconstruct`, re-deriving the dropped range bus from the reconstructed byte
+(the absolute "accepted ⇔ byte" law is `bytePairBus` chained with `byteCheck`); completeness supplies
+`inv` by `QuotientOrZero` and uses `seqz_forward`; side effects / admissibility are preserved because
+the dropped range bus is **stateless** (`bytePairBus ⇒ isStateful = false`, via `admissible_filterBus`
+and a stateless-drop list lemma). Field-independent (constants matched structurally, so not tied to
+BabyBear); identity under `BusFacts.trivial`.
+
+**Recognizer.** `extractRoles` matches the range bus (`[−1 + dv, 0, 0, 0]`, multiplicity the marker
+sum) and the constraint cluster by shape; `rolesValid` gates the collapse on: `Nat.Prime p ∧ 1024 ≤
+p`, the monic constant `2K = −1`, `bytePairBus`/`byteCheck` on the bus id, the 14 templates + result
+booleanity all present, the range bus present, the five witnesses occurring **only** in the cluster,
+byte bounds on the four limbs (via the *output* bounds map), distinctness, `inv` fresh, and the
+result/limbs carrying powdr IDs (so witgen can compute `inv`). Wired coda-only, after `monicScale`
+(where the cluster has stabilised into the `−1 + x` serialisation the recognizer expects).
+
+**Measured (this branch vs the same pipeline with the coda entry disabled, both vs powdr, over the
+100 openvm-eth cases).** A clean win on every axis with **zero regressions**:
+- variables (priority axis): agg **4.518× → 4.522×** (geo 3.837× → 3.842×); per-case
+  **27 W / 29 L / 44 T → 28 W / 28 L / 44 T** — apc_037 flips from a loss to a win
+  (**706 → 690 vars, now below powdr's 692**); lead over powdr +0.427× → **+0.430×**.
+- bus interactions: agg **3.479× → 3.480×** — the dropped range check **closes the aggregate bus
+  deficit vs powdr from −0.001× to 0.000×**.
+- constraints: agg **10.595× → 10.652×** (14 cluster constraints → 2 per instance).
+- keccak: unchanged (its lone comparison gadget landed with #114; the seqz idiom is eth-only here).
+
+**Wiring / integrity.** One `codaPasses` entry
+(`iterateToFixpoint SeqzCollapse.seqzCollapsePass |>.guardDegree`) plus the import; no audited
+surface touched, no new `BusFacts` (reuses the OpenVM `bytePairBus`/`byteCheck` instances). `lake
+build` green; proof integrity green (no `sorry`/`admit`/`axiom`/`native_decide`; the top-level
+theorems still depend only on `{propext, Classical.choice, Quot.sound}`).
