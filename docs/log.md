@@ -2814,3 +2814,46 @@ bytePackLate → …`): the split transiently *increases* the bus count, so it m
 the size-decreasing cleanup fixpoint. No new `BusFacts`; the pass reuses the `bytePairBus`/
 `byteCheck` facts that `bytePackPass` was proven from. Build + proof integrity green
 ({propext, Classical.choice, Quot.sound}-only).
+
+## Ideas-file regeneration from fresh first-principles measurement (2026-07-14, no optimizer change)
+
+Rewrote `docs/ideas.md` from scratch on main `656a9d8` (post-#114) after re-measuring both
+benchmarks from zero: fresh `opt-export` of all 100 openvm-eth cases + keccak, canonical-polynomial
+diffs against the checked-in powdr exports (exact per-variable/per-interaction attribution, not
+family heuristics). Headline corrections to the previous file's beliefs:
+
+- **eth absolute totals**: apc leads powdr on variables by −2,918 and constraints by −9,086, and
+  trails bus by only +196 absolute — but loses bus **per-case 7 W / 67 L / 26 T** (+588 over the
+  losing cases), which is what the geo metric punishes. The bus work is per-case hygiene, not one
+  big mechanism.
+- **eth variable losses decompose exactly**: constant decompositions +135 (Gauss unit-pivots the
+  affine digit seeds away before any digit solver sees them; the cascade needs carry-disjunction
+  pruning) · comparison gadgets +105 (−48 landed as #114; residue is the `sltu x,1` seqz idiom) ·
+  dead `bit_multiplier` one-hot family +14. Everything else nets in apc's favor.
+- **eth bus losses decompose into 8 mechanisms** totaling ~515 recoverable of +588: width-1
+  checks 90, stale byte/tuple coverage after unification ≥112, cancellable ±1 memory pairs 78 +
+  long (≥3) same-address chains 64, constant-family checks ~126, subsumed range checks 22,
+  NOT-form `[x,255,255−x,1]` byte checks 23.
+- **keccak +614 bus decomposes exactly**: 284 (142 byte-identical ±1 memory pairs; two-root
+  `midRefuted` is the only blocker; **zero** variable cascade) + 262 bitwise (200 NOT-form checks
+  all droppable — operands byte-justified by XOR slots; op-0 slot waste) + 68 width-1 checks (the
+  bus-3 width histograms are otherwise identical to powdr's). Fixes land exactly on powdr's
+  1734/2021/186; **nothing below that floor exists**: the XOR dag is measured perfectly clean
+  (0 duplicates / 0 dead / 0 collapsible chains; 862 genuine XORs ≡ powdr's).
+- **#116's gate rationale disproven**: `byteJustified` already accepts constants <256; the ungated
+  keccak regression must be a pair-matching artifact (constant-folded send vs unfolded receive) —
+  the fold is recoverable and owns the top eth variable family.
+- **New justification rule found**: AND/OR-result bytes (`z`-slot `±(x+y−2v)` in a genuine XOR ⟹
+  `v` is a byte) — needed by both the memory-pair drops (eth) and op-0 repacking (keccak).
+- Fresh dead ends recorded: keccak-below-powdr, timestamp/mem_ptr 2-var floors (1:1 washes in all
+  100 cases), bit_shift_carry representation wash, sub-byte checks not packable as bytes.
+
+New `docs/ideas.md`: 5 ranked ideas (constant-decomposition folding done right; memory-bus
+completion in 4 sub-items; seqz comparison collapse; stateless-check hygiene ×4; one-hot
+annihilation) with mechanisms, proof paths, worked examples, and per-benchmark expected impact,
+plus in-flight PR markers and working rules (duplicate-PR check, runtime discipline, per-case
+measurement).
+
+*(Rebase note: entries 77 (#117, interior memory pair cancellation = the file's idea 2 items (a)+(b))
+and 78 (#119, coda byte-pair splitting = the op-0 half of idea 4d) merged while this regeneration was
+in flight; the ideas file's baselines and ideas 2/4 were refreshed accordingly on rebase.)*
