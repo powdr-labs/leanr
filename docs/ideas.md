@@ -1,17 +1,17 @@
 # Ideas for future optimization passes
 
 Ranked by **expected benefit**. Effectiveness priority is **variables > bus interactions >
-constraints**, used as the tiebreak; the cheap high-confidence bus win #2 is ranked early because it
-is nearly free and closes part of the *only* axis on which apc-optimizer trails powdr in aggregate,
-plus keccak's dominant gap.
+constraints**, used as the tiebreak. With #2 landed (entry 77), the eth bus deficit (−0.025, the
+only trailing axis) and keccak's bus gap (+338) are the remaining aggregate gaps; both decompose
+into the smaller items below.
 
 ## Where we stand (measured on `c007db0`; keccak/eth refreshed for merged C4b #109, the bitwise byte-check cleanup (entry 75), and the is-equal collapse (entry 76))
 
 | benchmark | apc-optimizer | powdr | apc gap |
 |---|---|---|---|
-| **keccak** (`apc_001_pckeccak`) | 2025 v / 120 c / 2348 bus | 2021 / 186 / 1734 | vars **+4 (near parity)**, **bus +614** (wins constraints) |
-| **openvm-eth** (100-case agg / geo) | vars 4.518× / 3.837× · bus 3.439× / 2.723× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo +0.050); **trails bus by 0.040** |
-| **apc_010** (`pc0x200c18`) | 466 v / 251 c / 271 bus | 498 / 331 / 239 | wins vars+constraints, **bus +32** |
+| **keccak** (`apc_001_pckeccak`) | 2025 v / 120 c / 2072 bus | 2021 / 186 / 1734 | vars **+4 (near parity)**, **bus +338** (memory at parity; wins constraints) |
+| **openvm-eth** (100-case agg / geo) | vars 4.518× / 3.837× · bus 3.455× / 2.735× | vars 4.092× / 3.787× · bus 3.480× / 2.822× | leads vars agg (geo +0.050); **trails bus by 0.025** |
+| **apc_010** (`pc0x200c18`) | 466 v / 251 c / 247 bus | 498 / 331 / 239 | wins vars+constraints, **bus +8** |
 
 C4b (#109, entry 74) closed the keccak *variable* gap to near-parity; the bitwise byte-check cleanup
 (entry 75) cut the bitwise-bus gap; the is-equal collapse (entry 76) flipped 13 variable losses
@@ -64,64 +64,20 @@ Top-priority axis.
 
 ---
 
-## 2. Cancel interior memory send/receive pairs  ·  *bus*  ·  high confidence · low–medium effort
+## 2. Cancel interior memory send/receive pairs — **LANDED (entry 77)**
 
-**Gap:** the memory bus is where apc systematically trails on the memory-heavy blocks and on keccak.
-A register/heap cell accessed *N* times emits 2N memory interactions, but only the first receive and
-last send are externally observable — the N−1 interior send/receive pairs are exact `+1`/`−1`
-message negations and cancel. powdr does this; apc does not, purely because `busPairCancelPass`
-cannot *recognize* the pairs. Two independent recognizer gaps, both local to `BusPairCancel.lean`:
-
-**(a) Symbolic-address step-over** (keccak, the −276 chunk). Measured: 137/138 of keccak's memory
-pairs are **byte-identical `+1`/`−1` including the timestamp expression**; the send and its matching
-receive sit ~130 lines apart with *only other-pointer heap accesses* between them. `midRefuted`
-(line ~863) refutes an interleaved message as different-address only via `addrConstsNeq`, which needs
-**both** addresses to be literal constants — but heap pointers are expressions
-(`mem_ptr_limbs__0 + 65536·mem_ptr_limbs__1`), so no pair is ever cleared. The fix is to OR the
-**already-proven** `addrTwoRootNeq` (`AddrDiseq.lean`, built and used by `busUnify` since entry 71)
-into `midRefuted`:
-
-```
-midRefuted shape busId S m :=
-      decide (m.busId ≠ busId)
-   || multConst m == some 0
-   || addrConstsNeq shape S m
-   || addrTwoRootNeq twoRootMap shape S m      -- NEW: two-root branch disequality
-```
-
-Thread the once-per-pass `TwoRootMap` in (as `busUnify` does) and add the `hsat` hypothesis to
-`midRefuted_sound` (the exact plumbing entry 71 added to `checkPair_sound`).
-
-**(b) Constraint-entailed payload matching** (apc_010 registers, the −32 chunk). Measured: apc_010's
-16 register pairs share the address, timestamp and last three data slots; slot 0 differs
-*syntactically* — send `(1−flag)·srd0 + flag·srd1`, receive `read_data__X` — even though `busUnify`
-**already added** the equality `read_data__X − ((1−flag)·srd0 + flag·srd1) = 0`. Gauss can't apply it
-(`read_data` occurs at degree 3 in the `write_data` constraints; substituting its degree-2 definition
-would hit degree 4 > the bound of 3, so `guardDegree` reverts). So generalize the match from
-syntactic to entailed:
-
-```
-payloadsMatch cs S R :=
-    addrConstsEq shape S R                         -- unconditional address equality
- && ∀ value-slot i:  S[i] == R[i]                  -- syntactic, OR
-       || (eqExpr S[i] R[i]).normalize ∈ cs.algebraicConstraints.map normalize   -- entailed
-```
-
-Re-key the receive index on `(address ++ tail-slots)` and weaken `dropPair_correct`'s hypothesis from
-`S.payload = R.payload` to the env-conditioned `evaluated payloads equal under the algebraic
-constraints`.
-
-**Why sound.** `sideEffects_dropPair_equiv` (already stated over *evaluated* payloads) gives net-zero
-cancellation once evaluated payloads are equal — discharged from the algebraic constraints, which
-hold in both `refines` directions. `admissible_dropPair` needs only address equality (unconditional).
-The dropped receive's byte obligation is discharged by the existing `recvSlotsJustified`
-(`byteJustified`/`deepBoundOk`) — which already covers apc_010's plain-var and `255·bit` single-var
-slots. No new `BusFacts`, no audited-surface change.
-
-**Expected impact.** keccak memory **534 → 258 = exact powdr parity (−276 bus)** via (a); apc_010
-**271 → 239** (now *beats* powdr on all three axes), `apc_014` 151→135, `apc_008` −2, and every other
-sign-extending-load / heap-heavy block via (b). ~120–150 bus across the memory-heavy eth cases.
-Strictly variable-neutral.
+Both recognizer gaps fixed in `BusPairCancel.lean`: (a) the two-root address-disequality
+(`addrTwoRootNeq`) now backs `midRefuted`/`preRefuted`/`shieldScan` (Thunk'd `TwoRootMap`, once
+per invocation, transported across drops), telescoping keccak's interior heap pairs — **memory
+534 → 258 = exact powdr parity, keccak bus 2348 → 2072 (−276)**; (b) constraint-entailed payload
+matching (`EqConstraintMap` of normalized constraints + `payloadEntailedEq`), run **only in a new
+aggressive coda invocation** (`busPairCancelLate` + `bytePackLate`) — mid-cycle it measures as a
+net loss (premature emission racing the justification machinery, apc_005 class +34 bus each, and
+keccak 2.4× runtime) while at the coda each drop is net ≤ −1 bus by construction. eth: **bus agg
+3.439× → 3.455×, 10 cases / −76 bus / 0 regressions** (apc_010 271 → 247 vs powdr 239);
+vars/constraints byte-neutral; runtime eth −2.5%, keccak +1.3%. Deliberately forgone: −6 keccak /
+−6 apc_100 reachable only by mid-cycle entailed matching. Residual keccak bus gap +338 = bitwise
+≈257 (genuine-XOR representation) + width-1 range 68 (→ booleanity conversion, see below) + ~13.
 
 ---
 
