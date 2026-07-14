@@ -2535,3 +2535,41 @@ addresses, jump targets) — the largest variable family (`rd_data`, ~93 vars/23
 (no gap), disconnected-component (empty), keccak genuine-XOR bus gap (representation artifact),
 `bit_shift_carry` (VM-specific), varRange packing (apc already wins), `b`/`c` naming artifact,
 `apc_003` now a tie, constant-operand XOR exhausted (C4a/C4b landed).
+
+## Entry 72: interior memory-pair cancellation (idea #2) — correct, but perf-blocked + eth-regressing (not merged)
+
+**Idea (ideas.md #2).** Cancel `+1`/`-1` memory send/receive pairs `busPairCancel` could not
+recognize: **(a)** symbolic-address step-over (keccak's heap) by OR-ing the proven `addrTwoRootNeq`
+(`AddrDiseq.lean`) into `midRefuted`/`preRefuted`; **(b)** constraint-entailed payload matching
+(apc_010 registers) via `slotEntailed`/`payloadsMatch`, an address-keyed receive index, and an
+env-conditioned payload-equality hypothesis in `dropPair_correct`.
+
+**Implemented and proven.** Full `lake build` + `Scripts/check-proof-integrity.sh` green
+({propext, Classical.choice, Quot.sound} only). No audited-surface change; correctness carried by
+each pass's own `PassCorrect` (the two-root memo `RedMap` is *definitionally* the same predicate as
+`addrTwoRootNeq`, so soundness is reused verbatim).
+
+**Effectiveness (measured).** keccak bus **2418 → 2137 (−281, ≈ powdr parity)**, vars/constraints
+neutral. apc_010 bus **271 → 239 (−32)**, variable-neutral (now beats powdr on all three axes).
+**openvm-eth 100-case: variables 4.509× → 4.510× (flat), bus 3.401× → 3.351× (REGRESSION, −0.05×),
+constraints ~flat; per-case by variables 25 W / 42 L / 33 T (unchanged).**
+
+**Two blockers ⇒ not merged.**
+1. *Performance.* Part (a)'s two-root check runs over the shield's **full before-region prefix for
+   every candidate send** ⇒ O(n²) `ptrReductions` / `constDiffNZ`. Keccak went ~590s → ~5800s+ CPU
+   (~10×); the profiler put `busPairCancel` at 96% of cleanup time. Memoizing `ptrReductions`
+   (`RedMap`, keyed by structural hash) cut it roughly in half (25× → ~10×) but the O(n²) comparison
+   count remains — a real fix needs a **shield-scan redesign** (an O(n)/O(n log n) before-region
+   certificate), not caching. At ~10× it would hang CI.
+2. *eth bus regression.* The combined change lowers eth aggregate bus (3.401 → 3.351). Most likely
+   part (b)'s address-index re-keying changes *which* byte-identical pairs cancel (the search is
+   deterministic, but the cancellation SET differs from the old payload-hash order), net-worse on
+   some eth cases. A payload-hash-**primary** index with an address-hash **fallback** (only for the
+   entailed-value-slot pairs) would likely avoid it.
+
+**Status.** Correct implementation sits on branch `claude/idea-2-implementation-g8kp7m`; **not
+merged** — it regresses the primary benchmark's bus axis and would hang CI on keccak. Idea #2 is kept
+in `docs/ideas.md`, annotated with these findings. Recommended follow-up: (i) redesign `shieldScan`
+to avoid the per-send full-prefix two-root scan; (ii) payload-hash-primary + address-hash-fallback
+receive index; then the −281 keccak / −32 apc_010 wins land without the eth regression or the
+slowdown.

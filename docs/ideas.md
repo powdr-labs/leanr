@@ -64,6 +64,15 @@ Top-priority axis.
 
 ## 2. Cancel interior memory send/receive pairs  ·  *bus*  ·  high confidence · low–medium effort
 
+> **Attempted (log entry 72) — correct but not merged.** Both (a) and (b) were implemented and
+> proven (build + proof-integrity green): keccak bus **2418 → 2137 (−281, ≈ powdr parity)**, apc_010
+> **271 → 239 (−32)**, both variable-neutral. Two blockers stopped it landing: **(1)** the two-root
+> check in the shield runs over the whole before-region *per candidate send* → O(n²); keccak became
+> ~10× slower (memoizing `ptrReductions` only halved it — needs a `shieldScan` redesign, not
+> caching). **(2)** the change *regresses* eth aggregate bus (3.401× → 3.351×), most likely because
+> part (b)'s address-index re-keying alters which byte-identical pairs cancel. Fix path: an O(n)
+> before-region certificate + a payload-hash-**primary** / address-hash-**fallback** receive index.
+
 **Gap:** the memory bus is where apc systematically trails on the memory-heavy blocks and on keccak.
 A register/heap cell accessed *N* times emits 2N memory interactions, but only the first receive and
 last send are externally observable — the N−1 interior send/receive pairs are exact `+1`/`−1`
