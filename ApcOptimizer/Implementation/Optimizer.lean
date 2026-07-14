@@ -100,7 +100,7 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
     ("tautoBus", tautoBusDropPass.withFacts.guardDegree),
     ("domainFold", domainFoldPass.withFacts.guardDegree),
     ("busUnify", busUnifyPass.guardDegree),
-    ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint busPairCancelPass)),
+    ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass false))),
     ("tupleRange", VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass)),
     ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
@@ -110,7 +110,9 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
     reaches its fixpoint — drop bytes made redundant by the cleaned-up system, rescale carries to
     monic form, and one final constant-fold. -/
 def codaPasses : List (String × VerifiedPassW p) :=
-  [ ("redundantByteDrop", RedundantByteDrop.redundantByteDropPass.guardDegree),
+  [ ("busPairCancelLate", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass true))),
+    ("redundantByteDrop", RedundantByteDrop.redundantByteDropPass.guardDegree),
+    ("bytePackLate", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("monicScale", monicScalePass.withFacts.guardDegree),
     ("constFoldEnd", constantFoldPass.withFacts.guardDegree) ]
 
