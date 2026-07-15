@@ -129,8 +129,8 @@ def checkPair (shape : MemoryBusShape) {constraints : List (Expression p)}
   decide (L = pre ++ S :: mid ++ R :: post) &&
   decide (multConst S = some 1) && decide (multConst R = some (-1)) &&
   addrConstsEq shape S R &&
-  mid.all (fun m => addrConstsNeq shape S m || addrTwoRootNeq shape T S m
-    || decide (multConst m = some 0))
+  mid.all (fun m => addrConstsNeq shape S m || addrAffineNeq shape S m
+    || addrTwoRootNeq shape T S m || decide (multConst m = some 0))
 
 theorem checkPair_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0)
@@ -162,8 +162,10 @@ theorem checkPair_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
       shape.address (m.eval env) = shape.address (S.eval env) → False := by
     intro m hm hmne hmaddr
     rcases (Bool.or_eq_true _ _).mp (List.all_eq_true.mp hmidall m hm) with hcond | hz
-    · rcases (Bool.or_eq_true _ _).mp hcond with hneq | h2r
-      · exact addrConstsNeq_sound shape S m hneq env (hmaddr.symm)
+    · rcases (Bool.or_eq_true _ _).mp hcond with hcond2 | h2r
+      · rcases (Bool.or_eq_true _ _).mp hcond2 with hneq | haff
+        · exact addrConstsNeq_sound shape S m hneq env (hmaddr.symm)
+        · exact addrAffineNeq_sound shape S m haff env (hmaddr.symm)
       · exact addrTwoRootNeq_sound shape T S m h2r env hcon (hmaddr.symm)
     · have : (m.eval env).multiplicity = 0 := by
         show m.multiplicity.eval env = 0
@@ -196,7 +198,7 @@ def findConsumer (shape : MemoryBusShape) {constraints : List (Expression p)}
   | revMid, r :: rest =>
       if decide (multConst r = some (-1)) && addrConstsEq shape S r then
         some (revMid.reverse, r, rest)
-      else if addrConstsNeq shape S r || addrTwoRootNeq shape T S r
+      else if addrConstsNeq shape S r || addrAffineNeq shape S r || addrTwoRootNeq shape T S r
           || decide (multConst r = some 0) then
         findConsumer shape T S (r :: revMid) rest
       else none
