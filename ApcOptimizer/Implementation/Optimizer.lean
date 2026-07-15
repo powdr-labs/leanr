@@ -193,7 +193,9 @@ theorem pipeline_respectsDeg : RespectsDeg (pipeline (p := p)) := by
 def optimizerWithBusFacts {bs : BusSemantics p} (facts : BusFacts p bs)
     (cs : ConstraintSystem p) : ConstraintSystem p × Derivations p :=
   let r := pipeline cs bs facts
-  (r.out, r.derivs)
+  -- Drop derivations for variables absent from the output: they are dead (`witgen` never reads them)
+  -- and the spec requires every recorded derivation to name an output variable.
+  (r.out, r.derivs.filter (fun d => decide (d.1 ∈ r.out.vars)))
 
 /-! ## Evaluation depends only on a system's variables
 
@@ -244,6 +246,25 @@ theorem ConstraintSystem.sideEffects_congr {cs : ConstraintSystem p} {bs : BusSe
   refine List.map_congr_left (fun bi hbi => ?_)
   simp only [ConstraintSystem.busEval_congr h (List.mem_of_mem_filter hbi)]
 
+/-- Filtering the derivations to those naming a variable in `out` leaves `methodFor` unchanged on any
+    variable that *is* in `out` — every derivation for such a variable is kept, and a dropped
+    derivation can only name a variable outside `out`, hence never the one being queried. -/
+theorem Derivations.methodFor_filter {out : List Variable} {v : Variable} (hv : v ∈ out)
+    (ds : Derivations p) :
+    Derivations.methodFor (ds.filter (fun d => decide (d.1 ∈ out))) v
+      = Derivations.methodFor ds v := by
+  induction ds with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨u, cm⟩ := hd
+    by_cases hu : u ∈ out
+    · rw [List.filter_cons_of_pos (by simpa using hu)]
+      simp only [Derivations.methodFor, ih]
+    · rw [List.filter_cons_of_neg (by simpa using hu)]
+      rw [ih, Derivations.methodFor]
+      have hne : ¬ u = v := fun h => hu (h ▸ hv)
+      simp [hne]
+
 /-- The fact-aware optimizer is correct: its output is a sound replacement for its input (soundness
     plus invariant preservation) and a complete replacement for the input's intended (real-trace)
     executions — running `witgen` on any admissible input trace reproduces a valid witness. These
@@ -274,17 +295,35 @@ theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p 
         simp only [Derivations.witgen, hpw, hm]
         rw [← heq]
         exact ComputationMethod.eval_congr cm env env' (fun x hx => (hA x (hxpow x hx)).symm)
-  refine ⟨?_, (ConstraintSystem.satisfies_congr hagree).mpr hsat',
-    (ConstraintSystem.admissible_congr hagree).mpr hadm', ?_⟩
+  -- The returned derivations are `pipeline …`'s pruned to output variables; on output variables the
+  -- pruning leaves `witgen` unchanged (`methodFor_filter`), so `hagree` transports to the pruned list.
+  have hagree' : ∀ v ∈ (pipeline cs bs facts).out.vars,
+      Derivations.witgen ((pipeline cs bs facts).derivs.filter
+        (fun d => decide (d.1 ∈ (pipeline cs bs facts).out.vars))) env v = env' v := by
+    intro v hv
+    rw [show Derivations.witgen ((pipeline cs bs facts).derivs.filter
+          (fun d => decide (d.1 ∈ (pipeline cs bs facts).out.vars))) env v
+        = Derivations.witgen (pipeline cs bs facts).derivs env v by
+      simp only [Derivations.witgen, Derivations.methodFor_filter hv]]
+    exact hagree v hv
+  refine ⟨?_, ?_, (ConstraintSystem.satisfies_congr hagree').mpr hsat',
+    (ConstraintSystem.admissible_congr hagree').mpr hadm', ?_⟩
   · -- `ds` covers the output columns: reused ones exist in the input (`hS`), derived ones have a
-    -- method reading only powdr-ID columns (from the reconstruction).
+    -- method reading only powdr-ID columns (from the reconstruction), preserved by the pruning.
     intro v hv
     cases hpw : v.powdrId? with
     | some w => exact hS v hv (by simp [hpw])
-    | none => obtain ⟨cm, hm, _hxpow, hxinput, _⟩ := hrec v hv hpw; exact ⟨cm, hm, hxinput⟩
+    | none =>
+        obtain ⟨cm, hm, _hxpow, hxinput, _⟩ := hrec v hv hpw
+        exact ⟨cm, (Derivations.methodFor_filter hv _).trans hm, hxinput⟩
+  · -- Every recorded derivation names an output variable — that is exactly the pruning predicate.
+    intro d hd
+    simpa using (List.mem_filter.mp hd).2
   · show cs.sideEffects bs env
-        ≈ (pipeline cs bs facts).out.sideEffects bs (Derivations.witgen (pipeline cs bs facts).derivs env)
-    rw [ConstraintSystem.sideEffects_congr hagree]
+        ≈ (pipeline cs bs facts).out.sideEffects bs (Derivations.witgen
+            ((pipeline cs bs facts).derivs.filter
+              (fun d => decide (d.1 ∈ (pipeline cs bs facts).out.vars))) env)
+    rw [ConstraintSystem.sideEffects_congr hagree']
     exact hse
 
 /-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree

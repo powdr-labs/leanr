@@ -234,6 +234,7 @@ def ConstraintSystem.isCompleteReplacementOf (optimizedCS originalCS : Constrain
   (∀ v ∈ originalCS.vars, v.powdrId?.isSome) →
   ∀ env, originalCS.admissible busSemantics env → originalCS.satisfies busSemantics env →
     ds.cover originalCS.vars optimizedCS.vars ∧
+    (∀ derivation ∈ ds, derivation.1 ∈ optimizedCS.vars) ∧
     let env' := Derivations.witgen ds env
     optimizedCS.satisfies busSemantics env' ∧ optimizedCS.admissible busSemantics env' ∧
       originalCS.sideEffects busSemantics env ≈ optimizedCS.sideEffects busSemantics env'
