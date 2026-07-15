@@ -77,6 +77,22 @@ private def neverViolatesImpl (busMap : Nat → Option OpenVmBusType) (busId : N
   -- length is not 9, so it can violate and is not unconditionally sound.
   | _ => false
 
+/-- Byte-slot obligation for a memory-style pair cancellation, conditioned on the receive's
+    constant pattern. A memory receive whose address-space slot (payload slot 0) is a known
+    constant ∉ {1,2} carries **no** byte obligation (`some []`) — the VM's `violates` only rejects
+    non-byte data on address spaces 1 and 2 — so it can be cancelled freely (e.g. the wasm
+    frame-pointer cell at AS 5). Otherwise the data limbs (slots 2–5) must be bytes, as before.
+    The execution bridge never violates (`some []`); every other bus claims nothing (`none`). -/
+private def recvByteSlotsImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat)
+    (pattern : List (Option (ZMod p))) : Option (List Nat) :=
+  match busMap busId with
+  | some .memory =>
+    match pattern[0]? with
+    | some (some as) => some (if as.val = 1 ∨ as.val = 2 then [2, 3, 4, 5] else [])
+    | _ => some [2, 3, 4, 5]
+  | some .executionBridge => some []
+  | _ => none
+
 /-- The fixed-zero cell of the OpenVM memory bus: register `x0` = address `(as, ptr) = (1, 0)`,
     with the four data limbs at payload slots `2..5`. Backs the `zeroRegisterReads` admissibility
     clause; `none` for every non-memory bus. -/
@@ -188,6 +204,31 @@ private theorem memory_recv_ok (busMap : Nat → Option OpenVmBusType)
   have h2 : d2.val < 256 := hslots 4 (by simp) d2 rfl
   have h3 : d3.val < 256 := hslots 5 (by simp) d3 rfl
   simp [isByte, h0, h1, h2, h3]
+
+/-- A memory message whose address-space slot (payload slot 0) is a known constant ∉ {1, 2}
+    never violates, regardless of its multiplicity or data limbs: the VM's `violates` only
+    rejects non-byte data on address spaces 1 and 2. This is what lets a memory receive from a
+    non-register/non-main-memory address space (e.g. the wasm frame-pointer cell at AS 5) be
+    dropped with an empty byte obligation. -/
+private theorem memory_recv_nonByte_ok (busMap : Nat → Option OpenVmBusType)
+    (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .memory)
+    (as : ZMod p) (hasval : ¬ (as.val = 1 ∨ as.val = 2)) (has : m.payload[0]? = some as) :
+    violates busMap m = false := by
+  obtain ⟨bid, mult, payload⟩ := m
+  simp only at hbus has
+  unfold violates
+  rw [hbus]
+  rcases payload with _ | ⟨a0, _ | ⟨a1, _ | ⟨b0, _ | ⟨b1, _ | ⟨b2, _ | ⟨b3, rest⟩⟩⟩⟩⟩⟩ <;>
+    try rfl
+  -- only the 6+-element case remains; `a0` is the address space, equal to `as`
+  simp only [List.getElem?_cons_zero, Option.some.injEq] at has
+  push_neg at hasval
+  obtain ⟨hne1, hne2⟩ := hasval
+  have hmid : (a0.val == 1 || a0.val == 2) = false := by
+    rw [has]
+    simp only [Bool.or_eq_false_iff, beq_eq_false_iff_ne]
+    exact ⟨hne1, hne2⟩
+  simp only [hmid, Bool.and_false, Bool.false_and]
 
 /-- A bus with a declared last-write-wins shape (memory or execution bridge) is stateful. -/
 theorem openVm_isStateful_of_memShape {p : ℕ} (busMap : Nat → Option OpenVmBusType)
@@ -398,25 +439,49 @@ def openVmFacts (p : ℕ) [NeZero p]
     split at h
     · rename_i hbus; exact execBridge_ok busMap m hbus
     · exact absurd h (by simp)
-  recvByteSlots busId := match busMap busId with
-    | some .memory => some [2, 3, 4, 5]
-    | some .executionBridge => some []
-    | _ => none
+  recvByteSlots := recvByteSlotsImpl busMap
   recvByteSlots_sound := by
-    intro busId slots hfact m hbusId
+    intro busId pattern slots hfact m hbusId
     subst hbusId
-    split at hfact
-    · -- memory: sends never violate; receives need byte data limbs (slots 2–5)
-      rename_i hbus
-      simp only [Option.some.injEq] at hfact
-      subst hfact
-      exact ⟨fun hm => memory_send_ok busMap m hbus hm,
-             fun hm hbytes => memory_recv_ok busMap m hbus hm hbytes⟩
-    · -- execution bridge: never violates
-      rename_i hbus
-      exact ⟨fun _ => execBridge_ok busMap m hbus,
-             fun _ _ => execBridge_ok busMap m hbus⟩
-    · exact absurd hfact (by simp)
+    unfold recvByteSlotsImpl at hfact
+    cases hbus : busMap m.busId with
+    | none => rw [hbus] at hfact; simp at hfact
+    | some bt =>
+      cases bt with
+      | executionBridge =>
+        rw [hbus] at hfact
+        simp only [Option.some.injEq] at hfact
+        subst hfact
+        exact ⟨fun _ => execBridge_ok busMap m hbus, fun _ _ _ => execBridge_ok busMap m hbus⟩
+      | memory =>
+        rw [hbus] at hfact
+        cases hp0 : pattern[0]? with
+        | none =>
+          rw [hp0] at hfact
+          simp only [Option.some.injEq] at hfact
+          subst hfact
+          exact ⟨fun hm => memory_send_ok busMap m hbus hm,
+                 fun hm _ hbytes => memory_recv_ok busMap m hbus hm hbytes⟩
+        | some oas =>
+          cases oas with
+          | none =>
+            rw [hp0] at hfact
+            simp only [Option.some.injEq] at hfact
+            subst hfact
+            exact ⟨fun hm => memory_send_ok busMap m hbus hm,
+                   fun hm _ hbytes => memory_recv_ok busMap m hbus hm hbytes⟩
+          | some as =>
+            rw [hp0] at hfact
+            simp only [Option.some.injEq] at hfact
+            subst hfact
+            refine ⟨fun hm => memory_send_ok busMap m hbus hm, fun hm hmatch hbytes => ?_⟩
+            split_ifs at hbytes with hcase
+            · exact memory_recv_ok busMap m hbus hm hbytes
+            · exact memory_recv_nonByte_ok busMap m hbus as hcase (hmatch.2 0 as hp0)
+      | pcLookup => rw [hbus] at hfact; simp at hfact
+      | variableRangeChecker => rw [hbus] at hfact; simp at hfact
+      | bitwiseLookup => rw [hbus] at hfact; simp at hfact
+      | tupleRangeChecker s1 s2 => rw [hbus] at hfact; simp at hfact
   memShape := memShapeOf busMap
   memShape_stateful := fun busId shape hshape =>
     openVm_isStateful_of_memShape busMap busId shape hshape
