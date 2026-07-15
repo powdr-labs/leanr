@@ -744,6 +744,79 @@ def constraintRedundant {cs : ConstraintSystem p} {bs : BusSemantics p} (T : Dom
         (assignments d).all (fun a => @decide (ic.evalWith add mul a = 0) (dec _ 0))
       | none => (assignments d).all (fun a => decide (c.eval (envOfFast a) = 0))
 
+/-! ### Cheap pre-scan sample: prove a large box forces nothing without scanning it fully
+
+The candidate set (variables constant across the surviving points seen so far) computed over any
+*subset* of a box's points is a *superset* of the set over all points. So if a cheap strided sample
+of a box already drives the candidate set to empty, the full box provably forces nothing, and
+`forcedOver` may return `[]` — which is always sound (it is the "found nothing" case), so the skip
+carries no proof obligation. If the sample is inconclusive we fall through to the full proven scan,
+so nothing that would have been forced is ever lost: the skip is **effectiveness-exact**.
+
+Only large boxes are sampled: there the sample (≤ `sampleBudget` points, and the strided order tends
+to empty the candidates within a handful of points) is far cheaper than a box a sequential scan would
+grind through. Small boxes are scanned directly. -/
+
+/-- Scan state: no survivor yet / current candidate agreement set / candidates exhausted (`done`). -/
+inductive ScanSt (p : ℕ) where
+  | noSurv
+  | cands (c : List (Variable × ZMod p))
+  | done
+
+/-- One point's effect on the scan state (mirrors `scanInit`/`scanWith`): the first survivor seeds
+    the candidates from `keys`; each later survivor keeps only candidates it agrees with; the moment
+    none remain the state is `.done`. -/
+def scanStep (surv : List (Variable × ZMod p) → Bool) (keys : List Variable) :
+    ScanSt p → List (Variable × ZMod p) → ScanSt p
+  | .done, _ => .done
+  | .noSurv, pt => if surv pt then .cands (keys.map (fun x => (x, envOfFast pt x))) else .noSurv
+  | .cands c, pt =>
+    if surv pt then
+      match c.filter (fun xc => decide (envOfFast pt xc.1 = xc.2)) with
+      | [] => .done
+      | c' => .cands c'
+    else .cands c
+
+/-- Number of sample points probed per box (kept small — the sample must be far cheaper than the box
+    it might replace; empirically the candidate set empties within a few points when it is going to). -/
+def sampleBudget : Nat := 128
+
+/-- Only sample boxes larger than this; smaller boxes are scanned directly (the sample would not pay
+    for itself, and small boxes are already cheap). -/
+def sampleThreshold : Nat := 1024
+
+/-- The point at mixed-radix index `i` of the box `doms` (each coordinate `= d[i % d.length]`, then
+    `i /= d.length`), in the same positional key order as `assignments doms`. A strided sequence of
+    these indices varies every coordinate, exposing the disagreements that empty the candidate set. -/
+def pointAt : List (Variable × List (ZMod p)) → Nat → List (Variable × ZMod p)
+  | [], _ => []
+  | (x, d) :: rest, i =>
+    let n := d.length
+    (x, d.getD (i % n) 0) :: pointAt rest (i / n)
+
+/-- Fold `scanStep` over up to `k` strided sample points, stopping as soon as the candidate set is
+    exhausted (`.done`). -/
+def sampleScan (surv : List (Variable × ZMod p) → Bool) (keys : List Variable)
+    (doms : List (Variable × List (ZMod p))) (stride : Nat) : Nat → Nat → ScanSt p → ScanSt p
+  | _, 0, st => st
+  | i, k + 1, st =>
+    match scanStep surv keys st (pointAt doms i) with
+    | .done => .done
+    | st' => sampleScan surv keys doms stride (i + stride) k st'
+
+/-- `true` when a strided sample already proves the box forces nothing (candidate set emptied). Only
+    `.done` licenses the skip; `.noSurv`/`.cands` are inconclusive and fall through to the full scan.
+    Returning `true` only after the sample genuinely exhausted the candidates, and `forcedOver`
+    returning `[]` being always sound, means the skip never affects correctness — nor effectiveness,
+    since a real forced value keeps the candidate set non-empty on every subset and so never
+    triggers `.done`. -/
+def sampleForcesNothing (surv : List (Variable × ZMod p) → Bool) (keys : List Variable)
+    (doms : List (Variable × List (ZMod p))) (boxSize : Nat) : Bool :=
+  let stride := Nat.max 1 (boxSize / sampleBudget)
+  match sampleScan surv keys doms stride 0 sampleBudget .noSurv with
+  | .done => true
+  | _ => false
+
 /-- The single-pass box scan, after the first survivor: walk the remaining points, intersecting
     the list of `(x, c)` candidates on which every survivor seen so far agrees. The moment no
     candidate remains the scan **aborts** without visiting the remaining points — a target that
@@ -1022,6 +1095,13 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts
           simp only [Bool.and_eq_true] at hQ
           exact ⟨hMem, by rw [← BusInteraction.varsInF_eq]; exact hQ.1⟩
         let survC := compiledSurv bs es bis (doms.map Prod.fst)
+        -- Effectiveness-exact fast path: on a large box, if a cheap strided sample already proves the
+        -- candidate set empty, the full box forces nothing, so return `[]` (always sound) without the
+        -- full scan. A genuinely forced value keeps the candidates non-empty on every subset, so it is
+        -- never skipped. Small boxes are scanned directly (the sample would not pay for itself).
+        if boxSize > sampleThreshold &&
+            sampleForcesNothing survC.val (doms.map Prod.fst) doms boxSize then []
+        else
         match hscan : scanInit survC.val (doms.map Prod.fst) (assignments doms) with
         | none =>
           -- no surviving point: the box is empty of solutions, everything is vacuously forced
