@@ -290,6 +290,13 @@ and accepts both closer signs (mid-cycle the optimizer holds the negated `(1 −
 - **`flags` refolding, varRange-as-variables, `b`/`c` naming diffs, PC-lookup drops,
   disconnected witnesses, DigitEq wiring**: no targets (apc already wins `flags` by ~4,500 vars
   corpus-wide; keep it that way — test any new pass against the apc_005/009 flag folds).
+- **Derived-column-free reindex of the flag one-hots (`affineRel`, entry 87)**: adding the
+  entailed affine relation over `reencode`'s domain groups so `gauss` drops one flag (4→3 instead
+  of `reencode`'s 4→2). All 1,126 flag groups are width-4 ternary near-one-hots with min
+  separating subset 3, so a substitution-only pass is capped at half the direct compression.
+  Measured derived-free optimum: **30,851 vars (24% of `reencode`'s win recovered) ≈ powdr's
+  30,885** — the derived columns *are* apc's entire variable lead over powdr. Redundant with
+  `reencode` on (neutral), so not worth landing.
 
 ## Working rules (from this iteration's failures)
 

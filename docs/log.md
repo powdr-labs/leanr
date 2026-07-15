@@ -3268,3 +3268,48 @@ vars, shrinking every enumerated point; attacks the dominant 51 % directly, self
 and per-point `substF`/`linearize`. A cheaper extension of *this* entry: index-compile
 `constOnSurvs` (à la `domainBatch`'s `IExpr`) to also drop the `envOf` linear scan, which would help
 the cases where the `evalFast` hoist alone barely moved.
+
+### 87. Investigation (Georg): the derived-column-free ceiling — how much of `reencode` survives without derived columns?
+Follow-up to entry 47. Georg asked what a *fully derived-column-free* optimizer could achieve —
+skip every pass that introduces a derived (no-powdr-ID) column and see whether the effectiveness
+loss is small. Measured by rebuilding the optimizer with passes toggled (numbers = openvm-eth
+top-100, `apc-optimizer run`, Σafter vars).
+
+**Which passes introduce derived columns.** Exactly three, and only these emit non-empty
+`Derivations`: `reencode` (fresh bits), `hintCollapse` (`inv = QuotientOrZero`), `seqzCollapse`
+(`inv`). By the `reconstructs` obligation a pass can only add a no-ID column if it ships a
+derivation, so this list is complete.
+
+**Marginal cost of turning each off (vs baseline 27,762 vars, 4.55× agg):**
+- `reencode` off: **+4,048 (+14.6%)**, 4.55×→3.97×; constraints +68.6%.
+- `hintCollapse` off: +69 (+0.25%), 0 constraint/bus change.
+- `seqzCollapse` off: +20 (+0.07%).
+- all three off: **+4,137 (+14.9%)** — cleanly additive; `reencode` is ~98% of it.
+
+So the loss is *not* small, and it is essentially all `reencode`.
+
+**Where `reencode`'s win lives (census of all 100 baseline `derived_columns`).** 1,126 groups,
+uniformly **width-4 ternary near-one-hot** flags `flags__{0..3}_j ∈ {0,1,2}` with the four valid
+patterns `(0,0,0,2),(0,0,1,0),(0,1,0,0),(1,0,0,0)` → 2 fresh bits (plus one width-2 group). The
+direct flag compression is 4→2 = 2,253 vars; the remaining 1,795 of the 4,048-var win is indirect
+(register/memory chaining — mostly already recovered derived-free by `domainFold`, entry 48 — plus
+a bit-cleanliness cascade of ~256/big-block).
+
+**The derived-free ceiling.** For a width-4 near-one-hot the minimum subset of the *existing* flags
+that separates the four patterns is **3** (any pair collides — e.g. two patterns both read `(0,0)`),
+so a substitution-only pass is capped at 4→3, exactly half the direct compression. Prototyped it
+(`DomainAffineRel.affineRelPass`, **unverified — carried `sorry`, not committed**): reuse
+`reencode`'s group targets, compute the affine relations the survivors satisfy (nullspace over the
+field, e.g. `f3 = 2 − 2f0 − 2f1 − 2f2`), add them as constraints, and let `gaussElimPass` drop one
+flag/group. Placed before `gauss`; `reencode`/`hintCollapse`/`seqzCollapse` disabled.
+
+**Measured derived-free optimum: 30,851 vars (+11.1% over baseline; 4.55×→4.10×).** `affineRel`
+recovered only **959 of `reencode`'s 4,048-var win (~24%)** — the direct 4→3, no cascade. Decisively:
+**30,851 ≈ powdr's 30,885** (agg ≈ 4.09× on the same before-basis). i.e. apc-optimizer's entire ~3,100-var
+(~11%) variable lead over powdr *is* the derived columns; strip them and we fall back exactly to
+powdr's level. The log-density half of the flag compression and the bit-enabled cascade are
+genuinely derived-column-only.
+
+**Conclusion / no landing.** `affineRel` is not worth landing: with `reencode` on it is redundant
+(reencode already gets 4→2 ⊃ 4→3) and thus effectiveness-neutral; it only matters in a hypothetical
+derived-free build. Recorded as a measured dead end. No optimizer/spec change in this entry.
