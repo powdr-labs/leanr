@@ -77,6 +77,70 @@ LANDED are done — the remainder still adds up to the current gaps):
 
 ---
 
+## 0. wasm-eth: variable gap closed; global range-obligation repack is the last axis (after entries 87–89)
+
+The `wasm-eth` corpus (100 cases, merged #131) had apc **far behind** powdr — the worst cases
+(k256 `FieldElement10x26` square/mul, tiny_keccak `keccakf`) sat at 4.2–4.85× the powdr variable
+count. Entries 87 (`addrAffineNeq`, the affine same-base address-disequality certificate) and 88
+(pattern-aware `recvByteSlots`, which drops the vacuous byte obligation on non-{1,2} address-space
+memory receives) closed the memory-forwarding failure that caused it. Re-measured full-corpus
+(stack vs pre-fix `c6a167b`):
+
+| axis | apc | powdr | apc − powdr |
+|---|---|---|---|
+| variables | 17,035 | 19,628 | **−2,593 (lead)** |
+| bus interactions | 13,535 | 12,552 | +983 (**trails, +8%**) |
+| constraints | 15.2× agg | 9.7× agg | lead |
+
+Per-case variables W/L/T vs powdr **16/11/73**; worst variable-ratio case now **1.15×** (was 4.85×).
+**Variables and constraints are won; the one remaining axis is bus interactions**, concentrated in
+the two big k256 cases (apc_037 +351, apc_012 +511; mid cases small). Memory is fully telescoped
+(apc_004 bus-1 44 = powdr 44).
+
+### The remaining bus gap: global range-obligation rebuild  ·  *bus, wasm-eth*  ·  high value / medium effort
+
+Measured on apc_004 (bus-1 memory already at parity), the excess is entirely **range-check
+packing** — the large-corpus version of the existing repack ideas (§4, `TupleRange.lean` /
+`ByteCheckPack.lean`), which apc's *pairwise* packers cannot recover after large-scale unification:
+
+- apc emits **one tuple-range check (bus 7) per timestamp `lower_decomp` limb** —
+  `[a__i, …timestamp_lt…lower_decomp__1]` — where powdr **batches** several decomposition limbs
+  into a single arg as a linear combination: `[a__i, 15360·prev_ts + 15360·decomp + …]`.
+  apc bus-7 **68** vs powdr **22** on apc_004.
+- apc range-checks single `a__` result byte limbs on the tuple bus; powdr uses **byte-*pair***
+  checks on the bitwise bus (bus 6): `[a__i, a__j, 0, 0]`. apc bus-6 **1** vs powdr **24**.
+
+A **global** range-obligation rebuild would: collect every surviving range obligation, drop the
+solver-implied ones, keep the strongest per normalized expression, and re-pack into batched
+tuple/byte-pair checks. Bus-only (variable-neutral), so lexicographically acceptable. Highest-value
+wasm follow-up; touches no audited surface.
+
+### Residuals that fell out of the cascade — do NOT build (re-measured, now minor)
+
+- **`bit_shift_carry` / `a__` result-limb variable excess.** The naive pre-fix estimate feared
+  ~500 excess vars on apc_037; post-forwarding apc_037 is **+33 vars** and the corpus leads powdr.
+  There is no var-side pass to write here (consistent with the `bit_shift_carry` dead-end below —
+  representation choice is count-neutral).
+- **Functional (op-1) bitwise XOR/rotate lookups.** Partly collapsed once forwarding turned the
+  `b`/`c` operand limbs into actual values; re-measure on apc_037 before pursuing, and only after
+  the range repack (smaller residual).
+- **The ≤1-emitted-check cap** (`BusPairCancel.findCancelGoIdx`) is **not binding on wasm**:
+  apc_004 memory is at exact parity, so write-back `prev_data` pairs telescope without needing
+  multiple emitted checks. Leave the cap alone (it guards a measured apc_005-class eth regression).
+
+### Runtime note (profiling target, not a regression)
+
+The fixes are output-size wins at **flat runtime**: wasm-eth wall 1924 s (pre-fix) → 1965 s (stack),
+*not* a collapse. Forwarding now succeeds, but the enabling scans (`findConsumer`/`midRefuted`
+crossing the newly-refutable slots, plus the extra cancellations that now land) cost about what the
+shrink saves; the big k256 cases still spend ~300–490 s each in the cleanup fixpoint. A cheap lever,
+deliberately *not* taken in entry 87 (correctness-first): the affine disequality re-runs
+`linearize` on both address slots per (S, m) pair; a memoized pre-linearized address-slot side
+table (like `TwoRootMap`, passed as a plain argument) would cut the `busPairCancel`/`busUnify` scan
+cost. Profile apc_037 first to confirm that is where the time goes.
+
+---
+
 ## 1. Constant-decomposition folding — **CORE LANDED (entry 81, the bounded-payload digit fold)**
 
 **What landed.** `DigitFold.lean` (cleanup cycle): a bitwise pair check asserting an affine

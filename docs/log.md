@@ -3327,3 +3327,94 @@ Build + `Scripts/check-proof-integrity.sh` green (`{propext, Classical.choice, Q
 no `sorry`/`admit`/`axiom`/`native_decide`; no audited-surface / `Basic.lean` / `FactPass.lean` /
 pass-pipeline change (correctness rides on the pass's own `PassCorrect`, extended by one `rcases`
 branch per soundness theorem). **Worked: yes (major — the dominant wasm-eth variable lever).**
+
+### 88. Pattern-aware `recvByteSlots`: cancel non-{1,2} address-space memory pairs (wasm-eth root cause 2)
+
+**The gap** (`../leanr-wasm/fable-wasm-1.md`, root cause 2). After entry 87's forwarding,
+`busPairCancel` still refused to drop the byte-identical AS-5 pairs — the wasm frame-pointer cell
+`send(5,0,fp,0,0,0,k+ts)` immediately followed by its `receive` — because dropping a memory
+*receive* re-imposes its byte obligation, and the `recvByteSlots` fact declared the byte slots
+`[2,3,4,5]` **per bus, unconditionally**. The fp payload has `fp` at slot 2, which is not a byte,
+so justification failed and no cancellation ever fired. But the obligation is **vacuous**:
+`violates` (`OpenVmSemantics.lean`) only rejects a non-byte memory receive when its address-space
+slot is 1 or 2; an AS-5 receive never violates, whatever its data.
+
+**The fix.** Make the `recvByteSlots` `BusFacts` field pattern-aware, mirroring `slotBound`'s
+signature — `recvByteSlots busId pattern`. The OpenVM instance (`recvByteSlotsImpl`) returns `[]`
+(no obligation) for a memory receive whose AS slot is a known constant ∉ {1,2}, and `[2,3,4,5]`
+otherwise (AS ∈ {1,2}, or a symbolic AS — conservative). The new soundness lemma
+`memory_recv_nonByte_ok`: a memory message with a constant AS ∉ {1,2} never violates, whatever its
+data (that arm of `violates` is `false`). `recvByteSlots_sound`'s **send** clause stays
+pattern-free (sends never violate); the **receive** clause gains a `Matches m.payload pattern`
+hypothesis, discharged by the existing `matches_evalPattern`. Threaded through `BusPairCancel`:
+`slots` moves from per-bus to **per-candidate**, resolved from `R.payload.map constValue?` at each
+candidate receive (`findCancel`/`findCancelForBus`/`findCancelGoIdx` shed the per-bus `slots`
+argument); `dropPair_correct`/`checkCancel_sound` gain the pattern and its `Matches` witness. All
+of this is `Implementation/` — `BusFacts.lean` is zero audit surface (a wrong fact would not
+compile); the trivial instance adapts mechanically.
+
+**Impact — wasm-eth (bus interactions; variables unchanged from entry 87):**
+
+| case | apc bus (entry 87) | apc bus (now) | powdr bus |
+|------|----:|----:|----:|
+| apc_006 keccakf | 1934 | 1498 | 1479 |
+| apc_022         | 19 | **15** | 15 |
+| apc_004         | 246 | 176 | 146 |
+| apc_005         | 140 | 106 | 92 |
+
+apc_022 reaches **exact bus parity** (15 = 15, plus var/constraint parity); apc_006 drops −436
+(1934 → 1498, near powdr's 1479) and is now **at or better than powdr on all three axes**
+(vars 1606 < 1908, bus 1498 ≈ 1479, constraints 88 ≪ 548). Exactly the plan's predicted −436 on
+apc_006 — the AS-5 identical-payload fp cells now telescope. The residual bus gap on the mid cases
+(apc_004/005) is the shift-carry / range-rebuild residue (step 4).
+
+**openvm-eth (merge-gating): byte-for-byte identical to entry 87** — 100-case `--compare` reports
+Δ **+0.000×** on every axis, "per-case circuit sizes identical". eth has no non-{1,2} address
+spaces, so `recvByteSlots` returns `[2,3,4,5]` for every receive exactly as the old unconditional
+form did. keccak unchanged (2021v/186c/1752bus; its heap is AS 2 ∈ {1,2}). No regression anywhere.
+
+Build + `Scripts/check-proof-integrity.sh` green ({propext, Classical.choice, Quot.sound} only);
+no `sorry`/`admit`/`axiom`/`native_decide`; no audited-surface / `Basic.lean` / `FactPass.lean` /
+pass-pipeline change. **Worked: yes (bus-effectiveness lever; prerequisite for full AS-5
+telescoping).**
+
+### 89. wasm-eth corpus measurement + re-ranking (entries 87 + 88 combined): apc goes from far behind to ahead of powdr on variables
+
+Full-corpus A/B of the two wasm-eth fixes (entries 87 + 88 together) against pre-fix `main`
+(`c6a167b`), plus the openvm-eth merge gate. Both binaries built from source; `benchmark.py`
+`--jobs` default (parallel, so per-case runtimes are rough).
+
+**wasm-eth, 100 cases — apc-optimizer effectiveness (size before / after; agg / geomean), main → stack:**
+
+| measure | main | stack | Δ (agg) | powdr |
+|---|---|---|---|---|
+| variables | 1.979× / 2.756× | **7.228× / 3.588×** | **+5.248×** | 6.273× / 3.542× |
+| bus interactions | 1.547× / 1.840× | **5.254× / 2.714×** | +3.707× | 5.666× / 2.868× |
+| constraints | 14.664× / 10.279× | **15.165× / 10.438×** | +0.501× | 9.671× / 11.949× |
+
+Circuit sizes changed on **100 of 100** cases. On the **top-priority variable** axis apc now
+**leads powdr** (7.228× vs 6.273×): total surviving variables **apc 17035 vs powdr 19628** — apc
+uses **13% fewer** than powdr corpus-wide. Per-case variables W/L/T vs powdr: **1/56/43 → 16/11/73**
+(main lost 56 cases to powdr; the stack loses 11, all by a handful of vars on tiny blocks). The
+worst variable-ratio offender went from **4.85×** (apc_037 on main) to **1.15×** (apc_060, a
+23-vs-20-var block); the three headline cases: apc_037 4.85→1.02, apc_012 4.81→1.01, apc_006
+4.20→**0.84** (beats powdr). Constraints already crushed powdr and improved further. Bus
+interactions closed most of the gap (1.547×→5.254×, near powdr's 5.666×); the residual (apc 13535
+vs powdr 12552 total, +8%) is concentrated in apc_037/012 — the shift-carry / functional-XOR /
+range-rebuild residue (entry-90 / ideas.md follow-ups). Re-ranking saved to
+`../leanr-wasm/worst_vars_wasm.txt`.
+
+**Runtime:** essentially **flat** — main 1924 s vs stack 1965 s (+2 %, within parallel-contention
+noise), *not* the 5–8× collapse the investigation hoped for. Forwarding now succeeds (far fewer
+surviving interactions), but the enabling scans (`findConsumer`/`midRefuted` crossing refutable
+slots, plus the extra cancellations that now land) cost about what the shrink saves. So the win is
+entirely output size at flat cost; the fixpoint is still doing real per-cycle work on the big k256
+cases — a profiling target noted for step 4, not a regression.
+
+**openvm-eth (merge gate): no regression.** vs pre-fix main, aggregate variables 4.551× → **4.552×**
+(bus 3.543×, constraints 10.845×; all ≥ main), per-case vars W/L/T vs powdr 31/9/60 → **31/7/62**
+(two powdr-losses flip to ties, entry 87). Entry 88 is byte-identical to entry 87 on eth. **keccak
+unchanged** (2021 v / 186 c / 1752 bus). Build + `Scripts/check-proof-integrity.sh` green
+throughout ({propext, Classical.choice, Quot.sound} only). **Worked: yes — the wasm-eth variable
+gap that motivated the investigation (`../leanr-wasm/fable-wasm-1.md`) is closed; apc now leads
+powdr on variables and constraints, trails only slightly on bus.**
