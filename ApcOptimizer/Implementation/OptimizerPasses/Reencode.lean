@@ -783,12 +783,131 @@ def reencodeOut (cs : ConstraintSystem p) (xs bits : List Variable)
 def coveredCsOf (cs : ConstraintSystem p) (xs : List Variable) : List (Expression p) :=
   cs.algebraicConstraints.filter (coveredBy xs)
 
+/-- `(l.flatMap g).filter q = l.flatMap (fun a => (g a).filter q)`. -/
+theorem filter_flatMap_eq {α β : Type} (l : List α) (g : α → List β) (q : β → Bool) :
+    (l.flatMap g).filter q = l.flatMap (fun a => (g a).filter q) := by
+  induction l with
+  | nil => rfl
+  | cons a rest ih => simp only [List.flatMap_cons, List.filter_append, ih]
+
+/-- `(l.filter q).flatMap g = l.flatMap (fun a => if q a then g a else [])`. -/
+theorem filter_flatMap_guard {α β : Type} (l : List α) (q : α → Bool) (g : α → List β) :
+    (l.filter q).flatMap g = l.flatMap (fun a => if q a then g a else []) := by
+  induction l with
+  | nil => rfl
+  | cons a rest ih =>
+    rw [List.filter_cons]
+    by_cases h : q a = true
+    · rw [if_pos h, List.flatMap_cons, List.flatMap_cons, if_pos h, ih]
+    · rw [if_neg h, List.flatMap_cons, if_neg h, ih, List.nil_append]
+
+/-- `all` splits along a predicate partition (the `!f` part first, to match `factoredSurv`). -/
+theorem all_filter_split {α : Type} (l : List α) (f Q : α → Bool) :
+    ((l.filter (fun c => !f c)).all Q && (l.filter f).all Q) = l.all Q := by
+  induction l with
+  | nil => rfl
+  | cons c rest ih =>
+    rw [List.filter_cons, List.filter_cons]
+    by_cases hf : f c = true
+    · rw [if_neg (by simp [hf]), if_pos hf]
+      simp only [List.all_cons, ← ih, Bool.and_assoc, Bool.and_left_comm, Bool.and_comm]
+    · have hf' : f c = false := by cases hh : f c with | false => rfl | true => exact absurd hh hf
+      rw [if_pos (by simp [hf']), if_neg hf]
+      simp only [List.all_cons, ← ih, Bool.and_assoc, Bool.and_left_comm, Bool.and_comm]
+
+/-- `all` respects a pointwise-equal predicate on the list's elements. -/
+theorem all_congr_mem {α : Type} (l : List α) (Q R : α → Bool) (h : ∀ a ∈ l, Q a = R a) :
+    l.all Q = l.all R := by
+  induction l with
+  | nil => rfl
+  | cons a rest ih =>
+    rw [List.all_cons, List.all_cons, h a (List.mem_cons_self ..),
+      ih (fun b hb => h b (List.mem_cons_of_mem _ hb))]
+
+/-- Filtering by a predicate with a constant conjunct: keep everything (by the other conjunct) when
+    the constant holds, else drop everything. -/
+theorem filter_const_and {β : Type} (l : List β) (b : Bool) (q : β → Bool) :
+    l.filter (fun pt => b && q pt) = if b then l.filter q else [] := by
+  cases b with
+  | true => simp
+  | false => simp
+
+/-- Factored survivor enumeration: at each variable level the covered constraints that do **not**
+    mention that variable are constant across the inner loop, so they are checked once per suffix
+    (via the recursive `esNoX` call) rather than once per full point. Only the constraints mentioning
+    the level's variable (`esX`, whose other variables are already bound in the suffix `a`) are
+    re-checked per inner value. Extensionally the flat `(assignments doms).filter (all es zero)`
+    (`factoredSurv_eq`), but with the constraint evaluations lifted to the level where each becomes
+    determined — the win on boxes covered by many constraints local to few of the box's variables. -/
+def factoredSurv (es : List (Expression p)) :
+    List (Variable × List (ZMod p)) → List (List (Variable × ZMod p))
+  | [] => if es.all (fun c => decide (c.evalFast (envOf []) = 0)) then [[]] else []
+  | (x, d) :: rest =>
+    let esX := es.filter (fun c => c.mentionsF x)
+    let esNoX := es.filter (fun c => !c.mentionsF x)
+    (factoredSurv esNoX rest).flatMap (fun a =>
+      (d.map (fun v => (x, v) :: a)).filter
+        (fun pt => esX.all (fun c => decide (c.evalFast (envOf pt) = 0))))
+
 /-- The surviving group values from a **precomputed** covered set: enumerated over the group's
-    domains, filtered by the covered constraints. -/
+    domains, filtered by the covered constraints. Computed by `factoredSurv` (equal to the flat
+    filter by `groupSurvivorsE_spec`), which lifts each constraint check to the level where it is
+    determined instead of re-evaluating every constraint at every box point. -/
 def groupSurvivorsE (es : List (Expression p))
     (doms : List (Variable × List (ZMod p))) : List (List (Variable × ZMod p)) :=
-  (assignments doms).filter
-    (fun a => es.all (fun c => decide (c.evalFast (envOf a) = 0)))
+  factoredSurv es doms
+
+/-- The factored survivor enumeration equals the flat `(assignments doms).filter (all es zero)`:
+    lifting each constraint's check to the level where it is determined changes only *when* a check
+    runs, not the surviving set. Induction on `doms`; at each level the constraints not mentioning the
+    head variable are constant across the inner loop (`all_congr_mem` + `mentions_false_not_mem_vars`),
+    so they factor out of the filter exactly as `factoredSurv` defers them. -/
+theorem groupSurvivorsE_spec (es : List (Expression p))
+    (doms : List (Variable × List (ZMod p))) :
+    groupSurvivorsE es doms
+      = (assignments doms).filter (fun a => es.all (fun c => decide (c.evalFast (envOf a) = 0))) := by
+  show factoredSurv es doms = _
+  induction doms generalizing es with
+  | nil =>
+    show factoredSurv es [] = ([[]] : List (List (Variable × ZMod p))).filter _
+    rw [List.filter_cons, List.filter_nil]
+    rfl
+  | cons hd rest ih =>
+    obtain ⟨x, d⟩ := hd
+    show factoredSurv es ((x, d) :: rest) = (assignments ((x, d) :: rest)).filter _
+    rw [factoredSurv, ih (es.filter (fun c => !c.mentionsF x)), assignments, filter_flatMap_eq,
+      filter_flatMap_guard]
+    congr 1
+    funext a
+    -- goal: (if PnoX a then (d.map ..).filter PX else []) = (d.map ..).filter P_es
+    rw [← filter_const_and]
+    apply List.filter_congr
+    intro pt hpt
+    obtain ⟨v, _hv, rfl⟩ := List.mem_map.1 hpt
+    -- goal: PnoX a && PX ((x,v)::a) = P_es ((x,v)::a),  where P_es = es.all (eval at pt)
+    -- the `esNoX` conjunct (PnoX) is independent of x, so it equals the same `all` evaluated at pt
+    have hindep : (es.filter (fun c => !c.mentionsF x)).all
+          (fun c => decide (c.evalFast (envOf ((x, v) :: a)) = 0))
+        = (es.filter (fun c => !c.mentionsF x)).all
+          (fun c => decide (c.evalFast (envOf a) = 0)) := by
+      apply all_congr_mem
+      intro c hc
+      have hcx : c.mentionsF x = false := by
+        have := (List.of_mem_filter hc); simpa using this
+      have hxnv : x ∉ c.vars :=
+        mentions_false_not_mem_vars x c (Expression.mentionsF_eq x c ▸ hcx)
+      have heq : c.evalFast (envOf ((x, v) :: a)) = c.evalFast (envOf a) := by
+        rw [Expression.evalFast_eq, Expression.evalFast_eq]
+        apply Expression.eval_congr
+        intro y hy
+        have hyx : y ≠ x := fun h => hxnv (h ▸ hy)
+        show envOf ((x, v) :: a) y = envOf a y
+        simp only [envOf, if_neg hyx]
+      rw [heq]
+    rw [← hindep]
+    first
+      | exact all_filter_split es (fun c => c.mentionsF x) _
+      | exact (all_filter_split es (fun c => c.mentionsF x) _).symm
 
 /-- The surviving group values: enumerated over the group's domains, filtered by the covered
     constraints. The covered set is bound outside the filter so it is computed **once**, not once
@@ -1203,6 +1322,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
     have hamem : (doms.map (fun yd => (yd.1, env yd.1))) ∈ assignments doms :=
       mem_assignments doms env hdsound
     have hasurv : (doms.map (fun yd => (yd.1, env yd.1))) ∈ groupSurvivors cs xs doms := by
+      simp only [groupSurvivors, groupSurvivorsE_spec]
       refine List.mem_filter.2 ⟨hamem, ?_⟩
       rw [List.all_eq_true]
       intro c hc
