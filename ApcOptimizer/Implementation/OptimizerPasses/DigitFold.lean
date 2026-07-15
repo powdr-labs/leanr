@@ -92,7 +92,7 @@ def solutions (p : ℕ) (tval : ℕ → ℕ) (g : ℕ) (Bs : List ℕ) (maxM : �
 /-- Completeness of the grid: the digit vector of any assignment whose ladder sum `g·ladderVal xs`
     has residue `tval b` (for its byte value `b < 256`) and fits under `maxM` is enumerated. -/
 theorem solutions_complete (p : ℕ) (tval : ℕ → ℕ) (g : ℕ) (Bs : List ℕ) (maxM : ℕ)
-    (hp : 0 < p) (hg : 0 < g)
+    (_hp : 0 < p) (hg : 0 < g)
     (xs : List ℕ) (hxB : List.Forall₂ (· < ·) xs Bs) (hB : ∀ B ∈ Bs, B ≤ 256)
     (b : ℕ) (hb : b < 256)
     (hmod : (g * ladderVal xs) % p = tval b) (hle : g * ladderVal xs ≤ maxM) :

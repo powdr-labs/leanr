@@ -366,25 +366,28 @@ theorem seqz_reconstruct [Fact p.Prime] (hp : 1024 ≤ p)
           have ha0ne : a0 ≠ 0 := fun h => hSne (by rw [h]; ring)
           by_cases h0 : a0 = 1
           · subst h0
-            refine ⟨0, 0, 0, 0, 0, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-            all_goals try ring
-            intro h; exact absurd (by ring) h
+            refine ⟨0, 0, 0, 0, 0, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?last⟩
+            case last => intro h; exact absurd (by ring) h
+            all_goals ring
           · have ha0v2 : 2 ≤ a0.val := by
               have hne0 : a0.val ≠ 0 := by rw [ne_eq, ZMod.val_eq_zero]; exact ha0ne
               have hne1 : a0.val ≠ 1 := fun h => h0 (ZMod.val_injective p (by rw [h, hv1]))
               omega
-            refine ⟨1, 0, 0, 0, a0 - 1, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-            all_goals try ring
-            intro _; convert byte_sub_two_val hp ha0v2 hb0 using 2 <;> ring
-        · refine ⟨0, 1, 0, 0, a1, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-          all_goals try ring
-          intro _; convert byte_sub_one_val hp h1 hb1 using 2
-      · refine ⟨0, 0, 1, 0, a2, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-        all_goals try ring
-        intro _; convert byte_sub_one_val hp h2 hb2 using 2
-    · refine ⟨0, 0, 0, 1, a3, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-      all_goals try ring
-      intro _; convert byte_sub_one_val hp h3 hb3 using 2
+            refine ⟨1, 0, 0, 0, a0 - 1, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?last⟩
+            case last =>
+              intro _
+              convert byte_sub_two_val hp ha0v2 hb0 using 2
+              ring
+            all_goals ring
+        · refine ⟨0, 1, 0, 0, a1, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?last⟩
+          case last => intro _; convert byte_sub_one_val hp h1 hb1 using 2
+          all_goals ring
+      · refine ⟨0, 0, 1, 0, a2, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?last⟩
+        case last => intro _; convert byte_sub_one_val hp h2 hb2 using 2
+        all_goals ring
+    · refine ⟨0, 0, 0, 1, a3, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?last⟩
+      case last => intro _; convert byte_sub_one_val hp h3 hb3 using 2
+      all_goals ring
   · -- `R = 1`: the value is zero; mark limb 0.
     subst hR
     have hS0 : a0 + a1 + a2 + a3 = 0 := by linear_combination hRS
@@ -397,9 +400,9 @@ theorem seqz_reconstruct [Fact p.Prime] (hp : 1024 ≤ p)
     have ha2 : a2 = 0 := hall a2 (by simp)
     have ha3 : a3 = 0 := hall a3 (by simp)
     subst ha0; subst ha1; subst ha2; subst ha3
-    refine ⟨1, 0, 0, 0, 1, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-    all_goals try ring
-    intro _; simp
+    refine ⟨1, 0, 0, 0, 1, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?last⟩
+    case last => intro _; simp
+    all_goals ring
 
 /-! ## Bridging the constraint templates and their value forms -/
 
