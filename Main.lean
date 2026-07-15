@@ -48,7 +48,7 @@ def parseFile (fileName : String) : IO (ConstraintSystem babyBear × BusMapList)
   | .error err =>
     IO.eprintln s!"Error parsing {fileName}: {err}"
     IO.Process.exit 1
-  | .ok (system, busMap) =>
+  | .ok (system, busMap, _) =>
     let unmapped :=
       ((system.busInteractions.map (·.busId)).eraseDups).filter
         (fun busId => (busMap.toBusMap busId).isNone)
