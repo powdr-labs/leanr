@@ -119,9 +119,11 @@ private def parseBusInteraction (j : Lean.Json) :
     payload := payload
   }
 
-/-- Parse a JSON string into a `ConstraintSystem` and `BusMap`, starting at the `machine`
-    key. Constraints are assert-zero expressions. -/
-def parseJsonSystem (jsonStr : String) : Except String (ConstraintSystem p × BusMapList) := do
+/-- Parse a JSON string into a `ConstraintSystem`, its `BusMap`, and the `next_free_id` cursor if
+    present, starting at the `machine` key. It parses as `none` for a raw CLI export; the FFI
+    requires it, `parseFile` does not. Constraints are assert-zero expressions. -/
+def parseJsonSystem (jsonStr : String) :
+    Except String (ConstraintSystem p × BusMapList × Option Nat) := do
   let json ← Lean.Json.parse jsonStr
   let machine ← json.getObjVal? "machine"
 
@@ -145,11 +147,14 @@ def parseJsonSystem (jsonStr : String) : Except String (ConstraintSystem p × Bu
   let busMapJson ← json.getObjVal? "bus_map"
   let busMap ← parseBusMap busMapJson
 
+  -- powdr's `ColumnAllocator` cursor; absent or non-numeric parses as `none`.
+  let nextFreeId? := (json.getObjVal? "next_free_id").toOption.bind (·.getNat?.toOption)
+
   let system : ConstraintSystem p := {
     algebraicConstraints := constraints,
     busInteractions := busInteractions
   }
-  pure (system, busMap)
+  pure (system, busMap, nextFreeId?)
 
 /- A real powdr export from the `openvm-eth` benchmark set, exercising every parser path
    (constraints, bus interactions, all six bus types). The fixture is gzipped like the CLI
@@ -161,7 +166,7 @@ def parseJsonSystem (jsonStr : String) : Except String (ConstraintSystem p × Bu
     { cmd := "gunzip",
       args := #["-c", "OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz"] }
   match parseJsonSystem (p := 2013265921) result.stdout with
-  | .ok (system, busMap) =>
+  | .ok (system, busMap, _) =>
     IO.println s!"Parsed {system.algebraicConstraints.length} constraints, {system.busInteractions.length} bus interactions, {busMap.length} bus types"
   | .error e =>
     IO.println s!"Error: {e}"

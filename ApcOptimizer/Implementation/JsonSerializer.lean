@@ -11,10 +11,10 @@ Turns a `ConstraintSystem p` back into the JSON that powdr's serde deserializes 
 `expression/src/lib.rs`). This is the inverse of `ApcOptimizer/Implementation/JsonParser.lean`.
 
 Output schema (matched empirically against powdr's serde):
-- top level: `{"constraints":[expr...], "bus_interactions":[{"id","mult","args"}...],
-  "derived_columns":[[is_new, "name@id", method]...]}` — a `SymbolicMachine` (`derived_columns`
-  has no serde default, so it must be present; each entry is a `DerivedVariable` 3-tuple and
-  `method` is an externally-tagged `ComputationMethod`).
+- the `SymbolicMachine`: `{"constraints":[expr...], "bus_interactions":[{"id","mult","args"}...],
+  "derived_columns":[[is_new, "name@id", method]...]}` (`derived_columns` has no serde default, so
+  it must be present; each entry is a `DerivedVariable` 3-tuple, `method` an externally-tagged
+  `ComputationMethod`). `serializeResult` wraps this as `{"machine": …, "next_free_id": N}`.
 - an expression is:
   - a constant  → a JSON integer (powdr's `BabyBearField` serializes as a canonical `u32`);
   - a variable  → the string `"name@id"` (powdr's `AlgebraicReference` manual serde);
@@ -24,13 +24,13 @@ Output schema (matched empirically against powdr's serde):
   negative constants are emitted as their positive representative in `[0, p)`, which powdr
   deserializes back as a `Number`.
 
-## Fresh variables
+## Fresh variables and `next_free_id`
 
 Some passes (e.g. `Reencode`) introduce brand-new variables that carry no `powdrId?` (the
-exporter's `AlgebraicReference` requires an `@<id>`). Before serializing we assign every such
-variable a **fresh, unique** id strictly greater than any id already present, memoized so that
-equal variables get equal ids and distinct variables get distinct ids. The Rust side then reseeds
-its `ColumnAllocator` from the returned machine, so these ids never collide with later passes.
+exporter's `AlgebraicReference` requires an `@<id>`). We assign each a **fresh, unique** id from
+powdr's incoming `next_free_id` cursor and return the advanced cursor, so powdr reseeds its
+`ColumnAllocator` directly instead of rescanning the machine. Absent a cursor (a raw CLI export),
+`serializeSystem` instead starts above the largest id present.
 
 This file is in the (unaudited) implementation layer: a wrong serialization can only make the
 round-trip fail, never affect the proven optimizer.
@@ -54,16 +54,14 @@ def distinctVars (cs : ConstraintSystem p) (ds : Derivations p := []) : List Var
     ds.flatMap (fun (v, cm) => v :: cm.vars)
   (occ.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).toList
 
-/-- A renaming that assigns every fresh (id-less) variable a fresh id, taken strictly above the
-    maximum id already present. Variables that already carry an id are absent from the map. -/
-def freshRenaming (cs : ConstraintSystem p) (ds : Derivations p := []) : Std.HashMap Variable Nat :=
-  let vars := distinctVars cs ds
-  let maxId := vars.foldl (fun m x => match x.powdrId? with
-    | some i => Nat.max m i
-    | none => m) 0
-  let fresh := vars.filter (fun x => x.powdrId?.isNone)
-  (fresh.foldl (init := ((∅ : Std.HashMap Variable Nat), maxId + 1))
-    (fun (acc, i) x => (acc.insert x i, i + 1))).1
+/-- Assign each fresh (id-less) variable a unique id starting at `base` (powdr's `next_free_id`
+    cursor), returning the map plus the advanced cursor (`base + <#fresh>`). Variables that already
+    carry an id are absent from the map. -/
+def freshRenaming (cs : ConstraintSystem p) (ds : Derivations p := []) (base : Nat) :
+    Std.HashMap Variable Nat × Nat :=
+  let fresh := (distinctVars cs ds).filter (fun x => x.powdrId?.isNone)
+  fresh.foldl (init := ((∅ : Std.HashMap Variable Nat), base))
+    (fun (acc, i) x => (acc.insert x i, i + 1))
 
 /-- The reference string `name@id` emitted for a variable, drawing the id from the variable's own
     `powdrId?` when present, otherwise from the fresh renaming. -/
@@ -114,16 +112,33 @@ def serializeBus (m : Std.HashMap Variable Nat) (bi : BusInteraction (Expression
     ("args", Json.arr (bi.payload.map (serializeExpr m)).toArray)
   ]
 
-/-- Serialize a whole constraint system, together with the optimizer's derivations, as a powdr
-    `SymbolicMachine` JSON string. Introduced (id-less) columns get a fresh id via `freshRenaming`
-    that is shared between their constraint occurrences and their `derived_columns` entry. -/
-def serializeSystem (cs : ConstraintSystem p) (ds : Derivations p := []) : String :=
-  let m := freshRenaming cs ds
-  let machine := Json.mkObj [
+/-- The `SymbolicMachine` object `{constraints, bus_interactions, derived_columns}` under a
+    variable→id renaming (id-less columns share the same fresh id across constraints and their
+    `derived_columns` entry). -/
+def serializeMachine (m : Std.HashMap Variable Nat) (cs : ConstraintSystem p)
+    (ds : Derivations p) : Json :=
+  Json.mkObj [
     ("constraints", Json.arr (cs.algebraicConstraints.map (serializeExpr m)).toArray),
     ("bus_interactions", Json.arr (cs.busInteractions.map (serializeBus m)).toArray),
     ("derived_columns", serializeDerivations m ds)
   ]
-  machine.compress
+
+/-- Serialize the system and derivations as a bare `SymbolicMachine` JSON string. Used by the
+    `opt-export` CLI, which has no incoming cursor, so fresh ids start above the largest id present. -/
+def serializeSystem (cs : ConstraintSystem p) (ds : Derivations p := []) : String :=
+  let base := (distinctVars cs ds).foldl (fun m x => match x.powdrId? with
+    | some i => Nat.max m (i + 1)
+    | none => m) 0
+  (serializeMachine (freshRenaming cs ds base).1 cs ds).compress
+
+/-- Serialize the machine plus the advanced `next_free_id` as `{"machine": …, "next_free_id": N}`
+    (the FFI reply; `base` is powdr's incoming cursor). -/
+def serializeResult (cs : ConstraintSystem p) (ds : Derivations p := []) (base : Nat := 0) :
+    String :=
+  let (m, nextFreeId) := freshRenaming cs ds base
+  (Json.mkObj [
+    ("machine", serializeMachine m cs ds),
+    ("next_free_id", Json.num (JsonNumber.fromNat nextFreeId))
+  ]).compress
 
 end ApcOptimizer.Serialize
