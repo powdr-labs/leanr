@@ -766,7 +766,7 @@ theorem envOf_map (doms : List (Variable × List (ZMod p))) (f : Variable → ZM
       · exact h
 
 /-- Cap on the number of enumerated assignments, to keep the pass cheap. -/
-def maxEnumSize : Nat := 65536
+def maxEnumSize : Nat := 4096
 
 /-! ### Enumeration target: an algebraic constraint -/
 
