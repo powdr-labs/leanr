@@ -759,10 +759,18 @@ theorem peel_sqReassign_eval (D : List Variable) (E : Expression p) (hnd : D.Nod
     expensive part of a collapse attempt — a full-system `occursOnlyInTarget` scan per candidate —
     so the scanner computes it once per constraint and shares it across the plain / sum-of-squares
     attempts. Kept as its own definition (not an inline `filter`) so that the `rfl` proofs at the
-    call sites are trivial rather than forcing the filter to reduce. -/
-def witnessesOf (cs : ConstraintSystem p) (busVars : Std.HashSet Variable) (E : Expression p) :
-    List Variable :=
-  E.vars.dedup.filter (fun v => !busVars.contains v && occursOnlyInTarget cs E v)
+    call sites are trivial rather than forcing the filter to reduce.
+
+    `cnt` is the once-per-invocation constraint-occurrence counter (how many constraints mention
+    each variable, see `constraintCountMap`): a variable mentioned by two or more *distinct*
+    constraints can never occur only in `E`, so the certified full-system scan runs only for the
+    rare `cnt = 1` candidates — the counter is a pure prefilter, and the proofs consume the
+    `occursOnlyInTarget` conjunct alone. (A variable whose ≥ 2 mentioning constraints are all
+    *duplicates* of `E` is conservatively rejected; `dedup` removes such duplicates anyway.) -/
+def witnessesOf (cs : ConstraintSystem p) (busVars : Std.HashSet Variable)
+    (cnt : Std.HashMap Variable Nat) (E : Expression p) : List Variable :=
+  E.vars.dedup.filter (fun v => !busVars.contains v && cnt.getD v 0 == 1
+    && occursOnlyInTarget cs E v)
 
 /-- Attempt the plain-sum collapse with target constraint `E` and its precomputed witness set `D`:
     peel the coefficients and — if all checks pass — return the verified `PassResult`.
@@ -773,8 +781,9 @@ def witnessesOf (cs : ConstraintSystem p) (busVars : Std.HashSet Variable) (E : 
     majority of) constraints with `D.length < 2` nothing else is evaluated. -/
 def tryOne [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
     (Bm : BoundsMap p cs bs) (busVars : Std.HashSet Variable)
+    (cnt : Std.HashMap Variable Nat)
     (E : Expression p) (hE : E ∈ cs.algebraicConstraints)
-    (D : List Variable) (hD : D = witnessesOf cs busVars E) : Option (PassResult cs bs) := by
+    (D : List Variable) (hD : D = witnessesOf cs busVars cnt E) : Option (PassResult cs bs) := by
   classical
   set inv : Variable := ⟨"hcinv#" ++ (D.headD ⟨"_", none⟩).name, none⟩ with hinvdef
   by_cases hchk : (decide (2 ≤ D.length) && (coeffsByteOK Bm.map D (peel D E).1 &&
@@ -860,8 +869,9 @@ def tryOne [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
     square is `< 256²`, so the field sum does not wrap). -/
 def tryOneSq [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
     (Bm : BoundsMap p cs bs) (busVars : Std.HashSet Variable)
+    (cnt : Std.HashMap Variable Nat)
     (E : Expression p) (hE : E ∈ cs.algebraicConstraints)
-    (D : List Variable) (hD : D = witnessesOf cs busVars E) : Option (PassResult cs bs) := by
+    (D : List Variable) (hD : D = witnessesOf cs busVars cnt E) : Option (PassResult cs bs) := by
   classical
   set inv : Variable := ⟨"hcsq#" ++ (D.headD ⟨"_", none⟩).name, none⟩ with hinvdef
   set denom : Expression p := sumExpr ((peel D E).1.map (fun c => Expression.mul c c)) with hden
@@ -969,18 +979,19 @@ def tryOneSq [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
     both attempts short-circuit immediately, so the marginal cost of also offering the sum-of-squares
     shape is only the cheap coefficient re-check on the rare candidate constraints. -/
 def tryList [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (Bm : BoundsMap p cs bs) (busVars : Std.HashSet Variable) :
+    (Bm : BoundsMap p cs bs) (busVars : Std.HashSet Variable)
+    (cnt : Std.HashMap Variable Nat) :
     (L : List (Expression p)) → (∀ E ∈ L, E ∈ cs.algebraicConstraints) → Option (PassResult cs bs)
   | [], _ => none
   | E :: rest, hmem =>
     let hE := hmem E (List.mem_cons_self ..)
-    let D := witnessesOf cs busVars E
-    match tryOne cs bs Bm busVars E hE D rfl with
+    let D := witnessesOf cs busVars cnt E
+    match tryOne cs bs Bm busVars cnt E hE D rfl with
     | some r => some r
     | none =>
-      match tryOneSq cs bs Bm busVars E hE D rfl with
+      match tryOneSq cs bs Bm busVars cnt E hE D rfl with
       | some r => some r
-      | none => tryList cs bs Bm busVars rest (fun E' h => hmem E' (List.mem_cons_of_mem _ h))
+      | none => tryList cs bs Bm busVars cnt rest (fun E' h => hmem E' (List.mem_cons_of_mem _ h))
 
 /-- The hint-collapse pass: replace the first bilinear reciprocal-witness constraint by a single
     derived inverse hint (needs prime `p` for the field inverse; identity otherwise, and identity
@@ -996,7 +1007,11 @@ def hintCollapsePass : VerifiedPassW p := fun cs bs facts =>
     let busVars : Std.HashSet Variable := cs.busInteractions.foldl (init := ∅) fun s bi =>
       bi.payload.foldl (fun s e => e.vars.foldl (·.insert ·) s)
         (bi.multiplicity.vars.foldl (·.insert ·) s)
-    (tryList cs bs Bm busVars cs.algebraicConstraints (fun _ h => h)).getD
+    -- Constraint-occurrence counter (see `witnessesOf`): built once per invocation, so the
+    -- certified full-system witness scan runs only for the rare single-occurrence candidates.
+    let cnt : Std.HashMap Variable Nat := cs.algebraicConstraints.foldl (init := ∅) fun m c =>
+      c.vars.dedup.foldl (fun m v => m.insert v (m.getD v 0 + 1)) m
+    (tryList cs bs Bm busVars cnt cs.algebraicConstraints (fun _ h => h)).getD
       ⟨cs, [], PassCorrect.refl cs bs⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
 

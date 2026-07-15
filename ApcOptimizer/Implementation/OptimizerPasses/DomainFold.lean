@@ -396,6 +396,34 @@ def systemHasFoldable (cs : ConstraintSystem p) (xs : List Variable)
     cs.busInteractions.any (fun bi =>
       bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
 
+/-! ### The index-local gate
+
+`systemHasFoldable` is a full-system scan run once per target — the dominant cost of this pass.
+It decomposes exactly: an expression sharing **no** variable with the group `xs` can only have a
+foldable subexpression that is *variable-free* (`varsIn xs` is vacuous only for var-free nodes),
+and whether an expression has a var-free `add`/`mul` node is independent of `xs` and of the
+(nonempty) survivor set. So the gate equals: (a) any item *sharing a variable* with `xs` — found
+through the inverted indexes — passing the original per-item test, or (b) any item with a
+var-free compound node (precomputed once per invocation; empty after constant folding) sharing
+no variable with `xs`. Purely an efficiency gate, like `systemHasFoldable` itself. -/
+
+/-- Does the expression mention any variable of `xs`? (No allocation.) -/
+def Expression.anyVarIn (xs : List Variable) : Expression p → Bool
+  | .const _ => false
+  | .var y => containsFast xs y
+  | .add a b => a.anyVarIn xs || b.anyVarIn xs
+  | .mul a b => a.anyVarIn xs || b.anyVarIn xs
+
+/-- Does the expression contain a variable-free `add`/`mul` node? For an expression sharing no
+    variable with the group, `hasFoldable` holds iff this does (given a nonempty survivor set). -/
+def Expression.hasConstFoldableNode : Expression p → Bool
+  | .const _ => false
+  | .var _ => false
+  | .add a b =>
+      !(Expression.add a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
+  | .mul a b =>
+      !(Expression.mul a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
+
 /-! ### Indexing the per-target covered-constraint scan
 
 `foldStep` gates every target on `groupDoms (coveredCsOf cs xs) xs`, whose `coveredCsOf` is a full
@@ -411,12 +439,18 @@ and rebuilt only on an accepted fold (`cs` changes), carrying the proofs tying i
 faster. -/
 
 /-- The prebuilt covered-constraint index for the current `cs`, with the proofs tying it to `cs` so
-    the covered set it yields is provably `coveredCsOf cs xs` (`coveredCsIdx_eq`). -/
+    the covered set it yields is provably `coveredCsOf cs xs` (`coveredCsIdx_eq`), plus the
+    proof-free data the index-local `systemHasFoldableIdx` gate consumes: the interaction-side
+    inverted index and the (normally empty) const-foldable item lists. -/
 structure FoldIdx (cs : ConstraintSystem p) where
   idx : CoveredIndex.CovIndex
   hidx : idx = CoveredIndex.build Expression.vars cs.algebraicConstraints
   arr : Array (Expression p)
   harr : arr = cs.algebraicConstraints.toArray
+  bisIdx : CoveredIndex.CovIndex
+  arrBis : Array (BusInteraction (Expression p))
+  cfCs : List (Expression p)
+  cfBis : List (BusInteraction (Expression p))
 
 /-- Build the index for a system (by construction the equalities hold `rfl`). -/
 def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
@@ -424,6 +458,35 @@ def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
   hidx := rfl
   arr := cs.algebraicConstraints.toArray
   harr := rfl
+  bisIdx := CoveredIndex.build BusInteraction.vars cs.busInteractions
+  arrBis := cs.busInteractions.toArray
+  cfCs := cs.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
+  cfBis := cs.busInteractions.filter (fun bi =>
+    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
+
+/-- The index-local form of `systemHasFoldable` (see the section comment above): scan only the
+    items sharing a variable with `xs` (through the inverted indexes, candidate positions
+    deduplicated so an item sharing several variables is tested once — `hasFoldable` is the
+    expensive part), plus the precomputed const-foldable items when disjoint from `xs`. Requires
+    a nonempty survivor set (the caller's `1 ≤ survs.length` gate). Equal to
+    `systemHasFoldable cs xs survs`; purely an efficiency gate, so no proof is carried. -/
+def systemHasFoldableIdx {cs : ConstraintSystem p} (fidx : FoldIdx cs) (xs : List Variable)
+    (survs : List (List (Variable × ZMod p))) : Bool :=
+  (((xs.flatMap (fun v => fidx.idx.buckets.getD v [])).foldl (·.insert ·)
+      (∅ : Std.HashSet Nat)).toList.any (fun i =>
+    if h : i < fidx.arr.size then
+      let c := fidx.arr[i]
+      !coveredBy xs c && c.hasFoldable xs survs
+    else false)) ||
+  (((xs.flatMap (fun v => fidx.bisIdx.buckets.getD v [])).foldl (·.insert ·)
+      (∅ : Std.HashSet Nat)).toList.any (fun i =>
+    if h : i < fidx.arrBis.size then
+      let bi := fidx.arrBis[i]
+      bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs)
+    else false)) ||
+  (fidx.cfCs.any (fun c => !c.anyVarIn xs)) ||
+  (fidx.cfBis.any (fun bi =>
+    !(bi.multiplicity.anyVarIn xs || bi.payload.any (fun e => e.anyVarIn xs))))
 
 /-- An expression with any variable has a nonempty variable list. -/
 theorem hasVar_vars_ne_nil (c : Expression p) (h : c.hasVar = true) : c.vars ≠ [] := by
@@ -464,8 +527,11 @@ theorem coveredCsIdx_eq (cs : ConstraintSystem p) (xs : List Variable) (fidx : F
 
 /-- One checked fold for a candidate group (identity unless the group has a bounded domain, at least
     one survivor, and some foldable subexpression). The per-target covered scan is served from the
-    prebuilt index (`coveredCsIdx_eq`), rebuilt only when a fold rewrites `cs`. Prime `p`; the
-    caller supplies `Fact p.Prime`. -/
+    prebuilt index (`coveredCsIdx_eq`) — and reused for the survivor filter
+    (`groupSurvivorsE es`, provably `groupSurvivors cs xs doms` via `hes`) and for the
+    index-local no-op gate (`systemHasFoldableIdx`), so no full-system scan remains on the
+    per-target path. The index is rebuilt only when a fold rewrites `cs`. Prime `p`; the caller
+    supplies `Fact p.Prime`. -/
 def foldStep [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (fidx : FoldIdx cs)
     (xs : List Variable) : Σ' (r : PassResult cs bs), FoldIdx r.out :=
   let es := CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs
@@ -474,9 +540,12 @@ def foldStep [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (fid
   | none => ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
   | some doms =>
     if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
-      let survs := groupSurvivors cs xs doms
-      if 1 ≤ survs.length && systemHasFoldable cs xs survs then
-        ⟨⟨foldOut cs xs survs, [], foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩,
+      let survs := groupSurvivorsE es doms
+      if 1 ≤ survs.length && systemHasFoldableIdx fidx xs survs then
+        have hsurv : groupSurvivors cs xs doms = survs := by
+          show groupSurvivors cs xs doms = groupSurvivorsE es doms
+          rw [hes]; rfl
+        ⟨⟨foldOut cs xs survs, [], hsurv ▸ foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩,
          FoldIdx.mk' (foldOut cs xs survs)⟩
       else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
     else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
@@ -493,29 +562,28 @@ def foldLoop [Fact p.Prime] (bs : BusSemantics p) :
 
 /-! ### Direct (unindexed) path for small systems
 
-The inverted index amortizes a full covered-set scan across many targets, but it pays a fixed
-per-invocation build (and a rebuild on each accepted fold) plus a per-target `HashSet`/`mergeSort`.
-On the *small* circuits (openvm-eth blocks, ≤ ~4.6k constraints) that overhead exceeds the saved
-scan — the plain `coveredCsOf` filter is cheaper — even though it wins decisively on the keccak
-stress case (~28.6k constraints). `domainFoldPass` therefore gates on system size: the direct loop
-below (recomputing `coveredCsOf` per target, as before this file's index change) runs on small
-systems, the indexed `foldLoop` on large ones. Both call the same `foldStepWith` core, so the fold
-semantics — hence effectiveness — are identical on every case; only the covered-set *lookup* differs. -/
+The inverted index amortizes the covered-set scan, but its per-target candidate gather
+(bucket flat-map + dedup + sort) *loses* on the openvm-eth blocks, whose variables are shared by
+hundreds of items each (huge buckets); the plain `coveredCsOf` filter is cheaper there, while
+the index wins decisively on the keccak stress case (~28.6k constraints, sparser sharing).
+`domainFoldPass` therefore gates on system size. Relative to the pre-index direct path, the
+covered set is computed **once** per target and reused for the survivor filter
+(`groupSurvivorsE es`, provably `groupSurvivors cs xs doms` — the old code paid the full filter
+a second time inside `groupSurvivors`). -/
 
-/-- One checked fold for a candidate group, given the covered set `es` (required to equal
-    `coveredCsOf cs xs`, so `foldOut_correct`'s `hdoms` transports). Used by the direct path with
-    `es := coveredCsOf cs xs`, `hes := rfl`; the indexed `foldStep` mirrors this same logic inline
-    (it additionally threads and rebuilds the covered-set index on each accepted fold, which the
-    dependent `Σ' r, FoldIdx r.out` return forces it to do branch-by-branch rather than delegate). -/
+/-- One checked fold for a candidate group, given the covered set `es = coveredCsOf cs xs`. -/
 def foldStepWith [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (xs : List Variable)
     (es : List (Expression p)) (hes : es = coveredCsOf cs xs) : PassResult cs bs :=
   match hdoms : groupDoms es xs with
   | none => ⟨cs, [], PassCorrect.refl cs bs⟩
   | some doms =>
     if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
-      let survs := groupSurvivors cs xs doms
+      let survs := groupSurvivorsE es doms
       if 1 ≤ survs.length && systemHasFoldable cs xs survs then
-        ⟨foldOut cs xs survs, [], foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩
+        have hsurv : groupSurvivors cs xs doms = survs := by
+          show groupSurvivors cs xs doms = groupSurvivorsE es doms
+          rw [hes]; rfl
+        ⟨foldOut cs xs survs, [], hsurv ▸ foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩
       else ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs, [], PassCorrect.refl cs bs⟩
 
@@ -528,9 +596,8 @@ def foldLoopDirect [Fact p.Prime] (bs : BusSemantics p) :
     let r2 := foldLoopDirect bs rest r1.out
     ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
 
-/-- Systems at least this many algebraic constraints use the inverted index; smaller ones use the
-    direct per-target `coveredCsOf` scan. openvm-eth's largest block is ~4.6k constraints (index is
-    net-slower there); the keccak stress case is ~28.6k (index wins ~13 %). Purely a runtime gate —
+/-- Systems with at least this many algebraic constraints use the inverted index; smaller ones use
+    the direct per-target `coveredCsOf` scan (see the section comment). Purely a runtime gate —
     both paths compute the identical fold. -/
 def domainFoldIndexThreshold : Nat := 8192
 
@@ -546,8 +613,6 @@ def domainFoldPass : VerifiedPass p := fun cs bsem =>
       let vs := c.vars.dedup
       if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
-    -- Runtime gate (effectiveness-identical): amortize the covered-set scan through the inverted
-    -- index only on large systems, where it wins; small systems use the cheaper direct filter.
     if domainFoldIndexThreshold ≤ cs.algebraicConstraints.length then
       foldLoop bsem targets cs (FoldIdx.mk' cs)
     else
