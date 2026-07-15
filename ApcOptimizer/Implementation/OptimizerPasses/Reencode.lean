@@ -813,11 +813,6 @@ def checkReencode (cs : ConstraintSystem p) (xs bits : List Variable)
     decide (2 ≤ survs.length) &&
     decide (bits.length < xs.length) &&
     decide (bits.Nodup) &&
-    -- freshness: no bit occurs anywhere in the system
-    bits.all (fun b =>
-      cs.algebraicConstraints.all (fun c => !c.mentionsF b) &&
-      cs.busInteractions.all (fun bi =>
-        !bi.multiplicity.mentionsF b && bi.payload.all (fun e => !e.mentionsF b))) &&
     -- the substituted group variables only mention bits
     xs.all (fun x =>
       ((Expression.var x).substF (groupSubst xs hm)).vars.all (fun v => bits.contains v)) &&
@@ -827,7 +822,14 @@ def checkReencode (cs : ConstraintSystem p) (xs bits : List Variable)
         decide (((Expression.var x).substF (groupSubst xs hm)).evalFast (envOf aβ) = envOf s x)))) &&
     -- soundness: every bit pattern's image satisfies the covered constraints
     patts.all (fun aβ => es.all (fun c =>
-      decide ((c.substF (groupSubst xs hm)).evalFast (envOf aβ) = 0)))
+      decide ((c.substF (groupSubst xs hm)).evalFast (envOf aβ) = 0))) &&
+    -- freshness: no bit occurs anywhere in the system. Deliberately the **last** conjunct: it is
+    -- the only O(bits × system) one, and short-circuiting puts it after the cheap per-candidate
+    -- rejections, so it effectively runs only for accepted groups.
+    bits.all (fun b =>
+      cs.algebraicConstraints.all (fun c => !c.mentionsF b) &&
+      cs.busInteractions.all (fun bi =>
+        !bi.multiplicity.mentionsF b && bi.payload.all (fun e => !e.mentionsF b)))
 
 /-! ## Derived-variable methods for the fresh bits
 
@@ -1111,7 +1113,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
   · exact absurd hchk (by simp)
   rename_i doms hdoms
   simp only [Bool.and_eq_true] at hchk
-  obtain ⟨⟨⟨⟨⟨⟨⟨hbox, hm2⟩, hprofit⟩, hnodup⟩, hfreshB⟩, hvarsB⟩, hC5⟩, hC6⟩ := hchk
+  obtain ⟨⟨⟨⟨⟨⟨⟨hbox, hm2⟩, hprofit⟩, hnodup⟩, hvarsB⟩, hC5⟩, hC6⟩, hfreshB⟩ := hchk
   have hnodup' : bits.Nodup := of_decide_eq_true hnodup
   have hkeys := groupDoms_fst (coveredCsOf cs xs) xs doms hdoms
   have hbitKeys : (bitBox (p := p) bits).map Prod.fst = bits := by
@@ -1468,30 +1470,28 @@ def buildReencode (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p))
     checked for the few groups that are actually re-encodable. The output-variable frame is proven
     by construction (`reencodeOut_vars_subset`), so no per-variable scan is needed.
 
-    `varSet` is the (heuristic, threaded) set of `cs`'s variables: a candidate whose first fresh
-    bit already occurs in the system is skipped before `buildReencode` — in the steady state the
-    fresh-name counters repeat the previous cycle's accepted names, and `checkReencode`'s
-    freshness conjunct (an O(bits × system) scan paid per candidate) would reject exactly these.
-    The certificate still re-verifies freshness for candidates that pass, so a stale set can only
-    cost time, never a wrong rewrite. -/
+    `varSet` is the threaded, proof-carrying set of `cs`'s variables — `contains` implies
+    membership in `cs.vars`, so the group-membership side condition is decided by |xs| hash
+    lookups instead of materializing and scanning the ~10⁴-entry occurrence list per candidate.
+    It also prefilters fresh-name collisions: a candidate whose first fresh bit already occurs
+    in the system is skipped before `buildReencode` — in the steady state the fresh-name
+    counters repeat the previous cycle's accepted names, and `checkReencode`'s freshness
+    conjunct would reject exactly these after a full scan. -/
 def reencodeStep [Fact p.Prime] (bsem : BusSemantics p)
-    (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p))
-    (varSet : Std.HashSet Variable) (cs : ConstraintSystem p)
+    (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p)) (cs : ConstraintSystem p)
+    (varSet : { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ cs.vars })
     (xs : List Variable) (freshBase : String) :
-    PassResult cs bsem × CoveredIndex.CovIndex × Array (Expression p) × Std.HashSet Variable :=
+    Σ' (r : PassResult cs bsem), CoveredIndex.CovIndex × Array (Expression p) ×
+      { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ r.out.vars } :=
   if hxs : xs.all (fun x => x.powdrId?.isSome) = true then
-  if varSet.contains { name := freshBase ++ "_0" } then
+  if varSet.val.contains { name := freshBase ++ "_0" } then
     -- fresh-name collision: `checkReencode` would reject after the full freshness scan
     ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
   else
   match hb : buildReencode csIdx arrCs xs freshBase with
   | none => ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
   | some (bits, hm) =>
-    -- The group-membership scan is checked only for the few groups `buildReencode` accepts, and
-    -- against a `cs.vars` bound once — the occurrence list is ~10⁴ entries, so materializing it
-    -- (×8) for every candidate group dominated this pass's runtime.
-    let csVars := cs.vars
-    if hxsCs : xs.all (fun x => decide (x ∈ csVars)) = true then
+    if hxsCs : xs.all (fun x => varSet.val.contains x) = true then
     if hxsB : xs.all (fun x => decide (x ∉ bits)) = true then
     if hbn : bits.all (fun b => decide (b.powdrId? = none)) = true then
     if hchk : checkReencode cs xs bits hm = true then
@@ -1503,12 +1503,14 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p)
          bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b)),
          checkReencode_sound_D cs bsem xs bits hm
            (fun x hx => by simpa using List.all_eq_true.mp hxs x hx)
-           (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsCs x hx))
+           (fun x hx => varSet.property x (List.all_eq_true.mp hxsCs x hx))
            (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsB x hx))
            (fun b hbm => of_decide_eq_true (List.all_eq_true.mp hbn b hbm))
            hchk⟩,
          CoveredIndex.build Expression.vars ro.algebraicConstraints, ro.algebraicConstraints.toArray,
-         ro.vars.foldl (·.insert ·) ∅⟩
+         ⟨Std.HashSet.ofList ro.vars, fun x hx => by
+           rw [Std.HashSet.contains_ofList] at hx
+           exact List.contains_iff_mem.mp hx⟩⟩
       else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
     else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
     else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
@@ -1517,14 +1519,15 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p)
   else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
 
 /-- Process the candidate groups sequentially (correctness composes; derivations concatenate). The
-    inverted index and the variable set (valid for the current `cs`) are threaded through and
-    rebuilt by `reencodeStep` whenever it rewrites `cs`. -/
+    inverted index and the proof-carrying variable set (valid for the current `cs`) are threaded
+    through and rebuilt by `reencodeStep` whenever it rewrites `cs`. -/
 def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) :
     List (List Variable) → Nat → (cs : ConstraintSystem p) →
-    CoveredIndex.CovIndex → Array (Expression p) → Std.HashSet Variable → PassResult cs bsem
+    CoveredIndex.CovIndex → Array (Expression p) →
+    { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ cs.vars } → PassResult cs bsem
   | [], _, cs, _, _, _ => ⟨cs, [], PassCorrect.refl cs bsem⟩
   | xs :: rest, idx, cs, csIdx, arrCs, varSet =>
-    let r1 := reencodeStep bsem csIdx arrCs varSet cs xs
+    let r1 := reencodeStep bsem csIdx arrCs cs varSet xs
       (s!"rnc{cs.algebraicConstraints.length}_{cs.busInteractions.length}_{idx}")
     let r2 := reencodeLoop bsem rest (idx + 1) r1.1.out r1.2.1 r1.2.2.1 r1.2.2.2
     ⟨r2.out, r1.1.derivs ++ r2.derivs, r1.1.correct.andThen r2.correct⟩
@@ -1551,5 +1554,7 @@ def reencodePass : VerifiedPass p := fun cs bsem =>
       if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt)) else none))
     reencodeLoop bsem targets 0 cs
       (CoveredIndex.build Expression.vars cs.algebraicConstraints) cs.algebraicConstraints.toArray
-      (cs.vars.foldl (·.insert ·) ∅)
+      ⟨Std.HashSet.ofList cs.vars, fun x hx => by
+        rw [Std.HashSet.contains_ofList] at hx
+        exact List.contains_iff_mem.mp hx⟩
   else ⟨cs, [], PassCorrect.refl cs bsem⟩

@@ -464,6 +464,26 @@ def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
   cfBis := cs.busInteractions.filter (fun bi =>
     bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
 
+/-- Refresh the index after an accepted fold. The constraint side is rebuilt — the fold reorders
+    constraints, and the covered-set equality (`coveredCsIdx_eq`) needs the exact tie — but the
+    interaction-side *buckets* are reused stale: `foldOut` maps interactions in place (same count
+    and order) and only ever shrinks an expression's variable set (subexpressions are replaced by
+    constants), so the stale buckets are a superset of freshly-built ones. The gate stays exact:
+    candidates are re-tested against the fresh array, and an over-included candidate that still
+    passes the per-item test would make the full scan true as well. This halves the dominant
+    rebuild-per-accepted-fold cost on fold-heavy circuits. -/
+def FoldIdx.refresh {cs : ConstraintSystem p} (old : FoldIdx cs) (ro : ConstraintSystem p) :
+    FoldIdx ro where
+  idx := CoveredIndex.build Expression.vars ro.algebraicConstraints
+  hidx := rfl
+  arr := ro.algebraicConstraints.toArray
+  harr := rfl
+  bisIdx := old.bisIdx
+  arrBis := ro.busInteractions.toArray
+  cfCs := ro.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
+  cfBis := ro.busInteractions.filter (fun bi =>
+    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
+
 /-- The index-local form of `systemHasFoldable` (see the section comment above): scan only the
     items sharing a variable with `xs` (through the inverted indexes, candidate positions
     deduplicated so an item sharing several variables is tested once — `hasFoldable` is the
@@ -546,7 +566,7 @@ def foldStep [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (fid
           show groupSurvivors cs xs doms = groupSurvivorsE es doms
           rw [hes]; rfl
         ⟨⟨foldOut cs xs survs, [], hsurv ▸ foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩,
-         FoldIdx.mk' (foldOut cs xs survs)⟩
+         fidx.refresh (foldOut cs xs survs)⟩
       else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
     else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
 

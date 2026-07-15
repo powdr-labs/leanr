@@ -886,13 +886,6 @@ structurally, so exactly the same first matching receive is found — the pass's
 unchanged, and its correctness never depended on the search (the accepted candidate is
 re-verified by `checkCancel` and the decided split equation). -/
 
-/-- Structural hash of an expression (order-sensitive), for the payload-match prefilter. -/
-def Expression.structHash : Expression p → UInt64
-  | .const n => mixHash 11 (UInt64.ofNat n.val)
-  | .var y => mixHash 13 (mixHash (hash y.name) (hash y.powdrId?))
-  | .add a b => mixHash 17 (mixHash a.structHash b.structHash)
-  | .mul a b => mixHash 19 (mixHash a.structHash b.structHash)
-
 /-- Structural hash of a payload (order-sensitive). -/
 def payloadHash (pl : List (Expression p)) : UInt64 :=
   pl.foldl (fun h e => mixHash h e.structHash) 7
