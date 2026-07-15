@@ -61,17 +61,22 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
     ∀ (m : BusInteraction (ZMod p)),
       neverViolates m.busId = true → bs.violatesConstraint m = false
   /-- Send/receive table obligations of a memory-style stateful bus, for pair cancellation:
-      `recvByteSlots busId = some slots` asserts that a *send* (multiplicity `1`) on `busId`
-      never violates a constraint, and a *receive* (multiplicity `-1`) does not violate provided
-      every payload slot listed in `slots` (where present) holds a value `< 256`. `some []` is
-      "sends and receives never violate" — the right instance for a stateful bus with no table
-      at all (e.g. an execution bridge); `none` claims nothing. -/
-  recvByteSlots : (busId : Nat) → Option (List Nat)
+      `recvByteSlots busId pattern = some slots` asserts that a *send* (multiplicity `1`) on
+      `busId` never violates a constraint (regardless of the pattern), and a *receive*
+      (multiplicity `-1`) whose payload matches `pattern` does not violate provided every payload
+      slot listed in `slots` (where present) holds a value `< 256`. The pattern lets a fact make
+      the receive obligation conditional on constant payload entries — e.g. a memory receive
+      whose address-space slot is a known constant ∉ {1,2} carries *no* byte obligation
+      (`slots = []`), because the VM's `violates` only rejects non-byte data on address spaces
+      1/2. `some []` is "this receive (and every send) never violates"; `none` claims nothing.
+      Pattern-blind facts simply ignore the argument. -/
+  recvByteSlots : (busId : Nat) → (pattern : List (Option (ZMod p))) → Option (List Nat)
   recvByteSlots_sound :
-    ∀ (busId : Nat) (slots : List Nat), recvByteSlots busId = some slots →
+    ∀ (busId : Nat) (pattern : List (Option (ZMod p))) (slots : List Nat),
+      recvByteSlots busId pattern = some slots →
       ∀ (m : BusInteraction (ZMod p)), m.busId = busId →
         (m.multiplicity = 1 → bs.violatesConstraint m = false) ∧
-        (m.multiplicity = -1 →
+        (m.multiplicity = -1 → Matches m.payload pattern →
           (∀ slot ∈ slots, ∀ x : ZMod p, m.payload[slot]? = some x → x.val < 256) →
           bs.violatesConstraint m = false)
   /-- The last-write-wins shape declared for a bus, or `none`. Passes read `addressFields` to
@@ -284,8 +289,8 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   slotFun_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)
   neverViolates _ := false
   neverViolates_sound := by intro _ h; exact absurd h (by simp)
-  recvByteSlots _ := none
-  recvByteSlots_sound := by intro _ _ h; exact absurd h (by simp)
+  recvByteSlots _ _ := none
+  recvByteSlots_sound := by intro _ _ _ h; exact absurd h (by simp)
   memShape _ := none
   memShape_stateful := by intro _ _ h; exact absurd h (by simp)
   admissible_sound := by intro _ _ _ _ h; exact absurd h (by simp)

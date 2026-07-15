@@ -627,7 +627,9 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     (hp1 : (1 : ZMod p) ≠ 0)
     (A B C : List (BusInteraction (Expression p))) (S R : BusInteraction (Expression p))
     (busId : Nat) (shape : MemoryBusShape) (hshape : facts.memShape busId = some shape)
-    (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
+    (pattern : List (Option (ZMod p))) (slots : List Nat)
+    (hslots : facts.recvByteSlots busId pattern = some slots)
+    (hRmatch : ∀ env, Matches (R.eval env).payload pattern)
     (checks : List (BusInteraction (Expression p)))
     (hchecks : ∀ ck ∈ checks,
       bs.isStateful ck.busId = false ∧
@@ -690,12 +692,12 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
   -- `recvByteSlots` contract), and the receive's byte slots are justified from the remaining
   -- interactions, whose obligations hold under any `out`-satisfying assignment.
   have hnvS : ∀ env, bs.violatesConstraint (S.eval env) = false := fun env =>
-    (facts.recvByteSlots_sound busId slots hslots (S.eval env)
+    (facts.recvByteSlots_sound busId pattern slots hslots (S.eval env)
       (show (S.eval env).busId = busId from hSbus)).1 (hSmEv env)
   have hnvR : ∀ env, out.satisfies bs env → bs.violatesConstraint (R.eval env) = false := by
     intro env hsat
-    refine (facts.recvByteSlots_sound busId slots hslots (R.eval env)
-      (show (R.eval env).busId = busId from hRbus)).2 (hRmEv env)
+    refine (facts.recvByteSlots_sound busId pattern slots hslots (R.eval env)
+      (show (R.eval env).busId = busId from hRbus)).2 (hRmEv env) (hRmatch env)
       (hbyte env (fun c hc => hsat.1 c hc) ?_)
     intro bi hbi hne
     exact hsat.2 bi (by rw [houtb]; exact hbi) hne
@@ -1285,12 +1287,13 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
-    (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
+    (slots : List Nat)
     (T : Thunk (TwoRootMap p cs.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (A : List (BusInteraction (Expression p))) (S : BusInteraction (Expression p))
     (B : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p))
     (C : List (BusInteraction (Expression p)))
+    (hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) = some slots)
     (checks : List (BusInteraction (Expression p)))
     (hsplit : cs.busInteractions = A ++ S :: B ++ R :: C)
     (h : checkCancel deep cs.algebraicConstraints bs facts T M shape busId slots A S B R C checks
@@ -1301,7 +1304,9 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
   obtain ⟨⟨⟨⟨⟨⟨⟨⟨hSb, hRb⟩, hSm⟩, hRm⟩, hpay⟩, hmid⟩, hpre⟩, hemit⟩, hjust⟩ := h
   have hRmEv : ∀ env, (R.eval env).multiplicity = -1 :=
     fun env => R.multiplicity.constValue?_sound (-1) (of_decide_eq_true hRm) env
-  refine dropPair_correct cs bs facts hp1 A B C S R busId shape hshape slots hslots checks
+  refine dropPair_correct cs bs facts hp1 A B C S R busId shape hshape
+    (R.payload.map Expression.constValue?) slots hslots
+    (fun env => matches_evalPattern R.payload env) checks
     (fun ck hck => emitOk_sound bs facts busId slots R ck
       (List.all_eq_true.mp hemit ck hck) (of_decide_eq_true hRb) hRmEv)
     (fun env hall hbus => recvSlotsJustified_sound deep cs.algebraicConstraints bs facts
@@ -1333,7 +1338,6 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
     (aggressive : Bool)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
-    (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
     (T : Thunk (TwoRootMap p cs.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (bcBus? : Option Nat)
@@ -1345,7 +1349,7 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
     let S := arr[i]
     -- (thunked: Lean is strict, and the continuation must not run once a pair is accepted)
     let next := fun (_ : Unit) => findCancelGoIdx cs bs facts hp1 deep hdeep aggressive busId shape hshape
-      slots hslots T M bcBus? arr idx (i + 1)
+      T M bcBus? arr idx (i + 1)
     if decide (multConst S = some 1) && decide (S.busId = busId) then
       match firstMatchAt M arr S i (idx.getD
           (if aggressive then addrHash shape S.payload else payloadHash S.payload) []) with
@@ -1361,6 +1365,12 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
               && shieldOk shape T busId S A then
           let B := (arr.extract (i + 1) j).toList
           let C := (arr.extract (j + 1) arr.size).toList
+          -- The receive `R`'s byte obligation depends on its own constant pattern (e.g. a
+          -- memory receive whose address-space slot is a known constant ∉ {1,2} carries no
+          -- obligation), so `slots` is resolved per candidate, not per bus.
+          match hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) with
+          | none => next ()
+          | some slots =>
           -- Try the certificate with no emitted checks first: every non-justification conjunct
           -- of `checkCancel` is guaranteed by the scan's own gates, so it passes iff every
           -- declared byte slot is justified — the same predicate `unjustifiedSlots` decides —
@@ -1369,8 +1379,8 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
               A S B R C [] = true then
             if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
               some (⟨⟨{ cs with busInteractions := A ++ B ++ C ++ [] }, [],
-                    checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
-                      T M A S B R C [] hsplit hchk0⟩, rfl⟩, i, false)
+                    checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots
+                      T M A S B R C hslots [] hsplit hchk0⟩, rfl⟩, i, false)
             else next ()
           else
           -- Some slot is unjustified. Such slots are materialized as a single explicit
@@ -1398,8 +1408,8 @@ def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
               A S B R C checks = true then
             if hsplit : cs.busInteractions = A ++ S :: B ++ R :: C then
               some (⟨⟨{ cs with busInteractions := A ++ B ++ C ++ checks }, [],
-                    checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots hslots
-                      T M A S B R C checks hsplit hchk⟩, rfl⟩, i, true)
+                    checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots
+                      T M A S B R C hslots checks hsplit hchk⟩, rfl⟩, i, true)
             else next ()
           else next ()
           else next ()
@@ -1417,14 +1427,13 @@ def findCancelForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
     (aggressive : Bool)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
-    (slots : List Nat) (hslots : facts.recvByteSlots busId = some slots)
     (T : Thunk (TwoRootMap p cs.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (bcBus? : Option Nat) (startPos : Nat) :
     Option ({ r : PassResult cs bs // r.out.algebraicConstraints = cs.algebraicConstraints }
       × Nat × Bool) :=
   let arr := cs.busInteractions.toArray
-  findCancelGoIdx cs bs facts hp1 deep hdeep aggressive busId shape hshape slots hslots T M bcBus?
+  findCancelGoIdx cs bs facts hp1 deep hdeep aggressive busId shape hshape T M bcBus?
     arr (recvIndex busId shape aggressive arr) startPos
 
 /-- Search declared buses from list index `curIdx` for a droppable pair, honouring a resume hint:
@@ -1450,12 +1459,9 @@ def findCancel (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts
       let startPos := if curIdx = resumeIdx then resumePos else 0
       match hshape : facts.memShape busId with
       | some shape =>
-        match hslots : facts.recvByteSlots busId with
-        | some slots =>
-          match findCancelForBus cs bs facts hp1 deep hdeep aggressive busId shape hshape slots hslots
-              T M bcBus? startPos with
-          | some (r, pos, emitted) => some (r, curIdx, pos, emitted)
-          | none => findCancel cs bs facts hp1 deep hdeep aggressive T M bcBus? resumeIdx resumePos (curIdx + 1) rest
+        match findCancelForBus cs bs facts hp1 deep hdeep aggressive busId shape hshape
+            T M bcBus? startPos with
+        | some (r, pos, emitted) => some (r, curIdx, pos, emitted)
         | none => findCancel cs bs facts hp1 deep hdeep aggressive T M bcBus? resumeIdx resumePos (curIdx + 1) rest
       | none => findCancel cs bs facts hp1 deep hdeep aggressive T M bcBus? resumeIdx resumePos (curIdx + 1) rest
 
