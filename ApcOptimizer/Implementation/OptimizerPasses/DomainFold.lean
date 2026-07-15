@@ -39,8 +39,8 @@ def constOnSurvs (survs : List (List (Variable × ZMod p))) (e : Expression p) :
   match survs with
   | [] => none
   | s₀ :: rest =>
-    let v₀ := e.evalFast (envOf s₀)
-    if (s₀ :: rest).all (fun s => decide (e.evalFast (envOf s) = v₀)) then
+    let v₀ := e.evalFast (envOfFast s₀)
+    if (s₀ :: rest).all (fun s => decide (e.evalFast (envOfFast s) = v₀)) then
       some v₀
     else none
 
@@ -51,7 +51,7 @@ theorem constOnSurvs_sound (survs : List (List (Variable × ZMod p))) (e : Expre
   cases survs with
   | nil => exact absurd hs (by simp)
   | cons s₀ rest =>
-    simp only [constOnSurvs] at h
+    simp only [constOnSurvs, envOfFast_eq] at h
     split at h
     · next hall =>
         have hc : e.evalFast (envOf s₀) = c := Option.some.inj h

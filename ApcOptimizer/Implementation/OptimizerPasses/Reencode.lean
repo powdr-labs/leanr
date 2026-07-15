@@ -841,13 +841,13 @@ theorem filter_const_and {β : Type} (l : List β) (b : Bool) (q : β → Bool) 
     determined — the win on boxes covered by many constraints local to few of the box's variables. -/
 def factoredSurv (es : List (Expression p)) :
     List (Variable × List (ZMod p)) → List (List (Variable × ZMod p))
-  | [] => if es.all (fun c => decide (c.evalFast (envOf []) = 0)) then [[]] else []
+  | [] => if es.all (fun c => decide (c.evalFast (envOfFast []) = 0)) then [[]] else []
   | (x, d) :: rest =>
     let esX := es.filter (fun c => c.mentionsF x)
     let esNoX := es.filter (fun c => !c.mentionsF x)
     (factoredSurv esNoX rest).flatMap (fun a =>
       (d.map (fun v => (x, v) :: a)).filter
-        (fun pt => esX.all (fun c => decide (c.evalFast (envOf pt) = 0))))
+        (fun pt => esX.all (fun c => decide (c.evalFast (envOfFast pt) = 0))))
 
 /-- The surviving group values from a **precomputed** covered set: enumerated over the group's
     domains, filtered by the covered constraints. Computed by `factoredSurv` (equal to the flat
@@ -877,6 +877,7 @@ theorem groupSurvivorsE_spec (es : List (Expression p))
     show factoredSurv es ((x, d) :: rest) = (assignments ((x, d) :: rest)).filter _
     rw [factoredSurv, ih (es.filter (fun c => !c.mentionsF x)), assignments, filter_flatMap_eq,
       filter_flatMap_guard]
+    simp only [envOfFast_eq]
     congr 1
     funext a
     -- goal: (if PnoX a then (d.map ..).filter PX else []) = (d.map ..).filter P_es
