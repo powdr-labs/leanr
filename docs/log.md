@@ -3268,3 +3268,43 @@ vars, shrinking every enumerated point; attacks the dominant 51 % directly, self
 and per-point `substF`/`linearize`. A cheaper extension of *this* entry: index-compile
 `constOnSurvs` (à la `domainBatch`'s `IExpr`) to also drop the `envOf` linear scan, which would help
 the cases where the `evalFast` hoist alone barely moved.
+
+### 87. Optimizer runtime: factored survivor enumeration (`groupSurvivorsE`) — effectiveness unchanged
+
+The finite-domain survivor filter shared by `domainFold` and `reencode`
+(`groupSurvivorsE es doms = (assignments doms).filter (all es zero)`) evaluated **every** covered
+constraint at **every** point of the domain box. Replaced it with `factoredSurv`, which walks the
+box level by level: at each variable, the covered constraints that do **not** mention that variable
+are constant across the inner loop, so they are checked once per suffix (via the recursive call on
+the remaining domains) instead of once per full point; only the constraints mentioning the level's
+variable (whose other variables are already bound in the suffix) are re-checked per inner value.
+
+Effectiveness-exact: `groupSurvivorsE_spec` proves `factoredSurv es doms` equals the original
+`(assignments doms).filter (fun a => es.all (fun c => decide (c.evalFast (envOf a) = 0)))` (induction
+on `doms`, `List.filter_flatMap` + a per-level partition/independence argument `all_filter_split`),
+so the surviving set — hence every fold/re-encode decision — is unchanged. The proof surfaced a
+precedence gotcha worth recording: `a && b = c` parses as `a && (b = c)` (`=` binds tighter than
+`&&`), so a Bool-valued equality `X && Y = Z` **must** be parenthesised `(X && Y) = Z`.
+
+**Measured (CI, authoritative, PR #128 `e89e345` vs main).** Circuit sizes **byte-identical** on
+all 100 eth cases and keccak (effectiveness bench +0.000× on every axis). Runtime:
+- **openvm-eth: −4%** total (effectiveness-bench 206.2 s → 198.7 s); per-pass `domainFold` −6%
+  (4782 → 4494 ms) and `reencode` −5% (4611 → 4397 ms) — the two passes the factoring targets.
+- **keccak: within run-to-run noise** (±3% between the two single-case runs; `reencode`/`domainFold`
+  flat). keccak's `reencode` cost is dominated by the `groupRewrite` over `bitBox` patterns, a
+  different box than the survivor filter, so factoring the filter does little there.
+
+`lake build` green; `Scripts/check-proof-integrity.sh` green — the correctness theorems still depend
+only on `{propext, Classical.choice, Quot.sound}`; no `sorry`/`admit`/`axiom`/`native_decide`; no
+audited surface or pass-pipeline change. **Worked: yes (modest, eth-only).**
+
+**Runtime landscape (measured this session; for future work).** A clean *effectiveness-exact* 2×
+is not available: profiling showed the finite-domain enumeration family (`domainBatch`/`domainFold`/
+`reencode`/`flagFold`) dominates (~55% eth / ~74% keccak), and the box scan is ~98% of `domainBatch`,
+but the *non-forcing* boxes abort within ~5 points either way — so box-skipping saves nothing
+(a strided-sample skip was tried, CI-confirmed neutral on both benchmarks, and reverted). The
+runtime is spent on the *productive* enumeration; cutting it means cutting forced values
+(effectiveness loss). The remaining effectiveness-exact levers are per-pass factorings like this one
+(each a separate proof): `flagFold` has its own box enumeration; `domainBatch`'s scan uses a
+*compiled* positional evaluator (`IExpr`/`lookupIx`), so factoring it trades compiled eval for
+tree-walk + level-skipping (uncertain net win). Estimated effectiveness-exact ceiling ≈ 1.3–1.4×.
