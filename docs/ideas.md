@@ -365,3 +365,36 @@ and accepts both closer signs (mid-cycle the optimizer holds the negated `(1 −
 - **Measure per-case, not just aggregate**: `opt-export` + a canonical-form diff against
   `*.powdr_opt.json.gz` finds the mechanism; `benchmark.py` (+ keccak) confirms the totals. The
   geo metric moves with per-case wins — 67 small bus losses cost more than one big one.
+
+## Runtime leftovers (from the entry-90 runtime overhaul — see that log entry for the map)
+
+Levers identified but not taken, in rough value order (keccak profile shares at entry-87's end
+state; every item is output-preserving unless noted):
+
+- **domainBatch on keccak (~19 %)**: per-target work is now the unordered covered gather +
+  `assignments` box materialization + `DomainTable` rebuild per invocation. Candidates:
+  stream the box instead of materializing (`assignments` allocates the full product), and a
+  domainFold-style single-var prefilter for the *constraint-sourced* domain targets (bus-fact
+  domains make the general case harder). The user-suggested SAT-style propagation (prune the
+  box by evaluating constraints on partial assignments) fits `forcedOver`'s certificate shape —
+  the checked survivor scan visits every box point today; a DPLL-style search needs the skipped
+  subtrees refuted by a partially-determined covered item, which is provable but a real proof.
+- **reencode/domainFold accept-path on keccak**: `reencodeOut`/`foldOut` rewrite the whole
+  system per accept (inherent), but reencode also rebuilds its covered index + `cs.vars`
+  HashSet per accept; a stale-bucket refresh (the `FoldIdx.refresh` trick — buckets are
+  positional supersets when items are mapped in place) does not directly apply because
+  `reencodeOut` *removes* covered constraints (positions shift). A position-stable
+  `reencodeOut` variant would unlock it for both passes' constraint side.
+- **gauss (~6 % keccak)**: untouched this round.
+- **dedup (~4 % keccak)**: `List.dedup` over constraints and the `bi ∈ seen` scan are both
+  quadratic with deep equality. Hash-bucketed variants need `mem`-iff lemmas (the pass proof
+  consumes `List.mem_dedup`); ~100 lines of HashMap invariant proofs.
+- **rootPairUnify (~2-8 %)**: `scaledSlotBound`/`anyVarBound` rescan interactions per variable —
+  the `findVarBound`-per-candidate pattern that busPairCancel just shed.
+- **zeroWidthRange (~1.7 s/eth case)**: two `rangeEq?` scans per invocation (filterMap + keep);
+  fusing them into one tagged pass needs the `filterBus`-shaped proof reworked.
+- **Cross-cycle memoization (the big structural one)**: the cleanup cycle runs 5–9 times and the
+  enumeration passes rediscover the same negatives every cycle. A pass-state channel (e.g.
+  `VerifiedPassW` threading an opaque cache blob validated by cheap hashes) would cut the
+  steady-state tail of *every* pass at once; needs a framework change in
+  `Implementation/OptimizerPasses/Basic.lean`'s glue, so weigh against the audit-surface rule.
