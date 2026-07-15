@@ -3268,3 +3268,62 @@ vars, shrinking every enumerated point; attacks the dominant 51 % directly, self
 and per-point `substF`/`linearize`. A cheaper extension of *this* entry: index-compile
 `constOnSurvs` (à la `domainBatch`'s `IExpr`) to also drop the `envOf` linear scan, which would help
 the cases where the `evalFast` hoist alone barely moved.
+
+### 87. Affine same-base address disequality (`addrAffineNeq`): closes the wasm-eth variable gap — apc reaches powdr parity or better on every case (wasm-eth root cause 1)
+
+**The gap** (`../leanr-wasm/fable-wasm-1.md`, root cause 1). On the `wasm-eth` corpus (merged
+#131), memory forwarding never fired for the frame-pointer-relative shadow stack (address space
+1). A wasm stack pointer is `c + fp` — a symbolic base `fp` plus a constant offset — which
+neither existing disequality certificate can refute: `addrConstsNeq` needs both slots literal,
+and `addrTwoRootNeq` needs a two-root limb-wraparound decomposition + primality (`fp` has
+neither). So `busUnifyPass`'s consumer scan (`findConsumer`) and `busPairCancel`'s mid-region
+check (`midRefuted`) both aborted at the *first* interleaved other-stack-slot access
+(`140+fp` vs `108+fp` could not be refuted as a different address), and **no AS-1 access was ever
+forwarded** on the big blocks. The excess scaled with reuse count — the three worst offenders
+(apc_037/012/006, k256 square/mul + tiny_keccak `keccakf`) sat at **4.85× / 4.81× / 4.20×** the
+powdr variable count.
+
+**The fix.** A third disequality certificate `addrAffineNeq` (`AddrDiseq.lean`): for some address
+slot, `linearize` both expressions, subtract, `.norm`; if the difference has no variable terms
+and a nonzero constant, the slots provably differ — `(c₁+fp) − (c₂+fp) = c₁−c₂ ≠ 0`. No bounds,
+no primality, no `TwoRootMap`, no constraints consulted — a total `Bool` predicate. Soundness is
+three lines: `linearize_eval` on each slot + the existing `constDiffNZ_sound`. Wired as a third
+disjunct at the refutation sites — `findConsumer`/`checkPair` (`BusUnify.lean`) and `midRefuted`
+(`BusPairCancel.lean`, through which `preRefuted`/`shieldOk` and the aggressive-path array scan all
+funnel). The consumer *equality* side already worked (`addrConstsEq`'s syntactic `e = e'` branch
+matches two identical `fp+c` expressions), so only the mid-region disequality was missing. It
+**strictly generalizes** `addrConstsNeq` (const−const is a constant difference), so it can only
+enable *more* cancellation, never less; and it needs no primality/two-root, so it composes as a
+separate disjunct with `addrTwoRootNeq` (kept for the keccak heap, whose distinct-limb pointers
+have a variable-bearing difference that `addrAffineNeq` correctly declines).
+
+**Impact — wasm-eth (`apc-optimizer compare` vs powdr, variables the top-priority metric):**
+
+| case | apc vars (main) | apc vars (now) | powdr vars | ratio now | ratio main |
+|------|----:|----:|----:|----:|----:|
+| apc_037 k256 square | 9201 | 1929 | 1896 | 1.02× | 4.85× |
+| apc_012 k256 mul     | 12885 | 2705 | 2678 | 1.01× | 4.81× |
+| apc_006 keccakf      | 8021 | 1606 | 1908 | **0.84×** | 4.20× |
+| apc_028              | — | 1478 | 1478 | 1.00× | — |
+| apc_004              | — | 238 | 238 | 1.00× | — |
+| apc_005              | — | 184 | 200 | **0.92×** | — |
+| apc_022              | — | 21 | 21 | 1.00× | — |
+
+Variable effectiveness reaches **powdr parity or better on every case measured** (apc_006 and
+apc_005 beat powdr outright); constraints likewise at/near parity (apc_006 88 vs powdr 548;
+apc_012 1034 = 1034; apc_004 118 = 118). The residual is entirely **bus interactions** (apc_037
+2317 vs 1430, apc_006 1934 vs 1479, apc_022 19 vs 15): the byte-identical AS-5 fp-cell pairs and
+the fp-read chains — the target of the stacked step 2 (`recvByteSlots`).
+
+**openvm-eth (the merge-gating benchmark): no regression — a slight win.** 100-case sweep,
+aggregate / geo effectiveness: variables **4.552× / 3.887×** (powdr 4.092× / 3.787×; main was
+4.551× agg), bus **3.543× / 2.803×** (powdr 3.480×), constraints **10.845× / 12.026×** (powdr
+5.853×). Per-case variables W/L/T vs powdr **31 / 7 / 62** — vs the pre-change **31 / 9 / 60**,
+**two powdr-losses flip to ties** (affine addressing enabled an additional forward), zero
+regressions. Exactly what monotonicity predicts: the new disjunct only ever refutes *more*.
+keccak two-root heap path unchanged.
+
+Build + `Scripts/check-proof-integrity.sh` green (`{propext, Classical.choice, Quot.sound}` only);
+no `sorry`/`admit`/`axiom`/`native_decide`; no audited-surface / `Basic.lean` / `FactPass.lean` /
+pass-pipeline change (correctness rides on the pass's own `PassCorrect`, extended by one `rcases`
+branch per soundness theorem). **Worked: yes (major — the dominant wasm-eth variable lever).**

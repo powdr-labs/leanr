@@ -1017,7 +1017,7 @@ def firstMatchAt {constraints : List (Expression p)}
 def midRefuted (shape : MemoryBusShape) {constraints : List (Expression p)}
     (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
   decide (m.busId ≠ busId) || decide (multConst m = some 0) || addrConstsNeq shape S m
-    || addrTwoRootNeq shape T.get S m
+    || addrAffineNeq shape S m || addrTwoRootNeq shape T.get S m
 
 /-- Refute `m` as an active same-address *send* on `busId` (the "before" region test: earliest-send). -/
 def preRefuted (shape : MemoryBusShape) {constraints : List (Expression p)}
@@ -1032,11 +1032,12 @@ theorem midRefuted_sound (shape : MemoryBusShape) {constraints : List (Expressio
     (hbid : (m.eval env).busId = busId) (hmne : (m.eval env).multiplicity ≠ 0)
     (hmaddr : shape.address (m.eval env) = shape.address (S.eval env)) : False := by
   unfold midRefuted at h
-  rw [Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true] at h
-  rcases h with ((h | h) | h) | h
+  rw [Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true] at h
+  rcases h with (((h | h) | h) | h) | h
   · exact absurd hbid (of_decide_eq_true h)
   · exact hmne (m.multiplicity.constValue?_sound 0 (of_decide_eq_true h) env)
   · exact addrConstsNeq_sound shape S m h env hmaddr.symm
+  · exact addrAffineNeq_sound shape S m h env hmaddr.symm
   · exact addrTwoRootNeq_sound shape T.get S m h env hcon hmaddr.symm
 
 theorem preRefuted_sound (shape : MemoryBusShape) {constraints : List (Expression p)}

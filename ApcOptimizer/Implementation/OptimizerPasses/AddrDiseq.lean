@@ -260,3 +260,63 @@ theorem addrTwoRootNeq_sound (shape : MemoryBusShape) (T : TwoRootMap p constrai
       rw [hSp, hbp] at hcond key
       simp only [Option.map_some, Option.some.injEq] at key
       exact exprTwoRootNeq_sound T e e' hcond env hcon key
+
+/-! ## The affine (same-base) address-disequality certificate
+
+The two-root certificate above needs the limb-decomposition constraints and primality. A far more
+common shape — a wasm frame-pointer-relative stack pointer `c + fp`, or any two accesses off a
+*common base* with different immediates — needs neither: linearizing both address slots and
+subtracting yields a **nonzero field constant** (`(c₁ + fp) − (c₂ + fp) = c₁ − c₂`), so the
+addresses provably differ with pure linear arithmetic — no bounds, no primality, no `TwoRootMap`.
+This strictly generalizes `addrConstsNeq` (`const − const` is a constant difference too) and,
+unlike the two-root path, consults no constraints, so it is a total `Bool` predicate composable
+with the other two certificates. -/
+
+/-- Some address slot of `S` and `bi` linearizes to two affine forms differing by a nonzero field
+    constant: the two interactions provably have different addresses. Corpus-agnostic; any
+    common-base addressing (a shared symbolic base with distinct immediates) benefits. -/
+def addrAffineNeq (shape : MemoryBusShape) (S bi : BusInteraction (Expression p)) : Bool :=
+  shape.addressFields.any (fun slot =>
+    match S.payload[slot]?, bi.payload[slot]? with
+    | some e, some e' =>
+      (match linearize e, linearize e' with
+       | some L, some L' => constDiffNZ L L'
+       | _, _ => false)
+    | _, _ => false)
+
+theorem addrAffineNeq_sound (shape : MemoryBusShape) (S bi : BusInteraction (Expression p))
+    (h : addrAffineNeq shape S bi = true) (env : Variable → ZMod p) :
+    shape.address (S.eval env) ≠ shape.address (bi.eval env) := by
+  unfold addrAffineNeq at h
+  obtain ⟨slot, hslot, hcond⟩ := List.any_eq_true.1 h
+  intro heq
+  obtain ⟨j, hj⟩ : ∃ j, shape.addressFields[j]? = some slot := List.getElem?_of_mem hslot
+  have key : (S.eval env).payload[slot]? = (bi.eval env).payload[slot]? := by
+    have e1 : (shape.address (S.eval env))[j]? = some ((S.eval env).payload[slot]?) := by
+      simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
+    have e2 : (shape.address (bi.eval env))[j]? = some ((bi.eval env).payload[slot]?) := by
+      simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
+    rw [heq, e2] at e1; exact (Option.some.inj e1).symm
+  have keyS : (S.eval env).payload[slot]? = (S.payload[slot]?).map (fun e => e.eval env) := by
+    show (S.payload.map (fun e => e.eval env))[slot]? = _; rw [List.getElem?_map]
+  have keyB : (bi.eval env).payload[slot]? = (bi.payload[slot]?).map (fun e => e.eval env) := by
+    show (bi.payload.map (fun e => e.eval env))[slot]? = _; rw [List.getElem?_map]
+  rw [keyS, keyB] at key
+  cases hSp : S.payload[slot]? with
+  | none => rw [hSp] at hcond; simp at hcond
+  | some e =>
+    cases hbp : bi.payload[slot]? with
+    | none => rw [hSp, hbp] at hcond; simp at hcond
+    | some e' =>
+      rw [hSp, hbp] at key
+      simp only [Option.map_some, Option.some.injEq] at key
+      simp only [hSp, hbp] at hcond
+      cases hL : linearize e with
+      | none => simp [hL] at hcond
+      | some L =>
+        cases hL' : linearize e' with
+        | none => simp [hL, hL'] at hcond
+        | some L' =>
+          simp only [hL, hL'] at hcond
+          exact constDiffNZ_sound L L' hcond env
+            (by rw [← linearize_eval e L hL env, ← linearize_eval e' L' hL' env]; exact key)
