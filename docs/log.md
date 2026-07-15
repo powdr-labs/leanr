@@ -3308,3 +3308,59 @@ runtime is spent on the *productive* enumeration; cutting it means cutting force
 (each a separate proof): `flagFold` has its own box enumeration; `domainBatch`'s scan uses a
 *compiled* positional evaluator (`IExpr`/`lookupIx`), so factoring it trades compiled eval for
 tree-walk + level-skipping (uncertain net win). Estimated effectiveness-exact ceiling ≈ 1.3–1.4×.
+
+### 88. Optimizer runtime: four effectiveness-exact micro-levers tried, all neutral (per-op cost is not the bottleneck)
+
+Following entry 87's landscape, this session probed the per-operation costs inside the enumeration
+family. **All four levers were CI- or locally-measured neutral-to-negative; the conclusion is that
+the enumeration passes are already per-op optimized and the runtime is genuinely productive
+enumeration.** Recorded so future sessions do not re-try them.
+
+1. **`envOfFast` for the survivor-filter lookup (landed — `f4e98b2`, kept as a consistency change).**
+   `factoredSurv` (shared by `domainFold` and `reencode`) and `domainFold`'s `constOnSurvs` looked up
+   box-point variables with `envOf`, whose derived `DecidableEq Variable` compares the `name` String
+   first. Swapped to `envOfFast` (compares the cheap `powdrId?` before the String, short-circuiting
+   mismatches) — the exact lookup `domainBatch`'s scan already uses. Output-preserving
+   (`envOfFast_eq`; spec proofs bridge back). **CI (both benchmarks): effectiveness byte-identical;
+   runtime neutral** — keccak 1.00× (domainFold 0.98× / reencode 1.03×, a wash), eth within noise
+   (the two eth runtime measurements disagreed in sign: effectiveness-bench −1.5%, runtime-bench
+   +8%). So the survivor boxes are small enough that the lookup's String comparison is not a
+   measurable fraction; envOfFast kept only for consistency with `domainBatch`, not as a win.
+
+2. **Ring-op amortization in `factoredSurv` (no-op, reverted).** Hypothesised that `evalFast`'s
+   per-call `inferInstance : Add/Mul (ZMod p)` re-derives the runtime-`p` ring dictionary once per
+   point, so extracting it once per box (a `factoredSurvW add mul …` threaded from a single
+   `inferInstance`) would amortize it — the win `domainBatch`'s compiled `evalWith` gets. **Locally
+   no-op (slightly worse).** `inferInstance` for `ZMod p` is a cheap dictionary projection, so the
+   whole `eval`/`evalFast`/`evalWith` distinction is nearly cost-neutral (this also explains entry-era
+   notes that `eval→evalFast` barely moved `flagFold`). The real gap `domainBatch` closed by compiling
+   was the *positional* lookup (no scan at all), not ring-op hoisting.
+
+3. **`reencode` `candSelect` O(|patts|²) check elimination (neutral, not pursued).** `candSelect`
+   re-evaluates the one-hot interpolation `cand` at every pattern to confirm it agrees with the
+   substitution — always true by construction, and O(|patts|²) since `|cand| = O(|patts|)`. Removing
+   it (prototype, one-hot property `sorry`d for measurement only, never committed) was **noise on eth
+   and neutral on keccak** — a full keccak profile showed `reencode` tracking the run's uniform
+   machine-load inflation (1.083× vs overall 1.088×), i.e. no relative change. `interpOfV`'s
+   all-values-equal special-case (emits a bare `.const`, an O(|patts|) check) already covers the
+   common subexpressions, so the quadratic branch is rarely hit. This also **localises keccak's 45 s
+   `reencode` to `checkReencode` (the per-candidate certificate), not the accepted-group rewrite.**
+
+4. **`checkReencode` substitution/table hoisting (regressed, reverted).** The completeness
+   (`survs.all (fun s => patts.any …)`) and soundness (`patts.all (es.all …)`) checks recompute
+   `_.substF (groupSubst xs hm)` per pattern and the completeness image per survivor. Hoisting them
+   into a precomputed per-pattern image table **regressed eth `reencode` (2.61 s → 2.75–2.97 s)**: the
+   original `.all`/`.any` **short-circuit** (first surviving pattern / first failing constraint), so
+   the redundant recomputation almost never materialises, whereas an eager table forces all
+   `|patts|×|xs|` evaluations up front. Short-circuiting already does the work the hoist tried to save.
+
+**Net for the session:** no runtime win beyond entry 87's factored-survivor (−4 % eth). The
+enumeration passes are compiled (`domainBatch`), indexed (`reencode`/`domainFold` covered-set,
+`busPairCancel`), factored (entry 87), and short-circuited (`checkReencode`); per-op costs (variable
+lookup, ring-op derivation, always-true checks) are not the bottleneck — the wall-clock is spent
+doing enumeration that produces forced values, so cutting it costs effectiveness. `lake build` +
+`Scripts/check-proof-integrity.sh` green; only `f4e98b2` (envOfFast, effectiveness byte-identical)
+landed. **Worked: no (levers 2–4 reverted; lever 1 kept as neutral/consistency).** Future runtime
+work should target *algorithmic* work reduction (fewer candidates / fewer box points) with an
+effectiveness-preserving argument, not per-op speedups — or accept the ≈1.3–1.4× effectiveness-exact
+ceiling and pursue effectiveness (the repo's actual merge axis) instead.

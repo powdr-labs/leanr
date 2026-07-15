@@ -301,3 +301,9 @@ and accepts both closer signs (mid-cycle the optimizer holds the negated `(1 −
 - **Measure per-case, not just aggregate**: `opt-export` + a canonical-form diff against
   `*.powdr_opt.json.gz` finds the mechanism; `benchmark.py` (+ keccak) confirms the totals. The
   geo metric moves with per-case wins — 67 small bus losses cost more than one big one.
+- **Runtime per-op micro-levers are exhausted (see log entry 88)**: `envOfFast` lookup, ring-op
+  amortization, `candSelect`'s always-true O(|patts|²) check, and `checkReencode` substitution
+  hoisting were all CI/locally neutral-to-negative — the enumeration passes are already compiled,
+  indexed, factored, and short-circuited, so per-op cost is not the bottleneck. Runtime wins now
+  require *algorithmic* work reduction (fewer candidates / box points) with an effectiveness proof,
+  or the entry-87 per-pass factorings. Do not re-profile these four.
