@@ -1437,10 +1437,16 @@ def interpPoly (pz : List (List (Variable × ZMod p) × List (Variable × ZMod p
     exactly its constraint's root set), so the group is re-encodable only if
     `⌈log₂ box⌉ < |xs|` — decided without enumerating the box. This skips the enumeration for
     the ubiquitous pure-boolean-flag groups (box `2^|xs|` can never win). -/
-def buildReencode (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p))
+def buildReencode (useIdx : Bool) (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p))
     (xs : List Variable) (freshBase : String) :
     Option (List Variable × Std.HashMap Variable (Expression p)) :=
-  let es := CoveredIndex.coveredIdx csIdx arrCs (coveredBy xs) xs
+  -- The covered set: through the inverted index on large systems, by direct filter on small
+  -- ones — on small flag-heavy circuits the per-target bucket gather + sort of hyper-shared
+  -- variables costs more than the plain scan (same trade-off as `domainFoldIndexThreshold`).
+  -- Both produce `coveredCsOf` in its original order, which `checkReencode`'s certificate
+  -- recomputes exactly.
+  let es := if useIdx then CoveredIndex.coveredIdx csIdx arrCs (coveredBy xs) xs
+    else arrCs.foldr (fun c acc => if coveredBy xs c then c :: acc else acc) []
   match groupDoms es xs with
   | none => none
   | some doms =>
@@ -1477,7 +1483,7 @@ def buildReencode (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p))
     in the system is skipped before `buildReencode` — in the steady state the fresh-name
     counters repeat the previous cycle's accepted names, and `checkReencode`'s freshness
     conjunct would reject exactly these after a full scan. -/
-def reencodeStep [Fact p.Prime] (bsem : BusSemantics p)
+def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (useIdx : Bool)
     (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p)) (cs : ConstraintSystem p)
     (varSet : { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ cs.vars })
     (xs : List Variable) (freshBase : String) :
@@ -1488,7 +1494,7 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p)
     -- fresh-name collision: `checkReencode` would reject after the full freshness scan
     ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
   else
-  match hb : buildReencode csIdx arrCs xs freshBase with
+  match hb : buildReencode useIdx csIdx arrCs xs freshBase with
   | none => ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
   | some (bits, hm) =>
     if hxsCs : xs.all (fun x => varSet.val.contains x) = true then
@@ -1507,7 +1513,8 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p)
            (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsB x hx))
            (fun b hbm => of_decide_eq_true (List.all_eq_true.mp hbn b hbm))
            hchk⟩,
-         CoveredIndex.build Expression.vars ro.algebraicConstraints, ro.algebraicConstraints.toArray,
+         (if useIdx then CoveredIndex.build Expression.vars ro.algebraicConstraints else ⟨∅, []⟩),
+         ro.algebraicConstraints.toArray,
          ⟨Std.HashSet.ofList ro.vars, fun x hx => by
            rw [Std.HashSet.contains_ofList] at hx
            exact List.contains_iff_mem.mp hx⟩⟩
@@ -1521,15 +1528,15 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p)
 /-- Process the candidate groups sequentially (correctness composes; derivations concatenate). The
     inverted index and the proof-carrying variable set (valid for the current `cs`) are threaded
     through and rebuilt by `reencodeStep` whenever it rewrites `cs`. -/
-def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) :
+def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) (useIdx : Bool) :
     List (List Variable) → Nat → (cs : ConstraintSystem p) →
     CoveredIndex.CovIndex → Array (Expression p) →
     { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ cs.vars } → PassResult cs bsem
   | [], _, cs, _, _, _ => ⟨cs, [], PassCorrect.refl cs bsem⟩
   | xs :: rest, idx, cs, csIdx, arrCs, varSet =>
-    let r1 := reencodeStep bsem csIdx arrCs cs varSet xs
+    let r1 := reencodeStep bsem useIdx csIdx arrCs cs varSet xs
       (s!"rnc{cs.algebraicConstraints.length}_{cs.busInteractions.length}_{idx}")
-    let r2 := reencodeLoop bsem rest (idx + 1) r1.1.out r1.2.1 r1.2.2.1 r1.2.2.2
+    let r2 := reencodeLoop bsem useIdx rest (idx + 1) r1.1.out r1.2.1 r1.2.2.1 r1.2.2.2
     ⟨r2.out, r1.1.derivs ++ r2.derivs, r1.1.correct.andThen r2.correct⟩
 
 /-- `List.dedup` computed in linear time via a hash set, with the **identical** result: an element
@@ -1549,11 +1556,22 @@ def reencodePass : VerifiedPass p := fun cs bsem =>
     haveI : Fact p.Prime := ⟨hpr⟩
     -- `dedupHash` replaces the quadratic `List.dedup` over the (up to thousands of) target
     -- variable-sets, producing the identical list in linear time.
+    -- Same single-variable-constraint prefilter as `domainFoldPass`: a group variable without
+    -- one can never obtain a domain, so `buildReencode`'s `groupDoms` would reject the target
+    -- after paying its covered-set lookup.
+    let svSet : Std.HashSet Variable := cs.algebraicConstraints.foldl (init := ∅) fun s c =>
+      match c.vars.dedup with
+      | [x] => s.insert x
+      | _ => s
     let targets := dedupHash (cs.algebraicConstraints.filterMap (fun c =>
       let vs := c.vars.dedup
-      if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt)) else none))
-    reencodeLoop bsem targets 0 cs
-      (CoveredIndex.build Expression.vars cs.algebraicConstraints) cs.algebraicConstraints.toArray
+      if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
+        some (vs.mergeSort (fun a b => compare a b != .gt))
+      else none))
+    let useIdx := 8192 ≤ cs.algebraicConstraints.length
+    reencodeLoop bsem useIdx targets 0 cs
+      (if useIdx then CoveredIndex.build Expression.vars cs.algebraicConstraints else ⟨∅, []⟩)
+      cs.algebraicConstraints.toArray
       ⟨Std.HashSet.ofList cs.vars, fun x hx => by
         rw [Std.HashSet.contains_ofList] at hx
         exact List.contains_iff_mem.mp hx⟩

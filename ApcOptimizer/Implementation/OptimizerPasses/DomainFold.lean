@@ -60,11 +60,29 @@ theorem constOnSurvs_sound (survs : List (List (Variable × ZMod p))) (e : Expre
         rw [← Expression.evalFast_eq, hthis]; exact hc
     · next => exact absurd h (by simp)
 
+/-- Does the expression mention any variable of `xs`? (No allocation.) -/
+def Expression.anyVarIn (xs : List Variable) : Expression p → Bool
+  | .const _ => false
+  | .var y => containsFast xs y
+  | .add a b => a.anyVarIn xs || b.anyVarIn xs
+  | .mul a b => a.anyVarIn xs || b.anyVarIn xs
+
+/-- Does the expression contain a variable-free `add`/`mul` node? For an expression sharing no
+    variable with the group, `hasFoldable` holds iff this does (given a nonempty survivor set). -/
+def Expression.hasConstFoldableNode : Expression p → Bool
+  | .const _ => false
+  | .var _ => false
+  | .add a b =>
+      !(Expression.add a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
+  | .mul a b =>
+      !(Expression.mul a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
+
 /-! ## The fold rewrite -/
 
-/-- Replace every maximal wholly-in-group subexpression that is constant on the survivors by that
-    constant; recurse otherwise. Leaves the group's variables in place where they are not folded. -/
-def foldRewrite (xs : List Variable) (survs : List (List (Variable × ZMod p))) :
+/-- The recursive fold core: replace every maximal wholly-in-group subexpression that is constant
+    on the survivors by that constant; recurse otherwise. Leaves the group's variables in place
+    where they are not folded. -/
+def foldRewriteGo (xs : List Variable) (survs : List (List (Variable × ZMod p))) :
     Expression p → Expression p
   | .const c => .const c
   | .var y => .var y
@@ -72,24 +90,33 @@ def foldRewrite (xs : List Variable) (survs : List (List (Variable × ZMod p))) 
       if (Expression.add a b).varsIn xs then
         match constOnSurvs survs (.add a b) with
         | some c => .const c
-        | none => .add (foldRewrite xs survs a) (foldRewrite xs survs b)
-      else .add (foldRewrite xs survs a) (foldRewrite xs survs b)
+        | none => .add (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
+      else .add (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
   | .mul a b =>
       if (Expression.mul a b).varsIn xs then
         match constOnSurvs survs (.mul a b) with
         | some c => .const c
-        | none => .mul (foldRewrite xs survs a) (foldRewrite xs survs b)
-      else .mul (foldRewrite xs survs a) (foldRewrite xs survs b)
+        | none => .mul (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
+      else .mul (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
+
+/-- The fold rewrite, gated: an expression sharing no variable with the group and containing no
+    variable-free compound node has no node the core could fold (a qualifying node is either
+    wholly-in-group with a variable — impossible — or variable-free), so it is returned untouched
+    without walking it node-by-node. `foldOut` maps this over the *whole* system per accepted
+    fold, and almost all expressions take the cheap branch. -/
+def foldRewrite (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (e : Expression p) : Expression p :=
+  if e.anyVarIn xs || e.hasConstFoldableNode then foldRewriteGo xs survs e else e
 
 /-! ## Agreement with the identity on any survivor-matching environment -/
 
 /-- On an environment that agrees on `xs` with some survivor `s`, `foldRewrite` is
     evaluation-preserving. The folded constants are exactly the survivor-constant values, and `s`'s
     membership pins them; unfolded nodes recurse. -/
-theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+theorem foldRewriteGo_agree (xs : List Variable) (survs : List (List (Variable × ZMod p)))
     (env : Variable → ZMod p) (s : List (Variable × ZMod p)) (hs : s ∈ survs)
     (hxs : ∀ x ∈ xs, env x = envOf s x) :
-    ∀ e : Expression p, (foldRewrite xs survs e).eval env = e.eval env := by
+    ∀ e : Expression p, (foldRewriteGo xs survs e).eval env = e.eval env := by
   -- For a wholly-in-`xs` expression, `env` and `envOf s` agree on its variables.
   have hcongr : ∀ e : Expression p, e.varsIn xs = true → e.eval env = e.eval (envOf s) := by
     intro e he
@@ -99,12 +126,12 @@ theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × 
   | const c => rfl
   | var y => rfl
   | add a b iha ihb =>
-      unfold foldRewrite
+      unfold foldRewriteGo
       by_cases hin : (Expression.add a b).varsIn xs = true
       · rw [if_pos hin]
         cases hc : constOnSurvs survs (.add a b) with
         | none =>
-            show (foldRewrite xs survs a).eval env + (foldRewrite xs survs b).eval env
+            show (foldRewriteGo xs survs a).eval env + (foldRewriteGo xs survs b).eval env
               = a.eval env + b.eval env
             rw [iha, ihb]
         | some c =>
@@ -115,16 +142,16 @@ theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × 
             have : (Expression.add a b).eval env = c := by rw [h1]; exact h2
             simpa [Expression.eval] using this.symm
       · rw [if_neg (by simpa using hin)]
-        show (foldRewrite xs survs a).eval env + (foldRewrite xs survs b).eval env
+        show (foldRewriteGo xs survs a).eval env + (foldRewriteGo xs survs b).eval env
           = a.eval env + b.eval env
         rw [iha, ihb]
   | mul a b iha ihb =>
-      unfold foldRewrite
+      unfold foldRewriteGo
       by_cases hin : (Expression.mul a b).varsIn xs = true
       · rw [if_pos hin]
         cases hc : constOnSurvs survs (.mul a b) with
         | none =>
-            show (foldRewrite xs survs a).eval env * (foldRewrite xs survs b).eval env
+            show (foldRewriteGo xs survs a).eval env * (foldRewriteGo xs survs b).eval env
               = a.eval env * b.eval env
             rw [iha, ihb]
         | some c =>
@@ -135,9 +162,21 @@ theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × 
             have : (Expression.mul a b).eval env = c := by rw [h1]; exact h2
             simpa [Expression.eval] using this.symm
       · rw [if_neg (by simpa using hin)]
-        show (foldRewrite xs survs a).eval env * (foldRewrite xs survs b).eval env
+        show (foldRewriteGo xs survs a).eval env * (foldRewriteGo xs survs b).eval env
           = a.eval env * b.eval env
         rw [iha, ihb]
+
+/-- On an environment that agrees on `xs` with some survivor, the (gated) fold rewrite is
+    evaluation-preserving. -/
+theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (env : Variable → ZMod p) (s : List (Variable × ZMod p)) (hs : s ∈ survs)
+    (hxs : ∀ x ∈ xs, env x = envOf s x) :
+    ∀ e : Expression p, (foldRewrite xs survs e).eval env = e.eval env := by
+  intro e
+  unfold foldRewrite
+  split
+  · exact foldRewriteGo_agree xs survs env s hs hxs e
+  · rfl
 
 /-- Bus-interaction-level agreement, from any expression-level agreement `hag`, applied to the
     multiplicity and every payload slot. -/
@@ -152,14 +191,14 @@ theorem mapExpr_eval_of_agree (g : Expression p → Expression p) (env : Variabl
 
 /-! ## Variables of the rewrite -/
 
-/-- Folding never introduces a variable: every variable of `foldRewrite … e` is a variable of `e`. -/
-theorem foldRewrite_vars (xs : List Variable) (survs : List (List (Variable × ZMod p)))
-    (e : Expression p) : ∀ v ∈ (foldRewrite xs survs e).vars, v ∈ e.vars := by
+/-- Folding never introduces a variable: every variable of `foldRewriteGo … e` is a variable of `e`. -/
+theorem foldRewriteGo_vars (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (e : Expression p) : ∀ v ∈ (foldRewriteGo xs survs e).vars, v ∈ e.vars := by
   induction e with
-  | const c => intro v hv; simp [foldRewrite, Expression.vars] at hv
+  | const c => intro v hv; simp [foldRewriteGo, Expression.vars] at hv
   | var y => intro v hv; exact hv
   | add a b iha ihb =>
-      unfold foldRewrite
+      unfold foldRewriteGo
       by_cases hin : (Expression.add a b).varsIn xs = true
       · rw [if_pos hin]
         cases constOnSurvs survs (.add a b) with
@@ -177,7 +216,7 @@ theorem foldRewrite_vars (xs : List Variable) (survs : List (List (Variable × Z
         · exact Or.inl (iha v hv)
         · exact Or.inr (ihb v hv)
   | mul a b iha ihb =>
-      unfold foldRewrite
+      unfold foldRewriteGo
       by_cases hin : (Expression.mul a b).varsIn xs = true
       · rw [if_pos hin]
         cases constOnSurvs survs (.mul a b) with
@@ -194,6 +233,15 @@ theorem foldRewrite_vars (xs : List Variable) (survs : List (List (Variable × Z
         rcases hv with hv | hv
         · exact Or.inl (iha v hv)
         · exact Or.inr (ihb v hv)
+
+/-- Folding never introduces a variable (gated form). -/
+theorem foldRewrite_vars (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (e : Expression p) : ∀ v ∈ (foldRewrite xs survs e).vars, v ∈ e.vars := by
+  intro v hv
+  unfold foldRewrite at hv
+  split at hv
+  · exact foldRewriteGo_vars xs survs e v hv
+  · exact hv
 
 /-! ## Agreement on any environment satisfying the covered constraints
 
@@ -407,23 +455,6 @@ through the inverted indexes — passing the original per-item test, or (b) any 
 var-free compound node (precomputed once per invocation; empty after constant folding) sharing
 no variable with `xs`. Purely an efficiency gate, like `systemHasFoldable` itself. -/
 
-/-- Does the expression mention any variable of `xs`? (No allocation.) -/
-def Expression.anyVarIn (xs : List Variable) : Expression p → Bool
-  | .const _ => false
-  | .var y => containsFast xs y
-  | .add a b => a.anyVarIn xs || b.anyVarIn xs
-  | .mul a b => a.anyVarIn xs || b.anyVarIn xs
-
-/-- Does the expression contain a variable-free `add`/`mul` node? For an expression sharing no
-    variable with the group, `hasFoldable` holds iff this does (given a nonempty survivor set). -/
-def Expression.hasConstFoldableNode : Expression p → Bool
-  | .const _ => false
-  | .var _ => false
-  | .add a b =>
-      !(Expression.add a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
-  | .mul a b =>
-      !(Expression.mul a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
-
 /-! ### Indexing the per-target covered-constraint scan
 
 `foldStep` gates every target on `groupDoms (coveredCsOf cs xs) xs`, whose `coveredCsOf` is a full
@@ -629,9 +660,19 @@ def domainFoldIndexThreshold : Nat := 8192
 def domainFoldPass : VerifiedPass p := fun cs bsem =>
   if hpr : p.Prime then
     haveI : Fact p.Prime := ⟨hpr⟩
+    -- Domains come only from single-variable constraints (`findDomainAlg`/`rootsIn`), and a
+    -- single-variable constraint is covered by every group containing its variable — so a group
+    -- with a variable that has *no* single-variable constraint anywhere can never pass
+    -- `groupDoms`. Skipping those targets up front (one hash lookup per variable) avoids the
+    -- per-target covered-set scan for the ubiquitous byte-limb groups, exactly.
+    let svSet : Std.HashSet Variable := cs.algebraicConstraints.foldl (init := ∅) fun s c =>
+      match c.vars.dedup with
+      | [x] => s.insert x
+      | _ => s
     let targets := dedupHash (cs.algebraicConstraints.filterMap (fun c =>
       let vs := c.vars.dedup
-      if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt))
+      if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
+        some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
     if domainFoldIndexThreshold ≤ cs.algebraicConstraints.length then
       foldLoop bsem targets cs (FoldIdx.mk' cs)

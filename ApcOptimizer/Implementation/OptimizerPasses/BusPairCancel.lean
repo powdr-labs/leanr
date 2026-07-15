@@ -1581,7 +1581,7 @@ theorem dropWitsGo_mem {bs : BusSemantics p} (facts : BusFacts p bs)
         intro h
         obtain rfl := Option.some.inj h
         rw [Bool.and_eq_true] at hne
-        exact ⟨by simpa using Array.getElem_mem hk,
+        exact ⟨by simp [Array.getElem_mem hk],
           fun he => by simp [he] at hne, fun he => by simp [he] at hne⟩
       | none =>
         intro h
