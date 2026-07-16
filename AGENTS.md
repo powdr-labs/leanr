@@ -63,3 +63,13 @@ for fewer distinct variables; break ties, and pursue variable-neutral wins, by r
 interactions and then constraints.
 
 When asked to improve the optimizer, use the `autoopt` skill.
+
+## Pushing work
+
+- All commits have to compile without warnings.
+- Changes should be committed in incremental commits if possible. Rebases are fine.
+- The agent can always open a draft PR.
+- Opening a PR triggers a CI run with benchmark results posted as a sticky comment. Agents may
+  use this to run benchmarks (e.g. when they are on constrained environments).
+- Agents should frequently check if there were any updates to main and rebase if needed, at least
+  before they open / update a PR.
