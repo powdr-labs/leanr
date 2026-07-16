@@ -393,11 +393,20 @@ state; every item is output-preserving unless noted):
   the `findVarBound`-per-candidate pattern that busPairCancel just shed.
 - **zeroWidthRange (~1.7 s/eth case)**: two `rangeEq?` scans per invocation (filterMap + keep);
   fusing them into one tagged pass needs the `filterBus`-shaped proof reworked.
-- **Cross-cycle memoization (the big structural one)**: the cleanup cycle runs 5–9 times and the
-  enumeration passes rediscover the same negatives every cycle. A pass-state channel (e.g.
-  `VerifiedPassW` threading an opaque cache blob validated by cheap hashes) would cut the
-  steady-state tail of *every* pass at once; needs a framework change in
-  `Implementation/OptimizerPasses/Basic.lean`'s glue, so weigh against the audit-surface rule.
+- **Cross-cycle memoization / shared `FactStore` (the big structural one)**: the cleanup cycle runs
+  5–9 times and the passes rediscover the same derived data (occurrence indices, bound maps, two-root
+  decompositions, domains) every cycle. The **substrate now exists** — entry 92 added a `FactStore`
+  threaded through the whole pipeline by `VerifiedPassS` (`OptimizerPasses/FactStore.lean`, no glue in
+  `Basic.lean` touched), carrying `Prop`-free data that consumers re-validate at use, and the
+  input-independent range cache is shared through it. What remains is the part that pays for the
+  *input-dependent* members: they can only be reused byte-identically when their source list is
+  unchanged, and the O(system) freshness check to detect that costs about as much as their (cheap)
+  rebuild — so a real win needs **incremental maintenance**: update the store's occurrence
+  index / bound map / two-root map *through* `substF` and the drop primitives (a dirty-worklist over
+  stable-position arrays / tombstones), so members stay fresh without a rebuild or a whole-list check.
+  That is the step that lets `busPairCancel`/`domainFold`/`reencode`/the bound consumers reuse instead
+  of rebuild. Measured caveat (entry 92): these builds are individually cheap (a `BoundsMap.build` is
+  0–6 ms), so the win comes from the *aggregate* across ~27 passes × ~9 cycles, not any single pass.
 
 ## Runtime leftovers II (generated-C audit of the wasm-eth heavy cases)
 

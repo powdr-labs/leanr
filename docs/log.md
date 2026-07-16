@@ -3502,6 +3502,7 @@ Build green; `Scripts/check-proof-integrity.sh` green (the three correctness the
 depend only on `{propext, Classical.choice, Quot.sound}`). Runtime leftovers (domainBatch box
 streaming / SAT-style pruning, gauss, dedup's quadratics, rootPairUnify's rescans, cross-cycle
 memoization) are recorded in `docs/ideas.md` under "Runtime leftovers". **Worked: yes.**
+
 ### 91. Runtime: tupleRange batch-drain with split-by-construction (effectiveness unchanged)
 
 Profiling the heaviest wasm-eth cases put `tupleRange` second (96.3 s of `apc_012`'s 435 s
@@ -3553,3 +3554,60 @@ this lever also recorded the remaining ones (ZMod dictionary reconstruction per 
 gauss's unconditional per-constraint renormalization, rootPairUnify's quadratic seen-join,
 `sizeKey`/`varCount` allocation, variable interning, runtime `p.Prime` decides) in
 `docs/ideas.md` under "Runtime leftovers II". **Worked: yes.**
+
+### 92. Shared `FactStore`: thread derived data through the cleanup cycle + share the materialized range cache (runtime; effectiveness unchanged)
+
+Infrastructure plus a first member for reusing per-pass derived data across the cleanup cycle
+instead of rebuilding it in every pass on every cycle. **Effectiveness is unchanged — output is
+byte-identical to the previous pipeline** by construction (the range cache never affects the domain
+table; the framework is a pure store-threading refactor), locally confirmed by `opt-export` diff on
+95 wasm-eth cases (the 5 giant cases identical by the same argument), with the CI effectiveness bench
+confirming the openvm-eth corpus is unchanged. Audited surface untouched; the three correctness
+theorems still depend only on `{propext, Classical.choice, Quot.sound}`.
+
+**The framework (`OptimizerPasses/FactStore.lean`).** A `FactStore p` is threaded through the whole
+pipeline (prelude → cleanup fixpoint → coda) by a store-aware pass type `VerifiedPassS` — a
+`VerifiedPassW` that additionally takes and returns the store. `VerifiedPassS.andThen`/`.guardDegree`,
+`chainPassesS`, and the store-threaded fixpoint `iterateToFixpointS` mirror `FactPass.lean`
+one-for-one, and the degree-respecting lemmas carry over unchanged (the store never enters the degree
+argument, and the `PassResult` a store pass returns is exactly the obligation a `VerifiedPassW`
+discharges, so `PassCorrect` composes as before). The store carries **no soundness proof for its data
+members**: consumers re-validate what they read against the current system (the
+`CoveredIndex.coveredIdx_mem` / `recvIndex` candidate-then-reverify discipline), so a stale or wrong
+entry can only miss an optimization, never license an unsound one. `pipeline` runs the store-threaded
+`pipelineS` from `FactStore.empty` and discards the final store, so `optimizerWithBusFacts` and the
+audited `ApcOptimizer/Optimizer.lean` are unchanged; the `profile` CLI threads the store identically,
+keeping the profiler in lockstep with the three pass lists.
+
+**First member — the range cache (input-independent).** `RangeCache` (the memo of materialized
+`[0, bound)` finite-domain lists — a 65 536-element list for a 16-bit range check) moves from
+`DomainBatch.lean` into the store. It is input-independent (every entry is the canonical
+`(List.range b).map Nat.cast`, sound for *any* system), so it threads globally with zero staleness
+and zero re-validation: materialized once and reused across every `domainBatch` invocation instead of
+rebuilt from empty each cleanup cycle. `addBusDoms` now returns the grown cache; by
+`interactionDomainC_fst` the cache never changes the domain table, so the pass output is byte-identical.
+
+**Measured (profile, same runner, vs `origin/main`).** The win is on the small APCs whose cost is
+dominated by re-materializing the 16-bit range list across cleanup cycles:
+- wasm-eth apc_019: 329 → 226 ms total (domainBatch 265 → 161)   **−31 %**
+- wasm-eth apc_079: 314 → 213 ms total (domainBatch 258 → 157)   **−32 %**
+- other small wasm-eth cases: −2 % to −6 %; mid/large cases neutral (enumeration-bound).
+
+The gain is confined to circuits that re-materialize a wide range list (16-bit) across cleanup
+cycles; elsewhere it is neutral. This container has large run-to-run variance and concurrent load, so
+the on-demand `Runtime Bench` workflow (same-runner A/B) is the authoritative corpus-wide measurement.
+
+**Other candidate members measured but not shipped.** The remaining derived structures (the value
+`BoundsMap`, the variable→item occurrence index, `TwoRootMap`, `EqConstraintMap`, `DomainTable`) are
+all *input-dependent* — their soundness is keyed to the current constraint/interaction lists — so
+reusing them across passes needs an O(system) freshness check to stay byte-identical (a stale reuse
+would silently drop derived facts and *regress* effectiveness). But their builds are **cheap**: a
+direct measurement put one `BoundsMap.build` at 0–6 ms even on a 10 s case (`probeCandidatesOf` keeps
+the 256-value probes rare), at a ~42 % byte-identical reuse hit rate — so sharing them would save
+under ~0.5 % while the freshness check costs about as much. A real win from these needs incremental
+maintenance of the store through `substF`/drops (a dirty-worklist architecture over stable-position
+arrays), recorded under `docs/ideas.md`; an unsafe pointer-identity freshness check was rejected as
+incompatible with the fully-machine-checked, three-axioms-only guarantee.
+
+Build green; `Scripts/check-proof-integrity.sh` green. **Worked: yes** (framework + range cache; the
+other members are a deliberate no-op pending incremental maintenance).
