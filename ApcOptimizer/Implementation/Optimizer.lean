@@ -123,11 +123,11 @@ def codaPasses : List (String × VerifiedPassW p) :=
     ("redundantByteDrop", RedundantByteDrop.redundantByteDropPass.guardDegree),
     ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
-    -- runs global range packing once at the end), so it is deferred here out of the cleanup fixpoint
-    -- — where its own nested `iterateToFixpoint` re-ran on every cleanup cycle — to run once, after
-    -- `redundantByteDrop` has dropped droppable byte checks operand-granularly (packing a byte check
-    -- early would hide it from the drop, leaving more bus interactions).
-    ("tupleRange", VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass)),
+    -- runs global range packing once at the end), so it runs once here, out of the cleanup
+    -- fixpoint, after `redundantByteDrop` has dropped droppable byte checks operand-granularly
+    -- (packing a byte check early would hide it from the drop, leaving more bus interactions).
+    -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
+    ("tupleRange", tupleRangePass.guardDegree),
     ("bytePackLate", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("monicScale", monicScalePass.withFacts.guardDegree),
     ("constFoldEnd", constantFoldPass.withFacts.guardDegree),

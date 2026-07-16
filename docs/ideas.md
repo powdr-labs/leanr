@@ -398,3 +398,52 @@ state; every item is output-preserving unless noted):
   `VerifiedPassW` threading an opaque cache blob validated by cheap hashes) would cut the
   steady-state tail of *every* pass at once; needs a framework change in
   `Implementation/OptimizerPasses/Basic.lean`'s glue, so weigh against the audit-surface rule.
+
+## Runtime leftovers II (generated-C audit of the wasm-eth heavy cases)
+
+Reading the compiled C (`.lake/build/ir/`) plus a flat `perf` profile of wasm-eth `apc_012`
+(435 s at entry-90 state) shows ~40 % of big-case runtime is heap churn (`lean_dec_ref_cold`
+19.7 %, allocator 14.8 %, `List.reverseAux` copying 4.8 %), with `Variable` equality at 10.3 %.
+Pass ranking there: gauss 98 s, tupleRange 96 s (**taken — see the batch-drain entry**),
+busPairCancel 52 s, rootPairUnify 51 s, domainBatch 34 s. Levers not yet taken, in value order
+(all output-preserving unless noted):
+
+- **ZMod instance reconstruction per scalar op**: e.g. `addCoeff`'s merge branch compiles to
+  `ZMod.commRing p` → three structure projections → `lean_apply_2` **per field addition**; 400+
+  such construction sites across the pass C files. BabyBear values keep even products inside
+  Lean's tagged-scalar Nat range, so the arithmetic is nearly free — the whole cost is
+  dictionary building + dispatch. Fix: extend `IExpr.evalWith`'s hoisted-ops pattern
+  (DomainBatch) to `addCoeff`/`mergeTerms`/`linearize` and other hot arithmetic, or `@[csimp]`
+  fast ZMod ops compiling to direct `Nat` add/mod.
+- **gauss reduces every constraint unconditionally**: `pending = cs ++ cs` — each constraint
+  pays `substF` (full tree copy; shared nodes defeat ctor reuse) + `normalize` (quadratic
+  `addCoeff` merge) twice per invocation even when the solution map is empty or disjoint from
+  the constraint. Fix: solved-vars mention prefilter (HashSet), plus a var → dependent-solutions
+  index instead of `σ.map.toList.filter` per accepted pivot.
+- **rootPairUnify quadratic seen-join**: `rpLoop` probes `seen.findSome?` per candidate with
+  deep key comparison (`e.key == xk.2` compares full term lists); `seen` grows over the sweep.
+  Fix: hash-bucket `seen` by key hash (the `Expression.structHash` precedent from BusUnify).
+  Also `rpCandidates` runs `c.vars.eraseDups` (quadratic, string-compare equality) per
+  constraint, and a `ZMod` inverse per candidate.
+- **`sizeKey`/`varCount` ≈ 7.6 % of the run**: `Expression.vars` compiles to a per-node
+  `List.appendTR` (copies the whole left sublist — O(size × depth) cons allocations), then
+  `varCount` string-hashes every occurrence; `iterateToFixpoint` recomputes the key twice per
+  step (the previous step already computed it). Fix: fold the tree straight into the `HashSet`
+  and thread the computed key through the recursion.
+- **Variable identity ≈ 12 %**: the parser creates a fresh `String` per occurrence (~340 k
+  occurrences / ~17.5 k distinct on `apc_012`, names avg 24 chars with long shared prefixes),
+  so `lean_string_eq`'s pointer fast path never fires; every hash walks the full string; and
+  the derived `DecidableEq Variable` allocates a closure per names-equal comparison (generic
+  `Option Nat` dispatch — visible in `Spec.c`). Fix: intern variables in the parser
+  (`HashMap String Variable` pool; Implementation-only). A hand-written `DecidableEq Variable`
+  or a dense-id representation would also help but touches `Spec.lean` (audited).
+- **Runtime `decide p.Prime` per invocation** in flagFold (×3 entry points), flagUnify,
+  rootPairUnify, busPairCancel — trial division (`Nat.minFacAux`, ~22 k steps for babyBear);
+  in redundantByteDrop the decide sits **inside the per-element lambda**
+  (`ops.all (fun e => byteJustified (decide p.Prime) …)`). Dominates the small-APC tail. Fix:
+  hoist out of the lambda; longer-term decide once at pipeline entry and thread the result.
+- **flagFold derive-and-discard**: the box-constraint predicate recomputes `c.vars.eraseDups`
+  four times inside one expression; compute once per constraint, HashSet-dedup.
+- Lower priority: `withPtrEq`-shortcut structural equality for `Expression`/`BusInteraction`
+  (safe, Implementation-only; helps `dedup`'s quadratic `bi ∈ seen` and remaining split
+  decides); `substF` no-change signaling to preserve sharing; incremental lengths in `sizeKey`.
