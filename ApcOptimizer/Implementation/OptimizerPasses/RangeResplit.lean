@@ -1011,10 +1011,13 @@ def findPartner {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSy
         | some (y, wyc) =>
             if y == t.1 && cy.busId == cx.busId
                 && cy.multiplicity == cx.multiplicity then
-              let tag := x.name ++ "|" ++ toString (x.powdrId?.getD 0)
+              -- The low limb's powdr ID is unique per column (and validity demands it exists),
+              -- so it alone makes the fresh names distinct across pairs; collisions with
+              -- preexisting names are caught by the freshness conjunct of `Pair.valid`.
+              let tag := toString (x.powdrId?.getD 0)
               some { cx := cx, cy := cy, x := x, y := y, wxc := wxc, wyc := wyc,
-                     b := ⟨"rspl#b|" ++ tag, none⟩,
-                     h := ⟨"rspl#h|" ++ tag, none⟩ }
+                     b := ⟨"resplit_byte_" ++ tag, none⟩,
+                     h := ⟨"resplit_high_" ++ tag, none⟩ }
             else none
         | none => none))
 
