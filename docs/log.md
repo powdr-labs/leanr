@@ -3669,3 +3669,17 @@ Build + `Scripts/check-proof-integrity.sh` green throughout ({propext, Classical
 Quot.sound} only); no `sorry`/`admit`/`axiom`/`native_decide`. The `Spec.lean` diff is 12 lines
 of grammar + eval/vars and is the session's only audited-surface change, made on explicit user
 instruction; everything else is Implementation-side. **Worked: yes.**
+
+**Addendum (same session): `rangeResplit` moved after `tupleRange` in the coda.** The CI run on
+PR #147 showed wasm `apc_036`/`apc_063` at **+1 bus** each: on wasm (tuple slot-2 = 4096) a
+12-bit limb could previously ride a tuple with a byte partner in slot-1; re-splitting *before*
+`tupleRange` dissolves the 12-bit obligation and can strand that byte partner on odd parities.
+Re-ordered to run after `tupleRange`: pairs the tuple packer consumes are count-equal either way
+(tuple(byte, 12) + [17] = 2 = [21] + two pooled byte halves), the leftover bare pairs still
+re-split, and no partner is stranded. Count-invariant on eth (slot-2 there is 8192-exact, so
+12-bit limbs never ride tuples) and keccak (no tuple interactions); spot-checked apc_010 = 220,
+apc_001 = 22, wasm apc_004 = 146 retained, wasm apc_036 back to 1029. The first attempt at this
+edit silently no-oped (a stale replacement pattern from before #144 unwrapped the `tupleRange`
+entry — the "verification" was really running main's pass list); re-applied with an asserted
+match and re-verified against the actual binary. Working rule: after scripted source edits,
+grep the edited lines before trusting a rebuild.

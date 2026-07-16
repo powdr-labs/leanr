@@ -128,17 +128,22 @@ def codaPasses : List (String × VerifiedPassW p) :=
     ("dedupLate", dedupPass.withFacts.guardDegree),
     ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree),
     ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
-    -- Re-encode two-limb range decompositions at the byte boundary (e.g. the timestamp-lt
-    -- (17,12) split becomes byte + 21-bit) so the byte halves join the packing pool below.
-    -- Runs once, after the drops (a dropped check must not anchor a re-split) and before the
-    -- packers (which pair the fresh bytes).
-    ("rangeResplit", rangeResplitPass.guardDegree),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
     -- runs global range packing once at the end), so it runs once here, out of the cleanup
     -- fixpoint, after `redundantByteDrop` has dropped droppable byte checks operand-granularly
     -- (packing a byte check early would hide it from the drop, leaving more bus interactions).
     -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
     ("tupleRange", tupleRangePass.guardDegree),
+    -- Re-encode two-limb range decompositions at the byte boundary (e.g. the timestamp-lt
+    -- (17,12) split becomes byte + 21-bit) so the byte halves join the packing pool below.
+    -- Runs once, after the drops (a dropped check must not anchor a re-split) and after
+    -- `tupleRange`: on buses whose tuple slot-2 exactly fits a limb (wasm's 4096 and 12-bit
+    -- limbs), the tuple packer pairs that limb with a byte at equal density — re-splitting
+    -- first would strand the byte partner (+1 bus on odd parities, measured on wasm
+    -- apc_036/063). Pairs the tuple packer consumes are count-equal either way; the leftover
+    -- bare pairs re-split here and their fresh bytes pair two-per-interaction in
+    -- `bytePackLate` below.
+    ("rangeResplit", rangeResplitPass.guardDegree),
     ("bytePackLate", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("monicScale", monicScalePass.withFacts.guardDegree),
     ("constFoldEnd", constantFoldPass.withFacts.guardDegree),
