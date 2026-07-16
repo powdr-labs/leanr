@@ -84,7 +84,10 @@ def serializeExpr (m : Std.HashMap Variable Nat) : Expression p → Json
     (derived `serde` on `enum ComputationMethod<T, E>` in
     `constraint-solver/src/constraint_system.rs`):
     `const c → {"Constant": c}`, `quotientOrZero num den → {"QuotientOrZero": [num, den]}`,
-    `ifEqZero cond thenM elseM → {"IfEqZero": [cond, thenM, elseM]}`. -/
+    `ifEqZero cond thenM elseM → {"IfEqZero": [cond, thenM, elseM]}`,
+    `floorDiv e d → {"FloorDiv": [e, d]}`, `floorMod e d → {"FloorMod": [e, d]}` (the two
+    integer digit extractors added for range re-splitting; powdr's witgen must interpret them as
+    `⌊e.val / d⌋` / `e.val % d` on canonical values). -/
 def serializeComputationMethod (m : Std.HashMap Variable Nat) :
     ComputationMethod p → Json
   | .const c => Json.mkObj [("Constant", constJson c)]
@@ -95,6 +98,10 @@ def serializeComputationMethod (m : Std.HashMap Variable Nat) :
         serializeExpr m cond,
         serializeComputationMethod m thenM,
         serializeComputationMethod m elseM])]
+  | .floorDiv e d =>
+      Json.mkObj [("FloorDiv", Json.arr #[serializeExpr m e, Json.num (JsonNumber.fromNat d)])]
+  | .floorMod e d =>
+      Json.mkObj [("FloorMod", Json.arr #[serializeExpr m e, Json.num (JsonNumber.fromNat d)])]
 
 /-- Serialize the optimizer's derivations to powdr's `derived_columns` JSON: a list of
     `DerivedVariable` 3-tuples `[is_new, variable, computation_method]` (manual `serde` in

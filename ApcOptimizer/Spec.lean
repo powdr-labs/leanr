@@ -49,11 +49,16 @@ def Expression.vars : Expression p → List Variable
     `ComputationMethod`. For newly introduced variables, this is interpreted by powdr's witness
     generator.
     `quotientOrZero num den` is `num / den` in the field, or `0` when
-    `den = 0`; `ifEqZero cond thenM elseM` picks `thenM` when `cond` evaluates to `0`, else `elseM`. -/
+    `den = 0`; `ifEqZero cond thenM elseM` picks `thenM` when `cond` evaluates to `0`, else `elseM`;
+    `floorDiv e d` / `floorMod e d` are the integer quotient `⌊e.val / d⌋` / remainder `e.val % d`
+    of the evaluated expression's *canonical value*, as field elements — the digit extractors that
+    let the optimizer re-split a range decomposition into different limb widths. -/
 inductive ComputationMethod (p : ℕ) where
   | const (c : ZMod p)
   | quotientOrZero (num den : Expression p)
   | ifEqZero (cond : Expression p) (thenM elseM : ComputationMethod p)
+  | floorDiv (e : Expression p) (d : ℕ)
+  | floorMod (e : Expression p) (d : ℕ)
 
 /-- Evaluate a computation method under an assignment (cf. powdr's `evaluate_computation_method`). -/
 def ComputationMethod.eval : ComputationMethod p → (Variable → ZMod p) → ZMod p
@@ -62,12 +67,16 @@ def ComputationMethod.eval : ComputationMethod p → (Variable → ZMod p) → Z
       if den.eval env = 0 then 0 else (den.eval env)⁻¹ * num.eval env
   | .ifEqZero cond thenM elseM, env =>
       if cond.eval env = 0 then thenM.eval env else elseM.eval env
+  | .floorDiv e d, env => (((e.eval env).val / d : ℕ) : ZMod p)
+  | .floorMod e d, env => (((e.eval env).val % d : ℕ) : ZMod p)
 
 /-- The variables a computation method may read. -/
 def ComputationMethod.vars : ComputationMethod p → List Variable
   | .const _ => []
   | .quotientOrZero num den => num.vars ++ den.vars
   | .ifEqZero cond thenM elseM => cond.vars ++ thenM.vars ++ elseM.vars
+  | .floorDiv e _ => e.vars
+  | .floorMod e _ => e.vars
 
 /-- A list of derived variables paired with how to compute each, in order — the extra output of
     the optimizer, consumed by witness generation. -/

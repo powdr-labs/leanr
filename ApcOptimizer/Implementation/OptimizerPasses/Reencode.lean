@@ -862,6 +862,16 @@ theorem ComputationMethod.eval_congr (cm : ComputationMethod p) (e1 e2 : Variabl
       show (if cond.eval e1 = 0 then thenM.eval e1 else elseM.eval e1)
          = (if cond.eval e2 = 0 then thenM.eval e2 else elseM.eval e2)
       rw [hc, ht, he]
+  | floorDiv e d =>
+      intro h
+      have he : e.eval e1 = e.eval e2 := Expression.eval_congr e _ _ h
+      show (((e.eval e1).val / d : ℕ) : ZMod p) = (((e.eval e2).val / d : ℕ) : ZMod p)
+      rw [he]
+  | floorMod e d =>
+      intro h
+      have he : e.eval e1 = e.eval e2 := Expression.eval_congr e _ _ h
+      show (((e.eval e1).val % d : ℕ) : ZMod p) = (((e.eval e2).val % d : ℕ) : ZMod p)
+      rw [he]
 
 /-- The interpolation image of group variable `x` at pattern `aβ` (a field constant). -/
 def imgVal (xs : List Variable) (hm : Std.HashMap Variable (Expression p))
