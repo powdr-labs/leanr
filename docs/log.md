@@ -3608,3 +3608,64 @@ mod p before diffing* and *per-corpus bus maps differ*: eth tuple is (256, 8192)
 session is carried forward with the tupleRange and PrimeWitness (#141) items marked taken).
 Build untouched; no behavior change. **Worked: n/a (documentation iteration; the honest answer
 to "find a big one" is that in-spec big ones are exhausted — the frontier is the spec).**
+
+### 93. Byte-boundary range re-split: the spec's first user-approved extension breaks the timestamp packing floor (−584 eth bus, keccak below powdr)
+
+**Idea.** Entry 92's floor analysis identified the one remaining big lever as out-of-spec: the
+timestamp-lt decomposition `(d_lo, d_hi)` with `[d_lo, 17]`, `[d_hi, 12]` burns two full
+variable-range interactions per boundary address on eth (the 12-bit limb fits no packing slot
+exactly), and re-splitting at the byte boundary needs `⌊·/256⌋`/`mod 256` witnesses the
+`ComputationMethod` grammar could not express. **The user approved extending the grammar**, so
+this entry lands the whole chain:
+
+- **Spec (audited, user-requested): `ComputationMethod.floorDiv/.floorMod`** — integer digit
+  extractors on an expression's canonical value (`Spec.lean`; eval/vars cases, `eval_congr`
+  cases, `{"FloorDiv"|"FloorMod": [e, d]}` export encodings). powdr's witgen needs the twin
+  extension to interpret exported derivations.
+- **New fact `varRangeBusInv_sound`**: on a `varRangeBus` bus, `breaksInvariant` ignores the
+  payload (proven for OpenVM — the invariant is mult-only; vacuous for `trivial`). Lets a pass
+  *add* a range check whose multiplicity matches an existing accepted check's.
+- **New coda pass `RangeResplit`** (between `subsumedRange` and `tupleRange`): two solo
+  bare-variable checks `[x, a]`, `[y, b]` (same varRange bus, same multiplicity, widths in
+  bounds, `2^(a+b) < p`) whose limbs occur elsewhere **only through the composed form
+  `x + 2^a·y`** are replaced by fresh derived limbs `b' = D mod 256`, `h' = ⌊D/256⌋`
+  (`D = x + 2^a·y`), checked as `[b', 8]` + `[h', a+b−8]`. Both encodings are bijective digit
+  decompositions of `[0, 2^(a+b))`, so refinement holds in both directions; the digit identity
+  `n % 256 + 256·⌊n/256⌋ = n` makes the env mappings *unconditional* (bounds bind exactly where
+  multiplicities are nonzero, and both check families share one multiplicity expression).
+  Occurrence discovery linearizes the first site mentioning `x` and reads the partner off the
+  coefficient ratio `2^a`; validation is a decidable conjunction including "the rewrite
+  eliminated both limbs everywhere" — pairs with extra per-limb sites (e.g. the mem_ptr
+  alignment gadget's `limb₀/4` check) are *semantically correctly* rejected, since their low
+  limb carries information beyond `D`. Variable-neutral by construction (2 limbs for 2).
+- **`ByteCheckPack` generalization**: `svCheck?` gains the bare width-8 variable-range form
+  `[e, 8]` (mult 1, gated `256 < p` so the strengths agree exactly), and `findGo` now scans for
+  a target bus carrying `bytePairBus && byteCheck` (preferring the sources' own bus — existing
+  behavior unchanged) instead of requiring the singles to live on the pair bus. The fresh
+  varRange bytes pack two-per-interaction onto the bitwise bus; `mergeStateless2_correct` was
+  already bus-agnostic, so the proof delta is one hypothesis.
+
+**Measured (full corpora, this container, jobs 4; variables and constraints byte-neutral
+everywhere):**
+
+| benchmark | bus eff before (agg / geo) | after | powdr | abs after |
+|---|---|---|---|---|
+| openvm-eth (100) | 3.557× / 2.812× | **3.688× / 2.990×** | 3.480× / 2.822× | ~15,840 (−584) |
+| wasm-eth (100) | 6.099× / 2.886× | **6.172× / 2.928×** | 5.666× / 2.868× | (−~150) |
+| keccak | 1,752 | **1,688 (−64)** | 1,734 | **46 below powdr** |
+
+The last aggregate deficit anywhere (eth bus geo, −0.010) flips to **+0.168**; keccak — whose
+1,734 was documented as a measured floor under the frozen grammar — drops 46 *below* powdr
+(the 129 boundary lt-pairs re-split; 2,021 vars / 186 constraints unchanged). apc_010: 239 →
+220 vs powdr's 239. apc_005-class flag folds unaffected (1,424 vars / 694 bus, both slightly
+better than the entry-79 numbers). wasm apc_004 unchanged at exact parity (its 12-bit limbs
+ride the 4096 tuple slot-2, not bare checks — correctly out of scope). Runtime: keccak solo
+276 s → 311 s under benchmark contention (same-runner CI is authoritative); eth cases at
+noise level (apc_010 1.6 → 1.7 s).
+
+**apc-optimizer now leads powdr on every axis — aggregate and geomean — of every corpus.**
+
+Build + `Scripts/check-proof-integrity.sh` green throughout ({propext, Classical.choice,
+Quot.sound} only); no `sorry`/`admit`/`axiom`/`native_decide`. The `Spec.lean` diff is 12 lines
+of grammar + eval/vars and is the session's only audited-surface change, made on explicit user
+instruction; everything else is Implementation-side. **Worked: yes.**

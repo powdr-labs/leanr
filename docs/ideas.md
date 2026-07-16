@@ -13,20 +13,20 @@ older per-case number in the log is stale for layout questions; re-measure befor
 | benchmark | axis | apc (agg / geo) | powdr (agg / geo) | verdict |
 |---|---|---|---|---|
 | wasm-eth (100) | variables | **7.228× / 3.588×** | 6.273× / 3.542× | lead (agg + geo) |
-| | bus interactions | **6.099× / 2.886×** | 5.666× / 2.868× | **lead — the last trailing axis flipped with #140** |
+| | bus interactions | **6.172× / 2.928×** | 5.666× / 2.868× | lead (agg + geo) |
 | | constraints | 15.165× / 10.438× | 9.671× / 11.949× | agg lead, geo tail |
 | openvm-eth (100) | variables | **4.552× / 3.887×** | 4.092× / 3.787× | lead (agg + geo) |
-| | bus interactions | **3.557× / 2.812×** | 3.480× / 2.822× | agg lead, geo −0.010 tail |
+| | bus interactions | **3.688× / 2.990×** | 3.480× / 2.822× | lead (agg + geo; entry 93 re-split) |
 | | constraints | 10.845× / 12.026× | 5.853× / 10.311× | lead (agg + geo) |
 | keccak | variables / constraints | parity (2,021 / 186) | | parity |
-| | bus interactions | 1,752 | 1,734 | +18 (measured floor, see dead ends) |
+| | bus interactions | **1,688** | 1,734 | **46 below powdr** (entry 93 broke the old 1,734 "floor") |
 
 Per-case variables W/L/T vs powdr: wasm 16/11/73 (losses are a handful of vars on tiny blocks),
-eth 31/7/62. **apc-optimizer now leads or ties powdr on every aggregate axis of every corpus.**
-The remaining apc-vs-powdr deltas are Gauss pivot-order noise (±1–4 % per case, see §k256), and
-the remaining distance to the *information floor* is a sum of scattered ≤2 % residues. **No
-double-digit in-spec lever was found** — a floor argument per mass class is below, then the
-out-of-spec levers that *would* be big, then the small in-scope leftovers.
+eth 31/7/62. **apc-optimizer now leads powdr on every axis — aggregate and geomean — of every
+corpus** (entry 93 flipped the last tail). The remaining apc-vs-powdr deltas are Gauss
+pivot-order noise (±1–4 % per case, see §k256). The floor analysis below still holds for
+everything *except* item 2, whose wall was the `ComputationMethod` grammar: the user approved
+extending it (`floorDiv`/`floorMod`, entry 93), and the byte-boundary re-split landed.
 
 ## Output mass structure (what the surviving size *is*)
 
@@ -54,17 +54,15 @@ of these masses — and each is at a floor:
    batching of two unknowns is unsound* (bit stealing: `x + 2^a·y < 2^(a+b)` admits `x ≥ 2^a`).
    A single table row certifies at most log₂(table size) bits of fresh witness: varRange ≈ 2^26,
    tuple 2^19–2^21, bitwise op-0 2^16. Do **not** build a global set-cover repack pass.
-2. **Timestamp lt-machinery is floored at 2 vars + 2 interactions per boundary address on eth
-   (2 vars + 1.5 interactions on wasm).** The obligation is 29 bits (`cur − prev − 1 = d_lo +
-   2^17·d_hi`, `d_lo < 2^17`, `d_hi < 2^12`); the largest single slot is 25 bits, so ≥ 2 pieces
-   and (with one Gauss-eliminable limb) exactly 2 variables. Re-splitting into byte-friendly
-   pieces — e.g. `(8, 21)`: byte + 21-bit, the byte packable at density 2, worth ~−1,400 eth
-   interactions — **requires witnesses `ComputationMethod` cannot express**: the spec's grammar
-   is `constant | quotientOrZero | ifEqZero` (Spec.lean), and `⌊d/256⌋`/`d mod 256` are neither
-   (an ifEqZero tree would need 2^17 leaves). eth's tuple slot-2 is 8192 = 2^13 (per-corpus
-   bus_map — see working rules) but placing the 12-bit limb there is slot weakening (unsound).
-   wasm's (256, 4096) slot-2 exactly fits the 12-bit limb and is already used (that is the whole
-   apc/powdr wasm-vs-eth tuple-count difference).
+2. **Timestamp lt-machinery — the interaction floor was grammar-made and is now BROKEN
+   (entry 93).** 2 vars per boundary address stands (29-bit obligation, 25-bit max slot), but
+   the 2-interaction layout was an artifact of the frozen `(17, 12)` columns: with the
+   user-approved `ComputationMethod.floorDiv/.floorMod` extension, `RangeResplit` re-encodes
+   qualifying pairs at the byte boundary (`(8, a+b−8)`), and the extended `ByteCheckPack`
+   packs the bytes two-per-interaction → ~1.5 interactions/address. Landed: eth −584 bus,
+   keccak −64 (below powdr), wasm −~150. Still true: placing a 12-bit limb in eth's 8192
+   tuple slot-2 is slot weakening (unsound); wasm's (256, 4096) slot-2 fits 12-bit limbs
+   exactly and pairs that ride it are correctly out of the re-split's scope.
 3. **Memory is floored at 2 interactions per boundary address** — the bus interface itself
    (consume the cell state, re-produce it; identical-payload interior pairs already telescope).
    Verified complete: eth apc_010 total 239 = powdr 239 (the old "247 vs 239" 2(c) chain item is
@@ -88,19 +86,28 @@ of these masses — and each is at a floor:
 
 ## Out of scope for this repo, recorded for spec/toolchain owners
 
-These would be big, but they change the audited surface or the benchmark input format — not
-autoopt material; do not attempt them in the loop:
+These change the audited surface or the benchmark input format — only on explicit user
+instruction (as entry 93 was):
 
-- **Extend `ComputationMethod` with floor/mod (or byte-extract)**: unlocks re-splitting every
-  range decomposition to byte-aligned pieces; the timestamp (8,21) re-split alone is ~−1,400 eth
-  bus interactions (−8.5 %), variable-neutral.
+- ~~**Extend `ComputationMethod` with floor/mod**~~ — **LANDED (entry 93, user-approved)**:
+  `floorDiv`/`floorMod` digit extractors + `RangeResplit` + the `ByteCheckPack`
+  generalization. Realized ~−584 eth bus (the ~−1,400 estimate assumed every lt-pair
+  qualifies; pairs with non-bare checks, extra per-limb sites, or odd per-case byte leftovers
+  don't). **powdr's witgen needs the twin extension** to interpret the exported
+  `{"FloorDiv"|"FloorMod": [e, d]}` derivations — coordinate before relying on exports.
 - **Size the tuple checker to the lt-decomp on the input side** (e.g. (2^17, 2^12)): one tuple
-  interaction per boundary address = ~−2,850 eth bus (−17 %).
-- Both were checked against the current spec and are cleanly blocked (derivation grammar;
-  slot-weakening soundness).
+  interaction per boundary address = ~−2,850 eth bus (−17 %). Still open, still input-side.
 
 ## Remaining in-scope items (all small; ranked by value/risk)
 
+0. **Re-split follow-ups (entry 93 residue)**: (a) let `TupleRange`'s byte-single matcher
+   accept the `[e, 8]` varRange form too, so fresh bytes can pair with the exactly-8192
+   obligations on eth (a few per case, −0.5 each); (b) census the pairs the recognizer skips —
+   non-bare payloads (an expression instead of a variable in the check slot) could be handled
+   by generalizing `bareCheck?`; (c) each case with an odd byte count strands one solo byte
+   check (−0.5 available on ~half the cases if a partner source exists); (d) wasm pairs whose
+   12-bit limb rides a tuple slot are out of scope by design — re-check after any tuple-side
+   change.
 1. **k256 pivot steering** (§6 above): ~+60 vars/+110 bus recoverable on the two heavy wasm
    cases, unknown small tail elsewhere. High risk (DigitFold feeding, apc_005-class flag folds).
    Only attempt with a per-case A/B harness ready and the dead-end list in hand.
@@ -111,8 +118,8 @@ autoopt material; do not attempt them in the loop:
 3. **Equal-timestamp self-certifying pairs (old 2d)**: −6 keccak / −6 eth bus, and only reachable
    mid-cycle where entailed matching measured as a net loss (+34 bus per apc_005-class case,
    keccak 2.4× runtime — entry 77). Effectively dead; left here so nobody re-derives it.
-4. **keccak +18 bus**: previously measured floor (XOR dag clean, memory at parity, ranges
-   optimal). Nothing found below 1,752 this session either.
+4. ~~keccak +18 bus~~ — entry 93 took keccak to **1,688, 46 below powdr**. The old "1,734
+   floor" claim was grammar-relative; no further keccak lever is currently known.
 
 ## Measured dead ends (do not re-propose without new evidence)
 
@@ -128,9 +135,9 @@ New this session (2026-07-16):
 - **Operand-copy unification (`b`/`c` vs `read_data`)**: a renaming wash, not a gap — 0
   constraints mention both aliases; each system keeps exactly one representative per value
   (§k256). The set-level var-prefix diffs (48 `b` vs 40 `read_data` etc.) are pivot-choice noise.
-- **Timestamp decomposition re-splits (any shape)**: blocked by the derivation grammar (floor
-  item 2). This includes (8,21), (11,18), (18,11), 3-limb byte splits, and cross-address batching
-  (bit stealing).
+- **Timestamp re-splits under the OLD derivation grammar**: were blocked; the grammar was
+  extended (entry 93) and the (8, a+b−8) re-split landed. Still dead: 3-limb splits (a third
+  variable regresses the count) and cross-address batching (bit stealing, unsound).
 - **Weakened-slot packing**: 12-bit limbs into eth's 8192 tuple slot-2, 7-bit checks into byte
   slots, `[e1 + 4·e2, 4]` merges of width-2 checks — all unsound (slot weakening / bit stealing).
 
