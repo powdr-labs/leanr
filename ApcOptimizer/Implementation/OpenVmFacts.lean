@@ -831,6 +831,15 @@ def openVmFacts (p : ℕ) [NeZero p]
           = false ↔ (b.val ≤ 25 ∧ x.val < 2 ^ b.val)
       unfold violates; rw [hbus]
       simp
+  varRangeBusInv_sound := by
+    intro busId h x b x' b' mult
+    have hbus : busMap busId = some OpenVmBusType.variableRangeChecker := by
+      revert h; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    show breaksInvariant busMap { busId := busId, multiplicity := mult, payload := [x, b] }
+        = breaksInvariant busMap { busId := busId, multiplicity := mult, payload := [x', b'] }
+    unfold breaksInvariant; rw [hbus]
   tupleRangeBus busId := match busMap busId with
     | some (.tupleRangeChecker s1 s2) => some (s1, s2)
     | _ => none

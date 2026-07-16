@@ -35,6 +35,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.RangeResplit
 
 set_option autoImplicit false
 
@@ -127,6 +128,11 @@ def codaPasses : List (String × VerifiedPassW p) :=
     ("dedupLate", dedupPass.withFacts.guardDegree),
     ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree),
     ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
+    -- Re-encode two-limb range decompositions at the byte boundary (e.g. the timestamp-lt
+    -- (17,12) split becomes byte + 21-bit) so the byte halves join the packing pool below.
+    -- Runs once, after the drops (a dropped check must not anchor a re-split) and before the
+    -- packers (which pair the fresh bytes).
+    ("rangeResplit", rangeResplitPass.guardDegree),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
     -- runs global range packing once at the end), so it runs once here, out of the cleanup
     -- fixpoint, after `redundantByteDrop` has dropped droppable byte checks operand-granularly

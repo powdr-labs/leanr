@@ -186,6 +186,15 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       ∀ (x b mult : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, b] }
             = false ↔ (b.val ≤ 25 ∧ x.val < 2 ^ b.val)
+  /-- On a `varRangeBus` bus, whether a message breaks an invariant depends only on its
+      multiplicity, never on its payload. Lets a pass *add* a range check whose multiplicity
+      expression matches an existing check's: the new message inherits the old one's
+      (non-)breaking status. `trivial` discharges it vacuously (`varRangeBus` is `false`). -/
+  varRangeBusInv_sound :
+    ∀ (busId : Nat), varRangeBus busId = true →
+      ∀ (x b x' b' mult : ZMod p),
+        bs.breaksInvariant { busId := busId, multiplicity := mult, payload := [x, b] }
+          = bs.breaksInvariant { busId := busId, multiplicity := mult, payload := [x', b'] }
   /-- Tuple-range-checker style *stateless* bus with fixed sizes: the 2-ary message `[x, y]` is
       accepted **iff** `x.val < s1 ∧ y.val < s2`, and at multiplicity `1` it never breaks an
       invariant. Lets a pass pack a byte obligation (`s1 = 256`) and an exact-width range check
@@ -303,6 +312,7 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   xorZeroCheck_sound := by intro _ h; exact absurd h (by simp)
   varRangeBus _ := false
   varRangeBus_sound := by intro _ h; exact absurd h (by simp)
+  varRangeBusInv_sound := by intro _ h; exact absurd h (by simp)
   tupleRangeBus _ := none
   tupleRangeBus_sound := by intro _ _ _ h; exact absurd h (by simp)
   zeroCell _ := none

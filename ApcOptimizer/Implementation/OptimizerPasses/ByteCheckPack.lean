@@ -74,6 +74,12 @@ def svCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
       else if facts.xorComplCheck bi.busId = true ∧ e1 = Expression.const 255 ∧ isByteCompl e2 e3 = true then some e2
       else none
     else none
+  | [e1, w] =>
+    -- a bare width-8 variable-range check `[e, 8]` (mult 1) is a byte check; `256 < p` keeps
+    -- the width constant's canonical value at `8` so the strengths agree exactly
+    if bi.multiplicity = Expression.const 1 ∧ facts.varRangeBus bi.busId = true
+        ∧ w = Expression.const 8 ∧ 256 < p then some e1
+    else none
   | _ => none
 
 /-- A membership helper for `BusInteraction.vars`: a variable of a payload expression is a variable
@@ -91,7 +97,27 @@ theorem svCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
       (∀ env, bs.violatesConstraint (bi.eval env) = false ↔ (e.eval env).val < 256) := by
   unfold svCheck? at h
   split at h
-  case h_2 => exact absurd h (by simp)
+  case h_3 => exact absurd h (by simp)
+  case h_2 e1 w hpay =>
+    split_ifs at h with hmo
+    · obtain ⟨hm, hvr, hw, hple⟩ := hmo
+      obtain rfl : e1 = e := by simpa using h
+      refine ⟨(facts.varRangeBus_sound bi.busId hvr).1, hm, by rw [hpay]; simp, fun env => ?_⟩
+      have heq : bi.eval env
+          = BusInteraction.mk bi.busId 1 [e1.eval env, (8 : ZMod p)] := by
+        unfold BusInteraction.eval
+        rw [hm, hpay, hw]; simp [Expression.eval]
+      rw [heq]
+      have h8 : ((8 : ZMod p)).val = 8 := by
+        have hc : ((8 : ℕ) : ZMod p) = (8 : ZMod p) := by norm_num
+        rw [← hc]
+        exact ZMod.val_natCast_of_lt (by omega)
+      rw [(facts.varRangeBus_sound bi.busId hvr).2 (e1.eval env) (8 : ZMod p) 1, h8]
+      constructor
+      · rintro ⟨-, hlt⟩
+        simpa using hlt
+      · intro hlt
+        exact ⟨by omega, by simpa using hlt⟩
   case h_1 e1 e2 e3 e4 hpay =>
     -- payload shape and multiplicity
     have hmem : ∀ x ∈ ([e1, e2, e3, e4] : List (Expression p)), x ∈ bi.payload := by
@@ -202,6 +228,14 @@ theorem findSecond_sound (bs : BusSemantics p) (facts : BusFacts p bs) (busId : 
         rw [← hcb, ← hceb]; exact hc
       · exact ih (c :: revMid) mid b eB post h
 
+/-- The target bus for a packed pair: prefer the singles' own bus; otherwise any bus present in
+    the system carrying both pair facts. Byte singles recognised on a variable-range bus must
+    emit their pair on a bitwise-style bus, which this scan finds. -/
+def pairBus? {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
+    (preferred : Nat) : Option Nat :=
+  (preferred :: cs.busInteractions.map (·.busId)).find? (fun id =>
+    facts.bytePairBus id && facts.byteCheck id)
+
 /-- Fused scan for the first packable pair; the O(n) split-equation `decide` runs only for the
     chosen candidate (mirrors `bytePackPass`). -/
 def findGo (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -213,26 +247,30 @@ def findGo (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p b
     | some eA =>
       match hfs : findSecond bs facts a.busId [] rest with
       | some (mid, b, eB, post) =>
-        if hbp : facts.bytePairBus a.busId = true then
-          if hbc : facts.byteCheck a.busId = true then
+        match pairBus? facts cs a.busId with
+        | none => findGo cs bs facts hp1 (a :: revPre) rest
+        | some tId =>
+        if hbp : facts.bytePairBus tId = true then
+          if hbc : facts.byteCheck tId = true then
             if hsplit : cs.busInteractions = revPre.reverse ++ a :: mid ++ b :: post then
               some ⟨{ cs with busInteractions :=
-                        revPre.reverse ++ byteCheck2 a.busId eA eB :: mid ++ post }, [],
+                        revPre.reverse ++ byteCheck2 tId eA eB :: mid ++ post }, [],
                     by
                       have hsb : svCheck? bs facts b = some eB :=
                         findSecond_sound bs facts a.busId [] rest mid b eB post hfs
                       have hsa := svCheck?_sound bs facts a eA ha
                       have hsbd := svCheck?_sound bs facts b eB hsb
-                      refine mergeStateless2_correct cs bs hp1 a b (byteCheck2 a.busId eA eB)
-                        hsa.1 hsbd.1 hsa.1 hsa.2.1 hsbd.2.1 rfl (fun env => ?_) (fun env => ?_)
+                      refine mergeStateless2_correct cs bs hp1 a b (byteCheck2 tId eA eB)
+                        hsa.1 hsbd.1 (facts.bytePairBus_sound tId hbp).1 hsa.2.1 hsbd.2.1 rfl
+                        (fun env => ?_) (fun env => ?_)
                         (fun v hv => ?_) revPre.reverse mid post hsplit
                       · -- obligation equivalence
                         rw [byteCheck2_eval,
-                          pairAccept bs facts a.busId hbp hbc (eA.eval env) (eB.eval env)]
+                          pairAccept bs facts tId hbp hbc (eA.eval env) (eB.eval env)]
                         exact and_congr (hsa.2.2.2 env).symm (hsbd.2.2.2 env).symm
                       · -- the pair check breaks no invariant
                         rw [byteCheck2_eval]
-                        exact (facts.bytePairBus_sound a.busId hbp).2.1 (eA.eval env) (eB.eval env)
+                        exact (facts.bytePairBus_sound tId hbp).2.1 (eA.eval env) (eB.eval env)
                       · -- the pair check's variables come from `a` and `b`
                         have hvab : v ∈ eA.vars ∨ v ∈ eB.vars := by
                           simp only [byteCheck2, BusInteraction.vars, Expression.vars,
