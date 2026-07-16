@@ -25,7 +25,7 @@ jobs:
           path: .lake/build/bin/apc-optimizer
           retention-days: 30
 
-  # Effectiveness over the full openvm-eth set and the keccak stress set: one job per side (this PR
+  # Effectiveness over the full openvm-eth and wasm-eth sets and the keccak stress set: one job per side (this PR
   # and the latest main build) in parallel on their own runners. Circuit sizes are deterministic, so
   # the two sides needn't share a runner. `report` combines them. benchmark.py also captures a rough
   # total runtime, used for the report-only runtime row.
@@ -60,11 +60,11 @@ jobs:
             gh run download "$run_id" -n apc-optimizer-bin -D bin || true
           fi
           [ -f bin/apc-optimizer ] || echo "no latest-main binary; PR-only report"
-      - name: Effectiveness (openvm-eth + keccak)
+      - name: Effectiveness (openvm-eth + wasm-eth + keccak)
         run: |
           [ -f bin/apc-optimizer ] || { echo "no binary for side '${{ matrix.side }}'"; exit 0; }
           chmod +x bin/apc-optimizer
-          for set in openvm-eth keccak; do
+          for set in openvm-eth wasm-eth keccak; do
             python3 OpenVmBenchmarks/benchmark.py "$set" --binary bin/apc-optimizer \
               --json "$set.json" --md "$set.md"
           done
@@ -150,7 +150,7 @@ jobs:
       - name: Assemble comment
         run: |
           : > bench.md
-          for set in openvm-eth keccak; do
+          for set in openvm-eth wasm-eth keccak; do
             if [ -f "main/$set.json" ]; then
               python3 OpenVmBenchmarks/benchmark.py --compare "main/$set.json" "pr/$set.json" \
                 --md "$set.md"
@@ -175,7 +175,7 @@ jobs:
           pr: ${{ github.event.pull_request.head.repo.full_name == github.repository
                   && github.event.number || '' }}
           note: >-
-            openvm-eth + keccak, PR `${{ steps.base.outputs.psha }}`
+            openvm-eth + wasm-eth + keccak, PR `${{ steps.base.outputs.psha }}`
             ${{ steps.base.outputs.sha && format('vs main `{0}`', steps.base.outputs.sha)
                  || '(no main baseline binary)' }}.
             Effectiveness is exact; the runtime row and detail are report-only. Full runtime detail:
