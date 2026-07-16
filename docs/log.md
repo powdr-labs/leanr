@@ -3553,3 +3553,58 @@ this lever also recorded the remaining ones (ZMod dictionary reconstruction per 
 gauss's unconditional per-constraint renormalization, rootPairUnify's quadratic seen-join,
 `sizeKey`/`varCount` allocation, variable interning, runtime `p.Prime` decides) in
 `docs/ideas.md` under "Runtime leftovers II". **Worked: yes.**
+
+### 92. Fresh-eyes structural pass: floors verified everywhere, no in-spec double-digit lever; documentation iteration
+
+**Idea.** A from-scratch hunt for big (non-single-digit) variable/bus effectiveness wins —
+new passes or generalizations, explicitly not bounded by powdr. Method: `opt-export` +
+**canonical mod-p polynomial** set-diffs against powdr on sampled cases (wasm 004/012/037,
+eth 010), corpus-wide mass censuses from all 201 `powdr_opt` files, an exact packing-optimality
+model, and full 100-case `benchmark.py` runs of both corpora at base `e0d2911` (#140).
+
+**Current standings (first full benchmarks after #140).** wasm-eth: vars **7.228×/3.588×** vs
+powdr 6.273×/3.542×, bus **6.099×/2.886×** vs 5.666×/2.868× — **the wasm bus deficit (the last
+trailing aggregate axis anywhere) flipped to a lead with #140**; constraints 15.165×/10.438× vs
+9.671×/11.949×. openvm-eth: vars 4.552×/3.887× vs 4.092×/3.787×, bus 3.557×/2.812× vs
+3.480×/2.822×, constraints 10.845×/12.026× vs 5.853×/10.311×; W/L/T 31/7/62. keccak re-verified:
+**2,021 vars / 186 constraints / 1,752 bus** — byte-stable through #140 (powdr 2,021/186/1,734).
+**apc leads or ties powdr on every aggregate axis of every corpus.**
+
+**The negative result, with the floor arguments (full version in the rewritten `docs/ideas.md`):**
+
+- **Packing is optimal already**: stateless obligations partition into exactly-8-bit /
+  exactly-s2 / solo; optimal = solo + maximal pairing. Measured **gap 0 on all 201 powdr files
+  and all apc samples**. Slot weakening and linear-combination batching are both unsound (bit
+  stealing), so the model is tight — a table row certifies ≤ log₂(rows) bits.
+- **Timestamps**: 29-bit obligation, 25-bit max slot, and the `ComputationMethod` grammar
+  (constant/quotientOrZero/ifEqZero) cannot mint `⌊·/256⌋` witnesses ⇒ 2 vars + 2 interactions
+  per boundary address on eth (1.5 on wasm via the 4096 tuple slot) is a floor. The tempting
+  (8,21) re-split (~−1,400 eth bus) is cleanly blocked by the spec's derivation grammar.
+- **Memory**: 2 interactions/boundary address is the bus interface; telescoping is complete
+  (apc_010 total 239 = powdr, eth010 memory 78 = 78 — the old idea-2(c) chain item is closed).
+- **Boundary data / ALU byte witnesses**: 4 limbs/word interface floor; wasm's 8.8k `a`-vars are
+  degree-2-defined in degree-2 contexts (substitution exceeds bound 3) and each private byte
+  needs its own table row.
+- **The only measurable apc-vs-powdr output delta left** is the k256 shift-window residue
+  (wasm037 +33v/+57bus, wasm012 +27v/+52bus): canonical diffing shows check sets identical
+  except *which alias of an equal value* survives (apc `b__7_79` vs powdr `a__7_67` in
+  coefficient-identical windows) — Gauss pivot-order noise, ~1 % corpus-wide, high steering risk
+  (pivot mangling feeds DigitFold, entry 85).
+- Also killed: mod-p duplicate checks (none — dedup airtight, 1,347/1,347 distinct on wasm037),
+  operand-copy unification (a renaming wash, 0 linking constraints), equal-timestamp pairs
+  (−12 total, only reachable via the measured-loss mid-cycle phase).
+
+**What would be big but is out of scope for the loop** (recorded in ideas.md for spec/toolchain
+owners): extending `ComputationMethod` with floor/mod (unlocks byte-aligned re-splits, ~−8.5 %
+eth bus) and sizing the input-side tuple checker to the lt-decomp ((2^17, 2^12): one interaction
+per boundary address, ~−17 % eth bus). Both are audited-surface/benchmark-format changes.
+
+**Outcome: no pass implemented** — every implementable candidate measured ≤ ~2 % on its axis
+(the bar for this pass was explicitly higher), and the session's value is the verified floor map:
+`docs/ideas.md` rewritten from these measurements (stale pre-#140 numbers replaced, closed items
+2(c)/4(d)-tuple/wasm-§0 removed, new dead ends + working rules recorded — notably *canonicalize
+mod p before diffing* and *per-corpus bus maps differ*: eth tuple is (256, 8192), wasm
+(256, 4096), keccak (256, 2048) unused; the "Runtime leftovers II" C-audit section from entry 91's
+session is carried forward with the tupleRange and PrimeWitness (#141) items marked taken).
+Build untouched; no behavior change. **Worked: n/a (documentation iteration; the honest answer
+to "find a big one" is that in-spec big ones are exhausted — the frontier is the spec).**
