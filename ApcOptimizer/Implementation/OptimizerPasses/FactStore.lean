@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
+import ApcOptimizer.Implementation.OptimizerPasses.IndexedState
 
 set_option autoImplicit false
 
@@ -80,9 +81,13 @@ def RangeCache.get (C : RangeCache p) (b : Nat) :
 structure FactStore (p : ℕ) where
   /-- Materialized `[0, bound)` range domains, shared across `domainBatch` invocations. -/
   rangeCache : RangeCache p
+  /-- Step-11 substrate: a stable-position, tombstoned, occurrence-indexed view of the system with a
+      proven round-trip to `ConstraintSystem` (`IndexedState`). `none` until a worklist increment
+      populates it; carried here so future passes can thread it. Not yet consumed. -/
+  indexed : Option (IndexedState p)
 
 /-- The empty store: no cached facts. -/
-def FactStore.empty : FactStore p := { rangeCache := RangeCache.empty }
+def FactStore.empty : FactStore p := { rangeCache := RangeCache.empty, indexed := none }
 
 instance : Inhabited (FactStore p) := ⟨FactStore.empty⟩
 
