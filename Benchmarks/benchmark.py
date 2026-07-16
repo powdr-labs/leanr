@@ -125,9 +125,11 @@ def run_one(binary, vm, unopt, want_report):
     if not opt.exists():
         return name, None, None, None, "no .powdr_opt"
     sub = "report" if want_report else "compare"
+    # The VM token is optional and defaults to openvm; omit it for openvm so the command stays
+    # compatible with older binaries (e.g. the latest-main baseline in CI) that predate the token.
+    cmd = [str(binary), sub, *([vm] if vm != "openvm" else []), str(unopt), str(opt)]
     try:
-        out = subprocess.run([str(binary), sub, vm, str(unopt), str(opt)],
-                             capture_output=True, text=True, check=True).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
     except subprocess.CalledProcessError:
         return name, None, None, None, "apc-optimizer failed"
     if want_report:

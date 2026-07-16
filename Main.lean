@@ -289,12 +289,11 @@ def cmdReport (vm unoptFile optFile : String) : IO Unit :=
   if isSp1 vm then cmdReportImpl sp1Backend unoptFile optFile
   else cmdReportImpl openVmBackend unoptFile optFile
 
-open ApcOptimizer.OpenVM in
 /-- Profiling helper: apply one fact-aware pass, forcing full evaluation, and return the new
     system plus the elapsed milliseconds. -/
-def applyTimed (pass : VerifiedPassW babyBear) (cs : ConstraintSystem babyBear)
-    (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs) :
-    IO (ConstraintSystem babyBear × Nat) := do
+def applyTimed {p : ℕ} (pass : VerifiedPassW p) (cs : ConstraintSystem p)
+    (bs : BusSemantics p) (facts : BusFacts p bs) :
+    IO (ConstraintSystem p × Nat) := do
   let t0 ← IO.monoMsNow
   let out ← IO.lazyPure (fun _ => (pass cs bs facts).out)
   -- Force the whole output structure (varCount traverses every expression node).
@@ -303,11 +302,10 @@ def applyTimed (pass : VerifiedPassW babyBear) (cs : ConstraintSystem babyBear)
   let t1 ← IO.monoMsNow
   pure (out, t1 - t0)
 
-open ApcOptimizer.OpenVM in
 /-- Run one cleanup cycle's passes in order, accumulating per-pass elapsed time. -/
-partial def runCycleTimed (passes : List (String × VerifiedPassW babyBear))
-    (cs : ConstraintSystem babyBear) (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs)
-    (acc : Std.HashMap String Nat) : IO (ConstraintSystem babyBear × Std.HashMap String Nat) := do
+partial def runCycleTimed {p : ℕ} (passes : List (String × VerifiedPassW p))
+    (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (acc : Std.HashMap String Nat) : IO (ConstraintSystem p × Std.HashMap String Nat) := do
   let mut c := cs
   let mut a := acc
   for (name, pass) in passes do
@@ -316,43 +314,49 @@ partial def runCycleTimed (passes : List (String × VerifiedPassW babyBear))
     a := a.insert name (a.getD name 0 + dt)
   pure (c, a)
 
-open ApcOptimizer.OpenVM in
 /-- Iterate the cleanup cycle to a fixpoint (mirroring `iterateToFixpoint`), accumulating per-pass
     time and counting iterations. -/
-partial def profileLoop (passes : List (String × VerifiedPassW babyBear))
-    (cs : ConstraintSystem babyBear) (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs)
+partial def profileLoop {p : ℕ} (passes : List (String × VerifiedPassW p))
+    (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (acc : Std.HashMap String Nat) (iter : Nat) :
-    IO (ConstraintSystem babyBear × Std.HashMap String Nat × Nat) := do
+    IO (ConstraintSystem p × Std.HashMap String Nat × Nat) := do
   let (cs', acc') ← runCycleTimed passes cs bs facts acc
   if cs'.sizeKey < cs.sizeKey then
     profileLoop passes cs' bs facts acc' (iter + 1)
   else
     pure (cs, acc', iter)
 
-open ApcOptimizer.OpenVM in
-/-- `profile <file>`: run the OpenVM pipeline with per-pass timing, reporting the cumulative time
-    spent in each pass across all fixpoint iterations. -/
-def cmdProfile (fileName : String) : IO Unit := do
-  let (cs, busMap) ← parseFileWith parseOpenVm fileName
-  let bs := openVmBusSemantics babyBear busMap
-  let facts := openVmFacts babyBear busMap
-  -- `preludePasses` / `cleanupPasses` / `codaPasses` are the exact lists `pipeline` folds
-  -- (`ApcOptimizer/Implementation/Optimizer.lean`). Per-pass timing is an IO side-effect, so the
-  -- profiler steps the passes here instead of calling the pure `pipeline`; but it reads those same
-  -- three lists, so it cannot time a pass the optimizer does not run, nor drift out of sync.
+/-- Step the pipeline's three pass lists with per-pass timing, reporting the cumulative time spent in
+    each pass across all fixpoint iterations. `preludePasses` / `cleanupPasses` / `codaPasses` are
+    the exact lists `pipeline` folds (`ApcOptimizer/Implementation/Optimizer.lean`); per-pass timing
+    is an IO side-effect, so the profiler steps the passes here instead of calling the pure
+    `pipeline`, but it reads those same three lists, so it cannot time a pass the optimizer does not
+    run, nor drift out of sync. -/
+def profileRun {p : ℕ} (fileName : String) (cs : ConstraintSystem p)
+    (bs : BusSemantics p) (facts : BusFacts p bs) : IO Unit := do
   let t0 ← IO.monoMsNow
-  let (cs, acc) ← runCycleTimed (preludePasses (p := babyBear)) cs bs facts ∅
-  let (cs, acc, iters) ← profileLoop (cleanupPasses (p := babyBear)) cs bs facts acc 0
-  let (_, acc) ← runCycleTimed (codaPasses (p := babyBear)) cs bs facts acc
+  let (cs, acc) ← runCycleTimed (preludePasses (p := p)) cs bs facts ∅
+  let (cs, acc, iters) ← profileLoop (cleanupPasses (p := p)) cs bs facts acc 0
+  let (_, acc) ← runCycleTimed (codaPasses (p := p)) cs bs facts acc
   let t1 ← IO.monoMsNow
   IO.println s!"profile {fileName}: {iters} cleanup iterations, {t1 - t0} ms total"
   let sorted := acc.toList.toArray.qsort (fun a b => a.2 > b.2)
   for (name, ms) in sorted do
     IO.println s!"  {name}: {ms} ms"
 
+/-- `profile [vm] <file>`: per-pass optimizer timing for the selected VM. -/
+def cmdProfile (vm fileName : String) : IO Unit := do
+  if isSp1 vm then
+    let (cs, busMap) ← parseFileWith parseSp1 fileName
+    profileRun fileName cs (ApcOptimizer.SP1.sp1BusSemantics ApcOptimizer.SP1.koalaBear busMap)
+      (ApcOptimizer.SP1.sp1Facts ApcOptimizer.SP1.koalaBear busMap)
+  else
+    let (cs, busMap) ← parseFileWith parseOpenVm fileName
+    profileRun fileName cs (openVmBusSemantics babyBear busMap) (openVmFacts babyBear busMap)
+
 def usage : String :=
   "usage: apc-optimizer run [vm] <file.json[.gz]>\n" ++
-  "       apc-optimizer profile <file.json[.gz]>  (per-pass optimizer timing, OpenVM)\n" ++
+  "       apc-optimizer profile [vm] <file.json[.gz]>  (per-pass optimizer timing)\n" ++
   "       apc-optimizer powdr [vm] <unopt.json[.gz]> <opt.json[.gz]>\n" ++
   "       apc-optimizer compare [vm] <unopt.json[.gz]> <opt.json[.gz]>\n" ++
   "       apc-optimizer report  [vm] <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n" ++
@@ -374,7 +378,7 @@ def main (args : List String) : IO Unit := do
     | _ => ("openvm", args)
   match rest with
   | ["run", fileName] => cmdRun vm fileName
-  | ["profile", fileName] => cmdProfile fileName
+  | ["profile", fileName] => cmdProfile vm fileName
   | ["vars", fileName] => cmdVars vm fileName
   | ["render", fileName] => cmdRender vm fileName
   | ["powdr", unoptFile, optFile] => cmdPowdr vm unoptFile optFile

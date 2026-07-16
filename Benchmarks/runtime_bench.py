@@ -11,6 +11,7 @@ per pass across the whole set. Cases run *serially* so timings don't fight for c
 This measures runtime only; effectiveness is benchmark.py's job.
 
     Benchmarks/runtime_bench.py                 # all openvm-eth cases
+    Benchmarks/runtime_bench.py --vm sp1        # all rsp (SP1) cases
     Benchmarks/runtime_bench.py --n 20          # top 20 by cost rank
     Benchmarks/runtime_bench.py --repeat 3      # best-of-3 per case (less noise)
     Benchmarks/runtime_bench.py --md bench.md   # also write a markdown summary
@@ -33,7 +34,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]  # Benchmarks -> repo root
-DEFAULT_BENCHMARK = "openvm-eth"
+# VM -> its benchmark directory under Benchmarks/ and its default (main) set.
+VM_DIR = {"openvm": "OpenVM", "sp1": "SP1"}
+DEFAULT_BENCHMARK = {"openvm": "openvm-eth", "sp1": "rsp"}
 
 # `apc-optimizer run` total, e.g. "  (339 ms)".
 RUN_MS_RE = re.compile(r"^\s*\((\d+) ms\)\s*$", re.M)
@@ -87,9 +90,13 @@ def fmt_ratio(target, base):
 def bench(args):
     """Run the benchmark, returning {benchmark, repeat, run_ms, pass_ms, iters}."""
     repo = args.repo.resolve()
-    bench_dir = repo / "Benchmarks" / "OpenVM" / args.benchmark
+    benchmark = args.benchmark or DEFAULT_BENCHMARK[args.vm]
+    bench_dir = repo / "Benchmarks" / VM_DIR[args.vm] / benchmark
     if not bench_dir.is_dir():
-        sys.exit(f"error: no benchmark {args.benchmark!r} under {bench_dir.parent}")
+        sys.exit(f"error: no benchmark {benchmark!r} under {bench_dir.parent}")
+    # The VM token is optional and defaults to openvm; omit it for openvm so the commands stay
+    # compatible with older binaries (e.g. a latest-main baseline) that predate the token.
+    vm_tok = [] if args.vm == "openvm" else [args.vm]
 
     binary = args.binary.resolve() if args.binary is not None else None
     os.chdir(repo)
@@ -112,15 +119,16 @@ def bench(args):
     pass_ms = {}         # pass name -> cumulative ms across all cases
     iters = {}           # case name -> cleanup iterations
     for i, case in enumerate(cases):
-        (total,) = best_of([str(binary), "run", str(case)], args.repeat, parse_run)
-        _, its, passes = best_of([str(binary), "profile", str(case)], args.repeat, parse_profile)
+        (total,) = best_of([str(binary), "run", *vm_tok, str(case)], args.repeat, parse_run)
+        _, its, passes = best_of([str(binary), "profile", *vm_tok, str(case)],
+                                 args.repeat, parse_profile)
         run_ms[case.name] = total
         iters[case.name] = its
         for name, ms in passes.items():
             pass_ms[name] = pass_ms.get(name, 0) + ms
         print(f"[{i + 1}/{len(cases)}] {case.name}: {fmt_ms(total)}, {its} iterations",
               file=sys.stderr)
-    return {"benchmark": args.benchmark, "repeat": args.repeat,
+    return {"benchmark": benchmark, "repeat": args.repeat,
             "run_ms": run_ms, "pass_ms": pass_ms, "iters": iters}
 
 
@@ -247,9 +255,12 @@ def emit_detail_compare_md(base, target):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("benchmark", nargs="?", default=DEFAULT_BENCHMARK,
-                    help=f"benchmark name -- a subdirectory of Benchmarks/OpenVM/ "
-                         f"(default: {DEFAULT_BENCHMARK})")
+    ap.add_argument("benchmark", nargs="?", default=None,
+                    help="benchmark name -- a subdirectory of Benchmarks/<VM>/ "
+                         "(default: openvm-eth for openvm, rsp for sp1)")
+    ap.add_argument("--vm", choices=sorted(VM_DIR), default="openvm",
+                    help="VM whose benchmark set and fact-aware optimizer to use "
+                         "(default: openvm)")
     ap.add_argument("--n", type=int, default=None, metavar="N",
                     help="only the top N cases by cost rank (default: all)")
     ap.add_argument("--repeat", type=int, default=1,
