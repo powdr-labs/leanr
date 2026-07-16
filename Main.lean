@@ -4,19 +4,24 @@ import ApcOptimizer.Implementation.Optimizer
 import ApcOptimizer.Utils.Size
 import ApcOptimizer.Utils.Dsl
 import ApcOptimizer.OpenVmSemantics
+import ApcOptimizer.Sp1Semantics
 import ApcOptimizer.Ffi
 
 /-!
 # The apc-optimizer CLI
 
 Benchmark harness for the optimizer on powdr `SymbolicMachine` exports
-(`OpenVmBenchmarks/openvm-eth/*.json.gz`, or any file in the same format — see `ApcOptimizer/Implementation/JsonParser.lean`):
+(`Benchmarks/OpenVM/openvm-eth/*.json.gz`, or any file in the same format — see
+`ApcOptimizer/Implementation/JsonParser.lean`):
 
-- `apc-optimizer run <file.json[.gz]>` — parse, run the apc-optimizer with the file's
+- `apc-optimizer run [vm] <file.json[.gz]>` — parse, run the apc-optimizer with the file's
   own bus map, report sizes and effectiveness.
-- `apc-optimizer powdr <unopt.json[.gz]> <opt.json[.gz]>` — report powdr's effectiveness from its
-  serialized optimizer output (no apc-optimizer run).
-- `apc-optimizer compare <unopt.json[.gz]> <opt.json[.gz]>` — both, side by side.
+- `apc-optimizer powdr [vm] <unopt.json[.gz]> <opt.json[.gz]>` — report powdr's effectiveness from
+  its serialized optimizer output (no apc-optimizer run).
+- `apc-optimizer compare [vm] <unopt.json[.gz]> <opt.json[.gz]>` — both, side by side.
+
+`vm` is an optional leading `openvm` (default, BabyBear) or `sp1` (KoalaBear) token, selecting the
+VM whose bus semantics and fact-aware optimizer to use.
 
 The optimizer takes no iteration count: its cleanup loop (`iterateToFixpoint`) runs to a fixpoint,
 provably terminating on the lexicographic size key `(vars, bus, constraints)`.
@@ -39,23 +44,39 @@ def readInput (fileName : String) : IO String := do
     IO.eprintln s!"Error: expected a .json or .json.gz file, got {fileName}"
     IO.Process.exit 1
 
-/-- Parse a benchmark file into a constraint system over BabyBear plus its bus map.
+/-- Parse a benchmark file into a constraint system over field `p` plus its bus map, using the
+    given VM-specific parser (which already resolves the `BusMapList` to a `busId ↦ type` lookup).
     Rejects systems with bus ids missing from the map: an unmapped bus would be modeled as a
     no-op bus (stateless, never violating), silently licensing unsound optimizations. -/
-def parseFile (fileName : String) : IO (ConstraintSystem babyBear × BusMapList) := do
+def parseFileWith {p : ℕ} {τ : Type}
+    (parse : String → Except String (ConstraintSystem p × (Nat → Option τ)))
+    (fileName : String) : IO (ConstraintSystem p × (Nat → Option τ)) := do
   let contents ← readInput fileName
-  match parseJsonSystem (p := babyBear) contents with
+  match parse contents with
   | .error err =>
     IO.eprintln s!"Error parsing {fileName}: {err}"
     IO.Process.exit 1
-  | .ok (system, busMap, _) =>
+  | .ok (system, busMap) =>
     let unmapped :=
       ((system.busInteractions.map (·.busId)).eraseDups).filter
-        (fun busId => (busMap.toBusMap busId).isNone)
+        (fun busId => (busMap busId).isNone)
     unless unmapped.isEmpty do
       IO.eprintln s!"Error: {fileName} uses bus ids {unmapped} that are not in its bus_map"
       IO.Process.exit 1
     pure (system, busMap)
+
+/-- The OpenVM (BabyBear) file parser: resolve the `BusMapList` to a lookup, dropping `next_free_id`
+    (the CLI does not need powdr's column cursor). -/
+def parseOpenVm (contents : String) :
+    Except String (ConstraintSystem babyBear × (Nat → Option OpenVmBusType)) :=
+  (parseJsonSystem (p := babyBear) contents).map (fun (s, bm, _) => (s, bm.toBusMap))
+
+/-- The SP1 (KoalaBear) file parser. -/
+def parseSp1 (contents : String) :
+    Except String (ConstraintSystem ApcOptimizer.SP1.koalaBear ×
+      (Nat → Option ApcOptimizer.SP1.Sp1BusType)) :=
+  (parseJsonSystemSp1 (p := ApcOptimizer.SP1.koalaBear) contents).map
+    (fun (s, bm, _) => (s, bm.toBusMap))
 
 /-- Size measures of a constraint system, as reported by the CLI. -/
 structure Stats where
@@ -65,20 +86,20 @@ structure Stats where
 
 /-- Same count as `ConstraintSystem.size` (distinct variables), but via a hash set —
     `List.dedup` is quadratic and benchmark machines have ~10⁵ variable occurrences. -/
-def distinctVarCount (cs : ConstraintSystem babyBear) : Nat :=
+def distinctVarCount {p : ℕ} (cs : ConstraintSystem p) : Nat :=
   let occurrences := cs.algebraicConstraints.flatMap Expression.vars ++
     cs.busInteractions.flatMap BusInteraction.vars
   (occurrences.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).size
 
 /-- The distinct variable names of a constraint system, sorted and rendered for display.
     Variables may carry structured powdr IDs internally, but reports show only `Variable.name`. -/
-def distinctVars (cs : ConstraintSystem babyBear) : List String :=
+def distinctVars {p : ℕ} (cs : ConstraintSystem p) : List String :=
   let occurrences := cs.algebraicConstraints.flatMap Expression.vars ++
     cs.busInteractions.flatMap BusInteraction.vars
   ((occurrences.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).toList.map
     (fun x => x.name)).mergeSort (fun a b => decide (a ≤ b))
 
-def statsOf (cs : ConstraintSystem babyBear) : Stats :=
+def statsOf {p : ℕ} (cs : ConstraintSystem p) : Stats :=
   { vars := distinctVarCount cs,
     constraints := cs.algebraicConstraints.length,
     busInteractions := cs.busInteractions.length }
@@ -108,21 +129,29 @@ def printEffectiveness (label : String) (before after : Stats) : IO Unit := do
     (after := after.busInteractions)
   printRatio (label := "constraints     ") (before := before.constraints) (after := after.constraints)
 
-def cmdRun (fileName : String) : IO Unit := do
-  let (cs, busMap) ← parseFile fileName
+/-- A VM's runtime for the CLI: its file parser (resolving the bus map to a `busId ↦ type` lookup),
+    its fact-aware optimizer, and its bus semantics (for the degree bound). All three are threaded
+    through the generic `cmd*Impl` bodies so a single implementation serves both OpenVM and SP1. -/
+structure VmBackend (p : ℕ) (τ : Type) where
+  parse : String → Except String (ConstraintSystem p × (Nat → Option τ))
+  optimize : (Nat → Option τ) → ConstraintSystem p → ConstraintSystem p × Derivations p
+  semantics : (Nat → Option τ) → BusSemantics p
+
+def cmdRunImpl {p : ℕ} {τ : Type} (be : VmBackend p τ) (fileName : String) : IO Unit := do
+  let (cs, busMap) ← parseFileWith be.parse fileName
   IO.println s!"Parsed {cs.algebraicConstraints.length} constraints, \
-    {cs.busInteractions.length} bus interactions, {busMap.length} bus types"
+    {cs.busInteractions.length} bus interactions"
   let before := statsOf cs
   let t0 ← IO.monoMsNow
   -- IO.lazyPure sequences the pure optimizer run between the clock reads (the compiler is
   -- free to float a plain `let` across IO actions, which breaks the measurement).
-  let optimized ← IO.lazyPure (fun _ => (openVmOptimizer busMap.toBusMap cs).1)
+  let optimized ← IO.lazyPure (fun _ => (be.optimize busMap cs).1)
   let after ← IO.lazyPure (fun _ => statsOf optimized)
   let t1 ← IO.monoMsNow
   printStats (label := "before       ") (stats := before)
   printStats (label := "apc-optimizer") (stats := after)
   printEffectiveness (label := "apc-optimizer") (before := before) (after := after)
-  let bound := (openVmBusSemantics babyBear busMap.toBusMap).degreeBound
+  let bound := (be.semantics busMap).degreeBound
   IO.println s!"  degree bound (identities {bound.identities}, bus {bound.busInteractions}): \
     input {if cs.withinDegreeB bound then "ok" else "EXCEEDED"}, \
     output {if optimized.withinDegreeB bound then "ok" else "EXCEEDED"}"
@@ -130,9 +159,9 @@ def cmdRun (fileName : String) : IO Unit := do
 
 /-- Like `cmdRun`, but also dump the distinct variables remaining after optimization (for
     diagnosing which variable classes the optimizer misses). -/
-def cmdVars (fileName : String) : IO Unit := do
-  let (cs, busMap) ← parseFile fileName
-  let optimized ← IO.lazyPure (fun _ => (openVmOptimizer busMap.toBusMap cs).1)
+def cmdVarsImpl {p : ℕ} {τ : Type} (be : VmBackend p τ) (fileName : String) : IO Unit := do
+  let (cs, busMap) ← parseFileWith be.parse fileName
+  let optimized ← IO.lazyPure (fun _ => (be.optimize busMap cs).1)
   let occurrences := optimized.algebraicConstraints.flatMap Expression.vars ++
     optimized.busInteractions.flatMap BusInteraction.vars
   let distinct := (occurrences.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).toList
@@ -140,18 +169,19 @@ def cmdVars (fileName : String) : IO Unit := do
     IO.println v
 
 /-- Render the optimized system (for diagnosing residual constraints/interactions). -/
-def cmdRender (fileName : String) : IO Unit := do
-  let (cs, busMap) ← parseFile fileName
-  let optimized ← IO.lazyPure (fun _ => (openVmOptimizer busMap.toBusMap cs).1)
+def cmdRenderImpl {p : ℕ} {τ : Type} (be : VmBackend p τ) (fileName : String) : IO Unit := do
+  let (cs, busMap) ← parseFileWith be.parse fileName
+  let optimized ← IO.lazyPure (fun _ => (be.optimize busMap cs).1)
   IO.println (ApcOptimizer.Spec.Dsl.render optimized)
 
-/-- `opt-export <in> <out.json>`: run the optimizer and write the optimized machine back out as
-    `{"machine", "bus_map"}` JSON — the same shape `parseFile` reads, so the export can be fed to
+/-- `opt-export [vm] <in> <out.json>`: run the optimizer and write the optimized machine back out as
+    `{"machine", "bus_map"}` JSON — the same shape the parser reads, so the export can be fed to
     `powdr`/`compare` like a `.powdr_opt` file. The `bus_map` is spliced through verbatim from the
     input; the machine comes from the FFI serializer (`serializeSystem`, including
     `derived_columns` for optimizer-introduced witness columns). -/
-def cmdOptExport (inFile outFile : String) : IO Unit := do
-  let (cs, busMap) ← parseFile inFile
+def cmdOptExportImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
+    (inFile outFile : String) : IO Unit := do
+  let (cs, busMap) ← parseFileWith be.parse inFile
   let rawJson ← readInput inFile
   let busMapJson ← do
     match Lean.Json.parse rawJson >>= (·.getObjVal? "bus_map") with
@@ -159,7 +189,7 @@ def cmdOptExport (inFile outFile : String) : IO Unit := do
       IO.eprintln s!"Error: cannot extract bus_map from {inFile}: {err}"
       IO.Process.exit 1
     | .ok j => pure j
-  let (optimized, ds) ← IO.lazyPure (fun _ => openVmOptimizer busMap.toBusMap cs)
+  let (optimized, ds) ← IO.lazyPure (fun _ => be.optimize busMap cs)
   let machineStr ← IO.lazyPure (fun _ => ApcOptimizer.Serialize.serializeSystem optimized ds)
   let machineJson ← do
     match Lean.Json.parse machineStr with
@@ -170,19 +200,21 @@ def cmdOptExport (inFile outFile : String) : IO Unit := do
   IO.FS.writeFile outFile
     (Lean.Json.mkObj [("machine", machineJson), ("bus_map", busMapJson)]).compress
 
-def cmdPowdr (unoptFile : String) (optFile : String) : IO Unit := do
-  let (csBefore, _) ← parseFile unoptFile
-  let (csAfter, _) ← parseFile optFile
+def cmdPowdrImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
+    (unoptFile optFile : String) : IO Unit := do
+  let (csBefore, _) ← parseFileWith be.parse unoptFile
+  let (csAfter, _) ← parseFileWith be.parse optFile
   let before := statsOf csBefore
   let after := statsOf csAfter
   printStats (label := "before       ") (stats := before)
   printStats (label := "powdr        ") (stats := after)
   printEffectiveness (label := "powdr") (before := before) (after := after)
 
-def cmdCompare (unoptFile : String) (optFile : String) : IO Unit := do
-  cmdRun (fileName := unoptFile)
-  let (csBefore, _) ← parseFile unoptFile
-  let (csAfter, _) ← parseFile optFile
+def cmdCompareImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
+    (unoptFile optFile : String) : IO Unit := do
+  cmdRunImpl be unoptFile
+  let (csBefore, _) ← parseFileWith be.parse unoptFile
+  let (csAfter, _) ← parseFileWith be.parse optFile
   printStats (label := "powdr        ") (stats := statsOf csAfter)
   printEffectiveness (label := "powdr") (before := statsOf csBefore) (after := statsOf csAfter)
 
@@ -195,7 +227,7 @@ def jsonEscape (s : String) : String :=
   s.replace "\t" "\\t"
 
 /-- One circuit as a JSON object: size stats plus the DSL render. -/
-def circuitJson (cs : ConstraintSystem babyBear) : String :=
+def circuitJson {p : ℕ} (cs : ConstraintSystem p) : String :=
   let st := statsOf cs
   let vs := String.intercalate "," ((distinctVars cs).map (fun s => "\"" ++ jsonEscape s ++ "\""))
   "{\"vars\":" ++ toString st.vars ++
@@ -204,16 +236,58 @@ def circuitJson (cs : ConstraintSystem babyBear) : String :=
     ",\"vars_list\":[" ++ vs ++ "]" ++
     ",\"render\":\"" ++ jsonEscape (ApcOptimizer.Spec.Dsl.render cs) ++ "\"}"
 
-/-- `report <unopt> <opt>`: emit one JSON object with the original, powdr-optimized and
+/-- `report [vm] <unopt> <opt>`: emit one JSON object with the original, powdr-optimized and
     apc-optimizer-optimized circuits (each: vars/constraints/bus + DSL render). Consumed by the
-    benchmark HTML report (`OpenVmBenchmarks/benchmark.py --report`). -/
-def cmdReport (unoptFile optFile : String) : IO Unit := do
-  let (cs, busMap) ← parseFile unoptFile
-  let (csPowdr, _) ← parseFile optFile
-  let optimized := (openVmOptimizer busMap.toBusMap cs).1
+    benchmark HTML report (`Benchmarks/benchmark.py --report`). -/
+def cmdReportImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
+    (unoptFile optFile : String) : IO Unit := do
+  let (cs, busMap) ← parseFileWith be.parse unoptFile
+  let (csPowdr, _) ← parseFileWith be.parse optFile
+  let optimized := (be.optimize busMap cs).1
   IO.println ("{\"original\":" ++ circuitJson cs ++
     ",\"powdr\":" ++ circuitJson csPowdr ++
     ",\"apc-optimizer\":" ++ circuitJson optimized ++ "}")
+
+/-- The OpenVM backend: BabyBear field, OpenVM bus semantics, `openVmOptimizer`. The optimizer and
+    semantics are eta-expanded so their default `busMap` argument stays open. -/
+def openVmBackend : VmBackend babyBear OpenVmBusType where
+  parse := parseOpenVm
+  optimize := fun bm => openVmOptimizer bm
+  semantics := fun bm => openVmBusSemantics babyBear bm
+
+/-- The SP1 backend: KoalaBear field, SP1 bus semantics, `sp1Optimizer`. -/
+def sp1Backend : VmBackend ApcOptimizer.SP1.koalaBear ApcOptimizer.SP1.Sp1BusType where
+  parse := parseSp1
+  optimize := fun bm => ApcOptimizer.SP1.sp1Optimizer bm
+  semantics := fun bm => ApcOptimizer.SP1.sp1BusSemantics ApcOptimizer.SP1.koalaBear bm
+
+/-- Whether a token names the SP1 VM (`sp1`); anything else defaults to OpenVM. -/
+def isSp1 (vm : String) : Bool := vm == "sp1"
+
+def cmdRun (vm fileName : String) : IO Unit :=
+  if isSp1 vm then cmdRunImpl sp1Backend fileName else cmdRunImpl openVmBackend fileName
+
+def cmdVars (vm fileName : String) : IO Unit :=
+  if isSp1 vm then cmdVarsImpl sp1Backend fileName else cmdVarsImpl openVmBackend fileName
+
+def cmdRender (vm fileName : String) : IO Unit :=
+  if isSp1 vm then cmdRenderImpl sp1Backend fileName else cmdRenderImpl openVmBackend fileName
+
+def cmdOptExport (vm inFile outFile : String) : IO Unit :=
+  if isSp1 vm then cmdOptExportImpl sp1Backend inFile outFile
+  else cmdOptExportImpl openVmBackend inFile outFile
+
+def cmdPowdr (vm unoptFile optFile : String) : IO Unit :=
+  if isSp1 vm then cmdPowdrImpl sp1Backend unoptFile optFile
+  else cmdPowdrImpl openVmBackend unoptFile optFile
+
+def cmdCompare (vm unoptFile optFile : String) : IO Unit :=
+  if isSp1 vm then cmdCompareImpl sp1Backend unoptFile optFile
+  else cmdCompareImpl openVmBackend unoptFile optFile
+
+def cmdReport (vm unoptFile optFile : String) : IO Unit :=
+  if isSp1 vm then cmdReportImpl sp1Backend unoptFile optFile
+  else cmdReportImpl openVmBackend unoptFile optFile
 
 open ApcOptimizer.OpenVM in
 /-- Profiling helper: apply one fact-aware pass, forcing full evaluation, and return the new
@@ -259,9 +333,9 @@ open ApcOptimizer.OpenVM in
 /-- `profile <file>`: run the OpenVM pipeline with per-pass timing, reporting the cumulative time
     spent in each pass across all fixpoint iterations. -/
 def cmdProfile (fileName : String) : IO Unit := do
-  let (cs, busMap) ← parseFile fileName
-  let bs := openVmBusSemantics babyBear busMap.toBusMap
-  let facts := openVmFacts babyBear busMap.toBusMap
+  let (cs, busMap) ← parseFileWith parseOpenVm fileName
+  let bs := openVmBusSemantics babyBear busMap
+  let facts := openVmFacts babyBear busMap
   -- `preludePasses` / `cleanupPasses` / `codaPasses` are the exact lists `pipeline` folds
   -- (`ApcOptimizer/Implementation/Optimizer.lean`). Per-pass timing is an IO side-effect, so the
   -- profiler steps the passes here instead of calling the pure `pipeline`; but it reads those same
@@ -277,30 +351,36 @@ def cmdProfile (fileName : String) : IO Unit := do
     IO.println s!"  {name}: {ms} ms"
 
 def usage : String :=
-  "usage: apc-optimizer run <file.json[.gz]>\n" ++
-  "       apc-optimizer profile <file.json[.gz]>  (per-pass optimizer timing)\n" ++
-  "       apc-optimizer powdr <unopt.json[.gz]> <opt.json[.gz]>\n" ++
-  "       apc-optimizer compare <unopt.json[.gz]> <opt.json[.gz]>\n" ++
-  "       apc-optimizer report  <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n" ++
-  "       apc-optimizer opt-export <in.json[.gz]> <out.json>  (optimize and write the result\n" ++
+  "usage: apc-optimizer run [vm] <file.json[.gz]>\n" ++
+  "       apc-optimizer profile <file.json[.gz]>  (per-pass optimizer timing, OpenVM)\n" ++
+  "       apc-optimizer powdr [vm] <unopt.json[.gz]> <opt.json[.gz]>\n" ++
+  "       apc-optimizer compare [vm] <unopt.json[.gz]> <opt.json[.gz]>\n" ++
+  "       apc-optimizer report  [vm] <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n" ++
+  "       apc-optimizer opt-export [vm] <in.json[.gz]> <out.json>  (optimize and write the result\n" ++
   "                                as {machine, bus_map} JSON, readable by powdr/compare)\n\n" ++
-  "Files are powdr SymbolicMachine exports (ApcWithBusMap), e.g. OpenVmBenchmarks/openvm-eth/*.json.gz.\n" ++
+  "[vm] is an optional `openvm` (default, BabyBear) or `sp1` (KoalaBear) token.\n" ++
+  "Files are powdr SymbolicMachine exports (ApcWithBusMap), e.g. Benchmarks/OpenVM/openvm-eth/*.json.gz.\n" ++
   "The optimizer runs its cleanup loop to a fixpoint (provably terminating); there is no\n" ++
   "iteration count to set."
 
+/-- The recognized VM selector tokens. Consumed as an optional leading argument on the commands
+    that run the optimizer; anything else is treated as a filename and the VM defaults to OpenVM. -/
+def isVmToken (s : String) : Bool := s == "openvm" || s == "sp1"
+
 def main (args : List String) : IO Unit := do
-  match args with
-  | ["run", fileName] => cmdRun (fileName := fileName)
-  | ["profile", fileName] => cmdProfile (fileName := fileName)
-  | ["vars", fileName] => cmdVars (fileName := fileName)
-  | ["render", fileName] => cmdRender (fileName := fileName)
-  | ["powdr", unoptFile, optFile] => cmdPowdr (unoptFile := unoptFile) (optFile := optFile)
-  | ["report", unoptFile, optFile] =>
-    cmdReport (unoptFile := unoptFile) (optFile := optFile)
-  | ["opt-export", inFile, outFile] =>
-    cmdOptExport (inFile := inFile) (outFile := outFile)
-  | ["compare", unoptFile, optFile] =>
-    cmdCompare (unoptFile := unoptFile) (optFile := optFile)
+  -- Peel an optional leading VM token off the command's arguments (default: openvm).
+  let (vm, rest) := match args with
+    | cmd :: tok :: more => if isVmToken tok then (tok, cmd :: more) else ("openvm", args)
+    | _ => ("openvm", args)
+  match rest with
+  | ["run", fileName] => cmdRun vm fileName
+  | ["profile", fileName] => cmdProfile fileName
+  | ["vars", fileName] => cmdVars vm fileName
+  | ["render", fileName] => cmdRender vm fileName
+  | ["powdr", unoptFile, optFile] => cmdPowdr vm unoptFile optFile
+  | ["report", unoptFile, optFile] => cmdReport vm unoptFile optFile
+  | ["opt-export", inFile, outFile] => cmdOptExport vm inFile outFile
+  | ["compare", unoptFile, optFile] => cmdCompare vm unoptFile optFile
   | _ =>
     IO.eprintln usage
     IO.Process.exit 1

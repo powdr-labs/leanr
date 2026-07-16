@@ -5,23 +5,27 @@
 # ///
 """Benchmark apc-optimizer against powdr over a named benchmark set.
 
-Each benchmark is a subdirectory of OpenVmBenchmarks/ holding apc_<rank>_pc<pc>.json.gz
-case pairs (plus manifest.json / apc_candidates.json). The default and main benchmark
-used for optimization is `openvm-eth`. For each case, run `apc-optimizer compare` (the same
-optimizer run as the autoopt loop) and aggregate effectiveness -- size before / after -- for
-apc-optimizer vs powdr. That run also reports the optimizer's own wall time, so effectiveness and
-runtime come from one pass (no separate timing run). Cases run in parallel by default with a progress
-bar, so the reported runtime is rough (cases contend for cores) -- a report-only regression signal,
-not a precise number; pass --jobs 1 for clean timings. The optimizer takes no iteration count: its
-cleanup loop runs to a fixpoint on an input-derived budget.
+Benchmark sets are grouped by VM under Benchmarks/<VM>/ (Benchmarks/OpenVM, Benchmarks/SP1); each
+set is a subdirectory holding apc_<rank>_pc<pc>.json.gz case pairs (plus manifest.json /
+apc_candidates.json). `--vm` selects the VM (default: openvm), which picks both the directory and
+the apc-optimizer's fact-aware optimizer (openvm = BabyBear, sp1 = KoalaBear); the positional
+argument selects the set by name within it. The default set is openvm-eth for openvm, rsp for sp1.
+For each case, run `apc-optimizer compare <vm> ...` (the same optimizer run as the autoopt loop) and
+aggregate effectiveness -- size before / after -- for apc-optimizer vs powdr. That run also reports
+the optimizer's own wall time, so effectiveness and runtime come from one pass (no separate timing
+run). Cases run in parallel by default with a progress bar, so the reported runtime is rough (cases
+contend for cores) -- a report-only regression signal, not a precise number; pass --jobs 1 for clean
+timings. The optimizer takes no iteration count: its cleanup loop runs to a fixpoint on an
+input-derived budget.
 
-Run it directly (uv installs tqdm automatically); the optional positional argument
-selects the benchmark by name (default: openvm-eth):
+Run it directly (uv installs tqdm automatically):
 
-    OpenVmBenchmarks/benchmark.py                 # all openvm-eth cases
-    OpenVmBenchmarks/benchmark.py openvm-eth      # same, named explicitly
-    OpenVmBenchmarks/benchmark.py --n 20          # top 20 by cost rank
-    OpenVmBenchmarks/benchmark.py --n 10 --report report.html
+    Benchmarks/benchmark.py                    # all openvm-eth cases
+    Benchmarks/benchmark.py openvm-eth         # same, named explicitly
+    Benchmarks/benchmark.py --vm sp1           # all rsp (SP1) cases
+    Benchmarks/benchmark.py --vm sp1 keccak    # the SP1 keccak set
+    Benchmarks/benchmark.py --n 20             # top 20 by cost rank
+    Benchmarks/benchmark.py --n 10 --report report.html
 
 With --report, writes a self-contained interactive HTML page to click through
 each block and compare its assembly, original circuit, and the powdr / apc-optimizer
@@ -48,10 +52,11 @@ except ModuleNotFoundError:  # allow plain `python3 benchmark.py` without uv
     def tqdm(iterable, **_kwargs):
         return iterable
 
-HERE = Path(__file__).resolve().parent       # OpenVmBenchmarks
-REPO = Path(__file__).resolve().parents[1]    # OpenVmBenchmarks -> repo root
-# Each benchmark is a subdirectory of HERE; `openvm-eth` is the main one used for optimization.
-DEFAULT_BENCHMARK = "openvm-eth"
+HERE = Path(__file__).resolve().parent       # Benchmarks
+REPO = Path(__file__).resolve().parents[1]    # Benchmarks -> repo root
+# VM -> its benchmark directory under Benchmarks/ and its default (main) set.
+VM_DIR = {"openvm": "OpenVM", "sp1": "SP1"}
+DEFAULT_BENCHMARK = {"openvm": "openvm-eth", "sp1": "rsp"}
 NAME_RE = re.compile(r"apc_(\d+)_pc(.+)\.json\.gz$")
 # `apc-optimizer compare` stat lines, e.g. "  before: 62 vars, 55 constraints, 12 bus interactions".
 # Capture all three measures per role (variables, constraints, bus interactions).
@@ -110,17 +115,18 @@ def _metrics_from_json(o):
     return {"vars": o["vars"], "constraints": o["constraints"], "bus": o["bus"]}
 
 
-def run_one(binary, unopt, want_report):
+def run_one(binary, vm, unopt, want_report):
     """Run one case, returning (name, metrics, report_json, ms, err). `metrics` is
     {role: {vars, constraints, bus}} for role in before/apc-optimizer/powdr, or None on failure;
-    `ms` is the optimizer's wall time from the same run (compare only; None otherwise)."""
+    `ms` is the optimizer's wall time from the same run (compare only; None otherwise). `vm` selects
+    the apc-optimizer backend (openvm/sp1)."""
     name = unopt.name
     opt = unopt.with_name(unopt.name.replace(".json.gz", ".powdr_opt.json.gz"))
     if not opt.exists():
         return name, None, None, None, "no .powdr_opt"
     sub = "report" if want_report else "compare"
     try:
-        out = subprocess.run([str(binary), sub, str(unopt), str(opt)],
+        out = subprocess.run([str(binary), sub, vm, str(unopt), str(opt)],
                              capture_output=True, text=True, check=True).stdout
     except subprocess.CalledProcessError:
         return name, None, None, None, "apc-optimizer failed"
@@ -289,9 +295,12 @@ def emit_compare_md(base, target):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("benchmark", nargs="?", default=DEFAULT_BENCHMARK,
-                    help=f"benchmark name -- a subdirectory of OpenVmBenchmarks/ "
-                         f"(default: {DEFAULT_BENCHMARK})")
+    ap.add_argument("benchmark", nargs="?", default=None,
+                    help="benchmark name -- a subdirectory of Benchmarks/<VM>/ "
+                         "(default: openvm-eth for openvm, rsp for sp1)")
+    ap.add_argument("--vm", choices=sorted(VM_DIR), default="openvm",
+                    help="VM whose benchmark set and fact-aware optimizer to use "
+                         "(default: openvm)")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4,
                     help="cases to run in parallel (default: number of cores); with >1 the "
                          "reported runtime is rough (cases contend for cores)")
@@ -323,11 +332,12 @@ def main():
         return
 
     repo = args.repo.resolve()
-    bench_root = repo / "OpenVmBenchmarks"
-    bench_dir = bench_root / args.benchmark
+    benchmark = args.benchmark or DEFAULT_BENCHMARK[args.vm]
+    bench_root = repo / "Benchmarks" / VM_DIR[args.vm]
+    bench_dir = bench_root / benchmark
     if not bench_dir.is_dir():
         avail = ", ".join(available_benchmarks(bench_root)) or "(none found)"
-        sys.exit(f"error: no benchmark {args.benchmark!r} under {bench_root} (available: {avail})")
+        sys.exit(f"error: no benchmark {benchmark!r} under {bench_root} (available: {avail})")
 
     binary = args.binary.resolve() if args.binary is not None else None
     os.chdir(repo)
@@ -350,7 +360,7 @@ def main():
     want_report = args.report is not None
     results, reports, skipped, runtimes = [], {}, [], {}
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures = [pool.submit(run_one, binary, c, want_report) for c in cases]
+        futures = [pool.submit(run_one, binary, args.vm, c, want_report) for c in cases]
         for fut in tqdm(as_completed(futures), total=len(futures),
                         desc="apc-optimizer compare", unit="case"):
             name, metrics, report, ms, err = fut.result()
@@ -371,7 +381,7 @@ def main():
     summary = summarize(results)
     summary["runtime_ms_total"] = sum(runtimes.values()) if runtimes else None
 
-    print(f"\n=== {args.benchmark}: apc-optimizer vs powdr over {n} cases ===")
+    print(f"\n=== {args.vm}/{benchmark}: apc-optimizer vs powdr over {n} cases ===")
     print("effectiveness = size before / size after (larger is better); "
           "priority: variables > bus interactions > constraints")
     print(f"  {'measure':<18}{'apc-optimizer (agg / geo)':<26}{'powdr (agg / geo)':<26}diff (agg)")
@@ -388,13 +398,13 @@ def main():
             print(f"  {name}: {err}", file=sys.stderr)
 
     if args.json is not None:
-        args.json.write_text(json.dumps({"benchmark": args.benchmark,
+        args.json.write_text(json.dumps({"benchmark": benchmark, "vm": args.vm,
                                          "results": dict(results),
                                          "runtime_ms": runtimes,
                                          "skipped": skipped}))
         print(f"wrote {args.json}", file=sys.stderr)
     if args.md is not None:
-        args.md.write_text(emit_summary_md(args.benchmark, summary, skipped))
+        args.md.write_text(emit_summary_md(benchmark, summary, skipped))
         print(f"wrote {args.md}", file=sys.stderr)
 
     if want_report:
@@ -406,7 +416,7 @@ def main():
             r = reports[name]
             html_cases.append({"rank": rank, "pc": pc, "asm": asm.get(name, ""),
                                "original": r["original"], "powdr": r["powdr"], "apc-optimizer": r["apc-optimizer"]})
-        args.report.write_text(build_html(html_cases, args.benchmark, summary))
+        args.report.write_text(build_html(html_cases, benchmark, summary))
         print(f"\nwrote report ({len(html_cases)} cases) to {args.report}", file=sys.stderr)
 
 

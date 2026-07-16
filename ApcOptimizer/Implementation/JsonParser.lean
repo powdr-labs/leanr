@@ -2,6 +2,7 @@ import Lean.Data.Json
 import ApcOptimizer.Spec
 import ApcOptimizer.Implementation.Variable
 import ApcOptimizer.OpenVmSemantics
+import ApcOptimizer.Sp1Semantics
 
 /-!
 # JSON parser for powdr `SymbolicMachine` exports
@@ -57,6 +58,37 @@ private def parseBusMap (j : Lean.Json) : Except String BusMapList := do
       | some n => pure n
       | none => .error s!"non-numeric bus id: {k}"
     let ty ← parseBusType v
+    pure (id, ty)
+
+/-- Parse one SP1 bus type from a `bus_map.bus_ids` value, mirroring powdr's `sp1_bus_map`.
+    Unknown bus types fail loudly: an unmapped bus would be modeled as a no-op (never stateful,
+    never violating), silently licensing unsound drops. -/
+private def parseBusTypeSp1 (j : Lean.Json) : Except String ApcOptimizer.SP1.Sp1BusType :=
+  match j with
+  | Lean.Json.str "ExecutionBridge" => .ok .executionBridge
+  | Lean.Json.str "Memory" => .ok .memory
+  | Lean.Json.str "PcLookup" => .ok .pcLookup
+  | Lean.Json.obj obj =>
+    match obj.toList.head? with
+    | some ("Other", Lean.Json.str "Byte") => .ok .byteLookup
+    | some ("Other", Lean.Json.str "UntrustedInstruction") => .ok .instructionFetch
+    | some ("Other", Lean.Json.str "PageProt") => .ok .pageProt
+    | some ("Other", Lean.Json.str name) => .error s!"unknown bus type: Other.{name}"
+    | some (k, _) => .error s!"unknown bus type: {k}"
+    | none => .error "empty object in bus_map"
+  | _ => .error s!"unexpected bus type: {j}"
+
+private def parseBusMapSp1 (j : Lean.Json) :
+    Except String ApcOptimizer.SP1.BusMapList := do
+  let obj ← j.getObjVal? "bus_ids"
+  let entries ← match obj with
+    | Lean.Json.obj kvs => pure kvs.toList
+    | _ => .error "bus_ids is not an object"
+  entries.mapM fun (k, v) => do
+    let id ← match k.toNat? with
+      | some n => pure n
+      | none => .error s!"non-numeric bus id: {k}"
+    let ty ← parseBusTypeSp1 v
     pure (id, ty)
 
 /-- Parse a JSON expression tree into an `Expression p`. -/
@@ -119,11 +151,12 @@ private def parseBusInteraction (j : Lean.Json) :
     payload := payload
   }
 
-/-- Parse a JSON string into a `ConstraintSystem`, its `BusMap`, and the `next_free_id` cursor if
-    present, starting at the `machine` key. It parses as `none` for a raw CLI export; the FFI
-    requires it, `parseFile` does not. Constraints are assert-zero expressions. -/
-def parseJsonSystem (jsonStr : String) :
-    Except String (ConstraintSystem p × BusMapList × Option Nat) := do
+/-- Parse the field-generic, bus-map-agnostic part of a powdr export: the top-level JSON (so callers
+    can pull the `bus_map` out with the right per-VM parser), the constraint system under the
+    `machine` key, and the `next_free_id` cursor if present (`none` for a raw CLI export; the FFI
+    requires it, `parseFile` does not). Constraints are assert-zero expressions. -/
+private def parseMachinePart (jsonStr : String) :
+    Except String (Lean.Json × ConstraintSystem p × Option Nat) := do
   let json ← Lean.Json.parse jsonStr
   let machine ← json.getObjVal? "machine"
 
@@ -143,10 +176,6 @@ def parseJsonSystem (jsonStr : String) :
   let busInteractions : List (BusInteraction (Expression p)) ←
     busArr.toList.mapM (parseBusInteraction (p := p))
 
-  -- Parse bus_map
-  let busMapJson ← json.getObjVal? "bus_map"
-  let busMap ← parseBusMap busMapJson
-
   -- powdr's `ColumnAllocator` cursor; absent or non-numeric parses as `none`.
   let nextFreeId? := (json.getObjVal? "next_free_id").toOption.bind (·.getNat?.toOption)
 
@@ -154,6 +183,22 @@ def parseJsonSystem (jsonStr : String) :
     algebraicConstraints := constraints,
     busInteractions := busInteractions
   }
+  pure (json, system, nextFreeId?)
+
+/-- Parse a powdr export into a `ConstraintSystem`, its OpenVM `BusMap`, and the `next_free_id`
+    cursor. -/
+def parseJsonSystem (jsonStr : String) :
+    Except String (ConstraintSystem p × BusMapList × Option Nat) := do
+  let (json, system, nextFreeId?) ← parseMachinePart (p := p) jsonStr
+  let busMap ← parseBusMap (← json.getObjVal? "bus_map")
+  pure (system, busMap, nextFreeId?)
+
+/-- The SP1 counterpart of `parseJsonSystem`: same machine parsing, but the `bus_map` is read as SP1
+    bus types. SP1 exports are over KoalaBear, so instantiate `p := koalaBear`. -/
+def parseJsonSystemSp1 (jsonStr : String) :
+    Except String (ConstraintSystem p × ApcOptimizer.SP1.BusMapList × Option Nat) := do
+  let (json, system, nextFreeId?) ← parseMachinePart (p := p) jsonStr
+  let busMap ← parseBusMapSp1 (← json.getObjVal? "bus_map")
   pure (system, busMap, nextFreeId?)
 
 /- A real powdr export from the `openvm-eth` benchmark set, exercising every parser path
@@ -164,7 +209,7 @@ def parseJsonSystem (jsonStr : String) :
 #eval! do
   let result ← IO.Process.output
     { cmd := "gunzip",
-      args := #["-c", "OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz"] }
+      args := #["-c", "Benchmarks/OpenVM/openvm-eth/apc_001_pc0x4ecc54.json.gz"] }
   match parseJsonSystem (p := 2013265921) result.stdout with
   | .ok (system, busMap, _) =>
     IO.println s!"Parsed {system.algebraicConstraints.length} constraints, {system.busInteractions.length} bus interactions, {busMap.length} bus types"

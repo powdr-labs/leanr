@@ -72,7 +72,7 @@ jobs:
           [ -f bin/apc-optimizer ] || { echo "no binary for side '${{ matrix.side }}'"; exit 0; }
           chmod +x bin/apc-optimizer
           for set in ${{ matrix.group.sets }}; do
-            python3 OpenVmBenchmarks/benchmark.py "$set" --binary bin/apc-optimizer \
+            python3 Benchmarks/benchmark.py "$set" --binary bin/apc-optimizer \
               --json "$set.json" --md "$set.md"
           done
       - uses: actions/upload-artifact@v4
@@ -112,10 +112,10 @@ jobs:
           fi
       - name: Runtime, top-10 sequential (per-stage + slowest)
         run: |
-          python3 OpenVmBenchmarks/runtime_bench.py openvm-eth --n 10 \
+          python3 Benchmarks/runtime_bench.py openvm-eth --n 10 \
             --binary bin-target/apc-optimizer --json rt-pr.json
           if [ -f bin-base/apc-optimizer ]; then
-            python3 OpenVmBenchmarks/runtime_bench.py openvm-eth --n 10 \
+            python3 Benchmarks/runtime_bench.py openvm-eth --n 10 \
               --binary bin-base/apc-optimizer --json rt-main.json
           fi
       - uses: actions/upload-artifact@v4
@@ -161,7 +161,7 @@ jobs:
           : > bench.md
           for set in openvm-eth wasm-eth keccak; do
             if [ -f "main/$set.json" ]; then
-              python3 OpenVmBenchmarks/benchmark.py --compare "main/$set.json" "pr/$set.json" \
+              python3 Benchmarks/benchmark.py --compare "main/$set.json" "pr/$set.json" \
                 --md "$set.md"
               cat "$set.md" >> bench.md
             elif [ -f "pr/$set.md" ]; then
@@ -169,7 +169,7 @@ jobs:
             fi
             # openvm-eth only: collapsed runtime detail (slowest cases + per-stage) from bench-runtime.
             if [ "$set" = openvm-eth ] && [ -f rt/rt-main.json ] && [ -f rt/rt-pr.json ]; then
-              python3 OpenVmBenchmarks/runtime_bench.py --details \
+              python3 Benchmarks/runtime_bench.py --details \
                 --compare rt/rt-main.json rt/rt-pr.json --md rt.md
               cat rt.md >> bench.md
             fi

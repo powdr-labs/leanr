@@ -27,7 +27,7 @@ on:
         required: false
         default: "main"
       benchmark:
-        description: "benchmark set (a subdirectory of OpenVmBenchmarks/)"
+        description: "benchmark set (a subdirectory of Benchmarks/OpenVM/)"
         required: false
         default: "openvm-eth"
       n:
@@ -58,10 +58,10 @@ jobs:
           echo "TARGET_REF=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           # The baseline checkout below replaces the working tree, so keep this version of the
           # bench script (and its results) outside it.
-          cp OpenVmBenchmarks/runtime_bench.py "$RUNNER_TEMP/runtime_bench.py"
+          cp Benchmarks/runtime_bench.py "$RUNNER_TEMP/runtime_bench.py"
           N='${{ inputs.n }}'
           REPEAT='${{ inputs.repeat }}'
-          python3 OpenVmBenchmarks/runtime_bench.py '${{ inputs.benchmark }}' --no-build \
+          python3 Benchmarks/runtime_bench.py '${{ inputs.benchmark }}' --no-build \
             --json "$RUNNER_TEMP/target.json" --md bench.md \
             ${N:+--n "$N"} --repeat "${REPEAT:-1}"
       - name: Bench baseline

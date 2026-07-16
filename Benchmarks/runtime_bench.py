@@ -10,16 +10,16 @@ per pass across the whole set. Cases run *serially* so timings don't fight for c
 
 This measures runtime only; effectiveness is benchmark.py's job.
 
-    OpenVmBenchmarks/runtime_bench.py                 # all openvm-eth cases
-    OpenVmBenchmarks/runtime_bench.py --n 20          # top 20 by cost rank
-    OpenVmBenchmarks/runtime_bench.py --repeat 3      # best-of-3 per case (less noise)
-    OpenVmBenchmarks/runtime_bench.py --md bench.md   # also write a markdown summary
-    OpenVmBenchmarks/runtime_bench.py --json out.json # also dump raw results (for --compare)
+    Benchmarks/runtime_bench.py                 # all openvm-eth cases
+    Benchmarks/runtime_bench.py --n 20          # top 20 by cost rank
+    Benchmarks/runtime_bench.py --repeat 3      # best-of-3 per case (less noise)
+    Benchmarks/runtime_bench.py --md bench.md   # also write a markdown summary
+    Benchmarks/runtime_bench.py --json out.json # also dump raw results (for --compare)
 
 To compare two runs (e.g. a PR head against main, both benched on the same machine — timings
 from different machines don't compare), dump each with --json and then:
 
-    OpenVmBenchmarks/runtime_bench.py --compare base.json target.json --md bench.md
+    Benchmarks/runtime_bench.py --compare base.json target.json --md bench.md
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]  # OpenVmBenchmarks -> repo root
+REPO = Path(__file__).resolve().parents[1]  # Benchmarks -> repo root
 DEFAULT_BENCHMARK = "openvm-eth"
 
 # `apc-optimizer run` total, e.g. "  (339 ms)".
@@ -87,7 +87,7 @@ def fmt_ratio(target, base):
 def bench(args):
     """Run the benchmark, returning {benchmark, repeat, run_ms, pass_ms, iters}."""
     repo = args.repo.resolve()
-    bench_dir = repo / "OpenVmBenchmarks" / args.benchmark
+    bench_dir = repo / "Benchmarks" / "OpenVM" / args.benchmark
     if not bench_dir.is_dir():
         sys.exit(f"error: no benchmark {args.benchmark!r} under {bench_dir.parent}")
 
@@ -248,7 +248,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("benchmark", nargs="?", default=DEFAULT_BENCHMARK,
-                    help=f"benchmark name -- a subdirectory of OpenVmBenchmarks/ "
+                    help=f"benchmark name -- a subdirectory of Benchmarks/OpenVM/ "
                          f"(default: {DEFAULT_BENCHMARK})")
     ap.add_argument("--n", type=int, default=None, metavar="N",
                     help="only the top N cases by cost rank (default: all)")

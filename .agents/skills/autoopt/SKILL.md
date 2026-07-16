@@ -17,8 +17,8 @@ recent `docs/log.md` entries (`tail -100 docs/log.md`; earlier ones describe sup
 and recent commits to see what has already been tried. Run a case with, e.g.:
 
 ```
-lake exe apc-optimizer run OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz
-lake exe apc-optimizer run OpenVmBenchmarks/keccak/apc_001_pckeccak.json.gz
+lake exe apc-optimizer run Benchmarks/OpenVM/openvm-eth/apc_001_pc0x4ecc54.json.gz
+lake exe apc-optimizer run Benchmarks/OpenVM/keccak/apc_001_pckeccak.json.gz
 ```
 
 It reports before/after counts and three effectiveness factors — **variables**, **bus
@@ -31,10 +31,10 @@ removes more bus interactions, and then the one that removes more constraints. A
 bus interactions or constraints without regressing variables is still an improvement worth
 landing. Report all three factors in the log.
 
-Optimization is slow; sampling a few cases per iteration might be fine. You can use the `*.powdr_opt.*` files for inspiration of new ideas that are possible. For the full picture, `OpenVmBenchmarks/benchmark.py` runs `apc-optimizer compare` over all 100 cases in parallel (or `--n N` for the top N by cost; `--report out.html` for a
+Optimization is slow; sampling a few cases per iteration might be fine. You can use the `*.powdr_opt.*` files for inspiration of new ideas that are possible. For the full picture, `Benchmarks/benchmark.py` runs `apc-optimizer compare` over all 100 cases in parallel (or `--n N` for the top N by cost; `--report out.html` for a
 click-through comparison of the original / powdr / apc-optimizer circuits) and reports aggregate/geomean
 effectiveness against powdr — this is the final evaluation. It runs the main `openvm-eth` benchmark
-by default; a positional argument selects another set under `OpenVmBenchmarks/`. Report the result
+by default; a positional argument selects another set under `Benchmarks/<VM>/` (`--vm sp1` for SP1). Report the result
 in the log.
 
 ## Rules

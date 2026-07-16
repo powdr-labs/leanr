@@ -1,8 +1,8 @@
 # Sp1Benchmarks
 
 apc-optimizer benchmark inputs generated from SP1 guests, mirroring the layout of
-`OpenVmBenchmarks/`. Drop this folder into the apc-optimizer repo and drive it
-with `OpenVmBenchmarks/benchmark.py` (point it at this directory).
+`Benchmarks/OpenVM/`. Drive them with `Benchmarks/benchmark.py --vm sp1`
+(the `--vm sp1` flag selects both this directory and the SP1 / KoalaBear optimizer).
 
 ## Sets
 
@@ -25,9 +25,9 @@ with `OpenVmBenchmarks/benchmark.py` (point it at this directory).
 
 ## Notes
 
-- Field: SP1 uses **KoalaBear**; field elements are encoded accordingly (the
-  apc-optimizer's parser is currently BabyBear — that's the consuming side to
-  reconcile, not these inputs).
+- Field: SP1 uses **KoalaBear**; field elements are encoded accordingly. The
+  CLI parses these over KoalaBear when driven with the `sp1` VM selector
+  (`compare sp1 …`, `benchmark.py --vm sp1`).
 - Ranking is cell PGO's value ranking, which folds in powdr's effectiveness, so
   the top-N is close to but not exactly the N costliest blocks.
 
