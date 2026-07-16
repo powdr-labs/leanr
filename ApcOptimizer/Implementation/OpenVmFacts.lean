@@ -222,7 +222,7 @@ private theorem memory_recv_nonByte_ok (busMap : Nat → Option OpenVmBusType)
     try rfl
   -- only the 6+-element case remains; `a0` is the address space, equal to `as`
   simp only [List.getElem?_cons_zero, Option.some.injEq] at has
-  push_neg at hasval
+  push Not at hasval
   obtain ⟨hne1, hne2⟩ := hasval
   have hmid : (a0.val == 1 || a0.val == 2) = false := by
     rw [has]
