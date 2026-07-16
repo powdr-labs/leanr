@@ -3502,3 +3502,54 @@ Build green; `Scripts/check-proof-integrity.sh` green (the three correctness the
 depend only on `{propext, Classical.choice, Quot.sound}`). Runtime leftovers (domainBatch box
 streaming / SAT-style pruning, gauss, dedup's quadratics, rootPairUnify's rescans, cross-cycle
 memoization) are recorded in `docs/ideas.md` under "Runtime leftovers". **Worked: yes.**
+### 91. Runtime: tupleRange batch-drain with split-by-construction (effectiveness unchanged)
+
+Profiling the heaviest wasm-eth cases put `tupleRange` second (96.3 s of `apc_012`'s 435 s
+profile on a dev desktop) — yet the pass's useful work is tiny. The cost anatomy was exactly
+the disease entry 90 cured in `busPairCancel`/`busUnify`, left untreated here: the pass packed
+**one** (byte, range) pair per invocation and let `iterateToFixpoint` drain the rest, so every
+drained pair paid (a) a full pass re-entry, (b) two full-system `sizeKey` recomputations
+(`varCount` re-hashes every variable occurrence), and (c) an `O(#interactions)` *deep
+structural decide* of the split equation `cs.busInteractions = pre ++ D₁ :: mid ++ D₂ :: post`
+per accept — on `apc_012` a 12,949-interaction list compared expression-by-expression, with the
+whole bill paid once per drained pair, **1,877** times.
+
+**Treatment** (entry-90 pattern, `TupleRange.lean` rewritten below the matchers):
+
+- **Matcher soundness lemmas** (`matchByteSingle_eq`, `matchRangeCheck_eq`): a successful match
+  *is* the canonical `byteCheck1`/`rangeCheck1` — so the accepted split needs no runtime
+  re-verification of the interaction shapes, and the width facts (`b.val ≤ 25`, `2 ^ b.val = s2`)
+  ride along from the match.
+- **Split by construction**: the scan is array-indexed (`findRangeIdx`/`findByteIdx` carry
+  their position facts); an accept derives the split equation via `split_of_extracts` — moved,
+  with `list_split_two{,_aux}`, to a new shared `ListSplit.lean` (also imported by
+  `BusPairCancel`) — instead of deciding it.
+- **Batch drain** (`drainTuplePacks`): all packable pairs are drained in one invocation,
+  recursing on the strictly-dropping interaction count (each pack is 2-for-1), composing the
+  per-pack `PassCorrect`s with `andThen`; the pass-list entry drops its `iterateToFixpoint`
+  wrapper. Candidate buses are recomputed per round from the shrunken system, and the scan
+  order is position-major within bus-major — the exact pair sequence the fixpoint-wrapped
+  single-pack pass produced, so the transform is output-preserving by construction.
+
+Mid-flight, #140 moved `tupleRange` from the cleanup cycle to the coda (an effectiveness win:
+pack after `redundantByteDrop`). That removes the *re-run-every-cycle* component but keeps the
+whole per-pair bill (a)–(c) for the coda drain; this entry's rewrite composes with it — the
+coda entry is now the unwrapped `tupleRangePass.guardDegree`.
+
+**Measured** (dev desktop, single runs, not the CI container; both sides at the pre-#140 base,
+where the pass ran in the cleanup cycle): `apc_012` `profile` **434,984 ms → 325,986 ms**
+(−25 %), `tupleRange` **96,301 ms → 2,538 ms** (≈38×); cleanup iterations 9 → 9; every other
+pass's time within run-to-run variance. Outputs at that base: `opt-export` **byte-identical**
+on wasm-eth `apc_096`/`apc_058` (packs 8 tuple pairs)/`apc_084`/`apc_014`/`apc_012`
+(1,877 pairs) and openvm-eth `apc_001`/`apc_034`. Re-validated after rebasing onto #140:
+build and proof integrity green, the six fast cases again byte-identical against the post-#140
+baseline, and `benchmark.py` over all 100 openvm-eth cases matches that baseline's aggregates
+exactly (variables 4.552×/3.887× geo, bus 3.557×/2.812× geo, W/L/T 31/7/62). The same-runner
+CI benchmarks are the authoritative A/B for the post-#140 runtime.
+
+Build green; `Scripts/check-proof-integrity.sh` green (the three correctness theorems still
+depend only on `{propext, Classical.choice, Quot.sound}`). The generated-C audit that ranked
+this lever also recorded the remaining ones (ZMod dictionary reconstruction per scalar op,
+gauss's unconditional per-constraint renormalization, rootPairUnify's quadratic seen-join,
+`sizeKey`/`varCount` allocation, variable interning, runtime `p.Prime` decides) in
+`docs/ideas.md` under "Runtime leftovers II". **Worked: yes.**
