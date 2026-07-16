@@ -1765,10 +1765,10 @@ partial def cancelLoop (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : 
     prime `p`), or materializing it as one explicit byte check on a `byteCheck` bus already
     present in the system. Runs its own cancellation fixpoint (`cancelLoop`), so a whole access
     chain is cancelled in a single invocation. -/
-def busPairCancelPass (aggressive : Bool) : VerifiedPassW p := fun cs bs facts =>
+def busPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : VerifiedPassW p := fun cs bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then
     let busIds := (cs.busInteractions.map (fun bi => bi.busId)).dedup
-    let deep : Bool := decide p.Prime
+    let deep : Bool := pw.isPrime
     -- Two-root decomposition data (address disequality), normalized-constraint index (entailed
     -- payload equality), single-variable constraints and the variable→constraints index (deep
     -- byte justification): `Thunk`s, so each is built at most once per invocation — on the
@@ -1785,6 +1785,6 @@ def busPairCancelPass (aggressive : Bool) : VerifiedPassW p := fun cs bs facts =
         fun _ hc => List.mem_of_mem_filter hc⟩
     let candsT : Thunk (VarCsIdx p cs.algebraicConstraints) :=
       Thunk.mk fun _ => VarCsIdx.build cs.algebraicConstraints
-    cancelLoop cs bs facts hp1 deep (fun h => of_decide_eq_true h) aggressive T M domCsT candsT
+    cancelLoop cs bs facts hp1 deep (fun h => pw.correct h) aggressive T M domCsT candsT
       (busIds.find? facts.byteCheck) busIds 0 0
   else ⟨cs, [], PassCorrect.refl cs bs⟩

@@ -268,9 +268,9 @@ theorem resolveMap_correct [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSem
     never-vanishing factor to its other factor. Needs prime `p` (zero divisors would break the
     factoring); identity otherwise, and identity with `BusFacts.trivial` (no bounds ⇒ no
     certificate ever fires). -/
-def carryBranchPass : VerifiedPassW p := fun cs bs facts =>
-  if hp : p.Prime then
-    haveI : Fact p.Prime := ⟨hp⟩
+def carryBranchPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
+  if hpB : pw.isPrime = true then
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let Bm : BoundsMap p cs bs := BoundsMap.build facts
     ⟨{ cs with algebraicConstraints := cs.algebraicConstraints.map (resolveExpr Bm.map) }, [],
       resolveMap_correct cs bs Bm⟩

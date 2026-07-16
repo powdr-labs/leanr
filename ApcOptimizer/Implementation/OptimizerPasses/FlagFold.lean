@@ -172,9 +172,9 @@ theorem ConstraintSystem.boxTautoReplace_correct [Fact p.Prime]
     exact ⟨(hiff env).2 hsat, hadm, BusState.equiv_refl _⟩
 
 /-- Part B as a standalone (unguarded) verified pass; prime `p` re-checked at runtime. -/
-def boxTautoDropPass : VerifiedPass p := fun cs bs =>
-  if hp : (decide p.Prime) = true then
-    haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
+def boxTautoDropPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bs =>
+  if hpB : pw.isPrime = true then
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let singles := singleVarCs cs.algebraicConstraints
     let cache : Std.HashMap Variable (Option (List (ZMod p))) :=
       (cs.algebraicConstraints.flatMap Expression.vars).eraseDups.foldl
@@ -594,9 +594,9 @@ theorem ConstraintSystem.pointwiseDupDrop_correct [Fact p.Prime]
            rw [heq] at hob
            exact hob hm)
 
-def pointwiseDupDropPass : VerifiedPass p := fun cs bs =>
-  if hp : (decide p.Prime) = true then
-    haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
+def pointwiseDupDropPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bs =>
+  if hpB : pw.isPrime = true then
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let singles := singleVarCs cs.algebraicConstraints
     -- The fast sweep flags exactly `pdKeep`'s drop set; the certified `pdKeep` re-verifies each
     -- flagged drop (short-circuited away for the unflagged rest by the `||`).
@@ -962,9 +962,9 @@ def fxLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
           (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩) ++ seen) σ
 
 /-- Part A as a standalone (unguarded) pass: substitute every certified interpolation. -/
-def fxSubstPass : VerifiedPassW p := fun cs bs facts =>
-  if hp : (decide p.Prime) = true then
-    haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
+def fxSubstPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
+  if hpB : pw.isPrime = true then
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let σ := fxLoop cs bs facts cs.busInteractions (fun _ h => h) [] Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs.substF σ.fn, [],
@@ -976,5 +976,6 @@ def fxSubstPass : VerifiedPassW p := fun cs bs facts =>
     substitution creates — the boxed-out booleanity (part B) and the pointwise-duplicate scaled
     check (part C). Intermediate states exceed the degree bound by design; the composite is
     wired under a single `guardDegree`. -/
-def flagFoldPass : VerifiedPassW p :=
-  fxSubstPass.andThen boxTautoDropPass.withFacts |>.andThen pointwiseDupDropPass.withFacts
+def flagFoldPass (pw : PrimeWitness p) : VerifiedPassW p :=
+  (fxSubstPass pw).andThen (boxTautoDropPass pw).withFacts
+    |>.andThen (pointwiseDupDropPass pw).withFacts

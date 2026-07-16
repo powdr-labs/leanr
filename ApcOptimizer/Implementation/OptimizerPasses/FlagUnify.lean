@@ -446,9 +446,9 @@ def fuLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
 /-- Flag unification across duplicate scaled range checks. Prime `p` only (re-checked at
     runtime). Runs after `rootPairUnifyPass` — the carrier limbs must already be shared — and
     before `dedupPass`, which collects the checks this pass makes syntactically identical. -/
-def flagUnifyPass : VerifiedPassW p := fun cs bs facts =>
-  if hp : (decide p.Prime) = true then
-    haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
+def flagUnifyPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
+  if hpB : pw.isPrime = true then
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let σ := fuLoop cs bs facts cs.busInteractions (fun _ h => h) [] Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs.substF σ.fn, [],

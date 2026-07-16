@@ -76,6 +76,29 @@ theorem ConstraintSystem.implies_trans {a b c : ConstraintSystem p} {busSemantic
     let ⟨env'', hc, hbc⟩ := h2 env' hb
     ⟨env'', hc, BusState.equiv_trans hab hbc⟩
 
+/-! ## Precomputed primality witness
+
+`decide (Nat.Prime p)` is an expensive trial division (≈ √p steps for the field modulus). Every
+prime-gated pass needs to know whether `p` is prime, but re-deciding it once per pass invocation —
+and again on every cleanup iteration — repeats that cost dozens of times per optimizer run.
+`PrimeWitness p` computes the decision **once** (`PrimeWitness.of`) and carries the `Bool` together
+with a proof that `true` entails `Nat.Prime p`; the pipeline builds one and threads it to each
+prime-gated pass, which then branches on the `Bool` in O(1) instead of re-deciding. Purely a runtime
+optimization — the soundness proof a pass gets from `pw.correct` is the same `Nat.Prime p` it
+previously obtained from `of_decide_eq_true`. -/
+
+/-- A once-computed decision of `p`'s primality: the `Bool` result of `decide (Nat.Prime p)`
+    together with the proof that `true` entails primality. -/
+structure PrimeWitness (p : ℕ) where
+  /-- Whether `p` is prime (the result of the one expensive `decide`). -/
+  isPrime : Bool
+  /-- `isPrime = true` entails `Nat.Prime p` — the fact prime-gated passes consume. -/
+  correct : isPrime = true → Nat.Prime p
+
+/-- Compute the witness. This is the single `decide (Nat.Prime p)` per optimizer run. -/
+def PrimeWitness.of (p : ℕ) : PrimeWitness p :=
+  ⟨decide (Nat.Prime p), fun h => of_decide_eq_true h⟩
+
 /-! ## Verified passes
 
 A single optimization step, packaged with its correctness proof. `VerifiedPass` is a function

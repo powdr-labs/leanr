@@ -381,15 +381,15 @@ theorem ConstraintSystem.boxRewrite_correct [Fact p.Prime]
       exact BusState.equiv_refl _
 
 /-- The rewriter as a standalone (unguarded) pass; prime `p` re-checked at runtime. -/
-def boxRewritePass : VerifiedPass p := fun cs bs =>
-  if hp : (decide p.Prime) = true then
-    haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
+def boxRewritePass (pw : PrimeWitness p) : VerifiedPass p := fun cs bs =>
+  if hpB : pw.isPrime = true then
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     ⟨cs.boxRewrite bs, [], cs.boxRewrite_correct bs⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
 
 /-- The completed composite (supersedes the `FlagFold.lean` version): substitute the XOR
     component, rewrite the over-bound survivors multilinearly, then collect the tautologies and
     pointwise duplicates. Wired under a single degree guard. -/
-def flagFoldPass' : VerifiedPassW p :=
-  fxSubstPass.andThen boxRewritePass.withFacts |>.andThen boxTautoDropPass.withFacts
-    |>.andThen pointwiseDupDropPass.withFacts
+def flagFoldPass' (pw : PrimeWitness p) : VerifiedPassW p :=
+  (fxSubstPass pw).andThen (boxRewritePass pw).withFacts |>.andThen (boxTautoDropPass pw).withFacts
+    |>.andThen (pointwiseDupDropPass pw).withFacts

@@ -657,9 +657,9 @@ def domainFoldIndexThreshold : Nat := 8192
     the group's variables. Recovers the address-constant folding that unblocks memory chaining
     (which the re-encoder currently achieves only as a side effect). Prime `p` only; identity
     otherwise. -/
-def domainFoldPass : VerifiedPass p := fun cs bsem =>
-  if hpr : p.Prime then
-    haveI : Fact p.Prime := ⟨hpr⟩
+def domainFoldPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bsem =>
+  if hpB : pw.isPrime = true then
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     -- Domains come only from single-variable constraints (`findDomainAlg`/`rootsIn`), and a
     -- single-variable constraint is covered by every group containing its variable — so a group
     -- with a variable that has *no* single-variable constraint anywhere can never pass
