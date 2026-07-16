@@ -25,10 +25,12 @@ jobs:
           path: .lake/build/bin/apc-optimizer
           retention-days: 30
 
-  # Effectiveness over the full openvm-eth set and the keccak stress set: one job per side (this PR
-  # and the latest main build) in parallel on their own runners. Circuit sizes are deterministic, so
-  # the two sides needn't share a runner. `report` combines them. benchmark.py also captures a rough
-  # total runtime, used for the report-only runtime row.
+  # Effectiveness over the full openvm-eth and wasm-eth sets and the keccak stress set. The matrix
+  # crosses side (this PR vs the latest main build) with a benchmark group, so each cell is its own
+  # runner: circuit sizes are deterministic, so the sides needn't share a runner, and splitting the
+  # 100-case wasm-eth set into its own group keeps it off the openvm-eth critical path. `report`
+  # merges every cell. benchmark.py also captures a rough total runtime, used for the report-only
+  # runtime row.
   effectiveness:
     if: github.event_name == 'pull_request'
     needs: build
@@ -38,6 +40,11 @@ jobs:
       fail-fast: false
       matrix:
         side: [pr, main]
+        # `key` names the artifact; `sets` is the space-separated list this cell runs. keccak is tiny
+        # (2 cases), so it rides along with openvm-eth rather than paying for its own runner.
+        group:
+          - { key: openvm, sets: openvm-eth keccak }
+          - { key: wasm, sets: wasm-eth }
     permissions:
       contents: read
       actions: read
@@ -60,17 +67,17 @@ jobs:
             gh run download "$run_id" -n apc-optimizer-bin -D bin || true
           fi
           [ -f bin/apc-optimizer ] || echo "no latest-main binary; PR-only report"
-      - name: Effectiveness (openvm-eth + keccak)
+      - name: Effectiveness (${{ matrix.group.sets }})
         run: |
           [ -f bin/apc-optimizer ] || { echo "no binary for side '${{ matrix.side }}'"; exit 0; }
           chmod +x bin/apc-optimizer
-          for set in openvm-eth keccak; do
+          for set in ${{ matrix.group.sets }}; do
             python3 OpenVmBenchmarks/benchmark.py "$set" --binary bin/apc-optimizer \
               --json "$set.json" --md "$set.md"
           done
       - uses: actions/upload-artifact@v4
         with:
-          name: eff-${{ matrix.side }}
+          name: eff-${{ matrix.side }}-${{ matrix.group.key }}
           path: |
             *.json
             *.md
@@ -129,10 +136,12 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+      # One artifact per (side, group) cell; merge each side's cells back into one dir so the
+      # assemble step still reads pr/$set.json and main/$set.json regardless of grouping.
       - uses: actions/download-artifact@v4
-        with: { name: eff-pr, path: pr }
+        with: { pattern: eff-pr-*, path: pr, merge-multiple: true }
       - uses: actions/download-artifact@v4
-        with: { name: eff-main, path: main }
+        with: { pattern: eff-main-*, path: main, merge-multiple: true }
         continue-on-error: true
       - uses: actions/download-artifact@v4
         with: { name: bench-runtime, path: rt }
@@ -150,7 +159,7 @@ jobs:
       - name: Assemble comment
         run: |
           : > bench.md
-          for set in openvm-eth keccak; do
+          for set in openvm-eth wasm-eth keccak; do
             if [ -f "main/$set.json" ]; then
               python3 OpenVmBenchmarks/benchmark.py --compare "main/$set.json" "pr/$set.json" \
                 --md "$set.md"
@@ -175,7 +184,7 @@ jobs:
           pr: ${{ github.event.pull_request.head.repo.full_name == github.repository
                   && github.event.number || '' }}
           note: >-
-            openvm-eth + keccak, PR `${{ steps.base.outputs.psha }}`
+            openvm-eth + wasm-eth + keccak, PR `${{ steps.base.outputs.psha }}`
             ${{ steps.base.outputs.sha && format('vs main `{0}`', steps.base.outputs.sha)
                  || '(no main baseline binary)' }}.
             Effectiveness is exact; the runtime row and detail are report-only. Full runtime detail:
