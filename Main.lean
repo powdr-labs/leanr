@@ -216,44 +216,52 @@ def cmdReport (unoptFile optFile : String) : IO Unit := do
     ",\"apc-optimizer\":" ++ circuitJson optimized ++ "}")
 
 open ApcOptimizer.OpenVM in
-/-- Profiling helper: apply one fact-aware pass, forcing full evaluation, and return the new
-    system plus the elapsed milliseconds. -/
-def applyTimed (pass : VerifiedPassW babyBear) (cs : ConstraintSystem babyBear)
-    (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs) :
-    IO (ConstraintSystem babyBear × Nat) := do
+/-- Profiling helper: apply one store-threaded pass, forcing full evaluation, and return the new
+    system, the threaded store, and the elapsed milliseconds. Mirrors the store threading of
+    `iterateToFixpointS` so the profiler measures the shared `FactStore` exactly as the pipeline uses
+    it. -/
+def applyTimed (pass : VerifiedPassS babyBear) (cs : ConstraintSystem babyBear)
+    (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs) (store : FactStore babyBear) :
+    IO (ConstraintSystem babyBear × FactStore babyBear × Nat) := do
   let t0 ← IO.monoMsNow
-  let out ← IO.lazyPure (fun _ => (pass cs bs facts).out)
-  -- Force the whole output structure (varCount traverses every expression node).
+  let res ← IO.lazyPure (fun _ => pass cs bs facts store)
+  let out := res.1.out
+  let store' := res.2
+  -- Force the whole output structure (varCount traverses every expression node) and the store.
   let _ ← IO.lazyPure (fun _ =>
     out.varCount + out.algebraicConstraints.length + out.busInteractions.length)
+  let _ ← IO.lazyPure (fun _ => store')
   let t1 ← IO.monoMsNow
-  pure (out, t1 - t0)
+  pure (out, store', t1 - t0)
 
 open ApcOptimizer.OpenVM in
-/-- Run one cleanup cycle's passes in order, accumulating per-pass elapsed time. -/
-partial def runCycleTimed (passes : List (String × VerifiedPassW babyBear))
+/-- Run one cleanup cycle's passes in order, threading the store and accumulating per-pass time. -/
+partial def runCycleTimed (passes : List (String × VerifiedPassS babyBear))
     (cs : ConstraintSystem babyBear) (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs)
-    (acc : Std.HashMap String Nat) : IO (ConstraintSystem babyBear × Std.HashMap String Nat) := do
+    (store : FactStore babyBear) (acc : Std.HashMap String Nat) :
+    IO (ConstraintSystem babyBear × FactStore babyBear × Std.HashMap String Nat) := do
   let mut c := cs
+  let mut st := store
   let mut a := acc
   for (name, pass) in passes do
-    let (c', dt) ← applyTimed pass c bs facts
+    let (c', st', dt) ← applyTimed pass c bs facts st
     c := c'
+    st := st'
     a := a.insert name (a.getD name 0 + dt)
-  pure (c, a)
+  pure (c, st, a)
 
 open ApcOptimizer.OpenVM in
-/-- Iterate the cleanup cycle to a fixpoint (mirroring `iterateToFixpoint`), accumulating per-pass
-    time and counting iterations. -/
-partial def profileLoop (passes : List (String × VerifiedPassW babyBear))
+/-- Iterate the cleanup cycle to a fixpoint (mirroring `iterateToFixpointS`), threading the store,
+    accumulating per-pass time and counting iterations. -/
+partial def profileLoop (passes : List (String × VerifiedPassS babyBear))
     (cs : ConstraintSystem babyBear) (bs : BusSemantics babyBear) (facts : BusFacts babyBear bs)
-    (acc : Std.HashMap String Nat) (iter : Nat) :
-    IO (ConstraintSystem babyBear × Std.HashMap String Nat × Nat) := do
-  let (cs', acc') ← runCycleTimed passes cs bs facts acc
+    (store : FactStore babyBear) (acc : Std.HashMap String Nat) (iter : Nat) :
+    IO (ConstraintSystem babyBear × FactStore babyBear × Std.HashMap String Nat × Nat) := do
+  let (cs', store', acc') ← runCycleTimed passes cs bs facts store acc
   if cs'.sizeKey < cs.sizeKey then
-    profileLoop passes cs' bs facts acc' (iter + 1)
+    profileLoop passes cs' bs facts store' acc' (iter + 1)
   else
-    pure (cs, acc', iter)
+    pure (cs, store', acc', iter)
 
 open ApcOptimizer.OpenVM in
 /-- `profile <file>`: run the OpenVM pipeline with per-pass timing, reporting the cumulative time
@@ -267,9 +275,9 @@ def cmdProfile (fileName : String) : IO Unit := do
   -- profiler steps the passes here instead of calling the pure `pipeline`; but it reads those same
   -- three lists, so it cannot time a pass the optimizer does not run, nor drift out of sync.
   let t0 ← IO.monoMsNow
-  let (cs, acc) ← runCycleTimed (preludePasses (p := babyBear)) cs bs facts ∅
-  let (cs, acc, iters) ← profileLoop (cleanupPasses (p := babyBear)) cs bs facts acc 0
-  let (_, acc) ← runCycleTimed (codaPasses (p := babyBear)) cs bs facts acc
+  let (cs, s, acc) ← runCycleTimed (preludePasses (p := babyBear)) cs bs facts FactStore.empty ∅
+  let (cs, s, acc, iters) ← profileLoop (cleanupPasses (p := babyBear)) cs bs facts s acc 0
+  let (_, _, acc) ← runCycleTimed (codaPasses (p := babyBear)) cs bs facts s acc
   let t1 ← IO.monoMsNow
   IO.println s!"profile {fileName}: {iters} cleanup iterations, {t1 - t0} ms total"
   let sorted := acc.toList.toArray.qsort (fun a b => a.2 > b.2)

@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Basic
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
+import ApcOptimizer.Implementation.OptimizerPasses.FactStore
 import ApcOptimizer.Implementation.OptimizerPasses.Identity
 import ApcOptimizer.Implementation.OptimizerPasses.ConstantFold
 import ApcOptimizer.Implementation.OptimizerPasses.TrivialConstraint
@@ -64,8 +65,8 @@ follows automatically from the pass's own `PassCorrect`. -/
     command (`Main.lean`) times the same lists — so the optimizer and the profiler cannot drift
     apart. The prelude is a single constant-fold that canonicalizes the freshly-parsed system. The
     `String` labels name each pass in the profiler's timing report (irrelevant to behaviour). -/
-def preludePasses : List (String × VerifiedPassW p) :=
-  [ ("constFold0", constantFoldPass.withFacts.guardDegree) ]
+def preludePasses : List (String × VerifiedPassS p) :=
+  [ ("constFold0", constantFoldPass.withFacts.guardDegree.toS) ]
 
 /-- The cleanup-cycle passes as a **labelled list** (one of the three stages; see `preludePasses`).
 
@@ -82,117 +83,106 @@ def preludePasses : List (String × VerifiedPassW p) :=
     `(name, pass.….guardDegree)` entry to this list. That is the only edit needed here; the
     correctness proof follows automatically from the pass's own `PassCorrect`, and the profiler
     picks up the new label for free (it consumes this same list). -/
-def cleanupPasses : List (String × VerifiedPassW p) :=
+def cleanupPasses : List (String × VerifiedPassS p) :=
   -- One primality decision per optimizer run, threaded to every prime-gated pass below (they read
   -- the `Bool` in O(1) instead of re-running `decide (Nat.Prime p)` per invocation per iteration).
   let pw := PrimeWitness.of p
-  [ ("zeroWidthRange", (ZeroWidthRange.zeroWidthRangePass pw).guardDegree),
-    ("xorEqExtract", XorEqExtract.xorEqExtractPass.guardDegree),
-    ("carryBranch", (carryBranchPass pw).guardDegree),
-    ("gauss", gaussElimPass.withFacts.guardDegree),
-    ("normalize1", normalizePass.withFacts.guardDegree),
-    ("constFold1", constantFoldPass.withFacts.guardDegree),
-    ("domainBatch", (domainBatchPass pw).guardDegree),
-    ("normalize2", normalizePass.withFacts.guardDegree),
-    ("constFold2", constantFoldPass.withFacts.guardDegree),
-    ("zeroRegister", zeroRegisterPass.guardDegree),
-    ("digitFold", DigitFold.digitFoldPass.guardDegree),
-    ("oneHotAnnihilate", OneHotAnnihilate.oneHotAnnihilatePass.guardDegree),
-    ("hintCollapse", (hintCollapsePass pw).guardDegree),
-    ("rootPairUnify", (rootPairUnifyPass pw).guardDegree),
-    ("flagUnify", (flagUnifyPass pw).guardDegree),
-    ("flagFold", (flagFoldPass' pw).guardDegree),
-    ("dedup", dedupPass.withFacts.guardDegree),
-    ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree),
-    ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree),
-    ("tautoBus", tautoBusDropPass.withFacts.guardDegree),
-    ("domainFold", (domainFoldPass pw).withFacts.guardDegree),
-    ("busUnify", busUnifyPass.guardDegree),
-    ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass pw false))),
-    ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
-    ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
-    ("reencode", reencodePass.withFacts.guardDegree) ]
+  [ ("zeroWidthRange", (ZeroWidthRange.zeroWidthRangePass pw).guardDegree.toS),
+    ("xorEqExtract", XorEqExtract.xorEqExtractPass.guardDegree.toS),
+    ("carryBranch", (carryBranchPass pw).guardDegree.toS),
+    ("gauss", gaussElimPass.withFacts.guardDegree.toS),
+    ("normalize1", normalizePass.withFacts.guardDegree.toS),
+    ("constFold1", constantFoldPass.withFacts.guardDegree.toS),
+    ("domainBatch", (domainBatchPass pw).guardDegree.toS),
+    ("normalize2", normalizePass.withFacts.guardDegree.toS),
+    ("constFold2", constantFoldPass.withFacts.guardDegree.toS),
+    ("zeroRegister", zeroRegisterPass.guardDegree.toS),
+    ("digitFold", DigitFold.digitFoldPass.guardDegree.toS),
+    ("oneHotAnnihilate", OneHotAnnihilate.oneHotAnnihilatePass.guardDegree.toS),
+    ("hintCollapse", (hintCollapsePass pw).guardDegree.toS),
+    ("rootPairUnify", (rootPairUnifyPass pw).guardDegree.toS),
+    ("flagUnify", (flagUnifyPass pw).guardDegree.toS),
+    ("flagFold", (flagFoldPass' pw).guardDegree.toS),
+    ("dedup", dedupPass.withFacts.guardDegree.toS),
+    ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree.toS),
+    ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree.toS),
+    ("tautoBus", tautoBusDropPass.withFacts.guardDegree.toS),
+    ("domainFold", (domainFoldPass pw).withFacts.guardDegree.toS),
+    ("busUnify", busUnifyPass.guardDegree.toS),
+    ("busPairCancel", (VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass pw false))).toS),
+    ("bytePack", (VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)).toS),
+    ("disconnected", disconnectedComponentPass.withFacts.guardDegree.toS),
+    ("reencode", reencodePass.withFacts.guardDegree.toS) ]
 
 /-- The coda passes (one of the three stages; see `preludePasses`): run once after the cleanup loop
     reaches its fixpoint — drop bytes made redundant by the cleaned-up system, rescale carries to
     monic form, and one final constant-fold. -/
-def codaPasses : List (String × VerifiedPassW p) :=
+def codaPasses : List (String × VerifiedPassS p) :=
   -- One primality decision per optimizer run (see `cleanupPasses`), for the prime-gated coda passes.
   let pw := PrimeWitness.of p
-  [ ("busPairCancelLate", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass pw true))),
+  [ ("busPairCancelLate", (VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass pw true))).toS),
     -- Explode packed pair byte checks into singles so `dedupLate` collapses the same value
     -- byte-checked in several pairs and `redundantByteDrop` becomes operand-granular; the
     -- survivors are re-packed by `bytePackLate` below (a pair with nothing to shed round-trips).
-    ("splitBytePair", SplitBytePair.splitBytePairPass.guardDegree),
-    ("dedupLate", dedupPass.withFacts.guardDegree),
-    ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree),
-    ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
+    ("splitBytePair", SplitBytePair.splitBytePairPass.guardDegree.toS),
+    ("dedupLate", dedupPass.withFacts.guardDegree.toS),
+    ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree.toS),
+    ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree.toS),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
     -- runs global range packing once at the end), so it runs once here, out of the cleanup
     -- fixpoint, after `redundantByteDrop` has dropped droppable byte checks operand-granularly
     -- (packing a byte check early would hide it from the drop, leaving more bus interactions).
     -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
-    ("tupleRange", tupleRangePass.guardDegree),
-    ("bytePackLate", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
-    ("monicScale", monicScalePass.withFacts.guardDegree),
-    ("constFoldEnd", constantFoldPass.withFacts.guardDegree),
+    ("tupleRange", tupleRangePass.guardDegree.toS),
+    ("bytePackLate", (VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)).toS),
+    ("monicScale", monicScalePass.withFacts.guardDegree.toS),
+    ("constFoldEnd", constantFoldPass.withFacts.guardDegree.toS),
     -- Collapse recognised `sltu x, 1` (seqz) LessThan gadgets to the two-line is-zero gadget,
     -- dropping the four `diff_marker`s + `diff_val`. Runs after `monicScale`, where the cluster
     -- has reached the recognised form.
-    ("seqzCollapse", VerifiedPassW.guardDegree (iterateToFixpoint SeqzCollapse.seqzCollapsePass)) ]
+    ("seqzCollapse", (VerifiedPassW.guardDegree (iterateToFixpoint SeqzCollapse.seqzCollapsePass)).toS) ]
 
-/-- Fold a list of passes into one sequential pass (`andThen` left to right; identity on `[]`). -/
-def chainPasses (l : List (VerifiedPassW p)) : VerifiedPassW p :=
-  l.foldl VerifiedPassW.andThen (fun cs bs _ => ⟨cs, [], PassCorrect.refl cs bs⟩)
+/-- The optimizer's cleanup cycle: the `cleanupPasses` folded together in order, threading the shared
+    `FactStore`. See `cleanupPasses` for what each pass does and how to extend the cycle. -/
+def cleanupCycle : VerifiedPassS p :=
+  chainPassesS (cleanupPasses.map (·.2))
 
-/-- The optimizer's cleanup cycle: the `cleanupPasses` folded together in order. See `cleanupPasses`
-    for what each pass does and how to extend the cycle. -/
-def cleanupCycle : VerifiedPassW p :=
-  chainPasses (cleanupPasses.map (·.2))
-
-/-- Folding degree-respecting passes with `andThen` yields a degree-respecting pass. -/
-theorem foldl_andThen_respectsDeg :
-    ∀ (l : List (VerifiedPassW p)) (init : VerifiedPassW p),
-      RespectsDeg init → (∀ f ∈ l, RespectsDeg f) →
-      RespectsDeg (l.foldl VerifiedPassW.andThen init)
-  | [], _, hinit, _ => by simpa using hinit
-  | g :: rest, init, hinit, hall => by
-      rw [List.foldl_cons]
-      exact foldl_andThen_respectsDeg rest (init.andThen g)
-        (VerifiedPassW.andThen_respectsDeg hinit (hall g (List.mem_cons_self ..)))
-        (fun f hf => hall f (List.mem_cons_of_mem _ hf))
-
-/-- Any list of degree-respecting passes folds (`chainPasses`) to a degree-respecting pass. -/
-theorem chainPasses_respectsDeg {l : List (VerifiedPassW p)} (h : ∀ f ∈ l, RespectsDeg f) :
-    RespectsDeg (chainPasses l) := by
-  unfold chainPasses
-  exact foldl_andThen_respectsDeg _ _ (fun _ _ _ h => h) h
-
-theorem cleanupCycle_respectsDeg : RespectsDeg (cleanupCycle (p := p)) := by
+theorem cleanupCycle_respectsDeg : RespectsDegS (cleanupCycle (p := p)) := by
   unfold cleanupCycle
-  refine chainPasses_respectsDeg (fun f hf => ?_)
+  refine chainPassesS_respectsDeg (fun f hf => ?_)
   simp only [cleanupPasses, List.map_cons, List.map_nil] at hf
-  fin_cases hf <;> exact VerifiedPassW.guardDegree_respectsDeg _
+  fin_cases hf <;>
+    exact VerifiedPassW.toS_respectsDeg (VerifiedPassW.guardDegree_respectsDeg _)
 
-/-- The circuit optimizer: fold the prelude, iterate the cleanup cycle to a fixpoint
-    (`iterateToFixpoint`, no budget), then fold the coda. `pipeline` and the profiler both consume
-    `preludePasses` / `cleanupPasses` / `codaPasses`, so they stay in lockstep. -/
+/-- The circuit optimizer as a store-threaded pass: fold the prelude, iterate the cleanup cycle to a
+    fixpoint (`iterateToFixpointS`, no budget), then fold the coda, threading one shared `FactStore`
+    throughout. `pipelineS` and the profiler both consume `preludePasses` / `cleanupPasses` /
+    `codaPasses`, so they stay in lockstep. -/
+def pipelineS : VerifiedPassS p :=
+  ((chainPassesS (preludePasses.map (·.2))).andThen (iterateToFixpointS cleanupCycle)).andThen
+    (chainPassesS (codaPasses.map (·.2)))
+
+/-- The circuit optimizer (fact-aware, store-free interface): run `pipelineS` from an empty store and
+    discard the final store. Keeping this `VerifiedPassW` type leaves `optimizerWithBusFacts` and the
+    audited `ApcOptimizer/Optimizer.lean` unchanged. -/
 def pipeline : VerifiedPassW p :=
-  chainPasses (preludePasses.map (·.2))
-    |>.andThen (iterateToFixpoint cleanupCycle)
-    |>.andThen (chainPasses (codaPasses.map (·.2)))
+  fun cs bs facts => (pipelineS cs bs facts FactStore.empty).1
 
-theorem pipeline_respectsDeg : RespectsDeg (pipeline (p := p)) := by
-  unfold pipeline
-  refine VerifiedPassW.andThen_respectsDeg (VerifiedPassW.andThen_respectsDeg
-    (chainPasses_respectsDeg (fun f hf => ?_))
-    (iterateToFixpoint_respectsDeg cleanupCycle_respectsDeg))
-    (chainPasses_respectsDeg (fun f hf => ?_))
+theorem pipelineS_respectsDeg : RespectsDegS (pipelineS (p := p)) := by
+  unfold pipelineS
+  refine VerifiedPassS.andThen_respectsDeg (VerifiedPassS.andThen_respectsDeg
+    (chainPassesS_respectsDeg (fun f hf => ?_))
+    (iterateToFixpointS_respectsDeg cleanupCycle_respectsDeg))
+    (chainPassesS_respectsDeg (fun f hf => ?_))
   · simp only [preludePasses, List.map_cons, List.map_nil] at hf
     fin_cases hf
-    exact VerifiedPassW.guardDegree_respectsDeg _
+    exact VerifiedPassW.toS_respectsDeg (VerifiedPassW.guardDegree_respectsDeg _)
   · simp only [codaPasses, List.map_cons, List.map_nil] at hf
-    fin_cases hf <;> exact VerifiedPassW.guardDegree_respectsDeg _
+    fin_cases hf <;>
+      exact VerifiedPassW.toS_respectsDeg (VerifiedPassW.guardDegree_respectsDeg _)
+
+theorem pipeline_respectsDeg : RespectsDeg (pipeline (p := p)) :=
+  fun cs bs facts h => pipelineS_respectsDeg cs bs facts FactStore.empty h
 
 /-- The fact-aware circuit optimizer: given proven `BusFacts` about a bus semantics (which fixes the
     implicit `bs`), run the pipeline and return the resulting constraint system together with the
