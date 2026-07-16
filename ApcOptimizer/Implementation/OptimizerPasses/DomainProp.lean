@@ -730,6 +730,25 @@ def assignments : List (Variable × List (ZMod p)) → List (List (Variable × Z
   | [] => [[]]
   | (x, d) :: rest => (assignments rest).flatMap (fun a => d.map (fun v => (x, v) :: a))
 
+/-- Streaming conjunction over the cartesian product: apply `P` to each assignment generated on the
+    fly (same order as `assignments`), short-circuiting on the first `false` and **never
+    materializing the product list**. Provably equal to `(assignments doms).all P` (`foldAll_eq`),
+    so it is a drop-in that only changes runtime: on a box that is quickly refuted the generation
+    stops early, and even a fully-scanned box pays no list allocation. -/
+def foldAll : List (Variable × List (ZMod p)) → (List (Variable × ZMod p) → Bool) → Bool
+  | [], P => P []
+  | (x, d) :: rest, P => foldAll rest (fun a => d.all (fun v => P ((x, v) :: a)))
+
+/-- `foldAll` computes exactly `(assignments doms).all P`. -/
+theorem foldAll_eq (doms : List (Variable × List (ZMod p)))
+    (P : List (Variable × ZMod p) → Bool) : foldAll doms P = (assignments doms).all P := by
+  induction doms generalizing P with
+  | nil => simp [foldAll, assignments]
+  | cons xd rest ih =>
+    obtain ⟨x, d⟩ := xd
+    rw [foldAll]
+    simp only [assignments, List.all_flatMap, List.all_map, Function.comp_def, ih]
+
 /-- Read an assignment as an environment (`0` for unassigned variables). -/
 def envOf : List (Variable × ZMod p) → Variable → ZMod p
   | [], _ => 0

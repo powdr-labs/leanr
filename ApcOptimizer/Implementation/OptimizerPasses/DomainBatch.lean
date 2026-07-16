@@ -741,8 +741,8 @@ def constraintRedundant {cs : ConstraintSystem p} {bs : BusSemantics p} (T : Dom
         let dec : DecidableEq (ZMod p) := inferInstance
         let add := addI.add
         let mul := mulI.mul
-        (assignments d).all (fun a => @decide (ic.evalWith add mul a = 0) (dec _ 0))
-      | none => (assignments d).all (fun a => decide (c.eval (envOfFast a) = 0))
+        foldAll d (fun a => @decide (ic.evalWith add mul a = 0) (dec _ 0))
+      | none => foldAll d (fun a => decide (c.eval (envOfFast a) = 0))
 
 /-- The single-pass box scan, after the first survivor: walk the remaining points, intersecting
     the list of `(x, c)` candidates on which every survivor seen so far agrees. The moment no
