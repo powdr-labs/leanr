@@ -228,16 +228,17 @@ def byteDropBase (bs : BusSemantics p) (facts : BusFacts p bs) (cs : ConstraintS
 
 /-- Keep `bi` unless it is a recognized byte check whose operands are all byte-justified from
     the constraints and the justification base. -/
-def byteDropKeep (bs : BusSemantics p) (facts : BusFacts p bs) (all : List (Expression p))
+def byteDropKeep (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (all : List (Expression p))
     (rest : List (BusInteraction (Expression p))) (bi : BusInteraction (Expression p)) : Bool :=
   match byteCheckOperands? bs facts bi with
-  | some ops => !(ops.all (fun e => byteJustified (decide p.Prime) all bs facts rest e))
+  | some ops => !(ops.all (fun e => byteJustified pw.isPrime all bs facts rest e))
   | none => true
 
 /-- Drop every stateless byte-check interaction whose operands are all byte-justified from the
     parts of the system this pass can never remove. -/
-def redundantByteDropPass : VerifiedPassW p := fun cs bs facts =>
-  ⟨cs.filterBus (byteDropKeep bs facts cs.algebraicConstraints (byteDropBase bs facts cs)), [],
+def redundantByteDropPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
+  ⟨cs.filterBus (byteDropKeep pw bs facts cs.algebraicConstraints (byteDropBase bs facts cs)), [],
    cs.filterBusEntailed_correct bs _
      (by
        intro bi _ hkf
@@ -252,19 +253,19 @@ def redundantByteDropPass : VerifiedPassW p := fun cs bs facts =>
        | none => rw [hro] at hkf; exact absurd hkf (by simp)
        | some ops =>
          rw [hro] at hkf
-         have hjust : ops.all (fun e => byteJustified (decide p.Prime)
+         have hjust : ops.all (fun e => byteJustified pw.isPrime
              cs.algebraicConstraints bs facts (byteDropBase bs facts cs) e) = true := by
            simpa using hkf
          refine byteCheckOperands?_accepted bs facts bi ops hro env (fun e he => ?_)
-         refine byteJustified_sound (decide p.Prime) cs.algebraicConstraints bs facts
-           (byteDropBase bs facts cs) e (fun h => of_decide_eq_true h)
+         refine byteJustified_sound pw.isPrime cs.algebraicConstraints bs facts
+           (byteDropBase bs facts cs) e (fun h => pw.correct h)
            (List.all_eq_true.mp hjust e he) env
            (fun c hc => hsat.1 c hc) (fun bi' hbi' hmult => ?_)
          -- every justification-base interaction survives the filter, so `hsat` accepts it
          have hnone : byteCheckOperands? bs facts bi' = none := by
            have := (List.mem_filter.1 hbi').2
            simpa using this
-         have hkeep : byteDropKeep bs facts cs.algebraicConstraints
+         have hkeep : byteDropKeep pw bs facts cs.algebraicConstraints
              (byteDropBase bs facts cs) bi' = true := by
            unfold byteDropKeep
            rw [hnone]

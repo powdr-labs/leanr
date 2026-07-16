@@ -1000,9 +1000,9 @@ def tryList [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
     and the sum-of-squares (byte-bounded *difference* coefficients, `is-equal`) — sharing the
     per-constraint witness-set computation. The bounds map and the set of bus-occurring variables are
     built once here, not once per scanned constraint. -/
-def hintCollapsePass : VerifiedPassW p := fun cs bs facts =>
-  if hp : p.Prime then
-    haveI : Fact p.Prime := ⟨hp⟩
+def hintCollapsePass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
+  if hpB : pw.isPrime = true then
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let Bm : BoundsMap p cs bs := BoundsMap.build facts
     let busVars : Std.HashSet Variable := cs.busInteractions.foldl (init := ∅) fun s bi =>
       bi.payload.foldl (fun s e => e.vars.foldl (·.insert ·) s)

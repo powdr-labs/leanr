@@ -1071,8 +1071,9 @@ def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFa
 /-- The batch finite-domain propagation pass: build the domain table once, collect every
     checked forced constant from constraints and bus obligations, substitute them all in one
     traversal. Prime `p` only (runtime-decided); identity otherwise. -/
-def domainBatchPass : VerifiedPassW p := fun cs bs facts =>
-  if hp : p.Prime then
+def domainBatchPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
+  if hpB : pw.isPrime = true then
+    have hp : p.Prime := pw.correct hpB
     haveI : Fact p.Prime := ⟨hp⟩
     haveI : NeZero p := ⟨hp.ne_zero⟩
     let T : DomainTable p cs bs :=

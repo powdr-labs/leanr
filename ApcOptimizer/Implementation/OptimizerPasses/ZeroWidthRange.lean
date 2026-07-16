@@ -141,10 +141,10 @@ theorem rangeEq?_violates_iff (one : Bool) (hone : one = true → Nat.Prime p)
 /-- Convert every width-0 range check into the equality `value = 0`, and — on a prime field —
     every width-1 range check into the booleanity `value·(value−1) = 0`, dropping the
     interactions. -/
-def zeroWidthRangePass : VerifiedPassW p := fun cs bs facts =>
+def zeroWidthRangePass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
   if h1ne : (1 : ZMod p) ≠ 0 then
-    let one : Bool := decide (Nat.Prime p)
-    have hone : one = true → Nat.Prime p := fun h => of_decide_eq_true h
+    let one : Bool := pw.isPrime
+    have hone : one = true → Nat.Prime p := fun h => pw.correct h
     let newC := cs.busInteractions.filterMap (rangeEq? one bs facts)
     let out1 : ConstraintSystem p :=
       { cs with algebraicConstraints := cs.algebraicConstraints ++ newC }

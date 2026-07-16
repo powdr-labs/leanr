@@ -589,9 +589,9 @@ def rpLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
     `busPairCancelPass`). One sweep; the cleanup fixpoint iterates the pass, so chains resolve
     across cycles (the high limbs' root expressions become equal only after the low limbs
     unify). Solutions are bare variables, so substitution can never grow a degree. -/
-def rootPairUnifyPass : VerifiedPassW p := fun cs bs facts =>
-  if hp : (decide p.Prime) = true then
-    haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
+def rootPairUnifyPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
+  if hpB : pw.isPrime = true then
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let σ := rpLoop cs bs facts cs.algebraicConstraints (fun _ h => h)
       cs.algebraicConstraints (fun _ h => h) [] Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩

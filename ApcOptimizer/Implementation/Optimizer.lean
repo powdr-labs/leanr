@@ -83,29 +83,32 @@ def preludePasses : List (String × VerifiedPassW p) :=
     correctness proof follows automatically from the pass's own `PassCorrect`, and the profiler
     picks up the new label for free (it consumes this same list). -/
 def cleanupPasses : List (String × VerifiedPassW p) :=
-  [ ("zeroWidthRange", ZeroWidthRange.zeroWidthRangePass.guardDegree),
+  -- One primality decision per optimizer run, threaded to every prime-gated pass below (they read
+  -- the `Bool` in O(1) instead of re-running `decide (Nat.Prime p)` per invocation per iteration).
+  let pw := PrimeWitness.of p
+  [ ("zeroWidthRange", (ZeroWidthRange.zeroWidthRangePass pw).guardDegree),
     ("xorEqExtract", XorEqExtract.xorEqExtractPass.guardDegree),
-    ("carryBranch", carryBranchPass.guardDegree),
+    ("carryBranch", (carryBranchPass pw).guardDegree),
     ("gauss", gaussElimPass.withFacts.guardDegree),
     ("normalize1", normalizePass.withFacts.guardDegree),
     ("constFold1", constantFoldPass.withFacts.guardDegree),
-    ("domainBatch", domainBatchPass.guardDegree),
+    ("domainBatch", (domainBatchPass pw).guardDegree),
     ("normalize2", normalizePass.withFacts.guardDegree),
     ("constFold2", constantFoldPass.withFacts.guardDegree),
     ("zeroRegister", zeroRegisterPass.guardDegree),
     ("digitFold", DigitFold.digitFoldPass.guardDegree),
     ("oneHotAnnihilate", OneHotAnnihilate.oneHotAnnihilatePass.guardDegree),
-    ("hintCollapse", hintCollapsePass.guardDegree),
-    ("rootPairUnify", rootPairUnifyPass.guardDegree),
-    ("flagUnify", flagUnifyPass.guardDegree),
-    ("flagFold", flagFoldPass'.guardDegree),
+    ("hintCollapse", (hintCollapsePass pw).guardDegree),
+    ("rootPairUnify", (rootPairUnifyPass pw).guardDegree),
+    ("flagUnify", (flagUnifyPass pw).guardDegree),
+    ("flagFold", (flagFoldPass' pw).guardDegree),
     ("dedup", dedupPass.withFacts.guardDegree),
     ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree),
     ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree),
     ("tautoBus", tautoBusDropPass.withFacts.guardDegree),
-    ("domainFold", domainFoldPass.withFacts.guardDegree),
+    ("domainFold", (domainFoldPass pw).withFacts.guardDegree),
     ("busUnify", busUnifyPass.guardDegree),
-    ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass false))),
+    ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass pw false))),
     ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
     ("reencode", reencodePass.withFacts.guardDegree) ]
@@ -114,13 +117,15 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
     reaches its fixpoint — drop bytes made redundant by the cleaned-up system, rescale carries to
     monic form, and one final constant-fold. -/
 def codaPasses : List (String × VerifiedPassW p) :=
-  [ ("busPairCancelLate", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass true))),
+  -- One primality decision per optimizer run (see `cleanupPasses`), for the prime-gated coda passes.
+  let pw := PrimeWitness.of p
+  [ ("busPairCancelLate", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass pw true))),
     -- Explode packed pair byte checks into singles so `dedupLate` collapses the same value
     -- byte-checked in several pairs and `redundantByteDrop` becomes operand-granular; the
     -- survivors are re-packed by `bytePackLate` below (a pair with nothing to shed round-trips).
     ("splitBytePair", SplitBytePair.splitBytePairPass.guardDegree),
     ("dedupLate", dedupPass.withFacts.guardDegree),
-    ("redundantByteDrop", RedundantByteDrop.redundantByteDropPass.guardDegree),
+    ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree),
     ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
     -- runs global range packing once at the end), so it runs once here, out of the cleanup
