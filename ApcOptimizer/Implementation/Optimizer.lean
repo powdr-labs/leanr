@@ -106,7 +106,6 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
     ("domainFold", domainFoldPass.withFacts.guardDegree),
     ("busUnify", busUnifyPass.guardDegree),
     ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass false))),
-    ("tupleRange", VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass)),
     ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
     ("reencode", reencodePass.withFacts.guardDegree) ]
@@ -123,6 +122,12 @@ def codaPasses : List (String × VerifiedPassW p) :=
     ("dedupLate", dedupPass.withFacts.guardDegree),
     ("redundantByteDrop", RedundantByteDrop.redundantByteDropPass.guardDegree),
     ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
+    -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
+    -- runs global range packing once at the end), so it is deferred here out of the cleanup fixpoint
+    -- — where its own nested `iterateToFixpoint` re-ran on every cleanup cycle — to run once, after
+    -- `redundantByteDrop` has dropped droppable byte checks operand-granularly (packing a byte check
+    -- early would hide it from the drop, leaving more bus interactions).
+    ("tupleRange", VerifiedPassW.guardDegree (iterateToFixpoint tupleRangePass)),
     ("bytePackLate", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("monicScale", monicScalePass.withFacts.guardDegree),
     ("constFoldEnd", constantFoldPass.withFacts.guardDegree),
