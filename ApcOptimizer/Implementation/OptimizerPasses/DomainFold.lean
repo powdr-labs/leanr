@@ -665,16 +665,24 @@ def domainFoldPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bsem =>
     -- with a variable that has *no* single-variable constraint anywhere can never pass
     -- `groupDoms`. Skipping those targets up front (one hash lookup per variable) avoids the
     -- per-target covered-set scan for the ubiquitous byte-limb groups, exactly.
-    let svSet : Std.HashSet Variable := cs.algebraicConstraints.foldl (init := ∅) fun s c =>
-      match c.vars.dedup with
+    --
+    -- `svSet` and `targets` both need each constraint's deduped variable list, so compute it
+    -- **once** per constraint (`Expression.vars` is `++`-built, quadratic on skewed trees; the old
+    -- code paid `c.vars.dedup` twice per constraint per invocation, once per cleanup cycle).
+    let varsOf := cs.algebraicConstraints.map (fun c => c.vars.dedup)
+    let svSet : Std.HashSet Variable := varsOf.foldl (init := ∅) fun s vs =>
+      match vs with
       | [x] => s.insert x
       | _ => s
-    let targets := dedupHash (cs.algebraicConstraints.filterMap (fun c =>
-      let vs := c.vars.dedup
+    let targets := dedupHash (varsOf.filterMap (fun vs =>
       if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
         some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
-    if domainFoldIndexThreshold ≤ cs.algebraicConstraints.length then
+    -- No candidate group ⇒ every fold is a no-op; return the input without building the (full-system)
+    -- `FoldIdx` index. `foldLoop`/`foldLoopDirect` on `[]` already yield exactly this identity, so
+    -- the early exit is output-identical — it only skips the index build.
+    if targets.isEmpty then ⟨cs, [], PassCorrect.refl cs bsem⟩
+    else if domainFoldIndexThreshold ≤ cs.algebraicConstraints.length then
       foldLoop bsem targets cs (FoldIdx.mk' cs)
     else
       foldLoopDirect bsem targets cs
