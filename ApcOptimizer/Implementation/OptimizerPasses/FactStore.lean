@@ -28,15 +28,63 @@ machinery mirrors `FactPass.lean` one-for-one. The top-level `pipeline` seeds th
 
 variable {p : ℕ}
 
-/-- The shared derived-data store threaded through the cleanup cycle. `Prop`-free: only raw data,
-    no soundness proof — consumers re-validate against the current system. Starts empty
-    (`FactStore.empty`); members are added incrementally. -/
+/-! ## Store members
+
+### Materialized range cache (input-independent)
+
+`RangeCache` memoizes the materialized `[0, bound)` finite domains that `domainBatch` builds when
+turning a range-check bound into an explicit value list — a `bound`-element list (`2^16 = 65 536`
+for a 16-bit check) with a `% p` per element. It is **input-independent**: `C.map[b]?` is always the
+list `(List.range b).map Nat.cast`, so the cache is sound for *every* constraint system and needs no
+re-validation. Making it a store member built once and threaded across every `domainBatch` invocation
+(rather than rebuilt from empty each cycle) removes the repeated 65 536-element materializations.
+Moved here from `DomainBatch.lean` so the store can own it. -/
+
+/-- Proof-carrying cache of materialized `[0, bound)` domains, keyed by bound. Input-independent:
+    every entry equals the canonical list, so it is sound for any system. -/
+structure RangeCache (p : ℕ) where
+  map : Std.HashMap Nat (List (ZMod p))
+  sound : ∀ b l, map[b]? = some l → l = (List.range b).map (Nat.cast : Nat → ZMod p)
+
+def RangeCache.empty : RangeCache p where
+  map := ∅
+  sound := by
+    intro _ _ h
+    rw [Std.HashMap.getElem?_empty] at h
+    exact absurd h (by simp)
+
+/-- The materialized `[0, b)` domain, from the cache when present (inserting it on a miss). -/
+def RangeCache.get (C : RangeCache p) (b : Nat) :
+    { l : List (ZMod p) // l = (List.range b).map (Nat.cast : Nat → ZMod p) } × RangeCache p :=
+  match h : C.map[b]? with
+  | some l => (⟨l, C.sound b l h⟩, C)
+  | none =>
+    let l := (List.range b).map (Nat.cast : Nat → ZMod p)
+    (⟨l, rfl⟩,
+     { map := C.map.insert b l,
+       sound := by
+         intro b' l' h'
+         rw [Std.HashMap.getElem?_insert] at h'
+         by_cases hb : (b == b') = true
+         · rw [if_pos hb] at h'
+           have hbb : b = b' := by simpa using hb
+           have hll : l = l' := by simpa using h'
+           subst hbb; subst hll
+           rfl
+         · rw [if_neg hb] at h'
+           exact C.sound b' l' h' })
+
+/-- The shared derived-data store threaded through the cleanup cycle. Beyond the input-independent
+    `rangeCache`, members are raw data with no soundness proof — consumers re-validate against the
+    current system. Starts empty (`FactStore.empty`); members are added incrementally. -/
 structure FactStore (p : ℕ) where
-  -- members added in later phases
-  deriving Inhabited
+  /-- Materialized `[0, bound)` range domains, shared across `domainBatch` invocations. -/
+  rangeCache : RangeCache p
 
 /-- The empty store: no cached facts. -/
-def FactStore.empty : FactStore p := {}
+def FactStore.empty : FactStore p := { rangeCache := RangeCache.empty }
+
+instance : Inhabited (FactStore p) := ⟨FactStore.empty⟩
 
 /-- A proof-carrying pass that additionally threads the shared `FactStore`: given the current
     system, semantics, proven facts, and the incoming store, it returns the usual proof-carrying

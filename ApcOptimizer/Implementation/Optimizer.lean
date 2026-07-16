@@ -93,7 +93,7 @@ def cleanupPasses : List (String × VerifiedPassS p) :=
     ("gauss", gaussElimPass.withFacts.guardDegree.toS),
     ("normalize1", normalizePass.withFacts.guardDegree.toS),
     ("constFold1", constantFoldPass.withFacts.guardDegree.toS),
-    ("domainBatch", (domainBatchPass pw).guardDegree.toS),
+    ("domainBatch", (domainBatchPass pw).guardDegree),
     ("normalize2", normalizePass.withFacts.guardDegree.toS),
     ("constFold2", constantFoldPass.withFacts.guardDegree.toS),
     ("zeroRegister", zeroRegisterPass.guardDegree.toS),
@@ -151,8 +151,11 @@ theorem cleanupCycle_respectsDeg : RespectsDegS (cleanupCycle (p := p)) := by
   unfold cleanupCycle
   refine chainPassesS_respectsDeg (fun f hf => ?_)
   simp only [cleanupPasses, List.map_cons, List.map_nil] at hf
+  -- Most entries are lifted fact-aware passes; the store-aware `domainBatch` uses the S-guard.
   fin_cases hf <;>
-    exact VerifiedPassW.toS_respectsDeg (VerifiedPassW.guardDegree_respectsDeg _)
+    first
+      | exact VerifiedPassW.toS_respectsDeg (VerifiedPassW.guardDegree_respectsDeg _)
+      | exact VerifiedPassS.guardDegree_respectsDeg _
 
 /-- The circuit optimizer as a store-threaded pass: fold the prelude, iterate the cleanup cycle to a
     fixpoint (`iterateToFixpointS`, no budget), then fold the coda, threading one shared `FactStore`

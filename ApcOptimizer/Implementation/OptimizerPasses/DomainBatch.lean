@@ -1,6 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.CoveredIndex
+import ApcOptimizer.Implementation.OptimizerPasses.FactStore
 
 set_option autoImplicit false
 
@@ -148,38 +149,8 @@ with a `% p` per element — for **every** `(interaction, variable)` hit, though
 of distinct bounds (`2^16`, `2^8`, …) ever occur. The cache shares one materialization per
 bound; its entries provably equal the uncached list, so the built table is identical. -/
 
-/-- Proof-carrying cache of materialized `[0, bound)` domains, keyed by bound. -/
-structure RangeCache (p : ℕ) where
-  map : Std.HashMap Nat (List (ZMod p))
-  sound : ∀ b l, map[b]? = some l → l = (List.range b).map (Nat.cast : Nat → ZMod p)
-
-def RangeCache.empty : RangeCache p where
-  map := ∅
-  sound := by
-    intro _ _ h
-    rw [Std.HashMap.getElem?_empty] at h
-    exact absurd h (by simp)
-
-/-- The materialized `[0, b)` domain, from the cache when present. -/
-def RangeCache.get (C : RangeCache p) (b : Nat) :
-    { l : List (ZMod p) // l = (List.range b).map (Nat.cast : Nat → ZMod p) } × RangeCache p :=
-  match h : C.map[b]? with
-  | some l => (⟨l, C.sound b l h⟩, C)
-  | none =>
-    let l := (List.range b).map (Nat.cast : Nat → ZMod p)
-    (⟨l, rfl⟩,
-     { map := C.map.insert b l,
-       sound := by
-         intro b' l' h'
-         rw [Std.HashMap.getElem?_insert] at h'
-         by_cases hb : (b == b') = true
-         · rw [if_pos hb] at h'
-           have hbb : b = b' := by simpa using hb
-           have hll : l = l' := by simpa using h'
-           subst hbb; subst hll
-           rfl
-         · rw [if_neg hb] at h'
-           exact C.sound b' l' h' })
+-- `RangeCache` (the materialized-`[0, bound)` cache) now lives in `FactStore.lean` so it can be a
+-- shared store member threaded across `domainBatch` invocations; `interactionDomainC` below reads it.
 
 /-- `interactionDomain` through the cache: the same domain (`interactionDomainC_fst`), one
     materialization per distinct bound. -/
@@ -213,8 +184,8 @@ def addBusDoms [NeZero p] {cs : ConstraintSystem p} {bs : BusSemantics p}
     (facts : BusFacts p bs) :
     (pending : List (BusInteraction (Expression p))) →
     (∀ bi ∈ pending, bi ∈ cs.busInteractions) →
-    RangeCache p → DomainTable p cs bs → DomainTable p cs bs
-  | [], _, _, T => T
+    RangeCache p → DomainTable p cs bs → RangeCache p × DomainTable p cs bs
+  | [], _, C, T => (C, T)
   | bi :: rest, hmem, C, T =>
     let hbi := hmem bi (List.mem_cons_self ..)
     let hrest := fun bi' h => hmem bi' (List.mem_cons_of_mem _ h)
@@ -1070,15 +1041,21 @@ def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFa
 
 /-- The batch finite-domain propagation pass: build the domain table once, collect every
     checked forced constant from constraints and bus obligations, substitute them all in one
-    traversal. Prime `p` only (runtime-decided); identity otherwise. -/
-def domainBatchPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
+    traversal. Prime `p` only (decided once via `pw`); identity otherwise.
+
+    Store-threaded: the input `store.rangeCache` seeds the range materialization, and the cache
+    grown during the domain-table build is written back so later invocations reuse the (input-
+    independent) `[0, bound)` lists instead of rematerializing them. The cache never changes the
+    table (`interactionDomainC_fst`), so the output is unaffected. -/
+def domainBatchPass (pw : PrimeWitness p) : VerifiedPassS p := fun cs bs facts store =>
   if hpB : pw.isPrime = true then
     have hp : p.Prime := pw.correct hpB
     haveI : Fact p.Prime := ⟨hp⟩
     haveI : NeZero p := ⟨hp.ne_zero⟩
-    let T : DomainTable p cs bs :=
-      addBusDoms facts cs.busInteractions (fun _ h => h) RangeCache.empty
-        (addConstraintDoms cs.algebraicConstraints (fun _ h => h) DomainTable.empty)
+    let CT := addBusDoms facts cs.busInteractions (fun _ h => h) store.rangeCache
+      (addConstraintDoms cs.algebraicConstraints (fun _ h => h) DomainTable.empty)
+    let T : DomainTable p cs bs := CT.2
+    let store' : FactStore p := { store with rangeCache := CT.1 }
     let targets := cs.algebraicConstraints.map (fun e => e.vars.dedup) ++
       cs.busInteractions.map (fun bi => bi.vars.dedup)
     let activeCs := cs.algebraicConstraints.filter (fun c => !constraintRedundant T c)
@@ -1091,8 +1068,8 @@ def domainBatchPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =
         arrActive := activeCs.toArray, harrActive := rfl }
     let σ := collectForced facts T activeCs (fun _ h => (List.mem_filter.1 h).1) fidx targets ∅
       Solved.empty
-    if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
-    else ⟨cs.substF σ.fn, [],
+    if σ.map.isEmpty then (⟨cs, [], PassCorrect.refl cs bs⟩, store')
+    else (⟨cs.substF σ.fn, [],
       cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)
-        (fun y t hyt => σ.varsIn y t hyt)⟩
-  else ⟨cs, [], PassCorrect.refl cs bs⟩
+        (fun y t hyt => σ.varsIn y t hyt)⟩, store')
+  else (⟨cs, [], PassCorrect.refl cs bs⟩, store)
