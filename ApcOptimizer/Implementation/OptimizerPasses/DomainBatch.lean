@@ -1003,21 +1003,22 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts
       -- analogous drop for *obligations* is not worthwhile: an interaction's sub-box is large and
       -- its payload evaluation costly, and it is covered by few targets, so verifying its
       -- redundancy costs about what it would save.)
-      let esFull := CoveredIndex.coveredIdx fidx.csIdx fidx.arrCs (fun c => c.varsInF xs) xs
-      let bis := CoveredIndex.coveredIdx fidx.bisIdx fidx.arrBis
+      let esFull := CoveredIndex.coveredIdxUnord fidx.csIdx fidx.arrCs (fun c => c.varsInF xs) xs
+      let bis := CoveredIndex.coveredIdxUnord fidx.bisIdx fidx.arrBis
         (fun bi => bi.varsInF xs && !bs.isStateful bi.busId) xs
-      let es := CoveredIndex.coveredIdx fidx.activeIdx fidx.arrActive (fun c => c.varsInF xs) xs
+      let es := CoveredIndex.coveredIdxUnord fidx.activeIdx fidx.arrActive
+        (fun c => c.varsInF xs) xs
       let informative := !esFull.isEmpty || bis.any (biInformative bs facts)
       if informative && boxSize * (esFull.length + bis.length) ≤ maxEnumWork then
         have hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true := by
           intro e he
-          obtain ⟨hMem, hQ⟩ := CoveredIndex.coveredIdx_mem_of_eq fidx.activeIdx activeCs
+          obtain ⟨hMem, hQ⟩ := CoveredIndex.coveredIdxUnord_mem_of_eq fidx.activeIdx activeCs
             fidx.arrActive fidx.harrActive (fun c => c.varsInF xs) xs he
           refine ⟨hactiveCs e hMem, ?_⟩
           rw [← Expression.varsInF_eq]; exact hQ
         have hbis : ∀ bi ∈ bis, bi ∈ cs.busInteractions ∧ bi.varsIn xs = true := by
           intro bi hbi
-          obtain ⟨hMem, hQ⟩ := CoveredIndex.coveredIdx_mem_of_eq fidx.bisIdx cs.busInteractions
+          obtain ⟨hMem, hQ⟩ := CoveredIndex.coveredIdxUnord_mem_of_eq fidx.bisIdx cs.busInteractions
             fidx.arrBis fidx.harrBis (fun bi => bi.varsInF xs && !bs.isStateful bi.busId) xs hbi
           simp only [Bool.and_eq_true] at hQ
           exact ⟨hMem, by rw [← BusInteraction.varsInF_eq]; exact hQ.1⟩

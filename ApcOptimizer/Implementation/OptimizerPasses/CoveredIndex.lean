@@ -63,6 +63,15 @@ def coveredIdx (idx : CovIndex) (arr : Array α) (Q : α → Bool) (xs : List Va
   (uniq.mergeSort (· ≤ ·)).filterMap (fun i =>
     if h : i < arr.size then (if Q arr[i] then some arr[i] else none) else none)
 
+/-- `coveredIdx` without the order-restoring sort — for consumers whose result is independent of
+    the covered list's *order* (`domainBatch`: the covered items only ever feed `all`/`any`
+    filters and length counts). Same membership soundness (`coveredIdxUnord_mem_of_eq`). -/
+def coveredIdxUnord (idx : CovIndex) (arr : Array α) (Q : α → Bool) (xs : List Variable) :
+    List α :=
+  let uniq := ((candidates idx xs).foldl (·.insert ·) (∅ : Std.HashSet Nat)).toList
+  uniq.filterMap (fun i =>
+    if h : i < arr.size then (if Q arr[i] then some arr[i] else none) else none)
+
 /-- **Soundness.** Every item `coveredIdx` returns is a genuine item of `arr` (hence of the
     underlying list) that satisfies `Q`. This is all the enumeration proofs need; the index need
     not be complete for correctness (completeness only affects effectiveness, checked empirically). -/
@@ -79,6 +88,30 @@ theorem coveredIdx_mem (idx : CovIndex) (arr : Array α) (Q : α → Bool) (xs :
       exact ⟨i, h, hei, by rw [← hei]; exact hq⟩
     · rw [if_neg hq] at hfe; exact absurd hfe (by simp)
   · rw [dif_neg h] at hfe; exact absurd hfe (by simp)
+
+theorem coveredIdxUnord_mem (idx : CovIndex) (arr : Array α) (Q : α → Bool) (xs : List Variable)
+    {e : α} (he : e ∈ coveredIdxUnord idx arr Q xs) :
+    ∃ i, ∃ _h : i < arr.size, arr[i] = e ∧ Q e = true := by
+  rw [coveredIdxUnord, List.mem_filterMap] at he
+  obtain ⟨i, _hi, hfe⟩ := he
+  by_cases h : i < arr.size
+  · rw [dif_pos h] at hfe
+    by_cases hq : Q arr[i]
+    · rw [if_pos hq] at hfe
+      have hei : arr[i] = e := Option.some.inj hfe
+      exact ⟨i, h, hei, by rw [← hei]; exact hq⟩
+    · rw [if_neg hq] at hfe; exact absurd hfe (by simp)
+  · rw [dif_neg h] at hfe; exact absurd hfe (by simp)
+
+/-- Soundness of the unordered variant for an array threaded with its list equation. -/
+theorem coveredIdxUnord_mem_of_eq (idx : CovIndex) (l : List α) (arr : Array α)
+    (harr : arr = l.toArray) (Q : α → Bool) (xs : List Variable)
+    {e : α} (he : e ∈ coveredIdxUnord idx arr Q xs) : e ∈ l ∧ Q e = true := by
+  subst harr
+  obtain ⟨i, hi, hei, hq⟩ := coveredIdxUnord_mem idx l.toArray Q xs he
+  subst hei
+  have hi' : i < l.length := by simpa using hi
+  exact ⟨by simp [l.getElem_mem hi'], hq⟩
 
 /-- Soundness, specialized to the array being a list's `toArray` (what the passes pass in): every
     returned item is a genuine member of the list and satisfies `Q`. -/

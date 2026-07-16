@@ -439,25 +439,136 @@ theorem pdFirst_keep (bs : BusSemantics p) (singles : List (Expression p))
       rw [hcert] at hnc
       exact absurd hnc (by simp)
 
+/-! ### The fast duplicate analysis
+
+`pdKeep` per interaction pays an O(#interactions) `findIdx?` (with deep structural equality)
+plus a prefix scan of `msgEqCert`s — O(n²) certificate evaluations per invocation, the dominant
+cost of this pass on interaction-heavy circuits. The analysis below computes the *same* drop
+set in one left-to-right sweep: interactions are bucketed by the certificate's necessary
+invariants (bus id, constant multiplicity, payload length — `msgEqCert` fails outright across
+buckets), candidate pairs are prefiltered by per-slot structural hashes and variable Bloom
+masks (`slotEqCert` needs syntactic equality or a shared variable per slot), and the
+first-of-class check is memoized per bucket entry. The result is consumed as a *prefilter*
+only: `pointwiseDupDropPass` re-verifies every flagged drop through the original `pdKeep`, so
+the analysis carries no proof and a false flag can only cost time, never a wrong drop. -/
+
+/-- A 64-bit Bloom mask of the expression's variables (for the shared-variable prefilter). -/
+def Expression.pdVarBloom : Expression p → UInt64
+  | .const _ => 0
+  | .var y => (1 : UInt64) <<< (UInt64.ofNat ((mixHash (hash y.name) (hash y.powdrId?)).toNat % 64))
+  | .add a b => a.pdVarBloom ||| b.pdVarBloom
+  | .mul a b => a.pdVarBloom ||| b.pdVarBloom
+
+/-- Structural hash of an expression (order-sensitive), for the slot-equality prefilter. -/
+def Expression.pdStructHash : Expression p → UInt64
+  | .const n => mixHash 11 (UInt64.ofNat n.val)
+  | .var y => mixHash 13 (mixHash (hash y.name) (hash y.powdrId?))
+  | .add a b => mixHash 17 (mixHash a.pdStructHash b.pdStructHash)
+  | .mul a b => mixHash 19 (mixHash a.pdStructHash b.pdStructHash)
+
+/-- Necessary condition for `msgEqCert` on two payloads, from the precomputed per-slot
+    signatures: each slot pair is syntactically equal (hash) or shares a variable (Blooms). -/
+def pdSigsCompatible (a b : Array (UInt64 × UInt64)) : Bool :=
+  Array.isEqv a b (fun x y => x.1 == y.1 || (x.2 &&& y.2) != 0)
+
+/-- Full-value hash of an interaction, for the dropped-value buckets. -/
+def pdValHash (bi : BusInteraction (Expression p)) : UInt64 :=
+  mixHash (hash bi.busId) (mixHash bi.multiplicity.pdStructHash
+    (bi.payload.foldl (fun h e => mixHash h e.pdStructHash) 7))
+
+/-- One bucket entry of the sweep: position, the interaction, its slot signatures, and whether
+    it was kept. -/
+structure PdEntry (p : ℕ) where
+  pos : Nat
+  bi : BusInteraction (Expression p)
+  sigs : Array (UInt64 × UInt64)
+  kept : Bool
+
+/-- The value-keyed set of interactions the sweep decides to drop — exactly `pdKeep`'s drop set
+    (drops are value-based there too: `findIdx?` evaluates every duplicate at its first
+    occurrence). -/
+def pdDropSet (bs : BusSemantics p) (singles : List (Expression p))
+    (bis : List (BusInteraction (Expression p))) :
+    Std.HashMap UInt64 (List (BusInteraction (Expression p))) := Id.run do
+  let mut buckets : Std.HashMap UInt64 (List (PdEntry p)) := ∅
+  let mut firstMemo : Std.HashMap Nat Bool := ∅
+  let mut drops : Std.HashMap UInt64 (List (BusInteraction (Expression p))) := ∅
+  let mut pos := 0
+  for bi in bis do
+    if !bs.isStateful bi.busId then
+      match bi.multiplicity.constValue? with
+      | none => pure ()   -- can neither be dropped nor certify a drop
+      | some m =>
+        let key := mixHash (hash bi.busId) (mixHash (hash m.val) (hash bi.payload.length))
+        let sigs : Array (UInt64 × UInt64) :=
+          (bi.payload.map (fun e => (e.pdStructHash, e.pdVarBloom))).toArray
+        let entries := buckets.getD key []
+        -- an exact duplicate mirrors its first occurrence's decision (findIdx? semantics)
+        match entries.find? (fun e => decide (e.bi = bi)) with
+        | some e =>
+          if !e.kept then
+            let vk := pdValHash bi
+            drops := drops.insert vk (bi :: (drops.getD vk []))
+        | none =>
+          -- drop iff an earlier kept, first-of-class, certified twin exists
+          let mut dropped := false
+          for e in entries do
+            if !dropped && e.kept && pdSigsCompatible e.sigs sigs then
+              if msgEqCert singles e.bi bi then
+                -- lazily decide whether `e` is first of its class
+                let isFirst ← do
+                  match firstMemo[e.pos]? with
+                  | some b => pure b
+                  | none =>
+                    let b := entries.all (fun e' =>
+                      !(e'.pos < e.pos && pdSigsCompatible e'.sigs e.sigs
+                        && msgEqCert singles e'.bi e.bi))
+                    firstMemo := firstMemo.insert e.pos b
+                    pure b
+                if isFirst then
+                  dropped := true
+          if dropped then
+            let vk := pdValHash bi
+            drops := drops.insert vk (bi :: (drops.getD vk []))
+          buckets := buckets.insert key ({ pos, bi, sigs, kept := !dropped } :: entries)
+    pos := pos + 1
+  return drops
+
+/-- Was `bi` flagged by the sweep? (`false` = flagged as a drop candidate.) -/
+def pdFastKeep (drops : Std.HashMap UInt64 (List (BusInteraction (Expression p))))
+    (bi : BusInteraction (Expression p)) : Bool :=
+  match drops[pdValHash bi]? with
+  | some l => !(l.any (fun b => decide (b = bi)))
+  | none => true
+
 /-- Part C as a standalone (unguarded) pass: drop stateless interactions pointwise-equal to an
-    earlier first-of-class one. -/
+    earlier first-of-class one. Stated over an arbitrary *prefilter* `fast`: the kept set is
+    `fast bi || pdKeep … bi`, so a drop requires `pdKeep … = false` (the certified condition)
+    and keeping more is always sound. `pointwiseDupDropPass` instantiates `fast` with the sweep
+    above, which flags exactly `pdKeep`'s drop set — the expensive certified scan then runs only
+    on the few genuine drops. -/
 theorem ConstraintSystem.pointwiseDupDrop_correct [Fact p.Prime]
-    (cs : ConstraintSystem p) (bs : BusSemantics p) :
+    (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (fast : BusInteraction (Expression p) → Bool) :
     PassCorrect cs
       (cs.filterBus
-        (pdKeep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions))
+        (fun bi => fast bi || pdKeep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions bi))
       [] bs :=
   cs.filterBusEntailed_correct bs _
        (by
          intro bi _ hkf
-         unfold pdKeep at hkf
          rw [Bool.or_eq_false_iff] at hkf
-         simpa using hkf.1)
+         have hkf' := hkf.2
+         unfold pdKeep at hkf'
+         rw [Bool.or_eq_false_iff] at hkf'
+         simpa using hkf'.1)
        (by
          intro bi hbimem hkf env hsat hm
-         unfold pdKeep at hkf
          rw [Bool.or_eq_false_iff] at hkf
-         obtain ⟨_hst, hmatch⟩ := hkf
+         have hkf' := hkf.2
+         unfold pdKeep at hkf'
+         rw [Bool.or_eq_false_iff] at hkf'
+         obtain ⟨_hst, hmatch⟩ := hkf'
          cases hidx : cs.busInteractions.findIdx? (fun x => x == bi) with
          | none => rw [hidx] at hmatch; simp at hmatch
          | some i =>
@@ -471,9 +582,9 @@ theorem ConstraintSystem.pointwiseDupDrop_correct [Fact p.Prime]
                cs.busInteractions b = true :=
              pdFirst_keep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions b hfirst
            have hbout : b ∈ (cs.filterBus
-               (pdKeep bs (singleVarCs cs.algebraicConstraints)
-                 cs.busInteractions)).busInteractions :=
-             List.mem_filter.2 ⟨hbcs, hbkeep⟩
+               (fun bi => fast bi || pdKeep bs (singleVarCs cs.algebraicConstraints)
+                 cs.busInteractions bi)).busInteractions :=
+             List.mem_filter.2 ⟨hbcs, by simp [hbkeep]⟩
            have hdom : ∀ c ∈ singleVarCs cs.algebraicConstraints, c.eval env = 0 := by
              intro c hc
              exact hsat.1 c (List.mem_of_mem_filter hc)
@@ -486,8 +597,12 @@ theorem ConstraintSystem.pointwiseDupDrop_correct [Fact p.Prime]
 def pointwiseDupDropPass : VerifiedPass p := fun cs bs =>
   if hp : (decide p.Prime) = true then
     haveI : Fact p.Prime := ⟨of_decide_eq_true hp⟩
-    ⟨cs.filterBus (pdKeep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions), [],
-     cs.pointwiseDupDrop_correct bs⟩
+    let singles := singleVarCs cs.algebraicConstraints
+    -- The fast sweep flags exactly `pdKeep`'s drop set; the certified `pdKeep` re-verifies each
+    -- flagged drop (short-circuited away for the unflagged rest by the `||`).
+    let drops := pdDropSet bs singles cs.busInteractions
+    ⟨cs.filterBus (fun bi => pdFastKeep drops bi || pdKeep bs singles cs.busInteractions bi), [],
+     cs.pointwiseDupDrop_correct bs (pdFastKeep drops)⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
 
 /-! ## Part A: the entailed nonlinear substitution -/

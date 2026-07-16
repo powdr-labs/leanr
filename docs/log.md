@@ -3418,3 +3418,87 @@ unchanged** (2021 v / 186 c / 1752 bus). Build + `Scripts/check-proof-integrity.
 throughout ({propext, Classical.choice, Quot.sound} only). **Worked: yes — the wasm-eth variable
 gap that motivated the investigation (`../leanr-wasm/fable-wasm-1.md`) is closed; apc now leads
 powdr on variables and constraints, trails only slightly on bus.**
+
+### 90. Runtime overhaul: ~2.1× on keccak, ~1.2–1.3× on the heavy eth cases (effectiveness unchanged)
+
+Pure **performance** work across the six hottest passes, driven by gdb stack sampling (the
+container has no `perf`; ~250 samples per benchmark attribute time precisely). All changes are
+output-preserving by design — heuristic prefilters feed the existing certified checks, so a wrong
+prefilter can cost time but never change a drop/fold/collapse decision. Measured end-to-end on
+this container: **keccak 912 s → 432 s** (`run`; the baseline `profile` was 912 s and profile ≈
+run here), **apc_005 32.2 → 25.7 s, apc_006 26.6 → 23.7 s, apc_012 21.7 → 17.1 s** (profile
+totals; this machine has ±15 % run-to-run variance — the on-demand `Runtime Bench` workflow is
+the authoritative A/B). Effectiveness: `benchmark.py` over all 100 eth cases reproduces the
+documented aggregates exactly (vars 4.552×/3.887× geo, bus 3.543×/2.803×, W/L/T 31/7/62), and
+keccak's output is count-identical (2021 vars / 1752 bus / 186 constraints); spot checks
+apc_034 = 105/22/80, apc_066 = 49/10/37, apc_037 = 690 vars all match the documented sizes.
+
+**The shared disease, in six organs.** Almost all of the time went to per-candidate O(system)
+rescans and per-accept O(system) rebuilds inside passes that already had one layer of indexing:
+
+- **busPairCancel (keccak 117 s → ~55 s)**: the receive hash index was rebuilt per *bus* per
+  sweep — now one consolidated index (bus id mixed into the key) built once per sweep, with the
+  interaction array shared. The split equation `cs.busInteractions = A ++ S :: B ++ R :: C` was
+  *decided* per accepted drop (an O(n) deep structural comparison) — now proven by construction
+  from the array extracts (`split_of_extracts`/`list_split_two`). `checkCancel` re-ran the region
+  tests (`midRefuted` over B, `shieldOk` over A) the scan had just computed — they are hypotheses
+  of `checkCancel_sound` now. The byte justification materialized `A ++ B ++ C` and `findVarBound`-
+  scanned it per queried variable — `dropWits` scans the shared array directly with the same
+  early-exit, skipping the dropped pair by value. The deep justification's per-query constraint
+  filters (`all.filter isSingleVar`, `all.filter (containsVar x)`) are per-invocation thunks now
+  (`domCsT`, proof-carrying `VarCsIdx`), transported across drops like `TwoRootMap`. (A first
+  attempt eagerly built a per-sweep variable→bound witness map; it did ~30× the work of the old
+  early-exit scans on eth — reverted to the query-time scan. Lesson recorded below.)
+- **hintCollapse (keccak 48 s → 1.4 s)**: `witnessesOf` ran the full-system `occursOnlyInTarget`
+  scan per (constraint, variable). A per-invocation constraint-occurrence counter admits only
+  variables in exactly one constraint (a necessary condition); the certified scan runs just for
+  those — and they are the actual witnesses.
+- **flagFold/pointwiseDupDrop (keccak 109 s → ~27 s)**: `pdKeep` paid an O(n) `findIdx?` (deep
+  equality) plus a prefix `msgEqCert` scan per interaction — O(n²) certificates. `pdDropSet` now
+  computes the *same* drop set in one sweep (bucketed by the certificate's necessary invariants:
+  bus id, constant multiplicity, payload length; slot-hash + variable-Bloom pair prefilters;
+  memoized first-of-class), and the pass's predicate is `pdFastKeep drops bi || pdKeep … bi` — the
+  certified `pdKeep` re-verifies exactly the flagged drops, so `pointwiseDupDrop_correct` needed
+  only the `||`-weakening (keeping more is always sound).
+- **busUnify (keccak 45 s → ~12 s)**: `checkPair` decided the per-bus split equation per candidate
+  (O(n) deep comparison) — `candidateSplits`/`findConsumer` now carry the split by construction
+  (subtype invariants threaded through the accumulating recursion). The already-present filter
+  (`cs.algebraicConstraints.contains c` per candidate equality) compares within structural-hash
+  buckets (`Expression.structHash` moved to BusUnify for sharing).
+- **domainFold (keccak 156 s → ~100 s, apc_005 ~8 s → ~5 s)**: the covered set is computed once
+  per target and reused for the survivor filter — `groupSurvivors` re-ran the full `coveredCsOf`
+  filter per target even on the indexed path (`groupSurvivorsE es` + a `hes`-transport in
+  `foldStep`/`foldStepWith`). The no-op gate got an index-local form (`systemHasFoldableIdx`) on
+  the large-system path: an expression sharing no variable with the group can only fold at a
+  var-free compound node, so the gate = bucket-gathered sharing items + precomputed const-foldable
+  lists — exactly `systemHasFoldable`. `FoldIdx.refresh` reuses the interaction-side buckets stale
+  across accepted folds (folds map interactions in place and only shrink variable sets, so stale
+  buckets are positional supersets and the gate stays exact). `foldRewrite` is gated at expression
+  entry (`anyVarIn xs || hasConstFoldableNode` — otherwise no node qualifies), so `foldOut`'s
+  whole-system rewrite per accept skips the unrelated 95 % of expressions. And targets containing
+  a variable with *no* single-variable constraint anywhere are pruned before the covered-set scan
+  (`groupDoms` can only derive domains from single-variable constraints — exact).
+- **reencode (keccak 181 s → ~110 s, eth ≈ −20 %)**: same single-var-constraint target prefilter;
+  a hopeless-target skip in `buildReencode` (a single-var-only covered set with one constraint per
+  variable has survivors = the whole box, so `⌈log₂ box⌉ < |xs|` decides without enumerating — the
+  ubiquitous all-boolean flag groups); the freshness scan (the only O(bits × system) certificate
+  conjunct) moved to the last `&&` position so it runs only for near-accepts, plus a threaded
+  proof-carrying variable `HashSet` replaced the per-candidate `cs.vars` materialization + linear
+  membership scans (`Std.HashSet.contains_ofList` transports `contains` back to `∈ cs.vars`); and
+  the covered set uses a direct filter below the same size threshold as `domainFold` (per-target
+  bucket gather + sort of hyper-shared variables loses on flag-heavy eth blocks).
+- **domainBatch (keccak 142 s → ~105 s)**: `forcedOver`'s covered sets come from a new *unordered*
+  `coveredIdxUnord` (no per-target `mergeSort`) — every consumer is order-independent.
+
+**Working rules confirmed/added.** (1) The candidate-then-certified-recheck pattern keeps all of
+these proof-cheap: the only new proof surface is the split-by-construction lemmas, the
+`VarCsIdx`/`ByteWits`-style membership carriers, and `pointwiseDupDrop_correct`'s `||`-weakening.
+(2) *Measure early-exit behaviour before replacing a scan with an index*: the old `findVarBound`
+"O(n) rescan" was really O(first-hit) on eth; the eager witness map lost 3.7× there while the
+same map idea was right on keccak — the query-time array scan serves both. (3) This container's
+±15 % variance means per-pass eth deltas under ~1 s are noise; trust the same-runner CI A/B.
+
+Build green; `Scripts/check-proof-integrity.sh` green (the three correctness theorems still
+depend only on `{propext, Classical.choice, Quot.sound}`). Runtime leftovers (domainBatch box
+streaming / SAT-style pruning, gauss, dedup's quadratics, rootPairUnify's rescans, cross-cycle
+memoization) are recorded in `docs/ideas.md` under "Runtime leftovers". **Worked: yes.**

@@ -60,11 +60,29 @@ theorem constOnSurvs_sound (survs : List (List (Variable × ZMod p))) (e : Expre
         rw [← Expression.evalFast_eq, hthis]; exact hc
     · next => exact absurd h (by simp)
 
+/-- Does the expression mention any variable of `xs`? (No allocation.) -/
+def Expression.anyVarIn (xs : List Variable) : Expression p → Bool
+  | .const _ => false
+  | .var y => containsFast xs y
+  | .add a b => a.anyVarIn xs || b.anyVarIn xs
+  | .mul a b => a.anyVarIn xs || b.anyVarIn xs
+
+/-- Does the expression contain a variable-free `add`/`mul` node? For an expression sharing no
+    variable with the group, `hasFoldable` holds iff this does (given a nonempty survivor set). -/
+def Expression.hasConstFoldableNode : Expression p → Bool
+  | .const _ => false
+  | .var _ => false
+  | .add a b =>
+      !(Expression.add a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
+  | .mul a b =>
+      !(Expression.mul a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
+
 /-! ## The fold rewrite -/
 
-/-- Replace every maximal wholly-in-group subexpression that is constant on the survivors by that
-    constant; recurse otherwise. Leaves the group's variables in place where they are not folded. -/
-def foldRewrite (xs : List Variable) (survs : List (List (Variable × ZMod p))) :
+/-- The recursive fold core: replace every maximal wholly-in-group subexpression that is constant
+    on the survivors by that constant; recurse otherwise. Leaves the group's variables in place
+    where they are not folded. -/
+def foldRewriteGo (xs : List Variable) (survs : List (List (Variable × ZMod p))) :
     Expression p → Expression p
   | .const c => .const c
   | .var y => .var y
@@ -72,24 +90,33 @@ def foldRewrite (xs : List Variable) (survs : List (List (Variable × ZMod p))) 
       if (Expression.add a b).varsIn xs then
         match constOnSurvs survs (.add a b) with
         | some c => .const c
-        | none => .add (foldRewrite xs survs a) (foldRewrite xs survs b)
-      else .add (foldRewrite xs survs a) (foldRewrite xs survs b)
+        | none => .add (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
+      else .add (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
   | .mul a b =>
       if (Expression.mul a b).varsIn xs then
         match constOnSurvs survs (.mul a b) with
         | some c => .const c
-        | none => .mul (foldRewrite xs survs a) (foldRewrite xs survs b)
-      else .mul (foldRewrite xs survs a) (foldRewrite xs survs b)
+        | none => .mul (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
+      else .mul (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
+
+/-- The fold rewrite, gated: an expression sharing no variable with the group and containing no
+    variable-free compound node has no node the core could fold (a qualifying node is either
+    wholly-in-group with a variable — impossible — or variable-free), so it is returned untouched
+    without walking it node-by-node. `foldOut` maps this over the *whole* system per accepted
+    fold, and almost all expressions take the cheap branch. -/
+def foldRewrite (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (e : Expression p) : Expression p :=
+  if e.anyVarIn xs || e.hasConstFoldableNode then foldRewriteGo xs survs e else e
 
 /-! ## Agreement with the identity on any survivor-matching environment -/
 
 /-- On an environment that agrees on `xs` with some survivor `s`, `foldRewrite` is
     evaluation-preserving. The folded constants are exactly the survivor-constant values, and `s`'s
     membership pins them; unfolded nodes recurse. -/
-theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+theorem foldRewriteGo_agree (xs : List Variable) (survs : List (List (Variable × ZMod p)))
     (env : Variable → ZMod p) (s : List (Variable × ZMod p)) (hs : s ∈ survs)
     (hxs : ∀ x ∈ xs, env x = envOf s x) :
-    ∀ e : Expression p, (foldRewrite xs survs e).eval env = e.eval env := by
+    ∀ e : Expression p, (foldRewriteGo xs survs e).eval env = e.eval env := by
   -- For a wholly-in-`xs` expression, `env` and `envOf s` agree on its variables.
   have hcongr : ∀ e : Expression p, e.varsIn xs = true → e.eval env = e.eval (envOf s) := by
     intro e he
@@ -99,12 +126,12 @@ theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × 
   | const c => rfl
   | var y => rfl
   | add a b iha ihb =>
-      unfold foldRewrite
+      unfold foldRewriteGo
       by_cases hin : (Expression.add a b).varsIn xs = true
       · rw [if_pos hin]
         cases hc : constOnSurvs survs (.add a b) with
         | none =>
-            show (foldRewrite xs survs a).eval env + (foldRewrite xs survs b).eval env
+            show (foldRewriteGo xs survs a).eval env + (foldRewriteGo xs survs b).eval env
               = a.eval env + b.eval env
             rw [iha, ihb]
         | some c =>
@@ -115,16 +142,16 @@ theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × 
             have : (Expression.add a b).eval env = c := by rw [h1]; exact h2
             simpa [Expression.eval] using this.symm
       · rw [if_neg (by simpa using hin)]
-        show (foldRewrite xs survs a).eval env + (foldRewrite xs survs b).eval env
+        show (foldRewriteGo xs survs a).eval env + (foldRewriteGo xs survs b).eval env
           = a.eval env + b.eval env
         rw [iha, ihb]
   | mul a b iha ihb =>
-      unfold foldRewrite
+      unfold foldRewriteGo
       by_cases hin : (Expression.mul a b).varsIn xs = true
       · rw [if_pos hin]
         cases hc : constOnSurvs survs (.mul a b) with
         | none =>
-            show (foldRewrite xs survs a).eval env * (foldRewrite xs survs b).eval env
+            show (foldRewriteGo xs survs a).eval env * (foldRewriteGo xs survs b).eval env
               = a.eval env * b.eval env
             rw [iha, ihb]
         | some c =>
@@ -135,9 +162,21 @@ theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × 
             have : (Expression.mul a b).eval env = c := by rw [h1]; exact h2
             simpa [Expression.eval] using this.symm
       · rw [if_neg (by simpa using hin)]
-        show (foldRewrite xs survs a).eval env * (foldRewrite xs survs b).eval env
+        show (foldRewriteGo xs survs a).eval env * (foldRewriteGo xs survs b).eval env
           = a.eval env * b.eval env
         rw [iha, ihb]
+
+/-- On an environment that agrees on `xs` with some survivor, the (gated) fold rewrite is
+    evaluation-preserving. -/
+theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (env : Variable → ZMod p) (s : List (Variable × ZMod p)) (hs : s ∈ survs)
+    (hxs : ∀ x ∈ xs, env x = envOf s x) :
+    ∀ e : Expression p, (foldRewrite xs survs e).eval env = e.eval env := by
+  intro e
+  unfold foldRewrite
+  split
+  · exact foldRewriteGo_agree xs survs env s hs hxs e
+  · rfl
 
 /-- Bus-interaction-level agreement, from any expression-level agreement `hag`, applied to the
     multiplicity and every payload slot. -/
@@ -152,14 +191,14 @@ theorem mapExpr_eval_of_agree (g : Expression p → Expression p) (env : Variabl
 
 /-! ## Variables of the rewrite -/
 
-/-- Folding never introduces a variable: every variable of `foldRewrite … e` is a variable of `e`. -/
-theorem foldRewrite_vars (xs : List Variable) (survs : List (List (Variable × ZMod p)))
-    (e : Expression p) : ∀ v ∈ (foldRewrite xs survs e).vars, v ∈ e.vars := by
+/-- Folding never introduces a variable: every variable of `foldRewriteGo … e` is a variable of `e`. -/
+theorem foldRewriteGo_vars (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (e : Expression p) : ∀ v ∈ (foldRewriteGo xs survs e).vars, v ∈ e.vars := by
   induction e with
-  | const c => intro v hv; simp [foldRewrite, Expression.vars] at hv
+  | const c => intro v hv; simp [foldRewriteGo, Expression.vars] at hv
   | var y => intro v hv; exact hv
   | add a b iha ihb =>
-      unfold foldRewrite
+      unfold foldRewriteGo
       by_cases hin : (Expression.add a b).varsIn xs = true
       · rw [if_pos hin]
         cases constOnSurvs survs (.add a b) with
@@ -177,7 +216,7 @@ theorem foldRewrite_vars (xs : List Variable) (survs : List (List (Variable × Z
         · exact Or.inl (iha v hv)
         · exact Or.inr (ihb v hv)
   | mul a b iha ihb =>
-      unfold foldRewrite
+      unfold foldRewriteGo
       by_cases hin : (Expression.mul a b).varsIn xs = true
       · rw [if_pos hin]
         cases constOnSurvs survs (.mul a b) with
@@ -194,6 +233,15 @@ theorem foldRewrite_vars (xs : List Variable) (survs : List (List (Variable × Z
         rcases hv with hv | hv
         · exact Or.inl (iha v hv)
         · exact Or.inr (ihb v hv)
+
+/-- Folding never introduces a variable (gated form). -/
+theorem foldRewrite_vars (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (e : Expression p) : ∀ v ∈ (foldRewrite xs survs e).vars, v ∈ e.vars := by
+  intro v hv
+  unfold foldRewrite at hv
+  split at hv
+  · exact foldRewriteGo_vars xs survs e v hv
+  · exact hv
 
 /-! ## Agreement on any environment satisfying the covered constraints
 
@@ -396,6 +444,17 @@ def systemHasFoldable (cs : ConstraintSystem p) (xs : List Variable)
     cs.busInteractions.any (fun bi =>
       bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
 
+/-! ### The index-local gate
+
+`systemHasFoldable` is a full-system scan run once per target — the dominant cost of this pass.
+It decomposes exactly: an expression sharing **no** variable with the group `xs` can only have a
+foldable subexpression that is *variable-free* (`varsIn xs` is vacuous only for var-free nodes),
+and whether an expression has a var-free `add`/`mul` node is independent of `xs` and of the
+(nonempty) survivor set. So the gate equals: (a) any item *sharing a variable* with `xs` — found
+through the inverted indexes — passing the original per-item test, or (b) any item with a
+var-free compound node (precomputed once per invocation; empty after constant folding) sharing
+no variable with `xs`. Purely an efficiency gate, like `systemHasFoldable` itself. -/
+
 /-! ### Indexing the per-target covered-constraint scan
 
 `foldStep` gates every target on `groupDoms (coveredCsOf cs xs) xs`, whose `coveredCsOf` is a full
@@ -411,12 +470,18 @@ and rebuilt only on an accepted fold (`cs` changes), carrying the proofs tying i
 faster. -/
 
 /-- The prebuilt covered-constraint index for the current `cs`, with the proofs tying it to `cs` so
-    the covered set it yields is provably `coveredCsOf cs xs` (`coveredCsIdx_eq`). -/
+    the covered set it yields is provably `coveredCsOf cs xs` (`coveredCsIdx_eq`), plus the
+    proof-free data the index-local `systemHasFoldableIdx` gate consumes: the interaction-side
+    inverted index and the (normally empty) const-foldable item lists. -/
 structure FoldIdx (cs : ConstraintSystem p) where
   idx : CoveredIndex.CovIndex
   hidx : idx = CoveredIndex.build Expression.vars cs.algebraicConstraints
   arr : Array (Expression p)
   harr : arr = cs.algebraicConstraints.toArray
+  bisIdx : CoveredIndex.CovIndex
+  arrBis : Array (BusInteraction (Expression p))
+  cfCs : List (Expression p)
+  cfBis : List (BusInteraction (Expression p))
 
 /-- Build the index for a system (by construction the equalities hold `rfl`). -/
 def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
@@ -424,6 +489,55 @@ def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
   hidx := rfl
   arr := cs.algebraicConstraints.toArray
   harr := rfl
+  bisIdx := CoveredIndex.build BusInteraction.vars cs.busInteractions
+  arrBis := cs.busInteractions.toArray
+  cfCs := cs.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
+  cfBis := cs.busInteractions.filter (fun bi =>
+    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
+
+/-- Refresh the index after an accepted fold. The constraint side is rebuilt — the fold reorders
+    constraints, and the covered-set equality (`coveredCsIdx_eq`) needs the exact tie — but the
+    interaction-side *buckets* are reused stale: `foldOut` maps interactions in place (same count
+    and order) and only ever shrinks an expression's variable set (subexpressions are replaced by
+    constants), so the stale buckets are a superset of freshly-built ones. The gate stays exact:
+    candidates are re-tested against the fresh array, and an over-included candidate that still
+    passes the per-item test would make the full scan true as well. This halves the dominant
+    rebuild-per-accepted-fold cost on fold-heavy circuits. -/
+def FoldIdx.refresh {cs : ConstraintSystem p} (old : FoldIdx cs) (ro : ConstraintSystem p) :
+    FoldIdx ro where
+  idx := CoveredIndex.build Expression.vars ro.algebraicConstraints
+  hidx := rfl
+  arr := ro.algebraicConstraints.toArray
+  harr := rfl
+  bisIdx := old.bisIdx
+  arrBis := ro.busInteractions.toArray
+  cfCs := ro.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
+  cfBis := ro.busInteractions.filter (fun bi =>
+    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
+
+/-- The index-local form of `systemHasFoldable` (see the section comment above): scan only the
+    items sharing a variable with `xs` (through the inverted indexes, candidate positions
+    deduplicated so an item sharing several variables is tested once — `hasFoldable` is the
+    expensive part), plus the precomputed const-foldable items when disjoint from `xs`. Requires
+    a nonempty survivor set (the caller's `1 ≤ survs.length` gate). Equal to
+    `systemHasFoldable cs xs survs`; purely an efficiency gate, so no proof is carried. -/
+def systemHasFoldableIdx {cs : ConstraintSystem p} (fidx : FoldIdx cs) (xs : List Variable)
+    (survs : List (List (Variable × ZMod p))) : Bool :=
+  (((xs.flatMap (fun v => fidx.idx.buckets.getD v [])).foldl (·.insert ·)
+      (∅ : Std.HashSet Nat)).toList.any (fun i =>
+    if h : i < fidx.arr.size then
+      let c := fidx.arr[i]
+      !coveredBy xs c && c.hasFoldable xs survs
+    else false)) ||
+  (((xs.flatMap (fun v => fidx.bisIdx.buckets.getD v [])).foldl (·.insert ·)
+      (∅ : Std.HashSet Nat)).toList.any (fun i =>
+    if h : i < fidx.arrBis.size then
+      let bi := fidx.arrBis[i]
+      bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs)
+    else false)) ||
+  (fidx.cfCs.any (fun c => !c.anyVarIn xs)) ||
+  (fidx.cfBis.any (fun bi =>
+    !(bi.multiplicity.anyVarIn xs || bi.payload.any (fun e => e.anyVarIn xs))))
 
 /-- An expression with any variable has a nonempty variable list. -/
 theorem hasVar_vars_ne_nil (c : Expression p) (h : c.hasVar = true) : c.vars ≠ [] := by
@@ -464,8 +578,11 @@ theorem coveredCsIdx_eq (cs : ConstraintSystem p) (xs : List Variable) (fidx : F
 
 /-- One checked fold for a candidate group (identity unless the group has a bounded domain, at least
     one survivor, and some foldable subexpression). The per-target covered scan is served from the
-    prebuilt index (`coveredCsIdx_eq`), rebuilt only when a fold rewrites `cs`. Prime `p`; the
-    caller supplies `Fact p.Prime`. -/
+    prebuilt index (`coveredCsIdx_eq`) — and reused for the survivor filter
+    (`groupSurvivorsE es`, provably `groupSurvivors cs xs doms` via `hes`) and for the
+    index-local no-op gate (`systemHasFoldableIdx`), so no full-system scan remains on the
+    per-target path. The index is rebuilt only when a fold rewrites `cs`. Prime `p`; the caller
+    supplies `Fact p.Prime`. -/
 def foldStep [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (fidx : FoldIdx cs)
     (xs : List Variable) : Σ' (r : PassResult cs bs), FoldIdx r.out :=
   let es := CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs
@@ -474,10 +591,13 @@ def foldStep [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (fid
   | none => ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
   | some doms =>
     if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
-      let survs := groupSurvivors cs xs doms
-      if 1 ≤ survs.length && systemHasFoldable cs xs survs then
-        ⟨⟨foldOut cs xs survs, [], foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩,
-         FoldIdx.mk' (foldOut cs xs survs)⟩
+      let survs := groupSurvivorsE es doms
+      if 1 ≤ survs.length && systemHasFoldableIdx fidx xs survs then
+        have hsurv : groupSurvivors cs xs doms = survs := by
+          show groupSurvivors cs xs doms = groupSurvivorsE es doms
+          rw [hes]; rfl
+        ⟨⟨foldOut cs xs survs, [], hsurv ▸ foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩,
+         fidx.refresh (foldOut cs xs survs)⟩
       else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
     else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
 
@@ -493,29 +613,28 @@ def foldLoop [Fact p.Prime] (bs : BusSemantics p) :
 
 /-! ### Direct (unindexed) path for small systems
 
-The inverted index amortizes a full covered-set scan across many targets, but it pays a fixed
-per-invocation build (and a rebuild on each accepted fold) plus a per-target `HashSet`/`mergeSort`.
-On the *small* circuits (openvm-eth blocks, ≤ ~4.6k constraints) that overhead exceeds the saved
-scan — the plain `coveredCsOf` filter is cheaper — even though it wins decisively on the keccak
-stress case (~28.6k constraints). `domainFoldPass` therefore gates on system size: the direct loop
-below (recomputing `coveredCsOf` per target, as before this file's index change) runs on small
-systems, the indexed `foldLoop` on large ones. Both call the same `foldStepWith` core, so the fold
-semantics — hence effectiveness — are identical on every case; only the covered-set *lookup* differs. -/
+The inverted index amortizes the covered-set scan, but its per-target candidate gather
+(bucket flat-map + dedup + sort) *loses* on the openvm-eth blocks, whose variables are shared by
+hundreds of items each (huge buckets); the plain `coveredCsOf` filter is cheaper there, while
+the index wins decisively on the keccak stress case (~28.6k constraints, sparser sharing).
+`domainFoldPass` therefore gates on system size. Relative to the pre-index direct path, the
+covered set is computed **once** per target and reused for the survivor filter
+(`groupSurvivorsE es`, provably `groupSurvivors cs xs doms` — the old code paid the full filter
+a second time inside `groupSurvivors`). -/
 
-/-- One checked fold for a candidate group, given the covered set `es` (required to equal
-    `coveredCsOf cs xs`, so `foldOut_correct`'s `hdoms` transports). Used by the direct path with
-    `es := coveredCsOf cs xs`, `hes := rfl`; the indexed `foldStep` mirrors this same logic inline
-    (it additionally threads and rebuilds the covered-set index on each accepted fold, which the
-    dependent `Σ' r, FoldIdx r.out` return forces it to do branch-by-branch rather than delegate). -/
+/-- One checked fold for a candidate group, given the covered set `es = coveredCsOf cs xs`. -/
 def foldStepWith [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (xs : List Variable)
     (es : List (Expression p)) (hes : es = coveredCsOf cs xs) : PassResult cs bs :=
   match hdoms : groupDoms es xs with
   | none => ⟨cs, [], PassCorrect.refl cs bs⟩
   | some doms =>
     if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
-      let survs := groupSurvivors cs xs doms
+      let survs := groupSurvivorsE es doms
       if 1 ≤ survs.length && systemHasFoldable cs xs survs then
-        ⟨foldOut cs xs survs, [], foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩
+        have hsurv : groupSurvivors cs xs doms = survs := by
+          show groupSurvivors cs xs doms = groupSurvivorsE es doms
+          rw [hes]; rfl
+        ⟨foldOut cs xs survs, [], hsurv ▸ foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩
       else ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs, [], PassCorrect.refl cs bs⟩
 
@@ -528,9 +647,8 @@ def foldLoopDirect [Fact p.Prime] (bs : BusSemantics p) :
     let r2 := foldLoopDirect bs rest r1.out
     ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
 
-/-- Systems at least this many algebraic constraints use the inverted index; smaller ones use the
-    direct per-target `coveredCsOf` scan. openvm-eth's largest block is ~4.6k constraints (index is
-    net-slower there); the keccak stress case is ~28.6k (index wins ~13 %). Purely a runtime gate —
+/-- Systems with at least this many algebraic constraints use the inverted index; smaller ones use
+    the direct per-target `coveredCsOf` scan (see the section comment). Purely a runtime gate —
     both paths compute the identical fold. -/
 def domainFoldIndexThreshold : Nat := 8192
 
@@ -542,12 +660,20 @@ def domainFoldIndexThreshold : Nat := 8192
 def domainFoldPass : VerifiedPass p := fun cs bsem =>
   if hpr : p.Prime then
     haveI : Fact p.Prime := ⟨hpr⟩
+    -- Domains come only from single-variable constraints (`findDomainAlg`/`rootsIn`), and a
+    -- single-variable constraint is covered by every group containing its variable — so a group
+    -- with a variable that has *no* single-variable constraint anywhere can never pass
+    -- `groupDoms`. Skipping those targets up front (one hash lookup per variable) avoids the
+    -- per-target covered-set scan for the ubiquitous byte-limb groups, exactly.
+    let svSet : Std.HashSet Variable := cs.algebraicConstraints.foldl (init := ∅) fun s c =>
+      match c.vars.dedup with
+      | [x] => s.insert x
+      | _ => s
     let targets := dedupHash (cs.algebraicConstraints.filterMap (fun c =>
       let vs := c.vars.dedup
-      if 2 ≤ vs.length && vs.length ≤ 8 then some (vs.mergeSort (fun a b => compare a b != .gt))
+      if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
+        some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
-    -- Runtime gate (effectiveness-identical): amortize the covered-set scan through the inverted
-    -- index only on large systems, where it wins; small systems use the cheaper direct filter.
     if domainFoldIndexThreshold ≤ cs.algebraicConstraints.length then
       foldLoop bsem targets cs (FoldIdx.mk' cs)
     else
