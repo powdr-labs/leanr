@@ -215,7 +215,7 @@ def byteDropKeep (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p
     (all : List (Expression p))
     (rest : List (BusInteraction (Expression p))) (bi : BusInteraction (Expression p)) : Bool :=
   match byteCheckOperands? bs facts bi with
-  | some ops => !(ops.all (fun e => byteJustified pw.isPrime all bs facts rest e))
+  | some ops => !(ops.all (fun e => byteJustified 256 pw.isPrime all bs facts rest e))
   | none => true
 
 /-- Drop every stateless byte-check interaction whose operands are all byte-justified from the
@@ -236,11 +236,11 @@ def redundantByteDropPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs f
        | none => rw [hro] at hkf; exact absurd hkf (by simp)
        | some ops =>
          rw [hro] at hkf
-         have hjust : ops.all (fun e => byteJustified pw.isPrime
+         have hjust : ops.all (fun e => byteJustified 256 pw.isPrime
              cs.algebraicConstraints bs facts (byteDropBase bs facts cs) e) = true := by
            simpa using hkf
          refine byteCheckOperands?_accepted bs facts bi ops hro env (fun e he => ?_)
-         refine byteJustified_sound pw.isPrime cs.algebraicConstraints bs facts
+         refine byteJustified_sound 256 pw.isPrime cs.algebraicConstraints bs facts
            (byteDropBase bs facts cs) e (fun h => pw.correct h)
            (List.all_eq_true.mp hjust e he) env
            (fun c hc => hsat.1 c hc) (fun bi' hbi' hmult => ?_)

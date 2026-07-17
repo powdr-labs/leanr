@@ -29,6 +29,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.BoxRewrite
 import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRange
+import ApcOptimizer.Implementation.OptimizerPasses.SubsumedCheck
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
@@ -127,6 +128,7 @@ def codaPasses : List (String × VerifiedPassW p) :=
     ("dedupLate", dedupPass.withFacts.guardDegree),
     ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree),
     ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
+    ("subsumedCheck", SubsumedCheck.subsumedCheckDropPass.guardDegree),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
     -- runs global range packing once at the end), so it runs once here, out of the cleanup
     -- fixpoint, after `redundantByteDrop` has dropped droppable byte checks operand-granularly
