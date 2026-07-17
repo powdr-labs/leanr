@@ -61,6 +61,16 @@ def Expression.isVar : Expression p → Bool
     consumes. -/
 structure Solved (p : ℕ) (cs : ConstraintSystem p) (bs : BusSemantics p) where
   map : Std.HashMap Variable (Expression p)
+  /-- Reverse-dependency index: `revDeps[z]` is a *superset* of the solution keys `y` whose stored
+      right-hand side `map[y]` mentions `z`. Used to resolve a newly-adopted pivot `x := t` into
+      only the affected stored solutions (`revDeps[x]`) instead of scanning the whole map (which is
+      O(K²) over K pivots). It carries no proof field — a stale/superset entry only costs a
+      re-checked `mentions`, and soundness holds for whatever entailed pairs are produced; the
+      index's completeness (hence full resolution, hence byte-identical output) is verified by the
+      output tests, per the task's "retain the entailment proof + strong output comparison" option.
+      Buckets are `HashSet`s so re-posting a repeatedly-rewritten key is idempotent (a `List` bucket
+      would accumulate duplicates and blow up the re-insertion work). -/
+  revDeps : Std.HashMap Variable (Std.HashSet Variable)
   sound : ∀ env, cs.satisfies bs env → ∀ y t, map[y]? = some t → env y = t.eval env
   varsIn : ∀ (y : Variable) (t : Expression p), map[y]? = some t → ∀ z ∈ t.vars, z ∈ cs.vars
 
@@ -70,6 +80,7 @@ variable {cs : ConstraintSystem p} {bs : BusSemantics p}
 
 def empty : Solved p cs bs where
   map := ∅
+  revDeps := ∅
   sound := by
     intro _ _ y t h
     rw [Std.HashMap.getElem?_empty] at h
@@ -105,6 +116,9 @@ def insertAll (σ : Solved p cs bs) (pairs : List (Variable × Expression p))
   | (x, t) :: rest =>
       let σ' : Solved p cs bs :=
         { map := σ.map.insert x t,
+          -- post `x` into the reverse-dependency bucket of every variable `t` mentions (stale
+          -- entries from an overwritten `x` are harmless; the `HashSet` keeps re-posting idempotent).
+          revDeps := t.vars.foldl (fun rd z => rd.insert z (((rd[z]?).getD ∅).insert x)) σ.revDeps,
           sound := by
             intro env hsat y s hys
             rw [Std.HashMap.getElem?_insert] at hys
@@ -532,15 +546,25 @@ def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
           rcases List.mem_append.1 (List.argmin_mem hbest') with h | h
           · exact hc'vars z (pm1PivotsOf_vars c' x t h z hz)
           · exact hc'vars z (unitPivotsOf_vars c' x t h z hz)
-        -- resolve `x` out of the stored solutions, then store `x := t`
-        let touched := σ.map.toList.filter (fun ys => ys.2.mentions x)
+        -- resolve `x` out of the stored solutions, then store `x := t`. Only the keys in `x`'s
+        -- reverse-dependency bucket can mention `x`; re-check `mentions` (buckets may be stale).
+        let touched := ((σ.revDeps[x]?).getD ∅).toList.filterMap (fun y =>
+          (σ.map[y]?).bind (fun s => if s.mentions x then some (y, s) else none))
+        have htouched : ∀ y s, (y, s) ∈ touched → σ.map[y]? = some s := by
+          intro y s hys
+          obtain ⟨y', _, hy'⟩ := List.mem_filterMap.1 hys
+          obtain ⟨s', hs', hif⟩ := Option.bind_eq_some_iff.1 hy'
+          by_cases hm : s'.mentions x
+          · rw [if_pos hm] at hif
+            simp only [Option.some.injEq, Prod.mk.injEq] at hif
+            obtain ⟨rfl, rfl⟩ := hif; exact hs'
+          · rw [if_neg hm] at hif; exact absurd hif (by simp)
         let pairs := touched.map (fun ys => (ys.1, (ys.2.subst x t).normalize)) ++ [(x, t)]
         have hpairs : ∀ env, cs.satisfies bs env → ∀ yt ∈ pairs, env yt.1 = yt.2.eval env := by
           intro env hsat yt hyt
           rcases List.mem_append.1 hyt with h | h
           · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 h
-            have hmemys : σ.map[y]? = some s :=
-              Std.HashMap.mem_toList_iff_getElem?_eq_some.1 (List.mem_of_mem_filter hys)
+            have hmemys : σ.map[y]? = some s := htouched y s hys
             have hy : env y = s.eval env := σ.sound env hsat y s hmemys
             have hxe : env x = t.eval env := hx env hsat
             show env y = ((s.subst x t).normalize).eval env
@@ -552,8 +576,7 @@ def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
           intro yt hyt z hz
           rcases List.mem_append.1 hyt with h | h
           · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 h
-            have hmemys : σ.map[y]? = some s :=
-              Std.HashMap.mem_toList_iff_getElem?_eq_some.1 (List.mem_of_mem_filter hys)
+            have hmemys : σ.map[y]? = some s := htouched y s hys
             rcases Expression.subst_vars s x t z (Expression.normalize_vars _ z hz) with h2 | h2
             · exact σ.varsIn y s hmemys z h2
             · exact htvars z h2
