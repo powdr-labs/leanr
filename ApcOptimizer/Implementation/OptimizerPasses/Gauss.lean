@@ -155,7 +155,249 @@ def pivotScore (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
   let base := (occ.getD xt.1 1 - 1) * (1 + xt.2.varCount)
   if prot.contains xt.1 && !xt.2.isVar then base + 1000000 else base
 
-/-! ## The elimination loop -/
+/-! ## Fast pivot selection (build only the winning candidate)
+
+`pm1PivotsOf`/`unitPivotsOf` build a full solution `Expression` (`toExpr`) for *every* solvable
+pivot of a constraint, then `argmin` keeps one and discards the rest — wasteful expression
+allocation, which dominates via reference-count churn on large systems. `fastBest` scans
+lightweight `(variable, score)` descriptors instead, computing each candidate's exact `pivotScore`
+from the linear form's coefficients and term counts *without materialising any solution*, then
+builds `toExpr` only for the winner. It is proven equal to the old `argmin` over
+`pm1PivotsOf ++ unitPivotsOf` (`fastBest_eq`), so `gaussLoop`'s decisions and output are unchanged.
+
+Remaining opportunity (not taken here): `pm1Desc`/`unitDesc` still build `l.others v` and rescan
+`l.coeff v` per candidate, so scoring is O(terms²) per constraint. On the measured corpora affine
+forms are short, so this is below the win; a single coefficient/others-count index pass would make
+scoring linear if longer forms ever dominate. -/
+
+/-- `argmin` commutes with a key-preserving map: when `g` carries the key (`kγ (g a) = kα a`), the
+    winner of the mapped list is the mapped winner. This lets us score cheap descriptors in place
+    of built candidates. -/
+theorem argmin_map_key {α γ : Type*} (g : α → γ) (kα : α → Nat) (kγ : γ → Nat)
+    (h : ∀ a, kγ (g a) = kα a) : ∀ l : List α, (l.map g).argmin kγ = (l.argmin kα).map g := by
+  intro l
+  induction l with
+  | nil => simp
+  | cons a t ih =>
+      rw [List.map_cons, List.argmin_cons, List.argmin_cons, ih]
+      cases t.argmin kα with
+      | none => simp
+      | some c =>
+          simp only [Option.map_some, h]
+          by_cases hlt : kα c < kα a <;> simp [hlt]
+
+theorem map_filterMap {α β γ : Type*} (f : α → Option β) (g : β → γ) (l : List α) :
+    (l.filterMap f).map g = l.filterMap (fun a => (f a).map g) := by
+  induction l with
+  | nil => simp
+  | cons a t ih =>
+      simp only [List.filterMap_cons]
+      cases f a with
+      | none => simpa using ih
+      | some b => simp [ih]
+
+/-! ### `toExpr` size facts (score a candidate without building it) -/
+
+theorem toExpr_foldl_varCount (terms : List (Variable × ZMod p)) :
+    ∀ init : Expression p,
+      (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init).varCount
+        = init.varCount + terms.length := by
+  induction terms with
+  | nil => intro init; simp
+  | cons t rest ih =>
+      intro init
+      rw [List.foldl_cons, ih]
+      simp only [Expression.varCount, List.length_cons]
+      omega
+
+theorem LinExpr.toExpr_varCount (l : LinExpr p) : l.toExpr.varCount = l.terms.length := by
+  rw [LinExpr.toExpr, toExpr_foldl_varCount]
+  simp [Expression.varCount]
+
+theorem LinExpr.scale_terms_length (k : ZMod p) (l : LinExpr p) :
+    (l.scale k).terms.length = l.terms.length := by
+  simp [LinExpr.scale]
+
+theorem toExpr_foldl_isVar (terms : List (Variable × ZMod p)) :
+    ∀ init : Expression p, init.isVar = false →
+      (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init).isVar = false := by
+  induction terms with
+  | nil => intro init h; simpa using h
+  | cons t rest ih => intro init _; exact ih _ rfl
+
+theorem LinExpr.toExpr_isVar (l : LinExpr p) : l.toExpr.isVar = false :=
+  toExpr_foldl_isVar l.terms _ rfl
+
+/-! ### Descriptors -/
+
+/-- Score of a pivot on `v` whose solution has `oc` variable occurrences. The `pivotScore`
+    protection penalty reduces to `prot.contains v`, since a `toExpr` solution is never a bare
+    variable. -/
+def gaussScore (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) (v : Variable)
+    (oc : Nat) : Nat :=
+  let base := (occ.getD v 1 - 1) * (1 + oc)
+  if prot.contains v then base + 1000000 else base
+
+theorem gaussScore_eq_pivotScore (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (v : Variable) (t : Expression p) (oc : Nat) (hiv : t.isVar = false) (hvc : t.varCount = oc) :
+    gaussScore occ prot v oc = pivotScore occ prot (v, t) := by
+  subst hvc
+  simp only [gaussScore, pivotScore, hiv, Bool.not_false, Bool.and_true]
+
+/-- `l.trySolve` in closed form (keeps the `Option (Variable × Expression p)` type, so rewriting
+    with it — unlike unfolding into `none` — never leaves the element type ambiguous). -/
+theorem LinExpr.trySolve_eq_of_one (l : LinExpr p) (v : Variable) (h : l.coeff v = 1) :
+    l.trySolve v = some (v, ((l.others v).scale (-1)).toExpr) := by
+  unfold LinExpr.trySolve; rw [if_pos h]
+
+theorem LinExpr.trySolve_eq_of_negOne (l : LinExpr p) (v : Variable) (h1 : l.coeff v ≠ 1)
+    (h2 : l.coeff v = -1) : l.trySolve v = some (v, (l.others v).toExpr) := by
+  unfold LinExpr.trySolve; rw [if_neg h1, if_pos h2]
+
+theorem LinExpr.trySolve_eq_none (l : LinExpr p) (v : Variable)
+    (h : ¬(l.coeff v = 1 ∨ l.coeff v = -1)) : l.trySolve v = none := by
+  unfold LinExpr.trySolve; rw [if_neg (fun hh => h (Or.inl hh)), if_neg (fun hh => h (Or.inr hh))]
+
+theorem LinExpr.trySolveUnit_eq_of (l : LinExpr p) (v : Variable)
+    (h : l.coeff v * (l.coeff v)⁻¹ = 1) :
+    l.trySolveUnit v = some (v, ((l.others v).scale (-(l.coeff v)⁻¹)).toExpr) := by
+  unfold LinExpr.trySolveUnit; rw [if_pos h]
+
+theorem LinExpr.trySolveUnit_eq_none (l : LinExpr p) (v : Variable)
+    (h : ¬l.coeff v * (l.coeff v)⁻¹ = 1) : l.trySolveUnit v = none := by
+  unfold LinExpr.trySolveUnit; rw [if_neg h]
+
+/-- `±1`-pivot descriptor: `some (v, score)` exactly when `l.trySolve v` succeeds. -/
+def pm1Desc (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (v : Variable) : Option (Variable × Nat) :=
+  if l.coeff v = 1 ∨ l.coeff v = -1 then some (v, gaussScore occ prot v (l.others v).terms.length)
+  else none
+
+theorem pm1Desc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (v : Variable) :
+    pm1Desc l occ prot v = (l.trySolve v).map (fun xt => (xt.1, pivotScore occ prot xt)) := by
+  unfold pm1Desc
+  by_cases h1 : l.coeff v = 1
+  · rw [if_pos (Or.inl h1), LinExpr.trySolve_eq_of_one l v h1, Option.map_some,
+      gaussScore_eq_pivotScore occ prot v (((l.others v).scale (-1)).toExpr)
+        (l.others v).terms.length (LinExpr.toExpr_isVar _)
+        (by rw [LinExpr.toExpr_varCount, LinExpr.scale_terms_length])]
+  · by_cases h2 : l.coeff v = -1
+    · rw [if_pos (Or.inr h2), LinExpr.trySolve_eq_of_negOne l v h1 h2, Option.map_some,
+        gaussScore_eq_pivotScore occ prot v ((l.others v).toExpr)
+          (l.others v).terms.length (LinExpr.toExpr_isVar _) (LinExpr.toExpr_varCount _)]
+    · rw [if_neg (by rintro (h | h); exacts [h1 h, h2 h]),
+        LinExpr.trySolve_eq_none l v (by rintro (h | h); exacts [h1 h, h2 h]), Option.map_none]
+
+/-- Unit-pivot descriptor: `some (v, score)` exactly when `l.trySolve v` fails but
+    `l.trySolveUnit v` succeeds. -/
+def unitDesc (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (v : Variable) : Option (Variable × Nat) :=
+  if ¬(l.coeff v = 1 ∨ l.coeff v = -1) ∧ l.coeff v * (l.coeff v)⁻¹ = 1 then
+    some (v, gaussScore occ prot v (l.others v).terms.length)
+  else none
+
+theorem unitDesc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (v : Variable) :
+    unitDesc l occ prot v
+      = (match l.trySolve v with | some _ => none | none => l.trySolveUnit v).map
+          (fun xt : Variable × Expression p => (xt.1, pivotScore occ prot xt)) := by
+  unfold unitDesc
+  by_cases h1 : l.coeff v = 1
+  · rw [if_neg (fun hc => hc.1 (Or.inl h1)), LinExpr.trySolve_eq_of_one l v h1]; rfl
+  · by_cases h2 : l.coeff v = -1
+    · rw [if_neg (fun hc => hc.1 (Or.inr h2)), LinExpr.trySolve_eq_of_negOne l v h1 h2]; rfl
+    · rw [LinExpr.trySolve_eq_none l v (by rintro (h | h); exacts [h1 h, h2 h])]
+      by_cases h3 : l.coeff v * (l.coeff v)⁻¹ = 1
+      · rw [if_pos ⟨by rintro (h | h); exacts [h1 h, h2 h], h3⟩,
+          LinExpr.trySolveUnit_eq_of l v h3,
+          gaussScore_eq_pivotScore occ prot v (((l.others v).scale (-(l.coeff v)⁻¹)).toExpr)
+            (l.others v).terms.length (LinExpr.toExpr_isVar _)
+            (by rw [LinExpr.toExpr_varCount, LinExpr.scale_terms_length])]
+        rfl
+      · rw [if_neg (fun hc => h3 hc.2), LinExpr.trySolveUnit_eq_none l v h3]; rfl
+
+/-- All pivot descriptors, `±1` first (mirroring `pm1PivotsOf ++ unitPivotsOf`). -/
+def pivotDescs (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    List (Variable × Nat) :=
+  (l.terms.map Prod.fst).filterMap (pm1Desc l occ prot)
+    ++ (l.terms.map Prod.fst).filterMap (unitDesc l occ prot)
+
+theorem pivotDescs_eq (c : Expression p) (l : LinExpr p) (hlin : linearize c = some l)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    pivotDescs l occ prot
+      = (pm1PivotsOf c ++ unitPivotsOf c).map (fun xt => (xt.1, pivotScore occ prot xt)) := by
+  unfold pivotDescs pm1PivotsOf unitPivotsOf
+  rw [hlin, List.map_append, map_filterMap, map_filterMap]
+  congr 1
+  · exact List.filterMap_congr (fun v _ => pm1Desc_eq l occ prot v)
+  · exact List.filterMap_congr (fun v _ => unitDesc_eq l occ prot v)
+
+/-- The cheapest solvable pivot of a constraint, building the solution only for the winner. -/
+def fastBest (c : Expression p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    Option (Variable × Expression p) :=
+  match linearize c with
+  | none => none
+  | some l =>
+      match (pivotDescs l occ prot).argmin Prod.snd with
+      | none => none
+      | some (x, _) =>
+          match l.trySolve x with
+          | some xt => some xt
+          | none => l.trySolveUnit x
+
+theorem LinExpr.trySolve_fst (l : LinExpr p) (v : Variable) (w : Variable × Expression p)
+    (h : l.trySolve v = some w) : w.1 = v := by
+  unfold LinExpr.trySolve at h
+  split_ifs at h
+  all_goals simp_all [Prod.ext_iff]
+
+theorem LinExpr.trySolveUnit_fst (l : LinExpr p) (v : Variable) (w : Variable × Expression p)
+    (h : l.trySolveUnit v = some w) : w.1 = v := by
+  unfold LinExpr.trySolveUnit at h
+  split_ifs at h
+  all_goals simp_all [Prod.ext_iff]
+
+theorem mem_pm1_trySolve (c : Expression p) (l : LinExpr p) (hlin : linearize c = some l)
+    (w : Variable × Expression p) (h : w ∈ pm1PivotsOf c) : l.trySolve w.1 = some w := by
+  unfold pm1PivotsOf at h
+  rw [hlin] at h
+  obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
+  rw [LinExpr.trySolve_fst l v w hv]; exact hv
+
+theorem mem_unit_trySolveUnit (c : Expression p) (l : LinExpr p) (hlin : linearize c = some l)
+    (w : Variable × Expression p) (h : w ∈ unitPivotsOf c) :
+    l.trySolve w.1 = none ∧ l.trySolveUnit w.1 = some w := by
+  unfold unitPivotsOf at h
+  rw [hlin] at h
+  obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
+  cases hts : l.trySolve v with
+  | some r => rw [hts] at hv; simp at hv
+  | none =>
+      rw [hts] at hv
+      rw [LinExpr.trySolveUnit_fst l v w hv]
+      exact ⟨hts, hv⟩
+
+theorem fastBest_eq (c : Expression p) (occ : Std.HashMap Variable Nat)
+    (prot : Std.HashSet Variable) :
+    fastBest c occ prot = (pm1PivotsOf c ++ unitPivotsOf c).argmin (pivotScore occ prot) := by
+  unfold fastBest
+  split
+  · next hlin => simp [pm1PivotsOf, unitPivotsOf, hlin]
+  · next l hlin =>
+      rw [pivotDescs_eq c l hlin occ prot,
+        argmin_map_key (fun xt => (xt.1, pivotScore occ prot xt)) (pivotScore occ prot) Prod.snd
+          (fun _ => rfl)]
+      cases hA : (pm1PivotsOf c ++ unitPivotsOf c).argmin (pivotScore occ prot) with
+      | none => simp
+      | some w =>
+          simp only [Option.map_some]
+          have hmem : w ∈ pm1PivotsOf c ++ unitPivotsOf c :=
+            List.argmin_mem (by rw [hA]; exact Option.mem_some_self w)
+          rcases List.mem_append.1 hmem with hp | hu
+          · rw [mem_pm1_trySolve c l hlin w hp]
+          · obtain ⟨hn, hs⟩ := mem_unit_trySolveUnit c l hlin w hu
+            rw [hn, hs]
 
 /-- Process the pending constraints: reduce each by the current solutions, adopt the cheapest
     solvable pivot (if any), resolve it into the stored solutions, and continue. Structure of
@@ -171,16 +413,20 @@ def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
   | c :: rest, hmem, σ =>
     let hrest := fun c' hc' => hmem c' (List.mem_cons_of_mem _ hc')
     let c' := (c.substF σ.fn).normalize
-    match hbest : (pm1PivotsOf c' ++ unitPivotsOf c').argmin (pivotScore occ prot) with
+    match hbest : fastBest c' occ prot with
     | none => gaussLoop cs bs occ prot rest hrest σ
     | some (x, t) =>
+        -- `fastBest` picks exactly the old `argmin` pivot (`fastBest_eq`), so every downstream
+        -- soundness/vars proof is discharged against the original candidate-list membership.
+        have hbest' : (pm1PivotsOf c' ++ unitPivotsOf c').argmin (pivotScore occ prot) = some (x, t) :=
+          (fastBest_eq c' occ prot).symm.trans hbest
         have hx : ∀ env, cs.satisfies bs env → env x = t.eval env := by
           intro env hsat
           have hc0 : c.eval env = 0 := hsat.1 c (hmem c (List.mem_cons_self ..))
           have hc' : c'.eval env = 0 := by
             show ((c.substF σ.fn).normalize).eval env = 0
             rw [σ.eval_reduce c env hsat, hc0]
-          rcases List.mem_append.1 (List.argmin_mem hbest) with h | h
+          rcases List.mem_append.1 (List.argmin_mem hbest') with h | h
           · exact pm1PivotsOf_sound c' x t h env hc'
           · exact unitPivotsOf_sound c' x t h env hc'
         -- every variable of the reduced constraint (hence of any pivot solved from it) is a
@@ -193,7 +439,7 @@ def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
           · exact σ.varsIn y' t' hft' z hzt'
         have htvars : ∀ z ∈ t.vars, z ∈ cs.vars := by
           intro z hz
-          rcases List.mem_append.1 (List.argmin_mem hbest) with h | h
+          rcases List.mem_append.1 (List.argmin_mem hbest') with h | h
           · exact hc'vars z (pm1PivotsOf_vars c' x t h z hz)
           · exact hc'vars z (unitPivotsOf_vars c' x t h z hz)
         -- resolve `x` out of the stored solutions, then store `x := t`
