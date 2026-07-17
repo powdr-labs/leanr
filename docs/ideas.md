@@ -77,29 +77,39 @@ LANDED are done — the remainder still adds up to the current gaps):
 
 ---
 
-## 0b. SP1 (rsp): after the register-vs-RAM disequality (entry 93), the residual is bitwise + RAM-vs-RAM
+## 0b. SP1 (rsp): after entries 93–95, the residual is the dead-upper-byte ISA floor + carry slots
 
-Entry 93 landed the reciprocal nonzero-witness address-disequality certificate (`addrNonzeroNeq`),
-closing 65 % of the SP1 variable gap (agg 2.938× → 3.535×; gap vs powdr 3715 → 1318 vars) and 41 %
-of the bus gap (1.957× → 2.236×; 3209 → 1902). Per-case-by-variables W/L/T now 1/54/45. Remaining,
-biggest first (measured on `sp1_both.json`):
+Entries 93–95 landed three general, proven mechanisms — the reciprocal nonzero-witness
+address-disequality certificate (`addrNonzeroNeq`), affine bound propagation in `byteJustifiedW`, and
+the SP1 byte-op result-slot bound — taking SP1 from **variables 2.938× → 3.538×, bus 1.957× → 2.457×**
+(aggregate var gap vs powdr 3715 → 1310, bus gap 3209 → 1080; per-case-by-variables W/L/T 0/69/31 →
+1/54/45). OpenVM is untouched (keccak byte-identical; the result-slot bound is SP1-only). The
+register-access chains now telescope almost fully (apc_024 memory 186 → 70; most registers at powdr's
+2). What remains, biggest first:
 
-- **Dead upper bitwise-result bytes (var + bus).** SP1's bitwise chip decomposes a 32/16-bit op into
-  4 byte-XOR lookups producing `result_0..7`, but a store of a ≤16-bit result only writes
-  `result_0 + 256·result_1`; powdr proves the upper store limbs `= 0`, which makes the
-  `result_2..7` + `b/c_low_bytes_1..3` XOR cluster a **disconnected component** it drops entirely
-  (apc_001 residual = exactly this, 12 v / 12 bus). Dominates the big k256-like cases
-  (apc_024/040 bitwise_operation 152 v in powdr; apc still far above). Needs: prove the high store
-  limbs are `0` (from the operands' high bytes being `0`, or a width/mask fact), then a
-  disconnected-component / dead-witness drop. Size the residue; likely the single biggest SP1 lever
-  left. **Next target.**
-- **RAM-vs-RAM telescoping.** Two accesses to the *same* RAM pointer separated by accesses to a
-  *different* RAM pointer: needs two computed addresses proven `≠`. `addrTwoRootNeq` handles the
-  same-base-different-immediate case; genuinely different bases need either a two-root pin on both or
-  a nonzero-witness on their difference (extend `addrNonzeroNeq` to consult a witness for
-  `Σ(m_i − S_i)` directly, not only a subset-sum match — and to scalar multiples of a witness).
-- **Certificate generalizations** (cheap follow-ups to entry 93): match a witness up to a nonzero
-  *scalar* (`g = λ·Σ(m_i − S_i)`), not just `±1`; and recognize reciprocal constraints in more
+- **Dead upper bitwise-result bytes — the variable gap; likely an apc *floor*, not a missing pass.**
+  SP1's bitwise chip decomposes a 32-bit AND/OR/XOR into 4 byte-op lookups producing `result₀..₇`
+  (2 per byte via the shift-check trick), and the operand bytes `b/c_low_bytes_2,3` are **free
+  witnesses** occurring *only* in the upper byte-op lookups and the destination register's upper
+  data limbs. When the source operands are 16-bit the true upper result is `0`, and powdr pins it —
+  but that uses the **ISA zero-extension fact** (the op zero-extends, so the register's upper 16 bits
+  are `0`). apc has no such fact: the upper limbs are genuinely unconstrained in the input, and
+  zeroing them changes a *stateful* memory side-effect, so it is **not a sound local refinement**.
+  Dominates apc_024/040 (bitwise_operation 304 v vs powdr 152) and the other k256-heavy blocks
+  (apc_016/017/029/060/030/080…). Only routes: (a) an audited SP1 semantics addition asserting the
+  zero-extension invariant (changes the audited surface — out of scope for the AI-only loop), or
+  (b) a genuine liveness proof that the register's upper bits are overwritten-before-read within the
+  block (needs the memory continuity argument extended to sub-limb liveness). Neither is a cheap pass.
+  **Census the exact residue before attempting; treat as a floor for now.**
+- **Carry / negative-coefficient memory slots (bus).** The last register chains that don't fully
+  telescope (apc_024 addr 7/15) carry data like `add_value − 2¹⁶·higher_limb` (a low-limb/borrow
+  expression, coefficient `p − 65536`) or `2¹³·lower` needing a tighter-than-byte limb bound.
+  `affineJustified`'s natural-number bound can't certify a large/negative coefficient (its `M < p`
+  no-wrap check fails). A borrow-aware justification (recognize `x − 2ᵏ·y` as the low limb of a
+  decomposition with its own range check, or read a direct range-check on the slot *expression*)
+  would drain these; medium effort, bus-only.
+- **Certificate generalizations** (cheap follow-ups to entry 93): match a nonzero witness up to a
+  nonzero *scalar* (`g = λ·Σ(mᵢ − Sᵢ)`), not just `±1`; recognize reciprocal constraints in more
   additive shapes if a census finds `addrNonzeroNeq` missing live pairs.
 
 ## 0. wasm-eth: variable gap closed; global range-obligation repack is the last axis (after entries 87–89)

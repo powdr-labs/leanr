@@ -56,9 +56,14 @@ private def slotBoundImpl (busMap : Nat → Option Sp1BusType) (busId : Nat) (mu
   -- that bounds slot 1 by `2^b` — the fact that lets `busPairCancel` justify SP1's 16-bit memory
   -- data limbs (each carried by an op-6 width-16 range check) when telescoping.
   | some .byteLookup, 1 =>
-    match pattern[0]?, pattern[2]? with
-    | some (some op), some (some w) => if op.val = 6 then some (2 ^ w.val) else none
-    | _, _ => none
+    match pattern[0]? with
+    | some (some op) =>
+      -- Non-range byte ops (`op ≤ 5`) return a byte; op-6 (`Range`) returns `< 2^w` (needs `w`).
+      if op.val ≤ 5 then some 256
+      else match pattern[2]? with
+        | some (some w) => if op.val = 6 then some (2 ^ w.val) else none
+        | _ => none
+    | _ => none
   -- The four data limbs (slots 5–8) of a memory `getPrevious` (multiplicity `1`, full ≥9-slot
   -- record) are 16-bit; a surviving read thus justifies the telescoped same-register pairs' data.
   | some .memory, 5 => if mult = 1 ∧ 9 ≤ pattern.length then some (2 ^ 16) else none
@@ -115,6 +120,50 @@ private theorem byte_op6_bound (busMap : Nat → Option Sp1BusType)
   simp only [hop] at hok
   rw [Bool.not_eq_false', Bool.and_eq_true] at hok
   exact of_decide_eq_true hok.2
+
+/-- An accepted byte-bus message `[op, a, b, c]` whose op is a non-range operation (`op ≤ 5`) has a
+    **byte result**: AND/OR/XOR of bytes are bytes (`≤ b` / `< 2⁸`), U8Range forces `a = 0`, LTU
+    yields a comparison bit, MSB a single bit — so `a < 256` in every case. This lets a surviving
+    byte-op interaction bound the affine limb recompositions its result feeds (`256·hi + lo`). -/
+private theorem byte_result_lt256 (busMap : Nat → Option Sp1BusType)
+    (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .byteLookup)
+    (hok : violates busMap m = false)
+    (op a b c : ZMod p) (hpay : m.payload = [op, a, b, c]) (hop : op.val ≤ 5) :
+    a.val < 256 := by
+  obtain ⟨bid, mult, payload⟩ := m
+  simp only at hbus hpay
+  subst hpay
+  unfold violates at hok
+  rw [hbus] at hok
+  dsimp only at hok
+  rcases (show op.val = 0 ∨ op.val = 1 ∨ op.val = 2 ∨ op.val = 3 ∨ op.val = 4 ∨ op.val = 5 by omega)
+    with h | h | h | h | h | h
+  · rw [h] at hok
+    simp only [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, isByte] at hok
+    obtain ⟨⟨hb, _⟩, ha⟩ := hok
+    rw [ha]; exact lt_of_le_of_lt Nat.and_le_left hb
+  · rw [h] at hok
+    simp only [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, isByte] at hok
+    obtain ⟨⟨hb, hc⟩, ha⟩ := hok
+    rw [ha]; exact Nat.or_lt_two_pow (n := 8) hb hc
+  · rw [h] at hok
+    simp only [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, isByte] at hok
+    obtain ⟨⟨hb, hc⟩, ha⟩ := hok
+    rw [ha]; exact Nat.xor_lt_two_pow (n := 8) hb hc
+  · rw [h] at hok
+    simp only [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, isByte] at hok
+    obtain ⟨_, ha⟩ := hok
+    rw [ha]; omega
+  · rw [h] at hok
+    simp only [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, isByte] at hok
+    obtain ⟨_, ha⟩ := hok
+    rw [ha]; split <;> omega
+  · rw [h] at hok
+    simp only [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, isByte] at hok
+    obtain ⟨⟨hb, _⟩, ha⟩ := hok
+    rw [ha, Nat.shiftRight_eq_div_pow]
+    have h128 : (2 : ℕ) ^ 7 = 128 := rfl
+    rw [h128]; omega
 
 /-- An op-6 `[6, a, b, c]` message with a supported width (`b ≤ 16`) and `c = 0` is accepted **iff**
     its result is in range (`a < 2^b`). -/
@@ -326,29 +375,37 @@ def sp1Facts (p : ℕ) [NeZero p]
         obtain ⟨op, a, b, c, hpay, hb, hc⟩ := byte_operands busMap m hbus hok'
         have hxc : c = x := by rw [hpay] at hget; simpa using hget
         rw [← hxc]; exact hc
-      · -- slot 1: an op-6 range check `[6, a, w, 0]` bounds `a` by `2^w`.
+      · -- slot 1: a non-range byte op bounds its result `a` by `256`; op-6 by `2^w`.
         rename_i hbus
         obtain ⟨op, a, b, c, hpay, _, _⟩ := byte_operands busMap m hbus hok'
+        have hax : a = x := by rw [hpay] at hget; simpa using hget
         rcases hp0 : pattern[0]? with _ | o0
         · rw [hp0] at hfact; simp at hfact
         · rcases o0 with _ | pop
           · rw [hp0] at hfact; simp at hfact
-          · rcases hp2 : pattern[2]? with _ | o2
-            · rw [hp0, hp2] at hfact; simp at hfact
-            · rcases o2 with _ | pw
-              · rw [hp0, hp2] at hfact; simp at hfact
-              · rw [hp0, hp2] at hfact
-                dsimp only at hfact
-                split_ifs at hfact with hop6
-                · simp only [Option.some.injEq] at hfact; subst hfact
-                  have hpop : op = pop := by
-                    have := hmatch.2 0 pop (by rw [hp0]); rw [hpay] at this; simpa using this
-                  have hpw : b = pw := by
-                    have := hmatch.2 2 pw (by rw [hp2]); rw [hpay] at this; simpa using this
-                  have hax : a = x := by rw [hpay] at hget; simpa using hget
-                  have hopval : op.val = 6 := by rw [hpop]; exact hop6
-                  have hb6 := byte_op6_bound busMap m hbus hok' op a b c hpay hopval
-                  rw [hpw, hax] at hb6; exact hb6
+          · rw [hp0] at hfact
+            dsimp only at hfact
+            have hpop : op = pop := by
+              have := hmatch.2 0 pop (by rw [hp0]); rw [hpay] at this; simpa using this
+            by_cases hle : pop.val ≤ 5
+            · rw [if_pos hle] at hfact
+              simp only [Option.some.injEq] at hfact; subst hfact
+              have hr := byte_result_lt256 busMap m hbus hok' op a b c hpay (by rw [hpop]; exact hle)
+              rw [hax] at hr; exact hr
+            · rw [if_neg hle] at hfact
+              rcases hp2 : pattern[2]? with _ | o2
+              · rw [hp2] at hfact; simp at hfact
+              · rcases o2 with _ | pw
+                · rw [hp2] at hfact; simp at hfact
+                · rw [hp2] at hfact
+                  dsimp only at hfact
+                  split_ifs at hfact with hop6
+                  · simp only [Option.some.injEq] at hfact; subst hfact
+                    have hpw : b = pw := by
+                      have := hmatch.2 2 pw (by rw [hp2]); rw [hpay] at this; simpa using this
+                    have hb6 := byte_op6_bound busMap m hbus hok' op a b c hpay
+                      (by rw [hpop]; exact hop6)
+                    rw [hpw, hax] at hb6; exact hb6
       · -- memory data slot 5: a full-record read has 16-bit data
         rename_i hbus
         split_ifs at hfact with hm1

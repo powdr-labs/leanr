@@ -3646,3 +3646,26 @@ lexicographically clean bus win. Size-monotone ⇒ no OpenVM regression: keccak 
 `sorry`/`axiom`/`native_decide`. The residual SP1 bus gap is the long same-register access chains
 whose interior pairs still don't telescope (busUnify pairing) and the dead upper bitwise bytes —
 see `docs/ideas.md`. **Worked: yes.**
+
+### 95. Bound the SP1 byte-op result slot (SP1 bus 2.301× → 2.457×, variable-neutral)
+
+The affine justification of entry 94 needs *each* limb of a recomposition bounded. On the k256-heavy
+blocks the memory data limbs are XOR results (`result₀ + 256·result₁`), but SP1's `slotBound` only
+bounded the byte-bus operand slots (2, 3) and the op-6 range-check result — not the result slot of
+an AND/OR/XOR/U8Range/LTU/MSB op, so `findVarBound` could not bound `result₀`/`result₁` and the
+recomposition stayed unjustified.
+
+**`slotBoundImpl` slot-1 arm extended (`Sp1Facts.lean`, no audit surface — a wrong fact fails to
+compile).** For a byte-bus message whose op selector is constant and `≤ 5`, the result `a` (slot 1)
+is a byte: AND/OR/XOR of bytes are bytes (`Nat.and_le_left` / `Nat.or_lt_two_pow` /
+`Nat.xor_lt_two_pow`), U8Range forces `a = 0`, LTU is a comparison bit, MSB is `b ≫ 7 ≤ 1` — proved
+uniformly in `byte_result_lt256`; op-6 keeps its `2^w` bound. `findVarBound` now bounds byte-op
+result variables to `256`, so the affine arm justifies the XOR-result recompositions and their
+telescoped register reads drop.
+
+**Impact (`benchmark.py --vm sp1`):** bus interactions **2.301× → 2.457×** agg (aggregate bus gap vs
+powdr 1646 → 1080, −566); variables essentially unchanged (3.535× → 3.538×). SP1-only change
+(`Sp1Facts`), so OpenVM is untouched by construction. Proof integrity green; no
+`sorry`/`axiom`/`native_decide`. Cumulative over entries 93–95: SP1 variables 2.938× → 3.538×, bus
+1.957× → 2.457× (var gap 3715 → 1310, bus gap 3209 → 1080). Residual: dead upper bitwise bytes
+(the variable gap) and the tail of the long register chains — see `docs/ideas.md`. **Worked: yes.**
