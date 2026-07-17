@@ -1150,21 +1150,211 @@ theorem payloadEntailedEq_sound {constraints : List (Expression p)}
   | [], _ :: _, h, _, _ => by simp [payloadEntailedEq] at h
   | _ :: _, [], h, _, _ => by simp [payloadEntailedEq] at h
 
-/-- The first indexed position strictly after `i` on `busId` whose payload matches `S.payload`
-    (positions ascending; the hash bucket pre-filters, the bus-id check and the slot-wise
-    entailed comparison decide). -/
+/-! ### Stable live projection (tombstoned interaction array)
+
+`cancelLoop` used to rebuild `cs.busInteractions.toArray` and the consolidated receive index
+after *every* accepted drop — O(#interactions) with a structural-hash traversal of every surviving
+receive payload, repeated once per pair on a chain. Instead the array and index are built once per
+pass invocation and a drop merely *tombstones* the two cancelled positions in a liveness array
+(`alive`), leaving every later position in place (so the index stays valid). The logical
+`busInteractions` at any point is the **live projection** `liveSeg arr alive 0 arr.size ++ checks`:
+the live entries in stable order, followed by the byte checks emitted so far. It is materialized
+once, at the end; intermediate logical systems live only inside the (erased) `PassCorrect` proof.
+
+`liveSeg arr alive lo n` is the live entries of `arr` at the `n` positions `[lo, lo+n)`, skipping
+tombstoned ones (structural recursion on the count `n`, so the equation lemmas unfold cleanly). -/
+def liveSeg (arr : Array (BusInteraction (Expression p))) (alive : Array Bool) :
+    Nat → Nat → List (BusInteraction (Expression p))
+  | _, 0 => []
+  | lo, (n + 1) =>
+    (if alive[lo]?.getD false then (arr[lo]?).elim [] (fun a => [a]) else [])
+      ++ liveSeg arr alive (lo + 1) n
+
+/-- Additivity: scanning `m + n` positions from `lo` is the first `m` then the next `n`. -/
+theorem liveSeg_add (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (lo m n : Nat) :
+    liveSeg arr alive lo (m + n)
+      = liveSeg arr alive lo m ++ liveSeg arr alive (lo + m) n := by
+  induction m generalizing lo with
+  | zero => simp [liveSeg]
+  | succ m ih =>
+    have h1 : liveSeg arr alive lo (m + 1)
+        = (if alive[lo]?.getD false then (arr[lo]?).elim [] (fun a => [a]) else [])
+            ++ liveSeg arr alive (lo + 1) m := by rw [liveSeg]
+    have h2 : liveSeg arr alive lo (m + 1 + n)
+        = (if alive[lo]?.getD false then (arr[lo]?).elim [] (fun a => [a]) else [])
+            ++ liveSeg arr alive (lo + 1) (m + n) := by
+      rw [show m + 1 + n = (m + n) + 1 from by omega, liveSeg]
+    rw [h1, h2, ih (lo + 1), ← List.append_assoc, show lo + 1 + m = lo + (m + 1) from by omega]
+
+/-- Peel a live head off the front of a nonempty scan. -/
+theorem liveSeg_peel (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (lo n : Nat) (a : BusInteraction (Expression p))
+    (halive : alive[lo]?.getD false = true) (hget : arr[lo]? = some a) :
+    liveSeg arr alive lo (n + 1) = a :: liveSeg arr alive (lo + 1) n := by
+  rw [liveSeg, halive, if_pos rfl, hget]; rfl
+
+/-- Peel a dead head off the front of a nonempty scan. -/
+theorem liveSeg_skip (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (lo n : Nat) (halive : alive[lo]?.getD false = false) :
+    liveSeg arr alive lo (n + 1) = liveSeg arr alive (lo + 1) n := by
+  rw [liveSeg, halive, if_neg (by simp)]; rfl
+
+/-- The projection depends only on the liveness bits it reads: two liveness arrays that agree on
+    every position of the scanned range give the same live projection. -/
+theorem liveSeg_congr (arr : Array (BusInteraction (Expression p))) (alive alive' : Array Bool)
+    (lo n : Nat) (h : ∀ j, lo ≤ j → j < lo + n → alive'[j]? = alive[j]?) :
+    liveSeg arr alive' lo n = liveSeg arr alive lo n := by
+  induction n generalizing lo with
+  | zero => simp [liveSeg]
+  | succ n ih =>
+    rw [liveSeg, liveSeg, h lo (Nat.le_refl _) (by omega),
+      ih (lo + 1) (fun j hj1 hj2 => h j (by omega) (by omega))]
+
+/-- A live position's entry is a member of the projection over any enclosing range. -/
+theorem liveSeg_mem (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (lo n k : Nat) (a : BusInteraction (Expression p))
+    (hlo : lo ≤ k) (hk : k < lo + n)
+    (halive : alive[k]?.getD false = true) (hget : arr[k]? = some a) :
+    a ∈ liveSeg arr alive lo n := by
+  obtain ⟨d, rfl⟩ := Nat.le.dest hlo
+  obtain ⟨e, rfl⟩ : ∃ e, n = d + (e + 1) := ⟨n - d - 1, by omega⟩
+  rw [liveSeg_add]
+  refine List.mem_append_right _ ?_
+  rw [liveSeg_peel arr alive (lo + d) e a halive hget]
+  exact List.mem_cons.2 (Or.inl rfl)
+
+/-! ### The stable-state split and update
+
+When the search accepts a pair `(iP, jP)` (both live, `iP < jP < size`), the live projection
+factors as `A ++ S :: B ++ R :: C'` (`liveSeg_split`) — feeding `checkCancel_sound` exactly as the
+old `split_of_extracts` did. Tombstoning the two positions changes the projection to `A ++ B ++ C'`
+(`liveSeg_drop`), so the post-drop logical `busInteractions` (`… ++ checks`) matches the
+`A ++ B ++ C ++ checks` shape `checkCancel_sound` produces. Both are pure `liveSeg` algebra. -/
+
+/-- The live projection factors around two live positions `iP < jP`. -/
+theorem liveSeg_split (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (iP jP size : Nat) (S R : BusInteraction (Expression p))
+    (hij : iP < jP) (hj : jP < size)
+    (hSget : arr[iP]? = some S) (hRget : arr[jP]? = some R)
+    (hSalive : alive[iP]?.getD false = true) (hRalive : alive[jP]?.getD false = true) :
+    liveSeg arr alive 0 size
+      = liveSeg arr alive 0 iP ++ S :: liveSeg arr alive (iP + 1) (jP - iP - 1)
+          ++ R :: liveSeg arr alive (jP + 1) (size - jP - 1) := by
+  have peelS : liveSeg arr alive iP (size - iP)
+      = S :: liveSeg arr alive (iP + 1) (size - iP - 1) := by
+    conv_lhs => rw [show size - iP = (size - iP - 1) + 1 from by omega]
+    exact liveSeg_peel arr alive iP (size - iP - 1) S hSalive hSget
+  have peelR : liveSeg arr alive jP (size - jP)
+      = R :: liveSeg arr alive (jP + 1) (size - jP - 1) := by
+    conv_lhs => rw [show size - jP = (size - jP - 1) + 1 from by omega]
+    exact liveSeg_peel arr alive jP (size - jP - 1) R hRalive hRget
+  have splitJ : liveSeg arr alive (iP + 1) (size - iP - 1)
+      = liveSeg arr alive (iP + 1) (jP - iP - 1) ++ liveSeg arr alive jP (size - jP) := by
+    conv_lhs => rw [show size - iP - 1 = (jP - iP - 1) + (size - jP) from by omega]
+    rw [liveSeg_add, show iP + 1 + (jP - iP - 1) = jP from by omega]
+  conv_lhs => rw [show size = iP + (size - iP) from by omega]
+  rw [liveSeg_add, Nat.zero_add, peelS, splitJ, peelR]
+  simp only [List.append_assoc, List.cons_append]
+
+/-- Tombstoning two live positions `iP < jP` deletes exactly those two entries from the
+    projection, leaving every other position in place. -/
+theorem liveSeg_drop (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (iP jP size : Nat) (hij : iP < jP) (hj : jP < size)
+    (hisz : iP < alive.size) (hjsz : jP < alive.size)
+    (alive' : Array Bool)
+    (halive' : alive' = (alive.setIfInBounds iP false).setIfInBounds jP false) :
+    liveSeg arr alive' 0 size
+      = liveSeg arr alive 0 iP ++ liveSeg arr alive (iP + 1) (jP - iP - 1)
+          ++ liveSeg arr alive (jP + 1) (size - jP - 1) := by
+  -- `alive'` is `false` at `iP` and `jP` and agrees with `alive` elsewhere.
+  have hgetIP : alive'[iP]?.getD false = false := by
+    rw [halive', Array.getElem?_setIfInBounds_ne (show jP ≠ iP from by omega),
+      Array.getElem?_setIfInBounds_self_of_lt hisz]; rfl
+  have hgetJP : alive'[jP]?.getD false = false := by
+    rw [halive', Array.getElem?_setIfInBounds_self_of_lt
+      (by rw [Array.size_setIfInBounds]; exact hjsz)]; rfl
+  have hne : ∀ (lo n : Nat), (iP < lo ∨ lo + n ≤ iP) → (jP < lo ∨ lo + n ≤ jP) →
+      liveSeg arr alive' lo n = liveSeg arr alive lo n := by
+    intro lo n hI hJ
+    rw [halive']
+    refine liveSeg_congr arr _ _ lo n (fun j hj1 hj2 => ?_)
+    rw [Array.getElem?_setIfInBounds_ne (show jP ≠ j from by omega),
+      Array.getElem?_setIfInBounds_ne (show iP ≠ j from by omega)]
+  have step1 : liveSeg arr alive' iP (size - iP)
+      = liveSeg arr alive' (iP + 1) (size - iP - 1) := by
+    conv_lhs => rw [show size - iP = (size - iP - 1) + 1 from by omega]
+    exact liveSeg_skip arr alive' iP (size - iP - 1) hgetIP
+  have step2 : liveSeg arr alive' (iP + 1) (size - iP - 1)
+      = liveSeg arr alive' (iP + 1) (jP - iP - 1) ++ liveSeg arr alive' jP (size - jP) := by
+    conv_lhs => rw [show size - iP - 1 = (jP - iP - 1) + (size - jP) from by omega]
+    rw [liveSeg_add, show iP + 1 + (jP - iP - 1) = jP from by omega]
+  have step3 : liveSeg arr alive' jP (size - jP)
+      = liveSeg arr alive' (jP + 1) (size - jP - 1) := by
+    conv_lhs => rw [show size - jP = (size - jP - 1) + 1 from by omega]
+    exact liveSeg_skip arr alive' jP (size - jP - 1) hgetJP
+  conv_lhs => rw [show size = iP + (size - iP) from by omega]
+  rw [liveSeg_add, Nat.zero_add, step1, step2, step3,
+    hne 0 iP (by omega) (by omega),
+    hne (iP + 1) (jP - iP - 1) (by omega) (by omega),
+    hne (jP + 1) (size - jP - 1) (by omega) (by omega),
+    ← List.append_assoc]
+
+/-- The number of live interactions — the loop's termination measure (each drop removes two, so it
+    strictly decreases). -/
+def liveCount (arr : Array (BusInteraction (Expression p))) (alive : Array Bool) : Nat :=
+  (liveSeg arr alive 0 arr.size).length
+
+/-- The logical constraint system at a point in the loop: the original system with its interactions
+    replaced by the live projection followed by the checks emitted so far. Materialized once, at the
+    end of the loop; intermediate values live only inside the (erased) correctness proof. -/
+def mkCs (cs0 : ConstraintSystem p) (arr : Array (BusInteraction (Expression p)))
+    (alive : Array Bool) (checks : List (BusInteraction (Expression p))) : ConstraintSystem p :=
+  { cs0 with busInteractions := liveSeg arr alive 0 arr.size ++ checks }
+
+/-- With every bit live, the projection is the whole array. -/
+theorem liveSeg_all (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (halive : ∀ k, k < arr.size → alive[k]?.getD false = true) :
+    ∀ (lo n : Nat), lo + n = arr.size → liveSeg arr alive lo n = arr.toList.drop lo := by
+  intro lo n
+  induction n generalizing lo with
+  | zero =>
+    intro h
+    exact (List.drop_eq_nil_iff.2 (by rw [Array.length_toList]; omega)).symm
+  | succ n ih =>
+    intro h
+    have hlo : lo < arr.size := by omega
+    have hcons : arr.toList.drop lo = arr.toList[lo] :: arr.toList.drop (lo + 1) :=
+      List.drop_eq_getElem_cons (by rw [Array.length_toList]; exact hlo)
+    rw [liveSeg_peel arr alive lo n arr[lo] (halive lo hlo) (Array.getElem?_eq_getElem hlo),
+      ih (lo + 1) (by omega), hcons, Array.getElem_toList]
+
+/-- The initial logical system (all live, no checks) is the original system. -/
+theorem mkCs_all (cs0 : ConstraintSystem p) (arr : Array (BusInteraction (Expression p)))
+    (harr : arr = cs0.busInteractions.toArray) (alive : Array Bool)
+    (halive : ∀ k, k < arr.size → alive[k]?.getD false = true) :
+    mkCs cs0 arr alive [] = cs0 := by
+  unfold mkCs
+  rw [liveSeg_all arr alive halive 0 arr.size (by omega), List.drop_zero, List.append_nil, harr]
+
+/-- The first indexed position strictly after `i` on `busId` whose payload matches `S.payload`,
+    among positions that are still **live** (positions ascending; the hash bucket pre-filters, the
+    liveness bit and the bus-id check and the slot-wise entailed comparison decide). A tombstoned
+    position is skipped exactly as if it were absent, so the receive chosen is the first live match
+    — the same one the old compact-array scan chose. -/
 def firstMatchAt {constraints : List (Expression p)}
     (M : Thunk (EqConstraintMap p constraints)) (arr : Array (BusInteraction (Expression p)))
+    (alive : Array Bool)
     (busId : Nat) (S : BusInteraction (Expression p)) (i : Nat) : List Nat → Option Nat
   | [] => none
   | j :: rest =>
-    if i < j then
+    if decide (i < j) && alive[j]?.getD false then
       match arr[j]? with
       | some R =>
         if decide (R.busId = busId) && payloadEntailedEq M S.payload R.payload then some j
-        else firstMatchAt M arr busId S i rest
-      | none => firstMatchAt M arr busId S i rest
-    else firstMatchAt M arr busId S i rest
+        else firstMatchAt M arr alive busId S i rest
+      | none => firstMatchAt M arr alive busId S i rest
+    else firstMatchAt M arr alive busId S i rest
 
 /-- Refute `m` as an active same-address message on `busId` (the "between" region test). The
     two-root address-disequality (`addrTwoRootNeq`) lets this step over interleaved other-pointer
@@ -1494,35 +1684,55 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     early-exit cost, with no region list materialized. (Fuel-structured for the easy induction;
     called with `fuel := arr.size`, which reaches every position.) -/
 def dropWitsGo {bs : BusSemantics p} (facts : BusFacts p bs)
-    (arr : Array (BusInteraction (Expression p))) (S R : BusInteraction (Expression p))
+    (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (S R : BusInteraction (Expression p))
     (v : Variable) : Nat → Nat → Option (BusInteraction (Expression p))
   | 0, _ => none
   | fuel + 1, k =>
     if h : k < arr.size then
-      if !decide (arr[k] = S) && !decide (arr[k] = R) then
+      if alive[k]?.getD false && !decide (arr[k] = S) && !decide (arr[k] = R) then
         match interactionBound bs facts arr[k] v with
         | some _ => some arr[k]
-        | none => dropWitsGo facts arr S R v fuel (k + 1)
-      else dropWitsGo facts arr S R v fuel (k + 1)
+        | none => dropWitsGo facts arr alive S R v fuel (k + 1)
+      else dropWitsGo facts arr alive S R v fuel (k + 1)
     else none
 
-/-- The witness lookup for a candidate drop: the first bound-deriving interaction other than
-    the dropped pair, then the emitted checks. Every returned interaction is a member of the
-    remaining region (`dropWits_mem`). -/
+/-- First interaction of a plain list deriving an `interactionBound` for `v` — used to consult the
+    emitted byte checks, which live outside the stable array (`checksOld`), preserving the old
+    compact-array behaviour where the emitted checks sat in the array's tail and could witness an
+    earlier pair's byte bound. -/
+def firstBoundIn {bs : BusSemantics p} (facts : BusFacts p bs) (v : Variable) :
+    List (BusInteraction (Expression p)) → Option (BusInteraction (Expression p))
+  | [] => none
+  | bi :: rest =>
+    match interactionBound bs facts bi v with
+    | some _ => some bi
+    | none => firstBoundIn facts v rest
+
+/-- The witness lookup for a candidate drop: the first bound-deriving interaction other than the
+    dropped pair — first among the live stable-array entries (ascending, exactly the order the old
+    compact array had for the surviving originals), then among the previously-emitted checks
+    `checksOld` (which trailed the originals in the old array) — followed by this drop's emitted
+    checks. Every returned interaction is a member of the remaining region (`dropWits_mem`). -/
 def dropWits {bs : BusSemantics p} (facts : BusFacts p bs)
-    (arr : Array (BusInteraction (Expression p))) (S R : BusInteraction (Expression p))
-    (checks : List (BusInteraction (Expression p))) (v : Variable) :
+    (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (S R : BusInteraction (Expression p))
+    (checksOld emitted : List (BusInteraction (Expression p))) (v : Variable) :
     List (BusInteraction (Expression p)) :=
-  match dropWitsGo facts arr S R v arr.size 0 with
-  | some bi => bi :: checks
-  | none => checks
+  match dropWitsGo facts arr alive S R v arr.size 0 with
+  | some bi => bi :: emitted
+  | none =>
+    match firstBoundIn facts v checksOld with
+    | some bi => bi :: emitted
+    | none => emitted
 
 theorem dropWitsGo_mem {bs : BusSemantics p} (facts : BusFacts p bs)
-    (arr : Array (BusInteraction (Expression p))) (S R : BusInteraction (Expression p))
+    (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (S R : BusInteraction (Expression p))
     (v : Variable) (fuel : Nat) :
     ∀ (k : Nat) {bi : BusInteraction (Expression p)},
-      dropWitsGo facts arr S R v fuel k = some bi →
-      bi ∈ arr.toList ∧ bi ≠ S ∧ bi ≠ R := by
+      dropWitsGo facts arr alive S R v fuel k = some bi →
+      bi ∈ liveSeg arr alive 0 arr.size ∧ bi ≠ S ∧ bi ≠ R := by
   induction fuel with
   | zero =>
     intro k bi h
@@ -1530,250 +1740,331 @@ theorem dropWitsGo_mem {bs : BusSemantics p} (facts : BusFacts p bs)
   | succ fuel ih =>
     intro k bi h
     rw [dropWitsGo] at h
-    split_ifs at h with hk hne
-    · -- in range, not the dropped pair
+    split_ifs at h with hk hcond
+    · -- in range, live, not the dropped pair
       revert h
       cases hb : interactionBound bs facts arr[k] v with
       | some b =>
         intro h
         obtain rfl := Option.some.inj h
-        rw [Bool.and_eq_true] at hne
-        exact ⟨by simp [Array.getElem_mem hk],
-          fun he => by simp [he] at hne, fun he => by simp [he] at hne⟩
+        rw [Bool.and_eq_true, Bool.and_eq_true] at hcond
+        obtain ⟨⟨hal, hnS⟩, hnR⟩ := hcond
+        refine ⟨liveSeg_mem arr alive 0 arr.size k arr[k] (Nat.zero_le _) (by omega) hal
+            (Array.getElem?_eq_getElem hk), ?_, ?_⟩
+        · exact fun he => by simp [he] at hnS
+        · exact fun he => by simp [he] at hnR
       | none =>
         intro h
         exact ih (k + 1) h
     · exact ih (k + 1) h
 
-theorem dropWits_mem {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
-    (arr : Array (BusInteraction (Expression p)))
-    (harr : arr = cs.busInteractions.toArray)
-    (S R : BusInteraction (Expression p)) (checks : List (BusInteraction (Expression p)))
+theorem firstBoundIn_mem {bs : BusSemantics p} (facts : BusFacts p bs) (v : Variable) :
+    ∀ (l : List (BusInteraction (Expression p))) {bi : BusInteraction (Expression p)},
+      firstBoundIn facts v l = some bi → bi ∈ l := by
+  intro l
+  induction l with
+  | nil => intro bi h; simp [firstBoundIn] at h
+  | cons hd tl ih =>
+    intro bi h
+    rw [firstBoundIn] at h
+    cases hb : interactionBound bs facts hd v with
+    | some b => rw [hb] at h; obtain rfl := Option.some.inj h; exact List.mem_cons.2 (Or.inl rfl)
+    | none => rw [hb] at h; exact List.mem_cons_of_mem _ (ih h)
+
+/-- Every witness the lookup returns is in the remaining region, given that the live stable-array
+    entries other than the dropped pair are in `A ++ B ++ C`, and so are the previously-emitted
+    checks `checksOld`. -/
+theorem dropWits_mem {bs : BusSemantics p} (facts : BusFacts p bs)
+    (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (S R : BusInteraction (Expression p))
+    (checksOld emitted : List (BusInteraction (Expression p)))
     {A B C : List (BusInteraction (Expression p))}
-    (hsplit : cs.busInteractions = A ++ S :: B ++ R :: C) :
-    ∀ v, ∀ bi ∈ dropWits facts arr S R checks v, bi ∈ A ++ B ++ C ++ checks := by
+    (horig : ∀ bi ∈ liveSeg arr alive 0 arr.size, bi ≠ S → bi ≠ R → bi ∈ A ++ B ++ C)
+    (hchecks : ∀ bi ∈ checksOld, bi ∈ A ++ B ++ C) :
+    ∀ v, ∀ bi ∈ dropWits facts arr alive S R checksOld emitted v, bi ∈ A ++ B ++ C ++ emitted := by
   intro v bi hbi
   unfold dropWits at hbi
-  cases hgo : dropWitsGo facts arr S R v arr.size 0 with
-  | none =>
-    rw [hgo] at hbi
-    simp only [List.mem_append]
-    exact Or.inr hbi
+  cases hgo : dropWitsGo facts arr alive S R v arr.size 0 with
   | some bi' =>
     rw [hgo] at hbi
     rcases List.mem_cons.1 hbi with rfl | hbi
-    · obtain ⟨hmem, hne1, hne2⟩ := dropWitsGo_mem facts arr S R v arr.size 0 hgo
-      have hmem' : bi ∈ cs.busInteractions := by
-        rw [harr] at hmem
-        simpa using hmem
-      have := mem_core_of_ne hsplit hmem' hne1 hne2
-      simp only [List.mem_append] at this ⊢
-      tauto
-    · simp only [List.mem_append]
-      exact Or.inr hbi
+    · obtain ⟨hmem, hne1, hne2⟩ := dropWitsGo_mem facts arr alive S R v arr.size 0 hgo
+      exact List.mem_append_left _ (horig bi hmem hne1 hne2)
+    · exact List.mem_append_right _ hbi
+  | none =>
+    rw [hgo] at hbi
+    cases hfb : firstBoundIn facts v checksOld with
+    | some bi' =>
+      rw [hfb] at hbi
+      rcases List.mem_cons.1 hbi with rfl | hbi
+      · exact List.mem_append_left _ (hchecks bi (firstBoundIn_mem facts v checksOld hfb))
+      · exact List.mem_append_right _ hbi
+    | none =>
+      rw [hfb] at hbi
+      exact List.mem_append_right _ hbi
 
-/-- Indexed left-to-right scan for the first droppable pair on `busId`, starting at position `i`:
-    at each send `S` (position in `arr`), find its matching receive through the hash index (the
-    first position after it with an equal payload on the bus — exactly what the linear scan
-    found) and run the cheap region tests; the byte-justification lookup runs only for
-    candidates that already match, and the split equation holds by construction
-    (`split_of_extracts`) rather than by an O(n) whole-list comparison. Stops at the first hit,
-    returning the pass result together with the send's position and whether a byte check was
-    emitted (which the caller uses to decide where to resume the enclosing fixpoint). -/
-def findCancelGoIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+/-! ### The stable-state cancellation loop
+
+The search returns a `DropResult`: the tombstoned liveness array and grown checks list after the
+accepted drop, the resume hints, and — all erased — the single-step `PassCorrect` from the current
+logical system to the next plus the strict decrease of the live count. `cancelLoop` composes the
+steps with `PassCorrect.andThen`, threading the *stable* array and receive index unchanged, and
+materializes the final compact interaction list exactly once, at the end. -/
+
+/-- One accepted drop, as consumed by `cancelLoop`. `step`/`decreases`/`sizeNew` are erased. -/
+structure DropResult {p : ℕ} (cs0 : ConstraintSystem p) (bs : BusSemantics p)
+    (arr : Array (BusInteraction (Expression p)))
+    (alive : Array Bool) (checks : List (BusInteraction (Expression p))) where
+  aliveNew : Array Bool
+  checksNew : List (BusInteraction (Expression p))
+  emitted : Bool
+  dropIdx : Nat
+  dropPos : Nat
+  sizeNew : aliveNew.size = arr.size
+  step : PassCorrect (mkCs cs0 arr alive checks) (mkCs cs0 arr aliveNew checksNew) [] bs
+  decreases : liveCount arr aliveNew < liveCount arr alive
+
+/-- Assemble the `DropResult` for an accepted candidate: the split of the current logical
+    interactions around the two live positions (`liveSeg_split`, then appending the checks) feeds
+    `checkCancel_sound`; tombstoning the two positions (`liveSeg_drop`) rewrites its output into the
+    next logical system, and the two lemmas give the live-count decrease. All of it is erased. -/
+def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
+    (busId : Nat) (shape : MemoryBusShape) (hshape : facts.memShape busId = some shape)
+    (T : Thunk (TwoRootMap p cs0.algebraicConstraints))
+    (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
+    (domCs : List (Expression p)) (hdomCs : ∀ c ∈ domCs, c ∈ cs0.algebraicConstraints)
+    (candsOf : Variable → List (Expression p))
+    (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ cs0.algebraicConstraints)
+    (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
+    (iP jP : Nat) (S R : BusInteraction (Expression p)) (slots : List Nat)
+    (checks : List (BusInteraction (Expression p))) (emitted : Bool) (dropIdx dropPos : Nat)
+    (hij : iP < jP) (hjsz : jP < arr.size)
+    (hSget : arr[iP]? = some S) (hRget : arr[jP]? = some R)
+    (hSalive : alive[iP]?.getD false = true) (hRalive : alive[jP]?.getD false = true)
+    (hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) = some slots)
+    (hmid : ∀ m0 ∈ liveSeg arr alive (iP + 1) (jP - iP - 1), midRefuted shape T busId S m0 = true)
+    (hshield : shieldOk shape T busId S (liveSeg arr alive 0 iP) = true)
+    (hchk : checkCancel deep bs facts M domCs candsOf
+      (dropWits facts arr alive S R checksOld checks) busId slots S R checks = true) :
+    DropResult cs0 bs arr alive checksOld := by
+  let A := liveSeg arr alive 0 iP
+  let B := liveSeg arr alive (iP + 1) (jP - iP - 1)
+  let C' := liveSeg arr alive (jP + 1) (arr.size - jP - 1)
+  let aliveNew := (alive.setIfInBounds iP false).setIfInBounds jP false
+  have hisz : iP < alive.size := by rw [hsz]; omega
+  have hjsz' : jP < alive.size := by rw [hsz]; exact hjsz
+  have hsplitL : liveSeg arr alive 0 arr.size = A ++ S :: B ++ R :: C' :=
+    liveSeg_split arr alive iP jP arr.size S R hij hjsz hSget hRget hSalive hRalive
+  have hsplit : (mkCs cs0 arr alive checksOld).busInteractions
+      = A ++ S :: B ++ R :: (C' ++ checksOld) := by
+    show liveSeg arr alive 0 arr.size ++ checksOld = _
+    rw [hsplitL]; simp only [List.append_assoc, List.cons_append]
+  have horig : ∀ bi ∈ liveSeg arr alive 0 arr.size, bi ≠ S → bi ≠ R →
+      bi ∈ A ++ B ++ (C' ++ checksOld) := by
+    intro bi hbi hnS hnR
+    have hb := mem_core_of_ne hsplitL hbi hnS hnR
+    simp only [List.mem_append] at hb ⊢; tauto
+  have hchecks : ∀ bi ∈ checksOld, bi ∈ A ++ B ++ (C' ++ checksOld) := by
+    intro bi hbi; simp only [List.mem_append]; tauto
+  have hstep : PassCorrect (mkCs cs0 arr alive checksOld)
+      { mkCs cs0 arr alive checksOld with
+        busInteractions := A ++ B ++ (C' ++ checksOld) ++ checks } [] bs :=
+    checkCancel_sound (mkCs cs0 arr alive checksOld) bs facts hp1 deep hdeep busId shape hshape slots
+      T M domCs candsOf (dropWits facts arr alive S R checksOld checks)
+      A S B R (C' ++ checksOld) hslots checks hsplit hdomCs hcands
+      (dropWits_mem facts arr alive S R checksOld checks horig hchecks) hmid hshield hchk
+  have hdropL : liveSeg arr aliveNew 0 arr.size = A ++ B ++ C' :=
+    liveSeg_drop arr alive iP jP arr.size hij hjsz hisz hjsz' aliveNew rfl
+  have heq : { mkCs cs0 arr alive checksOld with
+        busInteractions := A ++ B ++ (C' ++ checksOld) ++ checks }
+      = mkCs cs0 arr aliveNew (checksOld ++ checks) := by
+    show { cs0 with busInteractions := A ++ B ++ (C' ++ checksOld) ++ checks }
+        = { cs0 with busInteractions := liveSeg arr aliveNew 0 arr.size ++ (checksOld ++ checks) }
+    rw [hdropL]; congr 1; simp only [List.append_assoc]
+  refine {
+    aliveNew := aliveNew
+    checksNew := checksOld ++ checks
+    emitted := emitted
+    dropIdx := dropIdx
+    dropPos := dropPos
+    sizeNew := by
+      simp only [aliveNew, Array.size_setIfInBounds]; exact hsz
+    step := heq ▸ hstep
+    decreases := ?_ }
+  show (liveSeg arr aliveNew 0 arr.size).length < (liveSeg arr alive 0 arr.size).length
+  rw [hdropL, hsplitL]
+  simp only [List.length_append, List.length_cons]
+  omega
+
+/-- Indexed left-to-right scan for the first droppable pair on `busId`, from position `i`: at each
+    live send `S` (stable position in `arr`), find its first matching *live* receive through the
+    hash index and run the region tests over the *live* before/between regions; the byte
+    justification runs only for candidates that already match, and the split equation holds by
+    construction (`liveSeg_split`). Dead (tombstoned) positions are skipped exactly as absent, so
+    the pair chosen is the one the old compact-array scan chose. -/
+def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (aggressive : Bool)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
-    (T : Thunk (TwoRootMap p cs.algebraicConstraints))
-    (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
-    (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs.algebraicConstraints })
-    (candsT : Thunk (VarCsIdx p cs.algebraicConstraints))
+    (T : Thunk (TwoRootMap p cs0.algebraicConstraints))
+    (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
+    (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
+    (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
     (bcBus? : Option Nat)
-    (arr : Array (BusInteraction (Expression p)))
-    (harr : arr = cs.busInteractions.toArray)
+    (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
     (idx : Std.HashMap UInt64 (List Nat))
-    (i : Nat) :
-    Option ({ r : PassResult cs bs // r.out.algebraicConstraints = cs.algebraicConstraints }
-      × Nat × Bool) :=
+    (i : Nat) : Option (DropResult cs0 bs arr alive checksOld) :=
   if hi : i < arr.size then
     let S := arr[i]
     -- (thunked: Lean is strict, and the continuation must not run once a pair is accepted)
-    let next := fun (_ : Unit) => findCancelGoIdx cs bs facts hp1 deep hdeep aggressive busId shape hshape
-      T M domCsT candsT bcBus? arr harr idx (i + 1)
+    let next := fun (_ : Unit) => findCancelGoIdx cs0 bs facts hp1 deep hdeep aggressive busId shape
+      hshape T M domCsT candsT bcBus? arr alive checksOld hsz idx (i + 1)
+    if haliveS : alive[i]?.getD false = true then
     if decide (multConst S = some 1) && decide (S.busId = busId) then
-      match firstMatchAt M arr busId S i (idx.getD
+      match firstMatchAt M arr alive busId S i (idx.getD
           (mixHash (hash busId)
             (if aggressive then addrHash shape S.payload else payloadHash S.payload)) []) with
       | some j =>
         match hR : arr[j]? with
         | some R =>
           if hij : i < j then
-            -- Cheap region tests first — only an otherwise-valid candidate pays the byte
-            -- justification lookup.
-            let B := (arr.extract (i + 1) j).toList
+          if hRalive : alive[j]?.getD false = true then
+            let B := liveSeg arr alive (i + 1) (j - i - 1)
             if hmidB : B.all (midRefuted shape T busId S) = true then
-            let A := (arr.extract 0 i).toList
+            let A := liveSeg arr alive 0 i
             if hshieldA : shieldOk shape T busId S A = true then
-            let C := (arr.extract (j + 1) arr.size).toList
-            have hsplit : cs.busInteractions = A ++ S :: B ++ R :: C :=
-              split_of_extracts harr hij hi hR
-            have hmid : ∀ m0 ∈ B, midRefuted shape T busId S m0 = true :=
-              fun m0 hm0 => List.all_eq_true.mp hmidB m0 hm0
-            -- The receive `R`'s byte obligation depends on its own constant pattern (e.g. a
-            -- memory receive whose address-space slot is a known constant ∉ {1,2} carries no
-            -- obligation), so `slots` is resolved per candidate, not per bus.
+            have hjlt : j < arr.size := by
+              by_contra hc
+              rw [Array.getElem?_eq_none (Nat.le_of_not_lt hc)] at hR; simp at hR
+            have hSget : arr[i]? = some S := Array.getElem?_eq_getElem hi
+            have hmid : ∀ m0 ∈ liveSeg arr alive (i + 1) (j - i - 1),
+                midRefuted shape T busId S m0 = true := fun m0 hm0 => List.all_eq_true.mp hmidB m0 hm0
             match hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) with
             | none => next ()
             | some slots =>
-            -- Try the certificate with no emitted checks first: it passes iff every declared
-            -- byte slot is justified — the same predicate `unjustifiedSlots` decides — and the
-            -- common fully-justified drop pays the justification lookup **once**.
             if hchk0 : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
-                (dropWits facts arr S R []) busId slots S R [] = true then
-              some (⟨⟨{ cs with busInteractions := A ++ B ++ C ++ [] }, [],
-                    checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots
-                      T M domCsT.get.val candsT.get.lookup (dropWits facts arr S R [])
-                      A S B R C hslots []
-                      hsplit domCsT.get.property (fun x => candsT.get.lookup_mem x)
-                      (dropWits_mem facts arr harr S R [] hsplit) hmid hshieldA hchk0⟩, rfl⟩,
-                i, false)
+                (dropWits facts arr alive S R checksOld []) busId slots S R [] = true then
+              some (mkDropResult cs0 bs facts hp1 deep hdeep busId shape hshape T M
+                domCsT.get.val domCsT.get.property candsT.get.lookup
+                (fun x => candsT.get.lookup_mem x)
+                arr alive checksOld hsz i j S R slots [] false 0 i
+                hij hjlt hSget hR haliveS hRalive hslots hmid hshieldA hchk0)
             else
-            -- Some slot is unjustified. Such slots are materialized as a single explicit
-            -- self-check on the byte-check bus (more than one would not shrink the bus count and
-            -- would stall the cancellation loop); when the justification cannot pass (≥ 2
-            -- unjustified slots, or no byte-check bus), skip the certificate re-check — the
-            -- justification scan is the expensive part.
             let unjust := unjustifiedSlots deep domCsT.get.val candsT.get.lookup bs facts
-              (dropWits facts arr S R []) slots R
+              (dropWits facts arr alive S R checksOld []) slots R
             let checks : List (BusInteraction (Expression p)) :=
               match unjust, bcBus? with
               | [slot], some bcBus => (R.payload[slot]?).elim [] (fun e =>
                   [{ busId := bcBus, multiplicity := .const 1,
                      payload := [e, e, .const 0, .const 1] }])
               | _, _ => []
-            -- Emission-path drops are restricted to *syntactically* equal payloads unless
-            -- `aggressive`: an entailed-matched pair otherwise fires only when every byte slot
-            -- is already justified (`checks = []`). Measured (apc_005 class): mid-cycle entailed
-            -- drops on unjustified receives trade one emitted self-check per pair for
-            -- obligations the deferred syntactic cancellation discharges for free — a net bus
-            -- regression. The `aggressive` form runs once, in the coda, where the race is over:
-            -- each drop is then locally net −1 bus at worst (2 dropped, ≤1 emitted).
             if !checks.isEmpty && (aggressive || decide (S.payload = R.payload)) then
               if hchk : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
-                  (dropWits facts arr S R checks) busId slots S R checks = true then
-                some (⟨⟨{ cs with busInteractions := A ++ B ++ C ++ checks }, [],
-                      checkCancel_sound cs bs facts hp1 deep hdeep busId shape hshape slots
-                        T M domCsT.get.val candsT.get.lookup (dropWits facts arr S R checks)
-                        A S B R C hslots checks hsplit domCsT.get.property
-                        (fun x => candsT.get.lookup_mem x)
-                        (dropWits_mem facts arr harr S R checks hsplit) hmid hshieldA hchk⟩, rfl⟩,
-                  i, true)
+                  (dropWits facts arr alive S R checksOld checks) busId slots S R checks = true then
+                some (mkDropResult cs0 bs facts hp1 deep hdeep busId shape hshape T M
+                  domCsT.get.val domCsT.get.property candsT.get.lookup
+                  (fun x => candsT.get.lookup_mem x)
+                  arr alive checksOld hsz i j S R slots checks true 0 i
+                  hij hjlt hSget hR haliveS hRalive hslots hmid hshieldA hchk)
               else next ()
             else next ()
             else next ()
             else next ()
           else next ()
+          else next ()
         | none => next ()
       | none => next ()
+    else next ()
     else next ()
   else none
   termination_by arr.size - i
 
-/-- Search declared buses from list index `curIdx` for a droppable pair, honouring a resume hint:
-    buses before `resumeIdx` are skipped (they were exhausted on the previous sweep and — since a
-    drop on one bus never re-enables a candidate on another, region tests refute cross-bus messages
-    outright — stay exhausted), the bus at `resumeIdx` resumes at `resumePos`, and later buses start
-    from `0`. The interaction array, the consolidated receive index and the byte-witness map are
-    built once per sweep by the caller and shared by every bus (the byte justification scans the
-    array directly, with the old early-exit cost but no region list materialized). Returns the
-    pass result together with the list index and position of the accepted send and whether a
-    byte check was emitted. -/
-def findCancel (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+/-- Search declared buses from list index `curIdx` for a droppable pair, honouring the resume hint
+    exactly as before: buses before `resumeIdx` are skipped, the bus at `resumeIdx` resumes at
+    `resumePos`, later buses start from `0`. The stable array, liveness array and receive index are
+    shared across every bus. -/
+def findCancel (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (aggressive : Bool)
-    (T : Thunk (TwoRootMap p cs.algebraicConstraints))
-    (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
-    (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs.algebraicConstraints })
-    (candsT : Thunk (VarCsIdx p cs.algebraicConstraints))
-    (arr : Array (BusInteraction (Expression p)))
-    (harr : arr = cs.busInteractions.toArray)
+    (T : Thunk (TwoRootMap p cs0.algebraicConstraints))
+    (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
+    (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
+    (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
+    (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
     (idx : Std.HashMap UInt64 (List Nat))
     (bcBus? : Option Nat) (resumeIdx resumePos : Nat) :
-    Nat → List Nat →
-      Option ({ r : PassResult cs bs // r.out.algebraicConstraints = cs.algebraicConstraints }
-        × Nat × Nat × Bool)
+    Nat → List Nat → Option (DropResult cs0 bs arr alive checksOld)
   | _, [] => none
   | curIdx, busId :: rest =>
     if curIdx < resumeIdx then
-      findCancel cs bs facts hp1 deep hdeep aggressive T M domCsT candsT arr harr idx bcBus?
-        resumeIdx resumePos (curIdx + 1) rest
+      findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT arr alive checksOld hsz
+        idx bcBus? resumeIdx resumePos (curIdx + 1) rest
     else
       let startPos := if curIdx = resumeIdx then resumePos else 0
       match hshape : facts.memShape busId with
       | some shape =>
-        match findCancelGoIdx cs bs facts hp1 deep hdeep aggressive busId shape hshape
-            T M domCsT candsT bcBus? arr harr idx startPos with
-        | some (r, pos, emitted) => some (r, curIdx, pos, emitted)
-        | none => findCancel cs bs facts hp1 deep hdeep aggressive T M domCsT candsT arr harr
-            idx bcBus? resumeIdx resumePos (curIdx + 1) rest
-      | none => findCancel cs bs facts hp1 deep hdeep aggressive T M domCsT candsT arr harr
-          idx bcBus? resumeIdx resumePos (curIdx + 1) rest
+        match findCancelGoIdx cs0 bs facts hp1 deep hdeep aggressive busId shape hshape
+            T M domCsT candsT bcBus? arr alive checksOld hsz idx startPos with
+        | some dr => some { dr with dropIdx := curIdx }
+        | none => findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT arr alive
+            checksOld hsz idx bcBus? resumeIdx resumePos (curIdx + 1) rest
+      | none => findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT arr alive
+          checksOld hsz idx bcBus? resumeIdx resumePos (curIdx + 1) rest
 
-/-- A `PassResult` is inhabited by the identity pass (its input, unchanged) — needed so the
-    fixpoint loop below can be a `partial def`. -/
-instance instInhabitedPassResult (cs : ConstraintSystem p) (bs : BusSemantics p) :
-    Inhabited (PassResult cs bs) := ⟨⟨cs, [], PassCorrect.refl cs bs⟩⟩
-
-/-- Cancel every droppable pair, iterating to a fixpoint in a single pass invocation. Each accepted
-    drop is certified by `checkCancel_sound` exactly as before, and the composite is correct by
-    `PassCorrect.andThen`; the loop only controls the *search order*, so the set and order of drops —
-    hence the output — is identical to restarting `findCancel` from the top after each drop. The
-    speedup: after a drop that emitted no byte check, the scan resumes at the drop's own bus/position
-    (`resumeIdx`/`resumePos`) rather than rescanning the already-rejected prefix, which cannot
-    contain a newly-droppable pair; a drop that *did* emit a byte check may make an earlier pair
-    justifiable (the check joins the remaining interactions), so the scan restarts from the top.
-    The interaction array and the consolidated receive index are rebuilt once per sweep — the
-    interactions changed — while the constraint-derived thunks (`T`/`M`/`domCsT`/`candsT`)
-    transport across drops. -/
-partial def cancelLoop (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
+/-- Cancel every droppable pair in one pass invocation, iterating over a *stable* tombstoned array
+    and receive index (built once by the caller) instead of rebuilding them per drop. Each accepted
+    drop is certified by `checkCancel_sound`, and the composite is `PassCorrect.andThen` — the loop
+    only controls the search order, so the set and order of drops (hence the output) is identical to
+    the old restart-from-top-after-each-drop scheme. Resume rule unchanged: a drop with no emitted
+    byte check resumes at its own bus/position (the rejected prefix cannot become droppable), a drop
+    that emitted a check restarts from the top (the new check can justify an earlier pair). Total,
+    recursing on the strictly-decreasing live-interaction count. The final compact interaction list
+    is materialized once, here, when the search reports no further pair. -/
+def cancelLoop (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (aggressive : Bool)
-    (T : Thunk (TwoRootMap p cs.algebraicConstraints))
-    (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
-    (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs.algebraicConstraints })
-    (candsT : Thunk (VarCsIdx p cs.algebraicConstraints))
-    (bcBus? : Option Nat) (busIds : List Nat) (resumeIdx resumePos : Nat) : PassResult cs bs :=
-  let arr := cs.busInteractions.toArray
-  let idx := recvIndexAll facts aggressive arr
-  match findCancel cs bs facts hp1 deep hdeep aggressive T M domCsT candsT arr rfl idx bcBus?
-      resumeIdx resumePos 0 busIds with
-  | none => ⟨cs, [], PassCorrect.refl cs bs⟩
-  | some (⟨r, hpres⟩, dropIdx, dropPos, emitted) =>
-    let nextIdx := if emitted then 0 else dropIdx
-    let nextPos := if emitted then 0 else dropPos
-    -- A drop changes only `busInteractions` (`hpres`), so the constraint-derived maps — built
-    -- once per pass invocation — transport to the recursive call instead of being rebuilt per
-    -- drop.
-    let r2 := cancelLoop r.out bs facts hp1 deep hdeep aggressive (hpres.symm ▸ T) (hpres.symm ▸ M)
-      (hpres.symm ▸ domCsT) (hpres.symm ▸ candsT) bcBus? busIds nextIdx nextPos
-    ⟨r2.out, r.derivs ++ r2.derivs, r.correct.andThen r2.correct⟩
+    (T : Thunk (TwoRootMap p cs0.algebraicConstraints))
+    (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
+    (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
+    (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
+    (bcBus? : Option Nat) (busIds : List Nat)
+    (arr : Array (BusInteraction (Expression p)))
+    (idx : Std.HashMap UInt64 (List Nat))
+    (alive : Array Bool) (checksOld : List (BusInteraction (Expression p)))
+    (hsz : alive.size = arr.size) (resumeIdx resumePos : Nat)
+    (hcur : PassCorrect cs0 (mkCs cs0 arr alive checksOld) [] bs) : PassResult cs0 bs :=
+  match hfc : findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT arr alive
+      checksOld hsz idx bcBus? resumeIdx resumePos 0 busIds with
+  | none => ⟨mkCs cs0 arr alive checksOld, [], hcur⟩
+  | some dr =>
+    let nextIdx := if dr.emitted then 0 else dr.dropIdx
+    let nextPos := if dr.emitted then 0 else dr.dropPos
+    cancelLoop cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT bcBus? busIds arr idx
+      dr.aliveNew dr.checksNew dr.sizeNew nextIdx nextPos (hcur.andThen dr.step)
+  termination_by liveCount arr alive
+  decreasing_by exact dr.decreases
 
 /-- Drop every matched consecutive send/receive pair on the declared memory buses with a
-    `recvByteSlots` contract — justifying each dropped receive's byte obligation from the
-    remaining interactions (shallow bus-fact bounds, or the deep one-hot-selection analysis on
-    prime `p`), or materializing it as one explicit byte check on a `byteCheck` bus already
-    present in the system. Runs its own cancellation fixpoint (`cancelLoop`), so a whole access
-    chain is cancelled in a single invocation. -/
-def busPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : VerifiedPassW p := fun cs bs facts =>
+    `recvByteSlots` contract — justifying each dropped receive's byte obligation from the remaining
+    interactions (shallow bus-fact bounds, or the deep one-hot-selection analysis on prime `p`), or
+    materializing it as one explicit byte check on a `byteCheck` bus. Runs its own cancellation
+    fixpoint (`cancelLoop`), so a whole access chain is cancelled in a single invocation. -/
+def busPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : VerifiedPassW p :=
+    fun cs bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then
     let busIds := (cs.busInteractions.map (fun bi => bi.busId)).dedup
     let deep : Bool := pw.isPrime
-    -- Two-root decomposition data (address disequality), normalized-constraint index (entailed
-    -- payload equality), single-variable constraints and the variable→constraints index (deep
-    -- byte justification): `Thunk`s, so each is built at most once per invocation — on the
-    -- first candidate that actually consults it — and reused across every drop (drops leave
-    -- `algebraicConstraints` untouched, so `cancelLoop` transports them).
+    let arr := cs.busInteractions.toArray
+    let idx := recvIndexAll facts aggressive arr
+    let alive : Array Bool := Array.replicate arr.size true
+    -- Constraint-derived thunks (address disequality, entailed-payload equality, single-variable
+    -- constraints, variable→constraints index): built at most once per invocation and reused
+    -- across every drop (drops leave `algebraicConstraints` untouched, so they stay valid).
     let T : Thunk (TwoRootMap p cs.algebraicConstraints) :=
       Thunk.mk fun _ => TwoRootMap.build cs.algebraicConstraints
     let M : Thunk (EqConstraintMap p cs.algebraicConstraints) :=
@@ -1785,6 +2076,12 @@ def busPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : VerifiedPassW 
         fun _ hc => List.mem_of_mem_filter hc⟩
     let candsT : Thunk (VarCsIdx p cs.algebraicConstraints) :=
       Thunk.mk fun _ => VarCsIdx.build cs.algebraicConstraints
+    have hsz : alive.size = arr.size := by simp only [alive, Array.size_replicate]
+    have halltrue : ∀ k, k < arr.size → alive[k]?.getD false = true := by
+      intro k hk
+      simp only [alive, Array.getElem?_replicate, hk, if_true, Option.getD_some]
+    have hcur : PassCorrect cs (mkCs cs arr alive []) [] bs := by
+      rw [mkCs_all cs arr rfl alive halltrue]; exact PassCorrect.refl cs bs
     cancelLoop cs bs facts hp1 deep (fun h => pw.correct h) aggressive T M domCsT candsT
-      (busIds.find? facts.byteCheck) busIds 0 0
+      (busIds.find? facts.byteCheck) busIds arr idx alive [] hsz 0 0 hcur
   else ⟨cs, [], PassCorrect.refl cs bs⟩
