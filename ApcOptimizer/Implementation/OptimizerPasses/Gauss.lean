@@ -730,6 +730,161 @@ theorem fastBestFold_eq (c : Expression p) (occ : Std.HashMap Variable Nat)
 @[csimp] theorem fastBest_eq_fastBestFold : @fastBest = @fastBestFold := by
   funext p c occ prot; exact (fastBestFold_eq c occ prot).symm
 
+/-! ## Ordered dirty second sweep
+
+The second sweep of `gaussElimPass` reduces *every* constraint again, but a constraint that mentions
+no solved variable cannot have been reduced at all — its reduced form is literally itself — and,
+having been processed once already, it has no solvable pivot (had it, its pivot variable would now
+be solved and it *would* mention a solved variable). So such a constraint's second visit is a
+guaranteed no-op and can be skipped without running `substF`/`normalize`/`fastBest`. `dirtyLoop`
+below performs exactly this ordered skip, and is proved equal to the blind second sweep
+(`gaussLoop`). Measurements on large cases show the majority of second-sweep visits are skippable.
+
+The proof rests on the invariant `settled` (`P` below): every constraint either has no pivot under
+the current solutions, or mentions a solved variable. It holds after the first sweep and is
+preserved as the solution map grows (keys are only added). The one non-trivial step is that a
+constraint which *adopts* a pivot ends up mentioning a solved variable — its pivot variable, or (if
+that was introduced by substitution) the solved variable whose stored solution introduced it. -/
+
+/-- Does the expression mention a variable satisfying `pred`? A fold (no `vars` list allocated). -/
+def Expression.anyVar (pred : Variable → Bool) : Expression p → Bool
+  | .const _ => false
+  | .var y => pred y
+  | .add a b => a.anyVar pred || b.anyVar pred
+  | .mul a b => a.anyVar pred || b.anyVar pred
+
+theorem Expression.anyVar_eq_vars_any (pred : Variable → Bool) (e : Expression p) :
+    e.anyVar pred = e.vars.any pred := by
+  induction e with
+  | const n => rfl
+  | var y => simp [Expression.anyVar, Expression.vars]
+  | add a b iha ihb => simp [Expression.anyVar, Expression.vars, List.any_append, iha, ihb]
+  | mul a b iha ihb => simp [Expression.anyVar, Expression.vars, List.any_append, iha, ihb]
+
+/-- Substituting with a map that is `none` on every variable of `e` leaves `e` unchanged. -/
+theorem Expression.substF_eq_self (f : Variable → Option (Expression p)) (e : Expression p)
+    (h : ∀ v ∈ e.vars, f v = none) : e.substF f = e := by
+  induction e with
+  | const n => rfl
+  | var y => have hy := h y (by simp [Expression.vars]); simp only [Expression.substF, hy]
+  | add a b iha ihb =>
+      simp only [Expression.substF]
+      rw [iha (fun v hv => h v (by simp [Expression.vars, List.mem_append, hv])),
+          ihb (fun v hv => h v (by simp [Expression.vars, List.mem_append, hv]))]
+  | mul a b iha ihb =>
+      simp only [Expression.substF]
+      rw [iha (fun v hv => h v (by simp [Expression.vars, List.mem_append, hv])),
+          ihb (fun v hv => h v (by simp [Expression.vars, List.mem_append, hv]))]
+
+/-- Every variable of `e.substF f` either is a variable of `e`, or comes from the solution `f y` of
+    some variable `y` **of `e`** (stronger than `substF_vars`: it pins `y ∈ e.vars`). -/
+theorem Expression.substF_vars_mem (f : Variable → Option (Expression p)) (e : Expression p) :
+    ∀ z ∈ (e.substF f).vars, z ∈ e.vars ∨ ∃ y ∈ e.vars, ∃ t, f y = some t ∧ z ∈ t.vars := by
+  induction e with
+  | const n => intro z hz; simp [Expression.substF, Expression.vars] at hz
+  | var y =>
+      intro z hz
+      simp only [Expression.substF] at hz
+      cases hfy : f y with
+      | none => rw [hfy] at hz; exact Or.inl (by simpa [Expression.vars] using hz)
+      | some t => rw [hfy] at hz; exact Or.inr ⟨y, by simp [Expression.vars], t, hfy, hz⟩
+  | add a b iha ihb =>
+      intro z hz
+      simp only [Expression.substF, Expression.vars, List.mem_append] at hz
+      rcases hz with hz | hz
+      · rcases iha z hz with h | ⟨y, hy, t, hft, hzt⟩
+        · exact Or.inl (by simp [Expression.vars, List.mem_append, h])
+        · exact Or.inr ⟨y, by simp [Expression.vars, List.mem_append, hy], t, hft, hzt⟩
+      · rcases ihb z hz with h | ⟨y, hy, t, hft, hzt⟩
+        · exact Or.inl (by simp [Expression.vars, List.mem_append, h])
+        · exact Or.inr ⟨y, by simp [Expression.vars, List.mem_append, hy], t, hft, hzt⟩
+  | mul a b iha ihb =>
+      intro z hz
+      simp only [Expression.substF, Expression.vars, List.mem_append] at hz
+      rcases hz with hz | hz
+      · rcases iha z hz with h | ⟨y, hy, t, hft, hzt⟩
+        · exact Or.inl (by simp [Expression.vars, List.mem_append, h])
+        · exact Or.inr ⟨y, by simp [Expression.vars, List.mem_append, hy], t, hft, hzt⟩
+      · rcases ihb z hz with h | ⟨y, hy, t, hft, hzt⟩
+        · exact Or.inl (by simp [Expression.vars, List.mem_append, h])
+        · exact Or.inr ⟨y, by simp [Expression.vars, List.mem_append, hy], t, hft, hzt⟩
+
+/-! ### The solution map after `insertAll`, as a fold of inserts -/
+
+/-- The map inside `insertAll` is exactly the left fold of inserts over the pairs. Makes the
+    `contains`/lookup facts below plain `HashMap`-fold combinatorics. -/
+theorem Solved.insertAll_map {cs : ConstraintSystem p} {bs : BusSemantics p} :
+    ∀ (pairs : List (Variable × Expression p)) (σ : Solved p cs bs)
+      (H : ∀ env, cs.satisfies bs env → ∀ yt ∈ pairs, env yt.1 = yt.2.eval env)
+      (Hv : ∀ yt ∈ pairs, ∀ z ∈ yt.2.vars, z ∈ cs.vars),
+      (σ.insertAll pairs H Hv).map = pairs.foldl (fun m xt => m.insert xt.1 xt.2) σ.map := by
+  intro pairs
+  induction pairs with
+  | nil => intro σ H Hv; rfl
+  | cons xt rest ih => intro σ H Hv; simp only [Solved.insertAll, List.foldl_cons]; rw [ih]
+
+theorem foldl_insert_contains_mono (v : Variable) :
+    ∀ (pairs : List (Variable × Expression p)) (m : Std.HashMap Variable (Expression p)),
+      m.contains v = true → (pairs.foldl (fun m xt => m.insert xt.1 xt.2) m).contains v = true := by
+  intro pairs
+  induction pairs with
+  | nil => intro m hm; exact hm
+  | cons xt rest ih =>
+      intro m hm
+      simp only [List.foldl_cons]
+      exact ih _ (by rw [Std.HashMap.contains_insert]; simp [hm])
+
+theorem foldl_insert_contains_of_key (v : Variable) :
+    ∀ (pairs : List (Variable × Expression p)) (m : Std.HashMap Variable (Expression p)),
+      v ∈ pairs.map Prod.fst → (pairs.foldl (fun m xt => m.insert xt.1 xt.2) m).contains v = true := by
+  intro pairs
+  induction pairs with
+  | nil => intro m hv; simp at hv
+  | cons xt rest ih =>
+      intro m hv
+      simp only [List.map_cons, List.mem_cons] at hv
+      simp only [List.foldl_cons]
+      rcases hv with rfl | hv
+      · exact foldl_insert_contains_mono _ rest _ (by rw [Std.HashMap.contains_insert]; simp)
+      · exact ih _ hv
+
+/-! ### The pivot variable is a variable of the constraint -/
+
+theorem pm1PivotsOf_var_mem (c : Expression p) (x : Variable) (t : Expression p)
+    (h : (x, t) ∈ pm1PivotsOf c) : x ∈ c.vars := by
+  unfold pm1PivotsOf at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i l hlin
+    obtain ⟨v, hvmem, hv⟩ := List.mem_filterMap.1 h
+    have hxv : x = v := LinExpr.trySolve_fst l v (x, t) hv
+    subst hxv
+    exact linearize_vars c l hlin x hvmem
+
+theorem unitPivotsOf_var_mem (c : Expression p) (x : Variable) (t : Expression p)
+    (h : (x, t) ∈ unitPivotsOf c) : x ∈ c.vars := by
+  unfold unitPivotsOf at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i l hlin
+    obtain ⟨v, hvmem, hv⟩ := List.mem_filterMap.1 h
+    cases htr : l.trySolve v with
+    | some r => rw [htr] at hv; exact absurd hv (by simp)
+    | none =>
+        rw [htr] at hv
+        have hxv : x = v := LinExpr.trySolveUnit_fst l v (x, t) hv
+        subst hxv
+        exact linearize_vars c l hlin x hvmem
+
+theorem fastBest_var_mem (c : Expression p) (occ : Std.HashMap Variable Nat)
+    (prot : Std.HashSet Variable) (x : Variable) (t : Expression p)
+    (h : fastBest c occ prot = some (x, t)) : x ∈ c.vars := by
+  have hA : (pm1PivotsOf c ++ unitPivotsOf c).argmin (pivotScore occ prot) = some (x, t) :=
+    (fastBest_eq c occ prot).symm.trans h
+  rcases List.mem_append.1 (List.argmin_mem hA) with hp | hu
+  · exact pm1PivotsOf_var_mem c x t hp
+  · exact unitPivotsOf_var_mem c x t hu
+
 /-- Reduce one constraint by the current solutions, adopt the cheapest solvable pivot (if any),
     and resolve it into the stored solutions — one step of the sweep, factored out of `gaussLoop`
     so both the blind loop and the dirty sweep (`dirtyLoop`) can share it and reason about it. The
@@ -815,6 +970,54 @@ theorem gaussStep_noop (cs : ConstraintSystem p) (bs : BusSemantics p)
   · rfl
   · next x t hbest => rw [h] at hbest; exact absurd hbest (by simp)
 
+/-- `gaussStep` only ever inserts keys, so it preserves `contains`. -/
+theorem gaussStep_contains_mono (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (c : Expression p) (hc : c ∈ cs.algebraicConstraints) (σ : Solved p cs bs) (v : Variable)
+    (hv : σ.map.contains v = true) :
+    (gaussStep cs bs occ prot c hc σ).map.contains v = true := by
+  simp only [gaussStep]
+  split
+  · exact hv
+  · rw [Solved.insertAll_map]; exact foldl_insert_contains_mono v _ _ hv
+
+/-- When `gaussStep` adopts pivot `x := t`, `x` becomes a key of the solution map. -/
+theorem gaussStep_contains_of_pivot (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (c : Expression p) (hc : c ∈ cs.algebraicConstraints) (σ : Solved p cs bs)
+    (x : Variable) (t : Expression p)
+    (h : fastBest ((c.substF σ.fn).normalize) occ prot = some (x, t)) :
+    (gaussStep cs bs occ prot c hc σ).map.contains x = true := by
+  simp only [gaussStep]
+  split
+  · next hbest => rw [h] at hbest; exact absurd hbest (by simp)
+  · next x' t' hbest =>
+      rw [h] at hbest
+      obtain ⟨rfl, rfl⟩ : x = x' ∧ t = t' := by
+        have := Option.some.inj hbest; exact ⟨(Prod.mk.injEq .. ▸ this).1, (Prod.mk.injEq .. ▸ this).2⟩
+      rw [Solved.insertAll_map]
+      exact foldl_insert_contains_of_key x _ _ (by simp [List.map_append])
+
+/-- **Trace lemma.** A constraint that adopts a pivot ends up mentioning a solved variable: the
+    pivot variable `x` (if it was already a variable of `c`), or the variable `y ∈ c.vars` whose
+    stored solution introduced `x` by substitution (that `y` is itself a solved key). This is what
+    keeps the `settled` invariant true through a pivot adoption. -/
+theorem gaussStep_marks (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (c : Expression p) (hc : c ∈ cs.algebraicConstraints) (σ : Solved p cs bs)
+    (x : Variable) (t : Expression p)
+    (h : fastBest ((c.substF σ.fn).normalize) occ prot = some (x, t)) :
+    c.anyVar (fun v => (gaussStep cs bs occ prot c hc σ).map.contains v) = true := by
+  rw [Expression.anyVar_eq_vars_any, List.any_eq_true]
+  have hxsub : x ∈ (c.substF σ.fn).vars :=
+    Expression.normalize_vars _ x (fastBest_var_mem _ occ prot x t h)
+  rcases Expression.substF_vars_mem σ.fn c x hxsub with hxc | ⟨y, hyc, t', hfy, _hxt'⟩
+  · exact ⟨x, hxc, gaussStep_contains_of_pivot cs bs occ prot c hc σ x t h⟩
+  · refine ⟨y, hyc, gaussStep_contains_mono cs bs occ prot c hc σ y ?_⟩
+    rw [Std.HashMap.contains_eq_isSome_getElem?]
+    have hy : σ.map[y]? = some t' := hfy
+    simp [hy]
+
 /-- Process the pending constraints left-to-right via `gaussStep`, then continue. Two invocations
     (the current `algebraicConstraints ++ algebraicConstraints`) give the two-sweep behaviour. -/
 def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
@@ -826,15 +1029,220 @@ def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
       gaussLoop cs bs occ prot rest (fun c' hc' => hmem c' (List.mem_cons_of_mem _ hc'))
         (gaussStep cs bs occ prot c (hmem c (List.mem_cons_self ..)) σ)
 
+/-- `settled σ`: every algebraic constraint either has no solvable pivot under the current
+    solutions, or mentions a solved variable. After one full sweep this holds, and it is preserved
+    as the solution map grows — so in the second sweep a constraint mentioning no solved variable is
+    guaranteed to have no pivot (a no-op), hence skippable. -/
+def settled (cs : ConstraintSystem p) (bs : BusSemantics p) (occ : Std.HashMap Variable Nat)
+    (prot : Std.HashSet Variable) (σ : Solved p cs bs) : Prop :=
+  ∀ c ∈ cs.algebraicConstraints,
+    fastBest ((c.substF σ.fn).normalize) occ prot = none
+      ∨ c.anyVar (fun v => σ.map.contains v) = true
+
+/-- Substituting with a map that is `none` on every variable of `c` (i.e. `c` mentions no solved
+    variable) leaves `c` unchanged. -/
+theorem substF_eq_self_of_anyVar_false {cs : ConstraintSystem p} {bs : BusSemantics p}
+    (σ : Solved p cs bs) (c : Expression p) (h : c.anyVar (fun v => σ.map.contains v) = false) :
+    c.substF σ.fn = c := by
+  apply Expression.substF_eq_self
+  intro v hv
+  rw [Expression.anyVar_eq_vars_any] at h
+  have hcv : σ.map.contains v = false := by
+    by_contra hcon
+    have : c.vars.any (fun v => σ.map.contains v) = true :=
+      List.any_eq_true.2 ⟨v, hv, by simpa using hcon⟩
+    rw [this] at h; simp at h
+  show σ.map[v]? = none
+  by_contra hne
+  obtain ⟨a, ha⟩ := Option.ne_none_iff_exists'.1 hne
+  rw [Std.HashMap.contains_eq_isSome_getElem?, ha] at hcv
+  simp at hcv
+
+/-- `anyVar (contains)` is monotone under `gaussStep` (keys only grow). -/
+theorem anyVar_contains_mono (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (c0 : Expression p) (hc0 : c0 ∈ cs.algebraicConstraints) (σ : Solved p cs bs) (c : Expression p)
+    (h : c.anyVar (fun v => σ.map.contains v) = true) :
+    c.anyVar (fun v => (gaussStep cs bs occ prot c0 hc0 σ).map.contains v) = true := by
+  rw [Expression.anyVar_eq_vars_any, List.any_eq_true] at h ⊢
+  obtain ⟨v, hv, hcv⟩ := h
+  exact ⟨v, hv, gaussStep_contains_mono cs bs occ prot c0 hc0 σ v hcv⟩
+
+/-- A constraint settled at `σ` stays settled after a `gaussStep` on any constraint. -/
+theorem settled_one_preserved (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (c0 : Expression p) (hc0 : c0 ∈ cs.algebraicConstraints) (σ : Solved p cs bs) (c : Expression p)
+    (hset : fastBest ((c.substF σ.fn).normalize) occ prot = none
+      ∨ c.anyVar (fun v => σ.map.contains v) = true) :
+    fastBest ((c.substF (gaussStep cs bs occ prot c0 hc0 σ).fn).normalize) occ prot = none
+      ∨ c.anyVar (fun v => (gaussStep cs bs occ prot c0 hc0 σ).map.contains v) = true := by
+  cases hany' : c.anyVar (fun v => (gaussStep cs bs occ prot c0 hc0 σ).map.contains v) with
+  | true => exact Or.inr rfl
+  | false =>
+      left
+      have hanyσ : c.anyVar (fun v => σ.map.contains v) = false := by
+        cases hb : c.anyVar (fun v => σ.map.contains v) with
+        | false => rfl
+        | true =>
+            have := anyVar_contains_mono cs bs occ prot c0 hc0 σ c hb
+            rw [this] at hany'; exact absurd hany' (by simp)
+      have hfσ : fastBest ((c.substF σ.fn).normalize) occ prot = none := by
+        rcases hset with h | h
+        · exact h
+        · rw [hanyσ] at h; exact absurd h (by simp)
+      have hsubσ : c.substF σ.fn = c := substF_eq_self_of_anyVar_false σ c hanyσ
+      have hsubσ' : c.substF (gaussStep cs bs occ prot c0 hc0 σ).fn = c :=
+        substF_eq_self_of_anyVar_false _ c hany'
+      rw [hsubσ', ← hsubσ]; exact hfσ
+
+/-- The constraint just processed by `gaussStep` is settled afterward: either it had no pivot (the
+    step was a no-op, still no pivot) or it adopted one (so it now mentions a solved variable, by the
+    trace lemma). -/
+theorem settled_of_processed (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (c0 : Expression p) (hc0 : c0 ∈ cs.algebraicConstraints) (σ : Solved p cs bs) :
+    fastBest ((c0.substF (gaussStep cs bs occ prot c0 hc0 σ).fn).normalize) occ prot = none
+      ∨ c0.anyVar (fun v => (gaussStep cs bs occ prot c0 hc0 σ).map.contains v) = true := by
+  by_cases hf : fastBest ((c0.substF σ.fn).normalize) occ prot = none
+  · left; rw [gaussStep_noop cs bs occ prot c0 hc0 σ hf]; exact hf
+  · right
+    obtain ⟨⟨x, t⟩, hxt⟩ := Option.ne_none_iff_exists'.1 hf
+    exact gaussStep_marks cs bs occ prot c0 hc0 σ x t hxt
+
+/-- **First-sweep post-condition.** If every constraint is either already settled or still pending,
+    then after `gaussLoop` finishes the pending list, all constraints are settled. Instantiated with
+    `pending = algebraicConstraints`, `σ = empty` (everything pending) it says the first sweep
+    settles everything. -/
+theorem gaussLoop_settles (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    ∀ (pending : List (Expression p)) (hmem : ∀ c ∈ pending, c ∈ cs.algebraicConstraints)
+      (σ : Solved p cs bs),
+      (∀ c ∈ cs.algebraicConstraints,
+        (fastBest ((c.substF σ.fn).normalize) occ prot = none
+          ∨ c.anyVar (fun v => σ.map.contains v) = true) ∨ c ∈ pending) →
+      settled cs bs occ prot (gaussLoop cs bs occ prot pending hmem σ) := by
+  intro pending
+  induction pending with
+  | nil =>
+      intro hmem σ hQ c hc
+      rcases hQ c hc with h | h
+      · exact h
+      · exact absurd h (by simp)
+  | cons c0 rest ih =>
+      intro hmem σ hQ
+      show settled cs bs occ prot (gaussLoop cs bs occ prot rest
+        (fun c' hc' => hmem c' (List.mem_cons_of_mem _ hc'))
+        (gaussStep cs bs occ prot c0 (hmem c0 (List.mem_cons_self ..)) σ))
+      refine ih _ _ ?_
+      intro c hc
+      rcases hQ c hc with hset | hpend
+      · exact Or.inl (settled_one_preserved cs bs occ prot c0 (hmem c0 (List.mem_cons_self ..)) σ c hset)
+      · rcases List.mem_cons.1 hpend with heq | hpend
+        · refine Or.inl ?_
+          rw [heq]
+          exact settled_of_processed cs bs occ prot c0 (hmem c0 (List.mem_cons_self ..)) σ
+        · exact Or.inr hpend
+
+/-- `gaussStep` preserves the `settled` invariant. -/
+theorem settled_gaussStep (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (c0 : Expression p) (hc0 : c0 ∈ cs.algebraicConstraints) (σ : Solved p cs bs)
+    (hs : settled cs bs occ prot σ) :
+    settled cs bs occ prot (gaussStep cs bs occ prot c0 hc0 σ) :=
+  fun c hc => settled_one_preserved cs bs occ prot c0 hc0 σ c (hs c hc)
+
+/-- Two consecutive sweeps compose: `gaussLoop` over `a ++ b` is `gaussLoop` over `b` applied to
+    `gaussLoop` over `a`. (The membership proofs differ but are irrelevant to the result.) -/
+theorem gaussLoop_append (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) (a : List (Expression p)) :
+    ∀ (b : List (Expression p)) (hab : ∀ c ∈ a ++ b, c ∈ cs.algebraicConstraints)
+      (σ : Solved p cs bs),
+      gaussLoop cs bs occ prot (a ++ b) hab σ
+        = gaussLoop cs bs occ prot b (fun c hc => hab c (List.mem_append_right a hc))
+            (gaussLoop cs bs occ prot a (fun c hc => hab c (List.mem_append_left b hc)) σ) := by
+  induction a with
+  | nil => intro b hab σ; rfl
+  | cons c0 a' ih =>
+      intro b hab σ
+      exact ih b (fun c hc => hab c (List.mem_cons_of_mem c0 hc))
+        (gaussStep cs bs occ prot c0 (hab c0 (List.mem_cons_self ..)) σ)
+
+/-- The ordered dirty second sweep: like `gaussLoop`, but skips a constraint that mentions no solved
+    variable (whose reduced form is itself — no pivot, a guaranteed no-op) without running
+    `substF`/`normalize`/`fastBest`. -/
+def dirtyLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    (pending : List (Expression p)) → (∀ c ∈ pending, c ∈ cs.algebraicConstraints) →
+    Solved p cs bs → Solved p cs bs
+  | [], _, σ => σ
+  | c :: rest, hmem, σ =>
+      if c.anyVar (fun v => σ.map.contains v) then
+        dirtyLoop cs bs occ prot rest (fun c' hc' => hmem c' (List.mem_cons_of_mem _ hc'))
+          (gaussStep cs bs occ prot c (hmem c (List.mem_cons_self ..)) σ)
+      else
+        dirtyLoop cs bs occ prot rest (fun c' hc' => hmem c' (List.mem_cons_of_mem _ hc')) σ
+
+/-- **The dirty sweep reproduces the blind sweep** whenever the solutions are `settled` (which the
+    first sweep guarantees): each skipped position is a `gaussStep` no-op, so skipping it changes
+    nothing, and `settled` is preserved across processed positions. -/
+theorem dirtyLoop_eq_gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    ∀ (pending : List (Expression p)) (hmem : ∀ c ∈ pending, c ∈ cs.algebraicConstraints)
+      (σ : Solved p cs bs), settled cs bs occ prot σ →
+      dirtyLoop cs bs occ prot pending hmem σ = gaussLoop cs bs occ prot pending hmem σ := by
+  intro pending
+  induction pending with
+  | nil => intro hmem σ _; rfl
+  | cons c0 rest ih =>
+      intro hmem σ hs
+      have hc0 : c0 ∈ cs.algebraicConstraints := hmem c0 (List.mem_cons_self ..)
+      have hrest : ∀ c ∈ rest, c ∈ cs.algebraicConstraints :=
+        fun c' hc' => hmem c' (List.mem_cons_of_mem _ hc')
+      show (if c0.anyVar (fun v => σ.map.contains v) = true
+              then dirtyLoop cs bs occ prot rest hrest (gaussStep cs bs occ prot c0 hc0 σ)
+              else dirtyLoop cs bs occ prot rest hrest σ)
+           = gaussLoop cs bs occ prot rest hrest (gaussStep cs bs occ prot c0 hc0 σ)
+      by_cases hany : c0.anyVar (fun v => σ.map.contains v) = true
+      · rw [if_pos hany]
+        exact ih hrest (gaussStep cs bs occ prot c0 hc0 σ)
+          (settled_gaussStep cs bs occ prot c0 hc0 σ hs)
+      · rw [if_neg hany]
+        have hnone : fastBest ((c0.substF σ.fn).normalize) occ prot = none := by
+          rcases hs c0 hc0 with h | h
+          · exact h
+          · exact absurd h hany
+        rw [gaussStep_noop cs bs occ prot c0 hc0 σ hnone]
+        exact ih hrest σ hs
+
 /-- The batch linear-elimination pass. Two sweeps over the constraints (so substitutions can
-    unlock later pivots within one invocation), then a single full-system substitution. -/
+    unlock later pivots within one invocation), then a single full-system substitution. The first
+    sweep processes every constraint; the second is the ordered dirty sweep (`dirtyLoop`), which
+    skips constraints that mention no solved variable — proved to give the same result as the blind
+    `algebraicConstraints ++ algebraicConstraints` sweep (`dirty_second_sweep_eq`). -/
 def gaussElimPass : VerifiedPass p := fun cs bs =>
   let occ := occurrenceMap cs
   let prot := protectedVars cs bs
-  let pending := cs.algebraicConstraints ++ cs.algebraicConstraints
-  let σ := gaussLoop cs bs occ prot pending
-    (fun _c hc => (List.mem_append.1 hc).elim id id) Solved.empty
+  let firstσ := gaussLoop cs bs occ prot cs.algebraicConstraints (fun _c hc => hc) Solved.empty
+  let σ := dirtyLoop cs bs occ prot cs.algebraicConstraints (fun _c hc => hc) firstσ
   if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
   else ⟨cs.substF σ.fn, [],
     cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)
       (fun y t hyt => σ.varsIn y t hyt)⟩
+
+/-- **The dirty second sweep yields exactly the old two-sweep solution map.** `firstσ` settles every
+    constraint (`gaussLoop_settles`), so `dirtyLoop` equals the blind `gaussLoop` second copy
+    (`dirtyLoop_eq_gaussLoop`), which composes with the first sweep into `gaussLoop` over
+    `algebraicConstraints ++ algebraicConstraints` (`gaussLoop_append`) — the exact `σ` the old
+    `gaussElimPass` computed. Hence identical output; the skip is proved, not merely tested. -/
+theorem dirty_second_sweep_eq (cs : ConstraintSystem p) (bs : BusSemantics p) :
+    dirtyLoop cs bs (occurrenceMap cs) (protectedVars cs bs) cs.algebraicConstraints (fun _c hc => hc)
+        (gaussLoop cs bs (occurrenceMap cs) (protectedVars cs bs) cs.algebraicConstraints
+          (fun _c hc => hc) Solved.empty)
+      = gaussLoop cs bs (occurrenceMap cs) (protectedVars cs bs)
+          (cs.algebraicConstraints ++ cs.algebraicConstraints)
+          (fun _c hc => (List.mem_append.1 hc).elim id id) Solved.empty := by
+  rw [dirtyLoop_eq_gaussLoop cs bs (occurrenceMap cs) (protectedVars cs bs) cs.algebraicConstraints
+        _ _ (gaussLoop_settles cs bs (occurrenceMap cs) (protectedVars cs bs)
+          cs.algebraicConstraints _ Solved.empty (fun c hc => Or.inr hc)),
+    gaussLoop_append cs bs (occurrenceMap cs) (protectedVars cs bs)
+      cs.algebraicConstraints cs.algebraicConstraints]
