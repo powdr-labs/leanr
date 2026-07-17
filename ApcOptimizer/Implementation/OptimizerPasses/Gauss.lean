@@ -415,7 +415,8 @@ classify `±1`/unit) and the size of its solution (`(l.others v).terms.length`, 
 `coeffIdx` folds the term list once into a `Std.HashMap Variable (ZMod p × Nat)` = (coefficient sum,
 occurrence count) per variable; then `coeff = idx[v].1` and `others-length = |terms| - idx[v].2` are
 O(1). Proven equal to `l.coeff`/`l.others` (`coeffIdx_coeff`/`coeffIdx_others`), so the descriptors
-below are unchanged in meaning. -/
+below are unchanged in meaning. Each descriptor binds `idx[v]` once (the `let e`), so a candidate
+visit performs a single index lookup on both the success and failure branch. -/
 
 /-- Coefficient sum of the terms whose variable is `v`. `l.coeff v` unfolds to `csum l.terms v`. -/
 def csum (terms : List (Variable × ZMod p)) (v : Variable) : ZMod p :=
@@ -488,16 +489,14 @@ theorem coeffIdx_others (l : LinExpr p) (v : Variable) :
 def pm1Desc (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
     (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) (v : Variable) :
     Option (Variable × Nat) :=
-  if ((idx[v]?).getD (0, 0)).1 = 1 ∨ ((idx[v]?).getD (0, 0)).1 = -1 then
-    some (v, gaussScore occ prot v (total - ((idx[v]?).getD (0, 0)).2))
-  else none
+  let e := (idx[v]?).getD (0, 0)
+  if e.1 = 1 ∨ e.1 = -1 then some (v, gaussScore occ prot v (total - e.2)) else none
 
 theorem pm1Desc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
     (v : Variable) :
     pm1Desc (coeffIdx l.terms) l.terms.length occ prot v
       = (l.trySolve v).map (fun xt => (xt.1, pivotScore occ prot xt)) := by
-  unfold pm1Desc
-  rw [coeffIdx_coeff l v, coeffIdx_others l v]
+  simp only [pm1Desc, coeffIdx_coeff l v, coeffIdx_others l v]
   by_cases h1 : l.coeff v = 1
   · rw [if_pos (Or.inl h1), LinExpr.trySolve_eq_of_one l v h1, Option.map_some,
       gaussScore_eq_pivotScore occ prot v (((l.others v).scale (-1)).toExpr)
@@ -515,9 +514,9 @@ theorem pm1Desc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.
 def unitDesc (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
     (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) (v : Variable) :
     Option (Variable × Nat) :=
-  if ¬(((idx[v]?).getD (0, 0)).1 = 1 ∨ ((idx[v]?).getD (0, 0)).1 = -1)
-      ∧ ((idx[v]?).getD (0, 0)).1 * (((idx[v]?).getD (0, 0)).1)⁻¹ = 1 then
-    some (v, gaussScore occ prot v (total - ((idx[v]?).getD (0, 0)).2))
+  let e := (idx[v]?).getD (0, 0)
+  if ¬(e.1 = 1 ∨ e.1 = -1) ∧ e.1 * e.1⁻¹ = 1 then
+    some (v, gaussScore occ prot v (total - e.2))
   else none
 
 theorem unitDesc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
@@ -525,8 +524,7 @@ theorem unitDesc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std
     unitDesc (coeffIdx l.terms) l.terms.length occ prot v
       = (match l.trySolve v with | some _ => none | none => l.trySolveUnit v).map
           (fun xt : Variable × Expression p => (xt.1, pivotScore occ prot xt)) := by
-  unfold unitDesc
-  rw [coeffIdx_coeff l v, coeffIdx_others l v]
+  simp only [unitDesc, coeffIdx_coeff l v, coeffIdx_others l v]
   by_cases h1 : l.coeff v = 1
   · rw [if_neg (fun hc => hc.1 (Or.inl h1)), LinExpr.trySolve_eq_of_one l v h1]; rfl
   · by_cases h2 : l.coeff v = -1
@@ -628,6 +626,109 @@ theorem fastBest_eq (c : Expression p) (occ : Std.HashMap Variable Nat)
           · rw [mem_pm1_trySolve c l hlin w hp]
           · obtain ⟨hn, hs⟩ := mem_unit_trySolveUnit c l hlin w hu
             rw [hn, hs]
+
+/-! ### Allocation-free best-descriptor scan
+
+`fastBest` above is proved correct through `pivotDescs`, which materialises two descriptor lists
+(`±1` then unit) and `argmin`s their append. `bestDesc` computes the same winner with **no
+intermediate lists**: two ordered left-folds over `l.terms` (the `±1` class first, the unit class
+seeded with the first fold's winner) that keep only the current best `(variable, score)`
+descriptor, replacing it solely on a *strictly smaller* score — so `List.argmin`'s first-minimum
+tie behaviour is preserved, including repeated occurrences of the same variable, and the two folds
+preserve candidate-class precedence. `bestDesc_eq` proves it equals `(pivotDescs l occ prot).argmin
+Prod.snd`, and `fastBestFold`/`fastBestFold_eq` lift that to `fastBest`; a `@[csimp]` installs it as
+the compiled implementation. The correspondence is short because `List.argmin` is *itself* a left
+fold of `List.argAux`, so `argMerge` is definitionally that step (`argmin_eq_foldl`) and the rest is
+`List.foldl_append` plus a filterMap/fold fusion (`foldl_argMerge_filterMap`). -/
+
+/-- One `argmin` fold step: keep incumbent `acc` unless the new element `b` scores strictly lower.
+    Definitionally `List.argAux (fun b c => f b < f c)`, so `argmin = foldl argMerge none`. -/
+def argMerge {α : Type*} (f : α → Nat) (acc : Option α) (b : α) : Option α :=
+  match acc with
+  | none => some b
+  | some c => if f b < f c then some b else some c
+
+theorem argmin_eq_foldl {α : Type*} (f : α → Nat) (l : List α) :
+    l.argmin f = l.foldl (argMerge f) none := by
+  show l.foldl (List.argAux fun b c => f b < f c) none = l.foldl (argMerge f) none
+  congr 1
+  funext acc b
+  cases acc with
+  | none => rfl
+  | some c => simp only [argMerge, List.argAux]
+
+/-- One term-scan fold step: classify the term's variable (`cl t.1`) and, if it yields a
+    descriptor, merge it into the running best with `argMerge` (strict `<`). Named (rather than an
+    inline lambda) so the fusion lemma below matches syntactically. -/
+def descFoldStep (cl : Variable → Option (Variable × Nat)) (acc : Option (Variable × Nat))
+    (t : Variable × ZMod p) : Option (Variable × Nat) :=
+  match cl t.1 with | none => acc | some c => argMerge Prod.snd acc c
+
+/-- Fuse the classifier into the `argMerge` fold: scanning terms with `descFoldStep cl` equals
+    folding `argMerge` over the classified variables `(terms.map Prod.fst).filterMap cl` — the exact
+    shape of one `pivotDescs` half — so no descriptor list is materialised at runtime. -/
+theorem foldl_descFoldStep (cl : Variable → Option (Variable × Nat))
+    (terms : List (Variable × ZMod p)) :
+    ∀ init : Option (Variable × Nat),
+      terms.foldl (descFoldStep cl) init
+        = ((terms.map Prod.fst).filterMap cl).foldl (argMerge Prod.snd) init := by
+  induction terms with
+  | nil => intro init; rfl
+  | cons t rest ih =>
+      intro init
+      simp only [List.foldl_cons, List.map_cons]
+      cases hcl : cl t.1 with
+      | none =>
+          rw [List.filterMap_cons_none hcl,
+            show descFoldStep cl init t = init from by simp only [descFoldStep, hcl]]
+          exact ih init
+      | some c =>
+          rw [List.filterMap_cons_some hcl, List.foldl_cons,
+            show descFoldStep cl init t = argMerge Prod.snd init c from by
+              simp only [descFoldStep, hcl]]
+          exact ih (argMerge Prod.snd init c)
+
+/-- The winning pivot descriptor of a linear form via two ordered `argMerge` folds over the terms:
+    `±1` candidates (`pm1Desc`) first, then unit candidates (`unitDesc`) seeded with the first
+    winner. `coeffIdx`/`total` are computed once and passed in, so no descriptor list is built. -/
+def bestDescAux (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (terms : List (Variable × ZMod p)) : Option (Variable × Nat) :=
+  terms.foldl (descFoldStep (unitDesc idx total occ prot))
+    (terms.foldl (descFoldStep (pm1Desc idx total occ prot)) none)
+
+def bestDesc (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    Option (Variable × Nat) :=
+  bestDescAux (coeffIdx l.terms) l.terms.length occ prot l.terms
+
+theorem bestDesc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    bestDesc l occ prot = (pivotDescs l occ prot).argmin Prod.snd := by
+  simp only [bestDesc, bestDescAux, pivotDescs, argmin_eq_foldl]
+  rw [List.foldl_append,
+    foldl_descFoldStep (pm1Desc (coeffIdx l.terms) l.terms.length occ prot) l.terms none,
+    foldl_descFoldStep (unitDesc (coeffIdx l.terms) l.terms.length occ prot) l.terms _]
+
+/-- Runtime pivot selection: like `fastBest`, but choosing the winner via `bestDesc`'s
+    allocation-free folds rather than `pivotDescs`'s `argmin`. Installed as `fastBest`'s compiled
+    form by the `@[csimp]` below, so `gaussLoop`'s proof (which mentions `fastBest`) is untouched. -/
+def fastBestFold (c : Expression p) (occ : Std.HashMap Variable Nat)
+    (prot : Std.HashSet Variable) : Option (Variable × Expression p) :=
+  match linearize c with
+  | none => none
+  | some l =>
+      match bestDesc l occ prot with
+      | none => none
+      | some (x, _) =>
+          match l.trySolve x with
+          | some xt => some xt
+          | none => l.trySolveUnit x
+
+theorem fastBestFold_eq (c : Expression p) (occ : Std.HashMap Variable Nat)
+    (prot : Std.HashSet Variable) : fastBestFold c occ prot = fastBest c occ prot := by
+  simp only [fastBestFold, fastBest, bestDesc_eq]
+
+@[csimp] theorem fastBest_eq_fastBestFold : @fastBest = @fastBestFold := by
+  funext p c occ prot; exact (fastBestFold_eq c occ prot).symm
 
 /-- Process the pending constraints: reduce each by the current solutions, adopt the cheapest
     solvable pivot (if any), resolve it into the stored solutions, and continue. Structure of
