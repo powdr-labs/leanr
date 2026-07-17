@@ -176,9 +176,14 @@ def boxTautoDropPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bs =>
   if hpB : pw.isPrime = true then
     haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let singles := singleVarCs cs.algebraicConstraints
+    -- Build the per-variable domain cache in one linear pass over all occurrences, skipping
+    -- variables already seen (a `contains` guard) rather than pre-deduplicating with the quadratic
+    -- `List.eraseDups` over the whole ~10⁵-entry occurrence list. `findDomainAlg` is deterministic,
+    -- so the resulting map — hence `boxTautoReplaceWith`'s output — is identical; the correctness
+    -- theorem takes the oracle as an arbitrary function, so this rebuild is proof-transparent.
     let cache : Std.HashMap Variable (Option (List (ZMod p))) :=
-      (cs.algebraicConstraints.flatMap Expression.vars).eraseDups.foldl
-        (fun m v => m.insert v (findDomainAlg singles v)) ∅
+      (cs.algebraicConstraints.flatMap Expression.vars).foldl
+        (fun m v => if m.contains v then m else m.insert v (findDomainAlg singles v)) ∅
     ⟨cs.boxTautoReplaceWith singles (fun v => cache.getD v none), [],
      cs.boxTautoReplace_correct bs (fun v => cache.getD v none)⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
