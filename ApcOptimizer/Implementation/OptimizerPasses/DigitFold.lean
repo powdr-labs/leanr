@@ -2,6 +2,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.FactPass
 import ApcOptimizer.Implementation.OptimizerPasses.Subst
 import ApcOptimizer.Implementation.OptimizerPasses.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
+import ApcOptimizer.Implementation.OptimizerPasses.BytePack
 
 set_option autoImplicit false
 
@@ -227,16 +228,19 @@ theorem env_forced [NeZero p] (hp : 256 < p) (pos : Bool) (g : ℕ) (hg : 0 < g)
 /-! ## The driver: recognize byte-checked ladders and fire a substitution -/
 
 
-/-- Recognize a packed bitwise pair check `[x, y, 0, 0]` at multiplicity `1` on a bus with both
-    the pair and self-check facts: acceptance asserts both operands are bytes. -/
+/-- Recognize a packed byte pair check (decoded op `= pairOp`, result `0`) at multiplicity `1` on a
+    `byteXorSpec` bus with byte bound `256`: acceptance asserts both operands are bytes. -/
 def pairByteOps? (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) : Option (Expression p × Expression p) :=
-  match bi.payload with
-  | [x, y, Expression.const z, Expression.const w] =>
-    if facts.bytePairBus bi.busId = true ∧ facts.byteCheck bi.busId = true
-        ∧ z = 0 ∧ w = 0 ∧ bi.multiplicity = Expression.const 1
-    then some (x, y) else none
-  | _ => none
+  match facts.byteXorSpec bi.busId with
+  | none => none
+  | some spec =>
+    match spec.decode bi.payload with
+    | some (op, o1, o2, r) =>
+      if spec.bound = 256 ∧ op = Expression.const spec.pairOp ∧ r = Expression.const 0
+          ∧ bi.multiplicity = Expression.const 1
+      then some (o1, o2) else none
+    | none => none
 
 /-- Acceptance of a recognized pair check bounds both operands below 256. -/
 theorem pairByteOps?_bytes (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -247,25 +251,23 @@ theorem pairByteOps?_bytes (bs : BusSemantics p) (facts : BusFacts p bs)
     (x.eval env).val < 256 ∧ (y.eval env).val < 256 := by
   unfold pairByteOps? at h
   split at h
-  · rename_i xe ye z w hpay
-    split_ifs at h with hcond
-    obtain ⟨hpair, hbyte, hz, hw, hm⟩ := hcond
-    simp only [Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    have heval : bi.eval env =
-        { busId := bi.busId, multiplicity := 1, payload := [xe.eval env, ye.eval env, 0, 0] } := by
-      unfold BusInteraction.eval
-      rw [hm, hpay, hz, hw]
-      simp [Expression.eval]
-    rw [heval] at hacc
-    have hviol := hacc (by simpa using h1)
-    have hpairIff := (facts.bytePairBus_sound bi.busId hpair).2.2
-      (xe.eval env) (ye.eval env) 1
-    have hself := hpairIff.1 hviol
-    have hxIff := ((facts.byteCheck_sound bi.busId hbyte).2.2 (xe.eval env) 1).1 hself.1
-    have hyIff := ((facts.byteCheck_sound bi.busId hbyte).2.2 (ye.eval env) 1).1 hself.2
-    exact ⟨hxIff, hyIff⟩
   · exact absurd h (by simp)
+  · rename_i spec hspec
+    split at h
+    · rename_i op o1 o2 r hdec
+      split_ifs at h with hcond
+      obtain ⟨hbound, hop, _, hm⟩ := hcond
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      have hmv : (bi.eval env).multiplicity = 1 := by
+        show bi.multiplicity.eval env = 1; rw [hm]; rfl
+      have hviol : bs.violatesConstraint (bi.eval env) = false := hacc (by rw [hmv]; simpa using h1)
+      have hopEv : op.eval env = spec.pairOp := by rw [hop]; rfl
+      obtain ⟨hb1, hb2, _⟩ :=
+        ((byteXorSpec_decode_iff bs facts spec bi hspec op o1 o2 r hdec env).2 hopEv).mp hviol
+      rw [hbound] at hb1 hb2
+      exact ⟨hb1, hb2⟩
+    · exact absurd h (by simp)
 
 /-- Sort a linear form's terms by the sign-interpreted coefficient and check the ladder shape;
     returns the leading ℕ-coefficient and the sorted terms. -/

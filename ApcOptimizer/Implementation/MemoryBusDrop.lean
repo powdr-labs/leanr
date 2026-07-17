@@ -17,6 +17,44 @@ is the `admissible_dropPair` field of `BusFacts`. -/
 
 variable {p : ℕ}
 
+/-! ## Discipline lemmas kept out of the audit surface (`MemoryBus.lean`) -/
+
+/-- The `setNew` multiplicity is nonzero whenever `1 ≠ 0` (it is `±1`). -/
+theorem MemoryBusShape.setNewMult_ne_zero (shape : MemoryBusShape) (hp1 : (1 : ZMod p) ≠ 0) :
+    (shape.setNewMult : ZMod p) ≠ 0 := by
+  unfold MemoryBusShape.setNewMult
+  split
+  · exact hp1
+  · exact neg_ne_zero.mpr hp1
+
+/-- The consumption form the passes use. Given `admissibleMemoryBus` over the **active** sublist of a
+    raw (all-multiplicity) message list `Lraw`, a `setNew` `S` followed by a `getPrevious` `R` to the
+    same address in `Lraw`, with no active same-address message between them, have equal payloads.
+    The passes exhibit the split of `Lraw` (the raw per-bus interaction list) directly; this lemma
+    filters it to the active sublist that `admissibleMemoryBus` ranges over (`S`, `R` survive as they
+    are active, given `1 ≠ 0`). -/
+theorem admissibleMemoryBus.consecutive (shape : MemoryBusShape)
+    (Lraw : List (BusInteraction (ZMod p))) (hp1 : (1 : ZMod p) ≠ 0)
+    (h : admissibleMemoryBus shape (Lraw.filter (fun m => decide (m.multiplicity ≠ 0))))
+    (pre mid post : List (BusInteraction (ZMod p))) (S R : BusInteraction (ZMod p))
+    (hsplit : Lraw = pre ++ S :: mid ++ R :: post)
+    (hS : S.multiplicity = shape.setNewMult) (hR : R.multiplicity = -shape.setNewMult)
+    (haddr : shape.address S = shape.address R)
+    (hmid : ∀ m ∈ mid, m.multiplicity ≠ 0 → shape.address m = shape.address S → False) :
+    S.payload = R.payload := by
+  have hwm : (shape.setNewMult : ZMod p) ≠ 0 := shape.setNewMult_ne_zero hp1
+  have hPS : decide (S.multiplicity ≠ 0) = true := by
+    simp only [hS, decide_eq_true_eq]; exact hwm
+  have hPR : decide (R.multiplicity ≠ 0) = true := by
+    simp only [hR, decide_eq_true_eq]; exact fun hh => hwm (neg_eq_zero.mp hh)
+  refine h (pre.filter (fun m => decide (m.multiplicity ≠ 0)))
+    (mid.filter (fun m => decide (m.multiplicity ≠ 0)))
+    (post.filter (fun m => decide (m.multiplicity ≠ 0))) S R ?_ hS hR haddr ?_
+  · subst hsplit
+    simp only [List.filter_append, List.filter_cons, hPS, hPR, if_true]
+  · intro m hm hmne hmaddr
+    exact hmid m (List.mem_of_mem_filter hm) hmne hmaddr
+
 /-! ## List split/filter/map plumbing (used to transport the shield across `filter`/`map`) -/
 
 /-- A split of a filtered list lifts to a split of the original list, filtering each side. -/
@@ -74,9 +112,9 @@ theorem admissibleMemoryBus_dropOne (shape : MemoryBusShape) (hp1 : (1 : ZMod p)
        ∀ (P₁ : List (BusInteraction (ZMod p))) (Sx : BusInteraction (ZMod p))
          (P₂ : List (BusInteraction (ZMod p))),
          P = P₁ ++ Sx :: P₂ → Sx.multiplicity ≠ 0 → shape.address Sx = shape.address e →
-         Sx.multiplicity = 1 →
+         Sx.multiplicity = shape.setNewMult →
          ∃ m ∈ P₂, m.multiplicity ≠ 0 ∧ shape.address m = shape.address e ∧
-           m.multiplicity = -1) :
+           m.multiplicity = -shape.setNewMult) :
     admissibleMemoryBus shape (P ++ Q) := by
   intro pre mid post S R hsplit hS hR haddr hmid
   have hsplit2 : P ++ Q = pre ++ (S :: (mid ++ R :: post)) := by
@@ -104,7 +142,7 @@ theorem admissibleMemoryBus_dropOne (shape : MemoryBusShape) (hp1 : (1 : ZMod p)
         rcases hcond with h0 | hsh
         · exact absurd h0 hene
         · obtain ⟨Rp, hRpmem, hRpne, hRpaddr, _⟩ :=
-            hsh pre S c'' hP (by rw [hS]; exact hp1) haddreS.symm hS
+            hsh pre S c'' hP (by rw [hS]; exact shape.setNewMult_ne_zero hp1) haddreS.symm hS
           exact ⟨Rp, hRpmem, hRpne, hRpaddr.trans haddreS⟩
       rcases List.append_eq_append_iff.mp hT2 with ⟨w, hc''w, hRpw⟩ | ⟨w, hmidw, hQw⟩
       · -- `c'' = mid ++ w`, `R :: post = w ++ Q`; `e` lands at/after `R`.
@@ -153,9 +191,9 @@ theorem admissibleMemoryBus_dropPair (shape : MemoryBusShape) (hp1 : (1 : ZMod p
     (hshield : ∀ (A₁ : List (BusInteraction (ZMod p))) (Sx : BusInteraction (ZMod p))
         (A₂ : List (BusInteraction (ZMod p))),
         A = A₁ ++ Sx :: A₂ → Sx.multiplicity ≠ 0 → shape.address Sx = shape.address S₀ →
-        Sx.multiplicity = 1 →
+        Sx.multiplicity = shape.setNewMult →
         ∃ m ∈ A₂, m.multiplicity ≠ 0 ∧ shape.address m = shape.address S₀ ∧
-          m.multiplicity = -1)
+          m.multiplicity = -shape.setNewMult)
     (haddrEq : shape.address S₀ = shape.address R₀) :
     admissibleMemoryBus shape (A ++ B ++ C) := by
   -- Step 1: remove `S₀`. `A ++ S₀ :: B ++ R₀ :: C = A ++ S₀ :: (B ++ R₀ :: C)`.

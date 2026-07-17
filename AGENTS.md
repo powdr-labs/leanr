@@ -25,11 +25,13 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
 
 - `README.md` — A readme file for humans. Defines the auditing surface. Read it and any files mentioned there.
 - `ApcOptimizer/Spec.lean` — the audited spec: `refines`, `optimizerMaintainsCorrectness`, the degree bound.
-- `ApcOptimizer/OpenVmSemantics.lean`, `ApcOptimizer/MemoryBus.lean` — the audited OpenVM bus semantics and the
-  memory-discipline utility they build on.
+- `ApcOptimizer/OpenVmSemantics.lean`, `ApcOptimizer/Sp1Semantics.lean`, `ApcOptimizer/MemoryBus.lean` — the audited
+  OpenVM and SP1 bus semantics and the memory-discipline utility they build on. Auditing a VM's semantics is
+  only needed if you use that VM; `MemoryBus.lean` (shared) carries the `direction`-parameterized memory discipline.
 - `ApcOptimizer/Optimizer.lean` — the audited top: `optimizerWithBusFacts_maintainsCorrectness` (the
-  master theorem, for all bus facts) plus its instances `simpleOptimizer_maintainsCorrectness` and the
-  OpenVM `openVmOptimizer` (with `openVmOptimizer_maintainsCorrectness`).
+  master theorem, for all bus facts) plus its instances `simpleOptimizer_maintainsCorrectness`, the
+  OpenVM `openVmOptimizer` (`openVmOptimizer_maintainsCorrectness`) and the SP1 `sp1Optimizer`
+  (`sp1Optimizer_maintainsCorrectness`).
 - `ApcOptimizer/Implementation/OptimizerPasses/Basic.lean`, `FactPass.lean` — the framework: a `VerifiedPass` bundles its
   own `PassCorrect` proof, so a pass cannot be written without discharging it.
 - `ApcOptimizer/Implementation/OptimizerPasses/*.lean` — one file per optimization pass.
@@ -40,8 +42,9 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
   consume the same lists, so they cannot drift apart. The cleanup cycle runs to a fixpoint via
   `iterateToFixpoint`, provably terminating on a lexicographic size measure, with no iteration count
   passed in.
-- `ApcOptimizer/Implementation/BusFacts.lean`, `ApcOptimizer/Implementation/OpenVmFacts.lean` — the proven
-  `BusFacts` (design + OpenVM instance); zero audit surface.
+- `ApcOptimizer/Implementation/BusFacts.lean`, `ApcOptimizer/Implementation/OpenVmFacts.lean`,
+  `ApcOptimizer/Implementation/Sp1Facts.lean` — the proven `BusFacts` (design + OpenVM and SP1 instances);
+  zero audit surface.
 - `ApcOptimizer/Implementation/JsonParser.lean`, `Main.lean` — the powdr-export parser and the benchmark CLI (see
   `README.md`).
 - `docs/design/architecture.md` — how the optimizer is built: the spec, the verified-pass
@@ -52,7 +55,7 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
 Write a `VerifiedPass` in a new `ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
 `ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass.….guardDegree)` entry to the
 `cleanupPasses` list. That is the only edit needed; the profiler picks up the new pass for free. Do
-not touch the audited surface (`Spec.lean`, `OpenVmSemantics.lean`, `MemoryBus.lean`,
+not touch the audited surface (`Spec.lean`, `OpenVmSemantics.lean`, `Sp1Semantics.lean`, `MemoryBus.lean`,
 `ApcOptimizer/Optimizer.lean`) or the glue in `Basic.lean`; correctness follows from the pass's own
 `PassCorrect`. Build and verify with `lake build`.
 

@@ -26,8 +26,9 @@ gadget and supplies `inv` by `QuotientOrZero`.
 The gadget's constants are field-independent: `-1`, `2`, `1`, and the monic-scale constant
 `c` with `2·c = -1` (i.e. `c = -2⁻¹`, rendered `(p-1)/2`). The pass matches those constants
 structurally, so it is not tied to BabyBear. It runs in the coda (after `monicScale`), where the
-cluster has stabilised into the recognised form. With `BusFacts.trivial` it is the identity (no
-byte bounds, `bytePairBus` false). -/
+cluster has stabilised into the recognised form. The range-check bus is recognized through the
+VM-neutral `BusFacts.byteXorSpec` (its `clusterBus` is `spec.encode pairOp (dv − 1) 0 0`); with
+`BusFacts.trivial` (`byteXorSpec = none`) it is the identity. -/
 
 namespace SeqzCollapse
 
@@ -97,10 +98,13 @@ def clusterConstraints (m3 m2 m1 m0 dv R a3 a2 a1 a0 : Variable) (K : ZMod p) :
     .mul (markerSum m3 m2 m1 m0) (sExpr m3 m2 m1 m0 0),
     .mul (sExpr m3 m2 m1 m0 0) (.var R) ]
 
-/-- The gadget's range-check bus interaction: `mult = Σ mₖ`, `args = [dv − 1, 0, 0, 0]`. -/
-def clusterBus (busId : Nat) (m3 m2 m1 m0 dv : Variable) : BusInteraction (Expression p) :=
+/-- The gadget's range-check bus interaction: `mult = Σ mₖ`, a byte pair-check on `dv − 1` emitted
+    through the bus's `ByteXorSpec` (`spec.encode pairOp (dv − 1) 0 0`). For OpenVM this is the
+    concrete `[dv − 1, 0, 0, 0]`. -/
+def clusterBus (busId : Nat) (m3 m2 m1 m0 dv : Variable) (spec : ByteXorSpec p) :
+    BusInteraction (Expression p) :=
   { busId := busId, multiplicity := markerSum m3 m2 m1 m0,
-    payload := [.add eM1 (.var dv), e0, e0, e0] }
+    payload := spec.encode (.const spec.pairOp) (.add eM1 (.var dv)) e0 e0 }
 
 /-- The result's booleanity constraint `R·(R − 1)` (kept, not part of the cluster). -/
 def boolConstraint (R : Variable) : Expression p := .mul (.var R) (.add eM1 (.var R))
@@ -555,9 +559,10 @@ def extractRoles (cs : ConstraintSystem p) (bi : BusInteraction (Expression p)) 
 
 /-- The collapsed output system: drop the cluster constraints and range bus, add the is-zero
     constraints. -/
-def collapsedSystem (cs : ConstraintSystem p) (r : Roles (p := p)) : ConstraintSystem p :=
+def collapsedSystem (cs : ConstraintSystem p) (r : Roles (p := p)) (spec : ByteXorSpec p) :
+    ConstraintSystem p :=
   let cluster := clusterConstraints r.m3 r.m2 r.m1 r.m0 r.dv r.R r.a3 r.a2 r.a1 r.a0 r.K
-  let bus := clusterBus r.busId r.m3 r.m2 r.m1 r.m0 r.dv
+  let bus := clusterBus r.busId r.m3 r.m2 r.m1 r.m0 r.dv spec
   { algebraicConstraints :=
       cs.algebraicConstraints.filter (fun c => !cluster.contains c)
         ++ newConstraints r.R r.a0 r.a1 r.a2 r.a3 r.inv,
@@ -566,14 +571,15 @@ def collapsedSystem (cs : ConstraintSystem p) (r : Roles (p := p)) : ConstraintS
 /-- All checks that must pass for the collapse to be sound: field size and primality, constants,
     template presence, result booleanity (kept), purity/distinctness of the witnesses, byte bounds
     on the limbs (via the *output* bounds map, whose buses are a subset of the input's), and `inv`
-    freshness. The bounds map is built for `collapsedSystem cs r` so its guarantees transfer to any
+    freshness. The bounds map is built for `collapsedSystem cs r spec` so its guarantees transfer to any
     assignment satisfying the (smaller) output bus set. -/
-def rolesValid (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (r : Roles (p := p)) (Bm : BoundsMap p (collapsedSystem cs r) bs) : Bool :=
+def rolesValid (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (r : Roles (p := p)) (spec : ByteXorSpec p) (Bm : BoundsMap p (collapsedSystem cs r spec) bs) :
+    Bool :=
   let cluster := clusterConstraints r.m3 r.m2 r.m1 r.m0 r.dv r.R r.a3 r.a2 r.a1 r.a0 r.K
-  let bus := clusterBus r.busId r.m3 r.m2 r.m1 r.m0 r.dv
+  let bus := clusterBus r.busId r.m3 r.m2 r.m1 r.m0 r.dv spec
   decide (Nat.Prime p) && decide (1024 ≤ p) && decide (2 * r.K + 1 = 0) &&
-  facts.bytePairBus r.busId && facts.byteCheck r.busId &&
+  decide (spec.bound = 256) &&
   cs.busInteractions.contains bus &&
   cluster.all (fun c => cs.algebraicConstraints.contains c) &&
   cs.algebraicConstraints.contains (boolConstraint r.R) &&
@@ -585,43 +591,46 @@ def rolesValid (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts
   decide (r.inv ∉ cs.vars) &&
   [r.R, r.a0, r.a1, r.a2, r.a3].all (fun v => v.powdrId?.isSome)
 
-/-- The range-check bus obligation for the payload `[x, 0, 0, 0]`: on a bus that is both a byte-pair
-    bus and a byte-check bus, the message is accepted whenever `x` is a byte (chaining the pair↔singles
-    law with the single↔byte law; the `0` slot is a byte for free). -/
-theorem bus_accepts_byte_zero {bs : BusSemantics p} (facts : BusFacts p bs) [NeZero p] (busId : Nat)
-    (hbpb : facts.bytePairBus busId = true) (hbc : facts.byteCheck busId = true)
+/-- The range-check bus obligation for the pair-check payload `spec.encode pairOp x 0 0`: on a
+    `byteXorSpec` bus with byte bound `256`, the message is accepted whenever `x` is a byte (the
+    other operand `0` and the result `0` are bytes / zero for free). -/
+theorem bus_accepts_byte_zero {bs : BusSemantics p} (facts : BusFacts p bs) (busId : Nat)
+    (spec : ByteXorSpec p) (hspec : facts.byteXorSpec busId = some spec) (hbound : spec.bound = 256)
     (x mult : ZMod p) (hx : x.val < 256) :
-    bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, 0, 0, 0] } = false := by
-  obtain ⟨_, _, hpair⟩ := facts.bytePairBus_sound busId hbpb
-  obtain ⟨_, _, hsingle⟩ := facts.byteCheck_sound busId hbc
-  rw [hpair x 0 mult]
-  refine ⟨(hsingle x mult).2 hx, (hsingle 0 mult).2 ?_⟩
-  rw [ZMod.val_zero]; omega
+    bs.violatesConstraint
+      { busId := busId, multiplicity := mult, payload := spec.encode spec.pairOp x 0 0 } = false := by
+  obtain ⟨_, _, hsound⟩ := facts.byteXorSpec_sound busId spec hspec
+  have hdec : spec.decode (spec.encode spec.pairOp x 0 0) = some (spec.pairOp, x, 0, 0) :=
+    spec.decode_encode _ _ _ _
+  rw [(hsound _ spec.pairOp x 0 0 mult hdec).2 rfl]
+  refine ⟨by rw [hbound]; exact hx, by rw [hbound, ZMod.val_zero]; omega, rfl⟩
 
-/-- Reverse direction: an accepted `[x, 0, 0, 0]` message pins `x` to the byte range. -/
-theorem bus_byte_of_accepts {bs : BusSemantics p} (facts : BusFacts p bs) [NeZero p] (busId : Nat)
-    (hbpb : facts.bytePairBus busId = true) (hbc : facts.byteCheck busId = true)
+/-- Reverse direction: an accepted pair-check message pins `x` to the byte range. -/
+theorem bus_byte_of_accepts {bs : BusSemantics p} (facts : BusFacts p bs) (busId : Nat)
+    (spec : ByteXorSpec p) (hspec : facts.byteXorSpec busId = some spec) (hbound : spec.bound = 256)
     (x mult : ZMod p)
-    (h : bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, 0, 0, 0] }
-        = false) :
+    (h : bs.violatesConstraint
+      { busId := busId, multiplicity := mult, payload := spec.encode spec.pairOp x 0 0 } = false) :
     x.val < 256 := by
-  obtain ⟨_, _, hpair⟩ := facts.bytePairBus_sound busId hbpb
-  obtain ⟨_, _, hsingle⟩ := facts.byteCheck_sound busId hbc
-  rw [hpair x 0 mult] at h
-  exact (hsingle x mult).1 h.1
+  obtain ⟨_, _, hsound⟩ := facts.byteXorSpec_sound busId spec hspec
+  have hdec : spec.decode (spec.encode spec.pairOp x 0 0) = some (spec.pairOp, x, 0, 0) :=
+    spec.decode_encode _ _ _ _
+  rw [(hsound _ spec.pairOp x 0 0 mult hdec).2 rfl] at h
+  rw [← hbound]; exact h.1
 
 /-- **The collapse is a verified pass.** Replacing the recognised gadget cluster (14 constraints +
     range-check bus + five private witnesses) by the two-line is-zero gadget (with one fresh derived
     `inv`) is `PassCorrect`: soundness reconstructs the markers via `seqz_reconstruct`; completeness
     derives the is-zero constraints via `seqz_forward` and computes `inv` by `QuotientOrZero`. -/
 theorem seqzCollapse_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (r : Roles (p := p)) (Bm : BoundsMap p (collapsedSystem cs r) bs)
-    (hvalid : rolesValid cs bs facts r Bm = true) :
-    PassCorrect cs (collapsedSystem cs r) [(r.inv, invMethod r.R r.a0 r.a1 r.a2 r.a3)] bs := by
+    (r : Roles (p := p)) (spec : ByteXorSpec p) (hspec : facts.byteXorSpec r.busId = some spec)
+    (Bm : BoundsMap p (collapsedSystem cs r spec) bs)
+    (hvalid : rolesValid cs bs r spec Bm = true) :
+    PassCorrect cs (collapsedSystem cs r spec) [(r.inv, invMethod r.R r.a0 r.a1 r.a2 r.a3)] bs := by
   classical
   -- Unpack the validity flags (before abstracting, so the bounds map keeps a single identity).
   simp only [rolesValid, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hvalid
-  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hprime, h1024⟩, hK⟩, hbpb⟩, hbc⟩, hbusEmemB⟩, hclMem⟩, hboolMem⟩, hboolNC⟩,
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hprime, h1024⟩, hK⟩, hbound⟩, hbusEmemB⟩, hclMem⟩, hboolMem⟩, hboolNC⟩,
     hpure⟩, hbounds⟩, hnodup⟩, hinvfresh⟩, hpow5⟩ := hvalid
   have hpowR : r.R.powdrId?.isSome = true := hpow5 r.R (by simp)
   have hpowa : ∀ a ∈ ([r.a0, r.a1, r.a2, r.a3] : List Variable), a.powdrId?.isSome = true :=
@@ -631,7 +640,7 @@ theorem seqzCollapse_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (fa
   -- Byte bounds on the limbs, phrased `Bm`-free (any assignment satisfying the output buses),
   -- so the (soon-abstracted) bounds map is not referenced again.
   have habyteAll : ∀ (e : Variable → ZMod p),
-      (∀ bi ∈ (collapsedSystem cs r).busInteractions,
+      (∀ bi ∈ (collapsedSystem cs r spec).busInteractions,
         (bi.eval e).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval e) = false) →
       ∀ a ∈ ([r.a0, r.a1, r.a2, r.a3] : List Variable), (e a).val < 256 := by
     intro e he a ha
@@ -641,13 +650,13 @@ theorem seqzCollapse_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (fa
       exact lt_of_lt_of_le (Bm.sound e he a ba heq) (by simpa using hb)
     · simp at hb
   set cl := clusterConstraints r.m3 r.m2 r.m1 r.m0 r.dv r.R r.a3 r.a2 r.a1 r.a0 r.K with hcldef
-  set busE := clusterBus r.busId r.m3 r.m2 r.m1 r.m0 r.dv with hbusEdef
-  set out := collapsedSystem cs r with houtdef
+  set busE := clusterBus r.busId r.m3 r.m2 r.m1 r.m0 r.dv spec with hbusEdef
+  set out := collapsedSystem cs r spec with houtdef
   set inv := r.inv with hinvdef
   set method : ComputationMethod p := invMethod r.R r.a0 r.a1 r.a2 r.a3 with hmethoddef
   have hinvid : inv.powdrId? = none := rfl
-  -- `busE` is stateless (byte-pair bus).
-  have hbusStateless : bs.isStateful r.busId = false := (facts.bytePairBus_sound r.busId hbpb).1
+  -- `busE` is stateless (byte-check bus).
+  have hbusStateless : bs.isStateful r.busId = false := (facts.byteXorSpec_sound r.busId spec hspec).1
   -- `busE` is an input bus interaction (the range check that pins `dv` to a byte).
   have hbusEmem : busE ∈ cs.busInteractions := by simpa using hbusEmemB
   -- Distinctness: `R, a0..a3` are disjoint from the five witnesses.
@@ -747,10 +756,10 @@ theorem seqzCollapse_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (fa
   -- Evaluating the range bus at any assignment.
   have hbusEvalAt : ∀ (e : Variable → ZMod p), busE.eval e =
       { busId := r.busId, multiplicity := e r.m3 + e r.m2 + e r.m1 + e r.m0,
-        payload := [-1 + e r.dv, 0, 0, 0] } := by
+        payload := spec.encode spec.pairOp (-1 + e r.dv) 0 0 } := by
     intro e
-    simp only [hbusEdef, clusterBus, BusInteraction.eval, markerSum, eM1, e0, Expression.eval,
-      List.map_cons, List.map_nil]
+    simp only [hbusEdef, clusterBus, BusInteraction.eval, spec.encode_map, markerSum, eM1, e0,
+      Expression.eval]
   -- Dropping stateless bus interactions leaves the stateful-filtered bus list unchanged.
   have hStateEqL : ∀ (keep : BusInteraction (Expression p) → Bool)
       (L : List (BusInteraction (Expression p))),
@@ -845,7 +854,8 @@ theorem seqzCollapse_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (fa
       simp only [BusInteraction.eval, hmul, hpay]
     -- the range bus, evaluated at `g`, is a byte-pair message accepted by the fact
     have hbusEval : busE.eval g =
-        { busId := r.busId, multiplicity := v3 + v2 + v1 + v0, payload := [-1 + vd, 0, 0, 0] } := by
+        { busId := r.busId, multiplicity := v3 + v2 + v1 + v0,
+          payload := spec.encode spec.pairOp (-1 + vd) 0 0 } := by
       rw [hbusEvalAt g, gm3, gm2, gm1, gm0, gdv]
     -- all 14 cluster constraints hold at `g`
     have hclG : ∀ c ∈ cl, c.eval g = 0 := by
@@ -871,7 +881,7 @@ theorem seqzCollapse_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (fa
         · show (bi.eval g).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval g) = false
           rw [hbe, hbusEval]
           intro hmult
-          exact bus_accepts_byte_zero facts r.busId hbpb hbc (-1 + vd) (v3 + v2 + v1 + v0)
+          exact bus_accepts_byte_zero facts r.busId spec hspec hbound (-1 + vd) (v3 + v2 + v1 + v0)
             (eBus hmult)
         · have hbout : bi ∈ out.busInteractions := by
             rw [houtdef, collapsedSystem, ← hbusEdef]
@@ -963,7 +973,7 @@ theorem seqzCollapse_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (fa
       (clusterEval_iff r.m3 r.m2 r.m1 r.m0 r.dv r.R r.a3 r.a2 r.a1 r.a0 r.K env).mp
         (by rw [← hcldef]; exact fun c hc => hsat.1 c (hclMem' c hc))
     -- byte bounds (input buses hold at `env`, and the output buses are a subset)
-    have hbusOutEnv : ∀ bi ∈ (collapsedSystem cs r).busInteractions,
+    have hbusOutEnv : ∀ bi ∈ (collapsedSystem cs r spec).busInteractions,
         (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false := by
       intro bi hbi hm
       rw [collapsedSystem] at hbi
@@ -981,7 +991,7 @@ theorem seqzCollapse_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (fa
       intro hmult
       have hbe := hsat.2 busE hbusEmem
       rw [hbusEvalAt env] at hbe
-      exact bus_byte_of_accepts facts r.busId hbpb hbc (-1 + env r.dv) _ (hbe hmult)
+      exact bus_byte_of_accepts facts r.busId spec hspec hbound (-1 + env r.dv) _ (hbe hmult)
     -- forward: the gadget computes `cmp = [S == 0]`
     obtain ⟨hfRS, hfSR⟩ :=
       seqz_forward h1024 r.K (env r.R) (env r.a0) (env r.a1) (env r.a2) (env r.a3)
@@ -1085,10 +1095,13 @@ def tryList (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p 
     match extractRoles cs bi with
     | none => tryList cs bs facts rest
     | some r =>
-      if h : rolesValid cs bs facts r (BoundsMap.build facts) = true then
-        some ⟨collapsedSystem cs r, [(r.inv, invMethod r.R r.a0 r.a1 r.a2 r.a3)],
-          seqzCollapse_correct cs bs facts r (BoundsMap.build facts) h⟩
-      else tryList cs bs facts rest
+      match hbx : facts.byteXorSpec r.busId with
+      | some spec =>
+        if h : rolesValid cs bs r spec (BoundsMap.build facts) = true then
+          some ⟨collapsedSystem cs r spec, [(r.inv, invMethod r.R r.a0 r.a1 r.a2 r.a3)],
+            seqzCollapse_correct cs bs facts r spec hbx (BoundsMap.build facts) h⟩
+        else tryList cs bs facts rest
+      | none => tryList cs bs facts rest
 
 /-- The seqz-collapse pass: replace the first recognised `sltu x, 1` LessThan gadget by the is-zero
     gadget, dropping the four `diff_marker`s and `diff_val` and introducing one `QuotientOrZero`

@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.Optimizer
 import ApcOptimizer.Implementation.OpenVmFacts
+import ApcOptimizer.Implementation.Sp1Facts
 
 set_option autoImplicit false
 
@@ -30,6 +31,15 @@ def openVmOptimizer (busMap : BusMap := defaultBusMap) :
 
 end ApcOptimizer.OpenVM
 
+namespace ApcOptimizer.SP1
+
+/-- Optimizer specialized for the SP1 semantics. -/
+def sp1Optimizer (busMap : BusMap := defaultBusMap) :
+    ConstraintSystem koalaBear → ConstraintSystem koalaBear × Derivations koalaBear :=
+  optimizerWithBusFacts (sp1Facts koalaBear busMap)
+
+end ApcOptimizer.SP1
+
 /-! ## Correctness
 
     In the following theorems, we establish that the optimizers maintain correctness. -/
@@ -52,3 +62,13 @@ theorem openVmOptimizer_maintainsCorrectness (busMap : BusMap) :
     (openVmFacts babyBear busMap)
 
 end ApcOptimizer.OpenVM
+
+namespace ApcOptimizer.SP1
+
+theorem sp1Optimizer_maintainsCorrectness (busMap : BusMap) :
+    Optimizer.isCorrect (sp1Optimizer busMap)
+      (sp1BusSemantics koalaBear busMap) :=
+  optimizerWithBusFacts_maintainsCorrectness (sp1BusSemantics koalaBear busMap)
+    (sp1Facts koalaBear busMap)
+
+end ApcOptimizer.SP1

@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
 import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseq
+import ApcOptimizer.Implementation.MemoryBusDrop
 import ApcOptimizer.MemoryBus
 
 set_option autoImplicit false
@@ -108,7 +109,8 @@ theorem consecutivePayloadEq (cs : ConstraintSystem p) (bs : BusSemantics p)
     (pre mid post : List (BusInteraction (Expression p)))
     (S R : BusInteraction (Expression p))
     (hsplit : cs.busInteractions.filter (fun bi => bi.busId = busId) = pre ++ S :: mid ++ R :: post)
-    (hS : (S.eval env).multiplicity = 1) (hR : (R.eval env).multiplicity = -1)
+    (hS : (S.eval env).multiplicity = shape.setNewMult)
+    (hR : (R.eval env).multiplicity = -shape.setNewMult)
     (haddr : shape.address (S.eval env) = shape.address (R.eval env))
     (hmid : ∀ m ∈ mid, (m.eval env).multiplicity ≠ 0 →
         shape.address (m.eval env) = shape.address (S.eval env) → False) :
@@ -139,7 +141,7 @@ def checkPair (shape : MemoryBusShape) {constraints : List (Expression p)}
     (T : TwoRootMap p constraints)
     (S : BusInteraction (Expression p))
     (mid : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p)) : Bool :=
-  decide (multConst S = some 1) && decide (multConst R = some (-1)) &&
+  decide (multConst S = some shape.setNewMult) && decide (multConst R = some (-shape.setNewMult)) &&
   addrConstsEq shape S R &&
   mid.all (fun m => addrConstsNeq shape S m || addrAffineNeq shape S m
     || addrTwoRootNeq shape T S m || decide (multConst m = some 0))
@@ -159,12 +161,14 @@ theorem checkPair_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
   unfold checkPair at hchk
   simp only [Bool.and_eq_true] at hchk
   obtain ⟨⟨⟨hSm, hRm⟩, haddrEq⟩, hmidall⟩ := hchk
-  have hSm : multConst S = some 1 := of_decide_eq_true hSm
-  have hRm : multConst R = some (-1) := of_decide_eq_true hRm
-  have hSev : (S.eval env).multiplicity = 1 := by
-    show S.multiplicity.eval env = 1; exact S.multiplicity.constValue?_sound 1 hSm env
-  have hRev : (R.eval env).multiplicity = -1 := by
-    show R.multiplicity.eval env = -1; exact R.multiplicity.constValue?_sound (-1) hRm env
+  have hSm : multConst S = some shape.setNewMult := of_decide_eq_true hSm
+  have hRm : multConst R = some (-shape.setNewMult) := of_decide_eq_true hRm
+  have hSev : (S.eval env).multiplicity = shape.setNewMult := by
+    show S.multiplicity.eval env = shape.setNewMult
+    exact S.multiplicity.constValue?_sound shape.setNewMult hSm env
+  have hRev : (R.eval env).multiplicity = -shape.setNewMult := by
+    show R.multiplicity.eval env = -shape.setNewMult
+    exact R.multiplicity.constValue?_sound (-shape.setNewMult) hRm env
   have haddr : shape.address (S.eval env) = shape.address (R.eval env) :=
     addrConstsEq_sound shape S R haddrEq env
   have hcon : ∀ c ∈ cs.algebraicConstraints, c.eval env = 0 := hsat.1
@@ -216,7 +220,7 @@ def findConsumer (shape : MemoryBusShape) {constraints : List (Expression p)}
       revMid.reverse ++ rest = mrp.1 ++ mrp.2.1 :: mrp.2.2 })
   | _, [] => none
   | revMid, r :: rest =>
-      if decide (multConst r = some (-1)) && addrConstsEq shape S r then
+      if decide (multConst r = some (-shape.setNewMult)) && addrConstsEq shape S r then
         some ⟨(revMid.reverse, r, rest), rfl⟩
       else if addrConstsNeq shape S r || addrAffineNeq shape S r || addrTwoRootNeq shape T S r
           || decide (multConst r = some 0) then
@@ -236,7 +240,7 @@ def candidateSplits (shape : MemoryBusShape) {constraints : List (Expression p)}
     List (SplitCand p L)
   | _, [], _ => []
   | revPre, S :: rest, hinv =>
-      (if decide (multConst S = some 1) then
+      (if decide (multConst S = some shape.setNewMult) then
         match findConsumer shape T S [] rest with
         | some ⟨(mid, R, post), hmrp⟩ =>
           [⟨(revPre.reverse, S, mid, R, post), by

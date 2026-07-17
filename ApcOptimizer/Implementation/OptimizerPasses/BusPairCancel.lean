@@ -2,6 +2,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
+import ApcOptimizer.Implementation.OptimizerPasses.BytePack
 import ApcOptimizer.Implementation.MemoryBusDrop
 
 set_option autoImplicit false
@@ -24,7 +25,7 @@ Under the spec this is sound because:
   bus-fact bound from a remaining interaction is `≤ 256` (`byteJustified`), or — on prime `p` — a
   variable whose defining constraint pins it to a byte on every point of its selector flags'
   proven finite domains (`deepBoundOk`, the one-hot byte-selection shape). When even that fails,
-  the pass *materializes* the obligation as an explicit self-check on a `byteCheck` bus
+  the pass *materializes* the obligation as an explicit self-check on a `byteXorSpec` bus
   (`emitOk`), still a net bus win. The pair's net side-effect contribution is `0`;
 * **completeness** (`cs.impliesAdmissible out`): removing the pair preserves the VM's `admissible`
   predicate (`admissible_dropPair`), provided the *shield* condition on the before-region `A`
@@ -575,7 +576,7 @@ theorem toBusState_cons_stateful (bs : BusSemantics p) (env : Variable → ZMod 
 theorem sideEffects_dropPair_equiv (bs : BusSemantics p) (env : Variable → ZMod p)
     (A B C : List (BusInteraction (Expression p))) (S R : BusInteraction (Expression p))
     (hSstate : bs.isStateful S.busId = true) (hRstate : bs.isStateful R.busId = true)
-    (hSm : (S.eval env).multiplicity = 1) (hRm : (R.eval env).multiplicity = -1)
+    (hRm : (R.eval env).multiplicity = -(S.eval env).multiplicity)
     (hbusEq : (S.eval env).busId = (R.eval env).busId)
     (hpay : (S.eval env).payload = (R.eval env).payload) :
     toBusState bs env (A ++ S :: B ++ R :: C) ≈ toBusState bs env (A ++ B ++ C) := by
@@ -588,7 +589,7 @@ theorem sideEffects_dropPair_equiv (bs : BusSemantics p) (env : Variable → ZMo
   rw [hstructOut, toBusState_append, toBusState_append]
   have hmsgEq : ((S.eval env).busId, (S.eval env).payload)
       = ((R.eval env).busId, (R.eval env).payload) := by rw [hbusEq, hpay]
-  simp only [multiplicitySum_append, multiplicitySum, hmsgEq, hSm, hRm]
+  simp only [multiplicitySum_append, multiplicitySum, hmsgEq, hRm]
   split_ifs <;> ring
 
 /-! ## The active∧stateful evaluated messages (what `admissible` inspects) -/
@@ -679,8 +680,9 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     (hp1 : (1 : ZMod p) ≠ 0)
     (A B C : List (BusInteraction (Expression p))) (S R : BusInteraction (Expression p))
     (busId : Nat) (shape : MemoryBusShape) (hshape : facts.memShape busId = some shape)
-    (pattern : List (Option (ZMod p))) (slots : List Nat)
-    (hslots : facts.recvByteSlots busId pattern = some slots)
+    (pattern : List (Option (ZMod p))) (slots : List Nat) (bound : Nat)
+    (hslots : facts.recvByteSlots busId pattern = some (slots, bound))
+    (hbound : 256 ≤ bound)
     (hRmatch : ∀ env, Matches (R.eval env).payload pattern)
     (checks : List (BusInteraction (Expression p)))
     (hchecks : ∀ ck ∈ checks,
@@ -696,7 +698,8 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
       ∀ slot ∈ slots, ∀ x : ZMod p, (R.eval env).payload[slot]? = some x → x.val < 256)
     (hsplit : cs.busInteractions = A ++ S :: B ++ R :: C)
     (hSbus : S.busId = busId) (hRbus : R.busId = busId)
-    (hSm : S.multiplicity.constValue? = some 1) (hRm : R.multiplicity.constValue? = some (-1))
+    (hSm : S.multiplicity.constValue? = some shape.setNewMult)
+    (hRm : R.multiplicity.constValue? = some (-shape.setNewMult))
     (hpayEval : ∀ (env : Variable → ZMod p), (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
       (S.eval env).payload = (R.eval env).payload)
     (hmidEval : ∀ (env : Variable → ZMod p), (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
@@ -709,10 +712,10 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
         A = A_pre ++ m0 :: A_suf → (m0.eval env).busId = busId →
         (m0.eval env).multiplicity ≠ 0 →
         shape.address (m0.eval env) = shape.address (S.eval env) →
-        (m0.eval env).multiplicity = 1 →
+        (m0.eval env).multiplicity = shape.setNewMult →
         ∃ Rp ∈ A_suf, (Rp.eval env).busId = busId ∧ (Rp.eval env).multiplicity ≠ 0 ∧
           shape.address (Rp.eval env) = shape.address (S.eval env) ∧
-          (Rp.eval env).multiplicity = -1) :
+          (Rp.eval env).multiplicity = -shape.setNewMult) :
     PassCorrect cs { cs with busInteractions := A ++ B ++ C ++ checks } [] bs := by
   set out : ConstraintSystem p := { cs with busInteractions := A ++ B ++ C ++ checks } with hout
   have houtb : out.busInteractions = A ++ B ++ C ++ checks := rfl
@@ -725,13 +728,14 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
   have hStateful : bs.isStateful busId = true := facts.memShape_stateful busId shape hshape
   have hSstate : bs.isStateful S.busId = true := hSbus ▸ hStateful
   have hRstate : bs.isStateful R.busId = true := hRbus ▸ hStateful
-  have hSmEv : ∀ env, (S.eval env).multiplicity = 1 :=
-    fun env => S.multiplicity.constValue?_sound 1 hSm env
-  have hRmEv : ∀ env, (R.eval env).multiplicity = -1 :=
-    fun env => R.multiplicity.constValue?_sound (-1) hRm env
-  have hSactive : ∀ env, (S.eval env).multiplicity ≠ 0 := fun env => by rw [hSmEv env]; exact hp1
+  have hSmEv : ∀ env, (S.eval env).multiplicity = shape.setNewMult :=
+    fun env => S.multiplicity.constValue?_sound shape.setNewMult hSm env
+  have hRmEv : ∀ env, (R.eval env).multiplicity = -shape.setNewMult :=
+    fun env => R.multiplicity.constValue?_sound (-shape.setNewMult) hRm env
+  have hSactive : ∀ env, (S.eval env).multiplicity ≠ 0 :=
+    fun env => by rw [hSmEv env]; exact shape.setNewMult_ne_zero hp1
   have hRactive : ∀ env, (R.eval env).multiplicity ≠ 0 :=
-    fun env => by rw [hRmEv env]; exact neg_ne_zero.mpr hp1
+    fun env => by rw [hRmEv env]; exact neg_ne_zero.mpr (shape.setNewMult_ne_zero hp1)
   have haddrEv : ∀ env, (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
       shape.address (S.eval env) = shape.address (R.eval env) := fun env hcon => by
     simp only [MemoryBusShape.address, hpayEval env hcon]
@@ -744,15 +748,18 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
   -- `recvByteSlots` contract), and the receive's byte slots are justified from the remaining
   -- interactions, whose obligations hold under any `out`-satisfying assignment.
   have hnvS : ∀ env, bs.violatesConstraint (S.eval env) = false := fun env =>
-    (facts.recvByteSlots_sound busId pattern slots hslots (S.eval env)
+    (facts.recvByteSlots_sound busId shape hshape pattern slots bound hslots (S.eval env)
       (show (S.eval env).busId = busId from hSbus)).1 (hSmEv env)
   have hnvR : ∀ env, out.satisfies bs env → bs.violatesConstraint (R.eval env) = false := by
     intro env hsat
-    refine (facts.recvByteSlots_sound busId pattern slots hslots (R.eval env)
+    have hbyteEnv : ∀ slot ∈ slots, ∀ x : ZMod p, (R.eval env).payload[slot]? = some x →
+        x.val < 256 := by
+      refine hbyte env (fun c hc => hsat.1 c hc) ?_
+      intro bi hbi hne
+      exact hsat.2 bi (by rw [houtb]; exact hbi) hne
+    refine (facts.recvByteSlots_sound busId shape hshape pattern slots bound hslots (R.eval env)
       (show (R.eval env).busId = busId from hRbus)).2 (hRmEv env) (hRmatch env)
-      (hbyte env (fun c hc => hsat.1 c hc) ?_)
-    intro bi hbi hne
-    exact hsat.2 bi (by rw [houtb]; exact hbi) hne
+      (fun slot hs x hx => Nat.lt_of_lt_of_le (hbyteEnv slot hs x hx) hbound)
   -- Side effects are `≈`-equal (the pair contributes `0` net; the checks are stateless). The
   -- evaluated-payload equality is discharged from the constraints, which hold in **both**
   -- refinement directions — a drop leaves `algebraicConstraints` untouched.
@@ -767,7 +774,8 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
       rw [toBusState_append, toBusState_stateless bs env checks hchecksStateless,
         List.append_nil]
     rw [e1, e2]
-    exact sideEffects_dropPair_equiv bs env A B C S R hSstate hRstate (hSmEv env) (hRmEv env)
+    exact sideEffects_dropPair_equiv bs env A B C S R hSstate hRstate
+      (by rw [hRmEv env, hSmEv env])
       (by rw [show (S.eval env).busId = busId from hSbus, show (R.eval env).busId = busId from hRbus])
       (hpayEval env hcon)
   -- `cs.satisfies` implies `out.satisfies` (the kept core has fewer obligations; each emitted
@@ -1447,7 +1455,7 @@ def midRefuted (shape : MemoryBusShape) {constraints : List (Expression p)}
 def preRefuted (shape : MemoryBusShape) {constraints : List (Expression p)}
     (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
   midRefuted shape T busId S m ||
-    (match multConst m with | some c => decide (c ≠ 1) | none => false)
+    (match multConst m with | some c => decide (c ≠ shape.setNewMult) | none => false)
 
 theorem midRefuted_sound (shape : MemoryBusShape) {constraints : List (Expression p)}
     (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p))
@@ -1470,7 +1478,7 @@ theorem preRefuted_sound (shape : MemoryBusShape) {constraints : List (Expressio
     (hcon : ∀ c ∈ constraints, c.eval env = 0)
     (hbid : (m.eval env).busId = busId) (hmne : (m.eval env).multiplicity ≠ 0)
     (hmaddr : shape.address (m.eval env) = shape.address (S.eval env)) :
-    (m.eval env).multiplicity ≠ 1 := by
+    (m.eval env).multiplicity ≠ shape.setNewMult := by
   unfold preRefuted at h
   rw [Bool.or_eq_true] at h
   rcases h with h | h
@@ -1486,20 +1494,21 @@ theorem preRefuted_sound (shape : MemoryBusShape) {constraints : List (Expressio
 /-- `m` is a *provable* active same-address receive on `busId`: on-bus, constant `-1`
     multiplicity, and a constant address equal to `S`'s. -/
 def provRecv (shape : MemoryBusShape) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
-  decide (m.busId = busId) && addrConstsEq shape S m && decide (multConst m = some (-1))
+  decide (m.busId = busId) && addrConstsEq shape S m && decide (multConst m = some (-shape.setNewMult))
 
 theorem provRecv_sound (shape : MemoryBusShape) (busId : Nat) (hp1 : (1 : ZMod p) ≠ 0)
     (S m : BusInteraction (Expression p)) (h : provRecv shape busId S m = true)
     (env : Variable → ZMod p) :
     (m.eval env).busId = busId ∧ (m.eval env).multiplicity ≠ 0 ∧
-    shape.address (m.eval env) = shape.address (S.eval env) ∧ (m.eval env).multiplicity = -1 := by
+    shape.address (m.eval env) = shape.address (S.eval env) ∧
+      (m.eval env).multiplicity = -shape.setNewMult := by
   unfold provRecv at h
   rw [Bool.and_eq_true, Bool.and_eq_true] at h
   obtain ⟨⟨hbid, haddr⟩, hmult⟩ := h
-  have hmult' : (m.eval env).multiplicity = -1 :=
-    m.multiplicity.constValue?_sound (-1) (of_decide_eq_true hmult) env
+  have hmult' : (m.eval env).multiplicity = -shape.setNewMult :=
+    m.multiplicity.constValue?_sound (-shape.setNewMult) (of_decide_eq_true hmult) env
   refine ⟨of_decide_eq_true hbid, ?_, (addrConstsEq_sound shape S m haddr env).symm, hmult'⟩
-  rw [hmult']; exact neg_ne_zero.mpr hp1
+  rw [hmult']; exact neg_ne_zero.mpr (shape.setNewMult_ne_zero hp1)
 
 /-- Single right-to-left pass returning `(hasRecvSoFar, ok)`: `hasRecvSoFar` is whether the tail
     processed so far (everything to the right) contains a provable active same-address receive; `ok`
@@ -1567,110 +1576,113 @@ theorem shieldOk_sound (shape : MemoryBusShape) {constraints : List (Expression 
 When the remaining system does not justify a byte slot of the dropped receive, the receive was
 that limb's *only* byte guarantee — silently dropping it would widen the satisfying set (a real
 soundness issue, not a proof artifact). The pass then *materializes* the obligation as an
-explicit self-check `[e, e, 0, 1]` (multiplicity 1) on a `byteCheck` bus: still a net
-bus-interaction win (2 dropped, 1 added), and later cancellations of the same chain are
+explicit single-value byte check (`mkByteCheck`, multiplicity 1) on a `byteXorSpec` bus: still a
+net bus-interaction win (2 dropped, 1 added), and later cancellations of the same chain are
 justified by the emitted check. -/
 
 /-- Certificate that an emitted check is a faithful carrier of `R`'s byte obligation: it sits on
-    a `byteCheck` bus, has multiplicity 1 and self-check payload `[e, e, 0, 1]` where `e` is one
-    of `R`'s declared byte-slot entries whose byte-ness `R`'s own accepted receive implies (a
-    `slotBound` of at most 256 at that slot, at multiplicity `-1`, against `R`'s own constant
-    pattern). -/
-def emitOk (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) (slots : List Nat)
-    (R ck : BusInteraction (Expression p)) : Bool :=
-  facts.byteCheck ck.busId &&
-  decide (ck.multiplicity = (.const 1 : Expression p)) &&
-  (match ck.payload with
-   | [e1, e2, z, o] =>
-     decide (e1 = e2) && decide (z = (.const 0 : Expression p)) &&
-     decide (o = (.const 1 : Expression p)) &&
-     slots.any (fun slot =>
-       decide (R.payload[slot]? = some e1) &&
-       (match facts.slotBound busId (-1) (R.payload.map Expression.constValue?) slot with
-        | some b => decide (b ≤ 256)
-        | none => false))
-   | _ => false)
+    a `byteXorSpec` bus (byte bound `256`), has multiplicity 1 and a self-check payload decoding to
+    `(xorOp, e, e, 0)` where `e` is one of `R`'s declared byte-slot entries whose byte-ness `R`'s
+    own accepted receive implies (a `slotBound` of at most 256 at that slot, at multiplicity `-1`,
+    against `R`'s own constant pattern). -/
+def emitOk (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) (shape : MemoryBusShape)
+    (slots : List Nat) (R ck : BusInteraction (Expression p)) : Bool :=
+  match facts.byteXorSpec ck.busId with
+  | none => false
+  | some spec =>
+    decide (spec.bound = 256) &&
+    decide (ck.multiplicity = (.const 1 : Expression p)) &&
+    (match spec.decode ck.payload with
+     | some (op, o1, o2, r) =>
+       decide (op = (.const spec.xorOp : Expression p)) && decide (o1 = o2) &&
+       decide (r = (.const 0 : Expression p)) &&
+       slots.any (fun slot =>
+         decide (R.payload[slot]? = some o1) &&
+         (match facts.slotBound busId (-shape.setNewMult) (R.payload.map Expression.constValue?) slot with
+          | some b => decide (b ≤ 256)
+          | none => false))
+     | none => false)
 
 theorem emitOk_sound (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat)
-    (slots : List Nat) (R ck : BusInteraction (Expression p))
-    (h : emitOk bs facts busId slots R ck = true)
-    (hRbus : R.busId = busId) (hRmEv : ∀ env, (R.eval env).multiplicity = -1) :
+    (shape : MemoryBusShape) (slots : List Nat) (R ck : BusInteraction (Expression p))
+    (h : emitOk bs facts busId shape slots R ck = true)
+    (hRbus : R.busId = busId) (hRmEv : ∀ env, (R.eval env).multiplicity = -shape.setNewMult) :
     bs.isStateful ck.busId = false ∧
     (∀ env, bs.violatesConstraint (R.eval env) = false →
       bs.violatesConstraint (ck.eval env) = false) ∧
     (∀ env, bs.breaksInvariant (ck.eval env) = false) ∧
     (∀ v ∈ ck.vars, v ∈ R.vars) := by
   unfold emitOk at h
-  rw [Bool.and_eq_true, Bool.and_eq_true] at h
-  obtain ⟨⟨hbc, hmultd⟩, hrest⟩ := h
-  have hmult := of_decide_eq_true hmultd
-  obtain ⟨hstateless, hbreak, hviol⟩ := facts.byteCheck_sound ck.busId hbc
-  split at hrest
-  · rename_i e1 e2 z o heq
-    rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hrest
-    obtain ⟨⟨⟨he12d, hzd⟩, hod⟩, hany⟩ := hrest
-    have he12 := of_decide_eq_true he12d
-    have hz := of_decide_eq_true hzd
-    have ho := of_decide_eq_true hod
-    obtain ⟨slot, hslotmem, hslot⟩ := List.any_eq_true.1 hany
-    rw [Bool.and_eq_true] at hslot
-    obtain ⟨hgetd, hbnd⟩ := hslot
-    have hget := of_decide_eq_true hgetd
-    -- the evaluated check is a literal self-check on `e1`'s value
-    have hev : ∀ env, ck.eval env =
-        { busId := ck.busId, multiplicity := (1 : ZMod p),
-          payload := [e1.eval env, e1.eval env, (0 : ZMod p), (1 : ZMod p)] } := by
-      intro env
-      simp only [BusInteraction.eval, heq, hmult, hz, ho, List.map_cons, List.map_nil,
-        Expression.eval, ← he12]
-    -- `e1` sits in `R`'s payload
-    have he1mem : e1 ∈ R.payload := by
-      have := List.getElem?_eq_some_iff.mp hget
-      obtain ⟨hlt, hgetE⟩ := this
-      exact hgetE ▸ List.getElem_mem hlt
-    refine ⟨hstateless, ?_, ?_, ?_⟩
-    · -- the check is implied by `R`'s own accepted receive
-      intro env hRok
-      cases hb : facts.slotBound busId (-1) (R.payload.map Expression.constValue?) slot with
-      | none => rw [hb] at hbnd; simp at hbnd
-      | some b =>
-        rw [hb] at hbnd
-        dsimp only at hbnd
-        have hgetEv : (R.eval env).payload[slot]? = some (e1.eval env) := by
-          show (R.payload.map (fun e => e.eval env))[slot]? = some (e1.eval env)
-          rw [List.getElem?_map, hget]; rfl
-        have hfact : facts.slotBound (R.eval env).busId (R.eval env).multiplicity
-            (R.payload.map Expression.constValue?) slot = some b := by
-          rw [hRmEv env, show (R.eval env).busId = busId from hRbus]
-          exact hb
-        have hbyteE : (e1.eval env).val < 256 :=
-          lt_of_lt_of_le
-            (facts.slotBound_sound (R.eval env) (R.payload.map Expression.constValue?)
-              slot b (e1.eval env) hfact (matches_evalPattern R.payload env) hRok hgetEv)
-            (of_decide_eq_true hbnd)
-        rw [hev env]
-        exact (hviol (e1.eval env) 1).mpr hbyteE
-    · -- the check breaks no invariant
-      intro env
-      rw [hev env]
-      exact hbreak (e1.eval env)
-    · -- the check's variables are `e1`'s, which are `R`'s
-      intro v hv
-      rw [BusInteraction.vars, List.mem_append] at hv
-      have hvE : v ∈ e1.vars := by
-        rcases hv with hm | hm
-        · rw [hmult] at hm; simp [Expression.vars] at hm
-        · rw [heq] at hm
-          obtain ⟨e, he, hve⟩ := List.mem_flatMap.1 hm
-          simp only [List.mem_cons, List.not_mem_nil, or_false] at he
-          rcases he with rfl | rfl | rfl | rfl
-          · exact hve
-          · rw [← he12] at hve; exact hve
-          · rw [hz] at hve; simp [Expression.vars] at hve
-          · rw [ho] at hve; simp [Expression.vars] at hve
-      rw [BusInteraction.vars, List.mem_append]
-      exact Or.inr (List.mem_flatMap.2 ⟨e1, he1mem, hvE⟩)
-  · exact absurd hrest (by simp)
+  split at h
+  · exact absurd h (by simp)
+  · rename_i spec hspec
+    rw [Bool.and_eq_true, Bool.and_eq_true] at h
+    obtain ⟨⟨hbd, hmultd⟩, hrest⟩ := h
+    have hbound : spec.bound = 256 := of_decide_eq_true hbd
+    have hmult := of_decide_eq_true hmultd
+    have hstateless := (facts.byteXorSpec_sound ck.busId spec hspec).1
+    split at hrest
+    · rename_i op o1 o2 r hdec
+      rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at hrest
+      obtain ⟨⟨⟨hopd, ho12d⟩, hrd⟩, hany⟩ := hrest
+      have hop := of_decide_eq_true hopd
+      have ho12 := of_decide_eq_true ho12d
+      have hr := of_decide_eq_true hrd
+      obtain ⟨slot, hslotmem, hslot⟩ := List.any_eq_true.1 hany
+      rw [Bool.and_eq_true] at hslot
+      obtain ⟨hgetd, hbnd⟩ := hslot
+      have hget := of_decide_eq_true hgetd
+      -- the check *is* `mkByteCheck spec ck.busId o1`
+      have hckeq : ck = mkByteCheck spec ck.busId o1 := by
+        obtain ⟨ckBus, ckMul, ckPay⟩ := ck
+        have hpay : ckPay = spec.encode (.const spec.xorOp) o1 o1 (.const 0) := by
+          have he := spec.decode_eq_encode ckPay op o1 o2 r hdec
+          rw [hop, ← ho12, hr] at he; exact he
+        have hm' : ckMul = Expression.const 1 := hmult
+        show ({ busId := ckBus, multiplicity := ckMul, payload := ckPay } :
+          BusInteraction (Expression p)) = mkByteCheck spec ckBus o1
+        rw [hm', hpay]; rfl
+      -- `o1` sits in `R`'s payload
+      have ho1mem : o1 ∈ R.payload := by
+        have := List.getElem?_eq_some_iff.mp hget
+        obtain ⟨hlt, hgetE⟩ := this
+        exact hgetE ▸ List.getElem_mem hlt
+      refine ⟨hstateless, ?_, ?_, ?_⟩
+      · -- the check is implied by `R`'s own accepted receive
+        intro env hRok
+        cases hb : facts.slotBound busId (-shape.setNewMult) (R.payload.map Expression.constValue?) slot with
+        | none => rw [hb] at hbnd; simp at hbnd
+        | some b =>
+          rw [hb] at hbnd
+          dsimp only at hbnd
+          have hgetEv : (R.eval env).payload[slot]? = some (o1.eval env) := by
+            show (R.payload.map (fun e => e.eval env))[slot]? = some (o1.eval env)
+            rw [List.getElem?_map, hget]; rfl
+          have hfact : facts.slotBound (R.eval env).busId (R.eval env).multiplicity
+              (R.payload.map Expression.constValue?) slot = some b := by
+            rw [hRmEv env, show (R.eval env).busId = busId from hRbus]
+            exact hb
+          have hbyteE : (o1.eval env).val < 256 :=
+            lt_of_lt_of_le
+              (facts.slotBound_sound (R.eval env) (R.payload.map Expression.constValue?)
+                slot b (o1.eval env) hfact (matches_evalPattern R.payload env) hRok hgetEv)
+              (of_decide_eq_true hbnd)
+          rw [hckeq, mkByteCheck_accepted bs facts spec ck.busId hspec o1 env, hbound]
+          exact hbyteE
+      · -- the check breaks no invariant
+        intro env
+        rw [hckeq]; exact mkByteCheck_breaks bs facts spec ck.busId hspec o1 env
+      · -- the check's variables are `o1`'s, which are `R`'s
+        intro v hv
+        rw [hckeq, BusInteraction.vars, List.mem_append] at hv
+        have hvE : v ∈ o1.vars := by
+          rcases hv with hm | hm
+          · simp only [mkByteCheck, Expression.vars, List.not_mem_nil] at hm
+          · obtain ⟨pe, hpe, hve⟩ := List.mem_flatMap.1 hm
+            exact mkByteCheck_payload_vars spec ck.busId o1 pe hpe hve
+        rw [BusInteraction.vars, List.mem_append]
+        exact Or.inr (List.mem_flatMap.2 ⟨o1, ho1mem, hvE⟩)
+    · exact absurd hrest (by simp)
 
 /-- The declared byte slots of `R` whose payload entries the witnesses do not justify. -/
 def unjustifiedSlots (deep : Bool) (domCs : List (Expression p))
@@ -1693,13 +1705,14 @@ def checkCancel (deep : Bool) {all : List (Expression p)} (bs : BusSemantics p)
     (M : Thunk (EqConstraintMap p all))
     (domCs : List (Expression p)) (candsOf : Variable → List (Expression p))
     (wits : Variable → List (BusInteraction (Expression p)))
-    (busId : Nat) (slots : List Nat)
+    (busId : Nat) (shape : MemoryBusShape) (slots : List Nat) (bound : Nat)
     (S R : BusInteraction (Expression p))
     (checks : List (BusInteraction (Expression p))) : Bool :=
   decide (S.busId = busId) && decide (R.busId = busId) &&
-  decide (multConst S = some 1) && decide (multConst R = some (-1)) &&
+  decide (multConst S = some shape.setNewMult) && decide (multConst R = some (-shape.setNewMult)) &&
+  decide (256 ≤ bound) &&
   payloadEntailedEq M S.payload R.payload &&
-  checks.all (emitOk bs facts busId slots R) &&
+  checks.all (emitOk bs facts busId shape slots R) &&
   recvSlotsJustified deep domCs candsOf bs facts wits slots R
 
 /-- A passing `checkCancel` — together with the split equation, the region hypotheses the scan
@@ -1709,7 +1722,7 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
-    (slots : List Nat)
+    (slots : List Nat) (bound : Nat)
     (T : Thunk (TwoRootMap p cs.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (domCs : List (Expression p)) (candsOf : Variable → List (Expression p))
@@ -1717,7 +1730,7 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (A : List (BusInteraction (Expression p))) (S : BusInteraction (Expression p))
     (B : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p))
     (C : List (BusInteraction (Expression p)))
-    (hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) = some slots)
+    (hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) = some (slots, bound))
     (checks : List (BusInteraction (Expression p)))
     (hsplit : cs.busInteractions = A ++ S :: B ++ R :: C)
     (hdomCs : ∀ c ∈ domCs, c ∈ cs.algebraicConstraints)
@@ -1725,17 +1738,17 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (hwits : ∀ v, ∀ bi ∈ wits v, bi ∈ A ++ B ++ C ++ checks)
     (hmid : ∀ m0 ∈ B, midRefuted shape T busId S m0 = true)
     (hshield : shieldOk shape T busId S A = true)
-    (h : checkCancel deep bs facts M domCs candsOf wits busId slots S R checks = true) :
+    (h : checkCancel deep bs facts M domCs candsOf wits busId shape slots bound S R checks = true) :
     PassCorrect cs { cs with busInteractions := A ++ B ++ C ++ checks } [] bs := by
   unfold checkCancel at h
   simp only [Bool.and_eq_true] at h
-  obtain ⟨⟨⟨⟨⟨⟨hSb, hRb⟩, hSm⟩, hRm⟩, hpay⟩, hemit⟩, hjust⟩ := h
-  have hRmEv : ∀ env, (R.eval env).multiplicity = -1 :=
-    fun env => R.multiplicity.constValue?_sound (-1) (of_decide_eq_true hRm) env
+  obtain ⟨⟨⟨⟨⟨⟨⟨hSb, hRb⟩, hSm⟩, hRm⟩, hbnd⟩, hpay⟩, hemit⟩, hjust⟩ := h
+  have hRmEv : ∀ env, (R.eval env).multiplicity = -shape.setNewMult :=
+    fun env => R.multiplicity.constValue?_sound (-shape.setNewMult) (of_decide_eq_true hRm) env
   refine dropPair_correct cs bs facts hp1 A B C S R busId shape hshape
-    (R.payload.map Expression.constValue?) slots hslots
+    (R.payload.map Expression.constValue?) slots bound hslots (of_decide_eq_true hbnd)
     (fun env => matches_evalPattern R.payload env) checks
-    (fun ck hck => emitOk_sound bs facts busId slots R ck
+    (fun ck hck => emitOk_sound bs facts busId shape slots R ck
       (List.all_eq_true.mp hemit ck hck) (of_decide_eq_true hRb) hRmEv)
     (fun env hall hbus => recvSlotsJustified_sound deep cs.algebraicConstraints domCs candsOf
       bs facts (A ++ B ++ C ++ checks) wits slots R hdeep hdomCs hcands hwits hjust env hall hbus)
@@ -1915,7 +1928,7 @@ def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
     (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ cs0.algebraicConstraints)
     (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
     (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
-    (iP jP : Nat) (S R : BusInteraction (Expression p)) (slots : List Nat)
+    (iP jP : Nat) (S R : BusInteraction (Expression p)) (slots : List Nat) (bound : Nat)
     (checks : List (BusInteraction (Expression p)))
     -- `checksNew` is passed literally (`checksOld` unchanged on the common no-emit path, so no
     -- `checksOld ++ []` copy) with its defining equation for the proof.
@@ -1924,11 +1937,11 @@ def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
     (hij : iP < jP) (hjsz : jP < arr.size)
     (hSget : arr[iP]? = some S) (hRget : arr[jP]? = some R)
     (hSalive : alive[iP]?.getD false = true) (hRalive : alive[jP]?.getD false = true)
-    (hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) = some slots)
+    (hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) = some (slots, bound))
     (hmid : ∀ m0 ∈ liveSeg arr alive (iP + 1) (jP - iP - 1), midRefuted shape T busId S m0 = true)
     (hshield : shieldOk shape T busId S (liveSeg arr alive 0 iP) = true)
     (hchk : checkCancel deep bs facts M domCs candsOf
-      (dropWits facts arr alive S R checksOld checks) busId slots S R checks = true) :
+      (dropWits facts arr alive S R checksOld checks) busId shape slots bound S R checks = true) :
     DropResult cs0 bs arr alive checksOld := by
   let A := liveSeg arr alive 0 iP
   let B := liveSeg arr alive (iP + 1) (jP - iP - 1)
@@ -1952,7 +1965,7 @@ def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
   have hstep : PassCorrect (mkCs cs0 arr alive checksOld)
       { mkCs cs0 arr alive checksOld with
         busInteractions := A ++ B ++ (C' ++ checksOld) ++ checks } [] bs :=
-    checkCancel_sound (mkCs cs0 arr alive checksOld) bs facts hp1 deep hdeep busId shape hshape slots
+    checkCancel_sound (mkCs cs0 arr alive checksOld) bs facts hp1 deep hdeep busId shape hshape slots bound
       T M domCs candsOf (dropWits facts arr alive S R checksOld checks)
       A S B R (C' ++ checksOld) hslots checks hsplit hdomCs hcands
       (dropWits_mem facts arr alive S R checksOld checks horig hchecks) hmid hshield hchk
@@ -1994,7 +2007,7 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
     (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
     (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
     (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
-    (bcBus? : Option Nat)
+    (bcBus? : Option (Nat × ByteXorSpec p))
     (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
     (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
     (idx : Std.HashMap UInt64 (List Nat))
@@ -2005,7 +2018,7 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
     let next := fun (_ : Unit) => findCancelGoIdx cs0 bs facts hp1 deep hdeep aggressive busId shape
       hshape T M domCsT candsT bcBus? arr alive checksOld hsz idx (i + 1)
     if haliveS : alive[i]?.getD false = true then
-    if decide (multConst S = some 1) && decide (S.busId = busId) then
+    if decide (multConst S = some shape.setNewMult) && decide (S.busId = busId) then
       match hfm : firstMatchAt M arr alive busId S i (idx.getD
           (mixHash (hash busId)
             (if aggressive then addrHash shape S.payload else payloadHash S.payload)) []) with
@@ -2033,17 +2046,17 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
             rw [← hAeq]; exact hshieldA
           match hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) with
           | none => next ()
-          | some slots =>
+          | some (slots, bound) =>
           if hchk0 : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
-              (dropWits facts arr alive S R checksOld []) busId slots S R [] = true then
+              (dropWits facts arr alive S R checksOld []) busId shape slots bound S R [] = true then
             some (mkDropResult cs0 bs facts hp1 deep hdeep busId shape hshape T M
               domCsT.get.val domCsT.get.property candsT.get.lookup (fun x => candsT.get.lookup_mem x)
-              arr alive checksOld hsz i j S R slots [] checksOld (List.append_nil checksOld).symm
+              arr alive checksOld hsz i j S R slots bound [] checksOld (List.append_nil checksOld).symm
               false 0 i hij hjlt hSget hR haliveS hRalive hslots hmid hshield hchk0)
           else
-          -- Unjustified byte slots are materialized as one explicit self-check on a `byteCheck`
+          -- Unjustified byte slots are materialized as one explicit self-check on a `byteXorSpec`
           -- bus. Such a check never re-enters the search and needs no index entry: its bus is
-          -- stateless (`facts.byteCheck_sound`), whereas every bus the scan visits satisfies
+          -- stateless (`facts.byteXorSpec_sound`), whereas every bus the scan visits satisfies
           -- `facts.memShape … = some shape`, hence is stateful (`facts.memShape_stateful`) — a
           -- check is therefore never a send/receive candidate. It lives only in the threaded
           -- `checks` list (consulted by `dropWits` for byte justification), at the logical tail.
@@ -2051,16 +2064,15 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
             (dropWits facts arr alive S R checksOld []) slots R
           let checks : List (BusInteraction (Expression p)) :=
             match unjust, bcBus? with
-            | [slot], some bcBus => (R.payload[slot]?).elim [] (fun e =>
-                [{ busId := bcBus, multiplicity := .const 1,
-                   payload := [e, e, .const 0, .const 1] }])
+            | [slot], some (bcBus, spec) => (R.payload[slot]?).elim [] (fun e =>
+                [mkByteCheck spec bcBus e])
             | _, _ => []
           if !checks.isEmpty && (aggressive || decide (S.payload = R.payload)) then
             if hchk : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
-                (dropWits facts arr alive S R checksOld checks) busId slots S R checks = true then
+                (dropWits facts arr alive S R checksOld checks) busId shape slots bound S R checks = true then
               some (mkDropResult cs0 bs facts hp1 deep hdeep busId shape hshape T M
                 domCsT.get.val domCsT.get.property candsT.get.lookup (fun x => candsT.get.lookup_mem x)
-                arr alive checksOld hsz i j S R slots checks (checksOld ++ checks) rfl
+                arr alive checksOld hsz i j S R slots bound checks (checksOld ++ checks) rfl
                 true 0 i hij hjlt hSget hR haliveS hRalive hslots hmid hshield hchk)
             else next ()
           else next ()
@@ -2087,7 +2099,7 @@ def findCancel (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFact
     (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
     (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
     (idx : Std.HashMap UInt64 (List Nat))
-    (bcBus? : Option Nat) (resumeIdx resumePos : Nat) :
+    (bcBus? : Option (Nat × ByteXorSpec p)) (resumeIdx resumePos : Nat) :
     Nat → List Nat → Option (DropResult cs0 bs arr alive checksOld)
   | _, [] => none
   | curIdx, busId :: rest =>
@@ -2122,7 +2134,7 @@ def cancelLoop (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFact
     (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
     (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
     (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
-    (bcBus? : Option Nat) (busIds : List Nat)
+    (bcBus? : Option (Nat × ByteXorSpec p)) (busIds : List Nat)
     (arr : Array (BusInteraction (Expression p)))
     (idx : Std.HashMap UInt64 (List Nat))
     (alive : Array Bool) (checksOld : List (BusInteraction (Expression p)))
@@ -2149,7 +2161,7 @@ def cancelLoop (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFact
 /-- Drop every matched consecutive send/receive pair on the declared memory buses with a
     `recvByteSlots` contract — justifying each dropped receive's byte obligation from the remaining
     interactions (shallow bus-fact bounds, or the deep one-hot-selection analysis on prime `p`), or
-    materializing it as one explicit byte check on a `byteCheck` bus. Runs its own cancellation
+    materializing it as one explicit byte check on a `byteXorSpec` bus. Runs its own cancellation
     fixpoint (`cancelLoop`), so a whole access chain is cancelled in a single invocation. -/
 def busPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : VerifiedPassW p :=
     fun cs bs facts =>
@@ -2180,5 +2192,7 @@ def busPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : VerifiedPassW 
     have hcur : PassCorrect cs (mkCs cs arr alive []) [] bs := by
       rw [mkCs_all cs arr rfl alive halltrue]; exact PassCorrect.refl cs bs
     cancelLoop cs bs facts hp1 deep (fun h => pw.correct h) aggressive T M domCsT candsT
-      (busIds.find? facts.byteCheck) busIds arr idx alive [] hsz 0 0 hcur
+      (busIds.findSome? (fun k => match facts.byteXorSpec k with
+        | some spec => if spec.bound = 256 then some (k, spec) else none
+        | none => none)) busIds arr idx alive [] hsz 0 0 hcur
   else ⟨cs, [], PassCorrect.refl cs bs⟩

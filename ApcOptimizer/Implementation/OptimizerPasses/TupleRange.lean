@@ -7,12 +7,12 @@ set_option autoImplicit false
 
 A tuple range checker (OpenVM's `TupleRangeChecker (s1, s2)`) accepts the 2-ary message `[x, y]`
 iff `x < s1 ∧ y < s2`. When `s1 = 256`, that is *exactly* the conjunction of a single-value byte
-check `[x, x, 0, 1]` on a bitwise-lookup bus and a variable range check `[y, bits]` with
+check (`mkByteCheck`, recognized through `byteXorSpec`) and a variable range check `[y, bits]` with
 `2 ^ bits = s2` — so the two stateless interactions pack into **one**, with the identical
 satisfying set. This is powdr's byte + memory-pointer-limb packing (e.g. a byte operand paired
 with a 13-bit `mem_ptr_limbs` check into `TupleRangeChecker (256, 8192)`).
 
-All three table equivalences are proven `BusFacts` fields (`byteCheck`, `varRangeBus`,
+All three table equivalences are proven `BusFacts` fields (`byteXorSpec`, `varRangeBus`,
 `tupleRangeBus`, discharged for OpenVM in `ApcOptimizer/Implementation/OpenVmFacts.lean`); the pass is
 VM-agnostic and degrades to a no-op under `BusFacts.trivial`. The target tuple bus typically has
 *no* interactions in the input circuit, so its id cannot be read off `cs` — the pass probes the
@@ -175,20 +175,21 @@ theorem mergeStateless2_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
 /-- The tuple check's obligation is exactly the byte check's and the range check's together,
     given `s1 = 256`, a supported constant width, and `2 ^ b.val = s2`. -/
 theorem tupleKey (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bcBus vrBus trBus : Nat) (s1 s2 : Nat)
-    (hbc : facts.byteCheck bcBus = true) (hvr : facts.varRangeBus vrBus = true)
+    (bcBus vrBus trBus : Nat) (s1 s2 : Nat) (spec : ByteXorSpec p)
+    (hspec : facts.byteXorSpec bcBus = some spec) (hbound : spec.bound = 256)
+    (hvr : facts.varRangeBus vrBus = true)
     (htr : facts.tupleRangeBus trBus = some (s1, s2))
     (hs1 : s1 = 256) (b : ZMod p) (hble : b.val ≤ 25) (hs2 : 2 ^ b.val = s2)
     (x y : Expression p) :
     ∀ env, bs.violatesConstraint ((tupleCheck trBus x y).eval env) = false ↔
-      bs.violatesConstraint ((byteCheck1 bcBus x).eval env) = false ∧
+      bs.violatesConstraint ((mkByteCheck spec bcBus x).eval env) = false ∧
         bs.violatesConstraint ((rangeCheck1 vrBus y (.const b)).eval env) = false := by
   intro env
   obtain ⟨-, -, htriff⟩ := facts.tupleRangeBus_sound trBus s1 s2 htr
-  obtain ⟨-, -, hbciff⟩ := facts.byteCheck_sound bcBus hbc
   obtain ⟨-, hvriff⟩ := facts.varRangeBus_sound vrBus hvr
-  rw [tupleCheck_eval, byteCheck1_eval, rangeCheck1_eval]
-  rw [htriff (x.eval env) (y.eval env) 1, hbciff (x.eval env) 1]
+  rw [tupleCheck_eval, rangeCheck1_eval,
+    mkByteCheck_accepted bs facts spec bcBus hspec x env, hbound]
+  rw [htriff (x.eval env) (y.eval env) 1]
   have hB : bs.violatesConstraint
       { busId := vrBus, multiplicity := 1,
         payload := [y.eval env, (Expression.const b).eval env] } = false ↔
@@ -201,17 +202,20 @@ theorem tupleKey (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-! ## The pass: find and pack every (byte, range) pair in one invocation -/
 
-/-- If `bi` is a single-value byte check `[e, e, 0, 1]` (multiplicity `1`) on a `byteCheck`
-    bus, return the checked value. -/
+/-- If `bi` is a single-value byte check (decoded op `= xorOp`, `o₁ = o₂`, result `0`, multiplicity
+    `1`) on a `byteXorSpec` bus with byte bound `256`, return the bus spec and checked value. -/
 def matchByteSingle {bs : BusSemantics p} (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) : Option (Expression p) :=
-  if facts.byteCheck bi.busId then
-    match bi.multiplicity, bi.payload with
-    | .const c, [e, e', z, op] =>
-        if decide (c = 1) && decide (e = e') && decide (z = .const 0) && decide (op = .const 1)
-        then some e else none
-    | _, _ => none
-  else none
+    (bi : BusInteraction (Expression p)) : Option (ByteXorSpec p × Expression p) :=
+  match facts.byteXorSpec bi.busId with
+  | none => none
+  | some spec =>
+    if decide (spec.bound = 256) then
+      match spec.decode bi.payload with
+      | some (op, o1, o2, r) =>
+          if bi.multiplicity = .const 1 ∧ op = .const spec.xorOp ∧ o1 = o2 ∧ r = .const 0
+          then some (spec, o1) else none
+      | none => none
+    else none
 
 /-- If `bi` is a range check `[y, b]` (multiplicity `1`, constant supported width, exact size
     `2 ^ b = s2`) on a `varRangeBus`, return `(y, b)`. -/
@@ -237,27 +241,37 @@ def tupleBusCandidates {bs : BusSemantics p} (facts : BusFacts p bs) (maxId : Na
 
 /-! ## Matcher soundness: a successful match pins the canonical shape by construction -/
 
-/-- A `matchByteSingle` hit *is* the canonical single-value byte check — the accepted split
-    equation follows with no runtime comparison. -/
+/-- A `matchByteSingle` hit *is* the canonical single-value byte check `mkByteCheck spec busId x`
+    (on a `byteXorSpec` bus with byte bound `256`) — the accepted split equation follows with no
+    runtime comparison. -/
 theorem matchByteSingle_eq {bs : BusSemantics p} {facts : BusFacts p bs}
-    {bi : BusInteraction (Expression p)} {x : Expression p}
-    (h : matchByteSingle facts bi = some x) :
-    bi = byteCheck1 bi.busId x ∧ facts.byteCheck bi.busId = true := by
+    {bi : BusInteraction (Expression p)} {spec : ByteXorSpec p} {x : Expression p}
+    (h : matchByteSingle facts bi = some (spec, x)) :
+    bi = mkByteCheck spec bi.busId x ∧ facts.byteXorSpec bi.busId = some spec ∧
+      spec.bound = 256 := by
   obtain ⟨busId, mult, payload⟩ := bi
-  simp only [matchByteSingle] at h
+  unfold matchByteSingle at h
   split at h
-  · rename_i hbc
+  · exact absurd h (by simp)
+  · rename_i spec' hspec
     split at h
-    · rename_i c e e' z op
+    · rename_i hb
       split at h
-      · rename_i hcond
-        simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
-        obtain ⟨⟨⟨rfl, rfl⟩, rfl⟩, rfl⟩ := hcond
-        cases h
-        exact ⟨rfl, hbc⟩
-      · cases h
-    · cases h
-  · cases h
+      · rename_i op o1 o2 r hdec
+        split_ifs at h with hc
+        obtain ⟨hm, hop, ho12, hr⟩ := hc
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        refine ⟨?_, hspec, of_decide_eq_true hb⟩
+        have hpay : payload = spec'.encode (.const spec'.xorOp) o1 o1 (.const 0) := by
+          have he := spec'.decode_eq_encode payload op o1 o2 r hdec
+          rw [hop, ← ho12, hr] at he; exact he
+        have hm' : mult = Expression.const 1 := hm
+        show ({ busId := busId, multiplicity := mult, payload := payload } :
+          BusInteraction (Expression p)) = mkByteCheck spec' busId o1
+        rw [hm', hpay]; rfl
+      · exact absurd h (by simp)
+    · exact absurd h (by simp)
 
 /-- A `matchRangeCheck` hit *is* the canonical range check, and carries the width facts the
     packing key needs. -/
@@ -305,14 +319,14 @@ def findRangeIdx {bs : BusSemantics p} (facts : BusFacts p bs) (s2 : Nat)
     fact. -/
 def findByteIdx {bs : BusSemantics p} (facts : BusFacts p bs)
     (arr : Array (BusInteraction (Expression p))) (i : Nat) :
-    Option ((j : Nat) ×' (x : Expression p) ×'
-      (i ≤ j ∧ ∃ hj : j < arr.size, matchByteSingle facts arr[j] = some x)) :=
+    Option ((j : Nat) ×' (spec : ByteXorSpec p) ×' (x : Expression p) ×'
+      (i ≤ j ∧ ∃ hj : j < arr.size, matchByteSingle facts arr[j] = some (spec, x))) :=
   if hi : i < arr.size then
     match hm : matchByteSingle facts arr[i] with
-    | some x => some ⟨i, x, Nat.le_refl i, hi, hm⟩
+    | some (spec, x) => some ⟨i, spec, x, Nat.le_refl i, hi, hm⟩
     | none =>
       match findByteIdx facts arr (i + 1) with
-      | some ⟨j, x, h⟩ => some ⟨j, x, Nat.le_of_succ_le h.1, h.2⟩
+      | some ⟨j, spec, x, h⟩ => some ⟨j, spec, x, Nat.le_of_succ_le h.1, h.2⟩
       | none => none
   else none
   termination_by arr.size - i
@@ -324,21 +338,21 @@ def findByteIdx {bs : BusSemantics p} (facts : BusFacts p bs)
 theorem packByteFirst_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (trBus s1 s2 bcBus vrBus : Nat)
     (htr : facts.tupleRangeBus trBus = some (s1, s2)) (hs1 : s1 = 256)
-    (x y : Expression p) (b : ZMod p)
-    (hbc : facts.byteCheck bcBus = true) (hvr : facts.varRangeBus vrBus = true)
-    (hble : b.val ≤ 25) (hs2 : 2 ^ b.val = s2)
+    (x y : Expression p) (b : ZMod p) (spec : ByteXorSpec p)
+    (hspec : facts.byteXorSpec bcBus = some spec) (hbound : spec.bound = 256)
+    (hvr : facts.varRangeBus vrBus = true) (hble : b.val ≤ 25) (hs2 : 2 ^ b.val = s2)
     (pre mid post : List (BusInteraction (Expression p)))
     (hsplit : cs.busInteractions
-      = pre ++ byteCheck1 bcBus x :: mid ++ rangeCheck1 vrBus y (.const b) :: post) :
+      = pre ++ mkByteCheck spec bcBus x :: mid ++ rangeCheck1 vrBus y (.const b) :: post) :
     PassCorrect cs
       { cs with busInteractions := pre ++ tupleCheck trBus x y :: mid ++ post } [] bs := by
   obtain ⟨hstT, hbrkT, -⟩ := facts.tupleRangeBus_sound trBus s1 s2 htr
-  obtain ⟨hstB, -, -⟩ := facts.byteCheck_sound bcBus hbc
+  have hstB : bs.isStateful bcBus = false := (facts.byteXorSpec_sound bcBus spec hspec).1
   obtain ⟨hstR, -⟩ := facts.varRangeBus_sound vrBus hvr
   refine mergeStateless2_correct cs bs hp1
-    (byteCheck1 bcBus x) (rangeCheck1 vrBus y (.const b))
+    (mkByteCheck spec bcBus x) (rangeCheck1 vrBus y (.const b))
     (tupleCheck trBus x y) hstB hstR hstT rfl rfl rfl
-    (tupleKey bs facts bcBus vrBus trBus s1 s2 hbc hvr htr hs1 b hble hs2 x y)
+    (tupleKey bs facts bcBus vrBus trBus s1 s2 spec hspec hbound hvr htr hs1 b hble hs2 x y)
     (fun env => by rw [tupleCheck_eval]; exact hbrkT (x.eval env) (y.eval env))
     ?_ pre mid post hsplit
   intro v hv
@@ -351,9 +365,7 @@ theorem packByteFirst_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     rcases this with rfl | rfl
     · exact Or.inl (by
         rw [BusInteraction.vars, List.mem_append]
-        exact Or.inr (List.mem_flatMap.2 ⟨e, by
-          show e ∈ [e, e, Expression.const 0, Expression.const 1]
-          exact List.mem_cons_self .., hve⟩))
+        exact Or.inr (List.mem_flatMap.2 ⟨e, mkByteCheck_operand_mem spec bcBus e, hve⟩))
     · exact Or.inr (by
         rw [BusInteraction.vars, List.mem_append]
         exact Or.inr (List.mem_flatMap.2 ⟨e, by
@@ -365,22 +377,22 @@ theorem packByteFirst_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
 theorem packRangeFirst_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (trBus s1 s2 bcBus vrBus : Nat)
     (htr : facts.tupleRangeBus trBus = some (s1, s2)) (hs1 : s1 = 256)
-    (x y : Expression p) (b : ZMod p)
-    (hbc : facts.byteCheck bcBus = true) (hvr : facts.varRangeBus vrBus = true)
-    (hble : b.val ≤ 25) (hs2 : 2 ^ b.val = s2)
+    (x y : Expression p) (b : ZMod p) (spec : ByteXorSpec p)
+    (hspec : facts.byteXorSpec bcBus = some spec) (hbound : spec.bound = 256)
+    (hvr : facts.varRangeBus vrBus = true) (hble : b.val ≤ 25) (hs2 : 2 ^ b.val = s2)
     (pre mid post : List (BusInteraction (Expression p)))
     (hsplit : cs.busInteractions
-      = pre ++ rangeCheck1 vrBus y (.const b) :: mid ++ byteCheck1 bcBus x :: post) :
+      = pre ++ rangeCheck1 vrBus y (.const b) :: mid ++ mkByteCheck spec bcBus x :: post) :
     PassCorrect cs
       { cs with busInteractions := pre ++ tupleCheck trBus x y :: mid ++ post } [] bs := by
   obtain ⟨hstT, hbrkT, -⟩ := facts.tupleRangeBus_sound trBus s1 s2 htr
-  obtain ⟨hstB, -, -⟩ := facts.byteCheck_sound bcBus hbc
+  have hstB : bs.isStateful bcBus = false := (facts.byteXorSpec_sound bcBus spec hspec).1
   obtain ⟨hstR, -⟩ := facts.varRangeBus_sound vrBus hvr
   refine mergeStateless2_correct cs bs hp1
-    (rangeCheck1 vrBus y (.const b)) (byteCheck1 bcBus x)
+    (rangeCheck1 vrBus y (.const b)) (mkByteCheck spec bcBus x)
     (tupleCheck trBus x y) hstR hstB hstT rfl rfl rfl
     (fun env => by
-      rw [tupleKey bs facts bcBus vrBus trBus s1 s2 hbc hvr htr hs1 b hble hs2 x y env]
+      rw [tupleKey bs facts bcBus vrBus trBus s1 s2 spec hspec hbound hvr htr hs1 b hble hs2 x y env]
       exact and_comm)
     (fun env => by rw [tupleCheck_eval]; exact hbrkT (x.eval env) (y.eval env))
     ?_ pre mid post hsplit
@@ -394,9 +406,7 @@ theorem packRangeFirst_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     rcases this with rfl | rfl
     · exact Or.inr (by
         rw [BusInteraction.vars, List.mem_append]
-        exact Or.inr (List.mem_flatMap.2 ⟨e, by
-          show e ∈ [e, e, Expression.const 0, Expression.const 1]
-          exact List.mem_cons_self .., hve⟩))
+        exact Or.inr (List.mem_flatMap.2 ⟨e, mkByteCheck_operand_mem spec bcBus e, hve⟩))
     · exact Or.inl (by
         rw [BusInteraction.vars, List.mem_append]
         exact Or.inr (List.mem_flatMap.2 ⟨e, by
@@ -420,7 +430,7 @@ def findTuplePackIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
     let next := fun (_ : Unit) =>
       findTuplePackIdx cs bs facts hp1 trBus s1 s2 htr hs1 arr harr (i + 1)
     match hmb : matchByteSingle facts arr[i] with
-    | some x =>
+    | some (spec, x) =>
       match findRangeIdx facts s2 arr (i + 1) with
       | some ⟨j, y, b, hj⟩ =>
         match hR : arr[j]? with
@@ -433,7 +443,7 @@ def findTuplePackIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
           have hbe := matchByteSingle_eq (facts := facts) hmb
           have hre := matchRangeCheck_eq (facts := facts) hmr
           have hsplit : cs.busInteractions
-              = (arr.extract 0 i).toList ++ byteCheck1 (arr[i]).busId x ::
+              = (arr.extract 0 i).toList ++ mkByteCheck spec (arr[i]).busId x ::
                 (arr.extract (i + 1) j).toList
                 ++ rangeCheck1 R.busId y (.const b) :: (arr.extract (j + 1) arr.size).toList := by
             have h0 := split_of_extracts harr hij hi hR
@@ -450,7 +460,7 @@ def findTuplePackIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
                     (arr.extract (i + 1) j).toList ++ (arr.extract (j + 1) arr.size).toList },
                  [],
                  packByteFirst_correct cs bs facts hp1 trBus s1 s2 (arr[i]).busId R.busId
-                   htr hs1 x y b hbe.2 hre.2.1 hre.2.2.1 hre.2.2.2 _ _ _ hsplit⟩,
+                   htr hs1 x y b spec hbe.2.1 hbe.2.2 hre.2.1 hre.2.2.1 hre.2.2.2 _ _ _ hsplit⟩,
                hlt⟩
         | none => next ()
       | none => next ()
@@ -458,11 +468,11 @@ def findTuplePackIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
       match hmrf : matchRangeCheck facts s2 arr[i] with
       | some (y, b) =>
         match findByteIdx facts arr (i + 1) with
-        | some ⟨j, x, hj⟩ =>
+        | some ⟨j, spec, x, hj⟩ =>
           match hR : arr[j]? with
           | some R =>
             have hij : i < j := Nat.lt_of_succ_le hj.1
-            have hmb2 : matchByteSingle facts R = some x := by
+            have hmb2 : matchByteSingle facts R = some (spec, x) := by
               obtain ⟨hjs, hm⟩ := hj.2
               rw [Array.getElem?_eq_getElem hjs, Option.some.injEq] at hR
               exact hR ▸ hm
@@ -471,7 +481,7 @@ def findTuplePackIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
             have hsplit : cs.busInteractions
                 = (arr.extract 0 i).toList ++ rangeCheck1 (arr[i]).busId y (.const b) ::
                   (arr.extract (i + 1) j).toList
-                  ++ byteCheck1 R.busId x :: (arr.extract (j + 1) arr.size).toList := by
+                  ++ mkByteCheck spec R.busId x :: (arr.extract (j + 1) arr.size).toList := by
               have h0 := split_of_extracts harr hij hi hR
               rw [hre.1, hbe.1] at h0
               exact h0
@@ -486,7 +496,7 @@ def findTuplePackIdx (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
                       (arr.extract (i + 1) j).toList ++ (arr.extract (j + 1) arr.size).toList },
                    [],
                    packRangeFirst_correct cs bs facts hp1 trBus s1 s2 R.busId (arr[i]).busId
-                     htr hs1 x y b hbe.2 hre.2.1 hre.2.2.1 hre.2.2.2 _ _ _ hsplit⟩,
+                     htr hs1 x y b spec hbe.2.1 hbe.2.2 hre.2.1 hre.2.2.1 hre.2.2.2 _ _ _ hsplit⟩,
                  hlt⟩
           | none => next ()
         | none => next ()

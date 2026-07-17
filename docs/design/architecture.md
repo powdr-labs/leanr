@@ -63,17 +63,22 @@ The semantics exposes bus tables only through the opaque `violatesConstraint`. T
 passes usable knowledge:
 
 - **`BusFacts` (`ApcOptimizer/Implementation/BusFacts.lean`) — proven, zero audit surface.** Each field (`slotBound`,
-  `slotFun`, `neverViolates`, `recvByteSlots`, `byteCheck`, `memShape`) carries a soundness proof
+  `slotFun`, `neverViolates`, `recvByteSlots`, `byteXorSpec`, `memShape`) carries a soundness proof
   against the semantics, so a wrong fact simply will not compile. `BusFacts.trivial` claims nothing
   and recovers fact-free behavior. Examples: the XOR functional dependence of the bitwise bus,
   byte bounds on its operands, or the byte bounds on the data limbs of a memory *receive*
-  (`slotBound` is multiplicity-aware for exactly this).
-- **`admissible` / `ApcOptimizer/MemoryBus.lean` — audited assumption.** The last-write-wins memory
-  discipline: `admissibleMemoryBus` states that a send followed by a same-address receive (with no
-  active same-address message between, **in list order**) carry equal payloads. This is a
-  completeness-only assumption about real traces — the input must list memory interactions in
-  timestamp order (see the README's assumptions). It is consumed by `busUnifyPass` to cancel
-  send/receive pairs and chain accesses across instructions.
+  (`slotBound` is multiplicity-aware for exactly this). The byte-check and XOR passes consume the
+  **VM-neutral** `byteXorSpec` descriptor — a layout-generic `(op, o₁, o₂, r)` decode/encode plus
+  its `xorOp`/`pairOp` acceptance semantics — rather than any OpenVM-shaped payload, so the same
+  passes fire on both the OpenVM bitwise-lookup bus and the SP1 byte-lookup bus.
+- **`admissible` / `ApcOptimizer/MemoryBus.lean` — audited assumption.** The memory discipline:
+  `admissibleMemoryBus` states that a `setNew` followed by a same-address `getPrevious` (with no
+  active same-address message between, **in list order**) carry equal payloads. The `setNew`/`getPrevious`
+  multiplicities are chosen per bus by `MemoryBusShape.direction` (via `setNewMult`) — `1`/`-1` for
+  OpenVM (which sends the new record and receives the previous one), `-1`/`1` for SP1 (which sends the
+  previous record and receives the new one). This is a completeness-only assumption about real traces —
+  the input must list memory interactions in timestamp order (see the README's assumptions). It is
+  consumed by `busUnifyPass` to cancel send/receive pairs and chain accesses across instructions.
 
 ## OpenVM instantiation
 
@@ -81,6 +86,18 @@ passes usable knowledge:
 `violatesConstraint` (per-bus tables: range checkers, bitwise/XOR, PC lookup), `breaksInvariant`,
 `admissible`, and the degree bound. `openVmFacts` (`ApcOptimizer/Implementation/OpenVmFacts.lean`) is the
 proven `BusFacts` instance. Both are parameterized by the bus map, defaulting to `defaultBusMap`.
+
+## SP1 instantiation
+
+`sp1BusSemantics` (`ApcOptimizer/Sp1Semantics.lean`, audited) is the analogous KoalaBear-field
+instance: `isStateful`, `violatesConstraint` (the byte bus — AND/OR/XOR/U8Range/LTU/MSB/Range — plus
+the 16-bit memory discipline and lookup arities), `breaksInvariant`, `admissible`, and SP1's degree
+bound. SP1 sends the previous record and receives the new one, so its memory shapes carry
+`direction := .sendThenReceive` (`setNewMult = -1`). `sp1Facts` (`ApcOptimizer/Implementation/Sp1Facts.lean`) is the
+proven `BusFacts` instance: the execution bridge never violating, the x0 zero-cell, byte-operand slot
+bounds, the byte-XOR functional dependence, the memory-unification discipline (`memShape` +
+`admissible_sound`/`admissible_dropPair`), and the pair-cancellation `recvByteSlots` — carrying SP1's
+16-bit (`2^16`) obligation on the memory data limbs via the VM-declared byte-slot bound.
 
 ## The pipeline (`ApcOptimizer/Implementation/Optimizer.lean`, theorems in `ApcOptimizer/Optimizer.lean`)
 
