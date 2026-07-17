@@ -531,6 +531,22 @@ def rpCandidates (c : Expression p) :
       else none
     | none => none)
 
+/-- Hash of a candidate key, used to bucket the `seen` accumulator. It reads only fields that the
+    `key == key'` test compares, so equal keys hash equally — bucketing never hides a twin — while
+    unequal keys that happen to collide are still separated by the exact `e.key == xk.2` check
+    inside the scan. Mirrors the `pdValHash`/`Expression.structHash` bucketing used elsewhere. -/
+def rpKeyHash (key : ZMod p × List (Variable × ZMod p) × ZMod p × ZMod p) : UInt64 :=
+  mixHash (hash key.1.val)
+    (mixHash (hash key.2.2.1.val) (mixHash (hash key.2.2.2.val) (hash key.2.1.length)))
+
+/-- Prepend seen-entries into their key-hash buckets. `foldr` keeps each bucket in the same order
+    as the old flat `es ++ seen` list, so the bucketed `findSome?` returns the identical earliest
+    twin the linear scan did — the pass output is unchanged, only the per-candidate scan is now
+    over one bucket instead of the whole history. -/
+def rpInsertAll {cs : ConstraintSystem p} (m : Std.HashMap UInt64 (List (RPSeen p cs)))
+    (es : List (RPSeen p cs)) : Std.HashMap UInt64 (List (RPSeen p cs)) :=
+  es.foldr (fun e acc => acc.insert (rpKeyHash e.key) (e :: acc.getD (rpKeyHash e.key) [])) m
+
 /-- Scan the constraints: for each two-root candidate, look for an earlier twin with the same
     key whose pair certificate passes, and adopt the entailed equality into the solution map.
     The certificate is re-checked inside the proof, so the scan itself carries no obligations. -/
@@ -538,14 +554,14 @@ def rpLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (domCs : List (Expression p))
     (hdomCs : ∀ c ∈ domCs, c ∈ cs.algebraicConstraints) :
     (pending : List (Expression p)) → (∀ c ∈ pending, c ∈ cs.algebraicConstraints) →
-    List (RPSeen p cs) → Solved p cs bs → Solved p cs bs
+    Std.HashMap UInt64 (List (RPSeen p cs)) → Solved p cs bs → Solved p cs bs
   | [], _, _, σ => σ
   | c :: rest, hmem, seen, σ =>
     have hc : c ∈ cs.algebraicConstraints := hmem c (List.mem_cons_self ..)
     let hrest := fun c' h' => hmem c' (List.mem_cons_of_mem _ h')
     let cands := rpCandidates c
     match hfound : cands.findSome? (fun xk =>
-        seen.findSome? (fun e =>
+        (seen.getD (rpKeyHash xk.2) []).findSome? (fun e =>
           if e.key == xk.2 && e.x != xk.1 &&
               rpCheckPair bs facts cs.busInteractions domCs e.c c e.x xk.1
           then some (e, xk.1) else none)) with
@@ -579,11 +595,11 @@ def rpLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
           exact ConstraintSystem.mem_vars_of_constraint ex.1.mem
             (rpCheckPair_vars bs facts cs.busInteractions domCs ex.1.c c ex.1.x ex.2 hcert).1
         rpLoop cs bs facts domCs hdomCs rest hrest
-          ((cands.filter (fun xk => xk.1 != ex.2)).map (fun xk => ⟨c, hc, xk.1, xk.2⟩) ++ seen)
+          (rpInsertAll seen ((cands.filter (fun xk => xk.1 != ex.2)).map (fun xk => ⟨c, hc, xk.1, xk.2⟩)))
           (σ.insertAll [(ex.2, Expression.var ex.1.x)] hpairs hpairsV)
     | none =>
         rpLoop cs bs facts domCs hdomCs rest hrest
-          (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩) ++ seen) σ
+          (rpInsertAll seen (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩))) σ
 
 /-- Two-root decomposition unification. Prime `p` only (re-checked at runtime, as in
     `busPairCancelPass`). One sweep; the cleanup fixpoint iterates the pass, so chains resolve
@@ -593,7 +609,7 @@ def rootPairUnifyPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts
   if hpB : pw.isPrime = true then
     haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let σ := rpLoop cs bs facts cs.algebraicConstraints (fun _ h => h)
-      cs.algebraicConstraints (fun _ h => h) [] Solved.empty
+      cs.algebraicConstraints (fun _ h => h) ∅ Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs.substF σ.fn, [],
       cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)
