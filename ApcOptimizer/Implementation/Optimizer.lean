@@ -108,7 +108,7 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
     ("tautoBus", tautoBusDropPass.withFacts.guardDegree),
     ("domainFold", (domainFoldPass pw).withFacts.guardDegree),
     ("busUnify", busUnifyPass.guardDegree),
-    ("busPairCancel", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass pw false))),
+    ("busPairCancel", VerifiedPassW.guardDegree (busPairCancelPass pw false)),
     ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
     ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
     ("reencode", reencodePass.withFacts.guardDegree) ]
@@ -119,7 +119,7 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
 def codaPasses : List (String × VerifiedPassW p) :=
   -- One primality decision per optimizer run (see `cleanupPasses`), for the prime-gated coda passes.
   let pw := PrimeWitness.of p
-  [ ("busPairCancelLate", VerifiedPassW.guardDegree (iterateToFixpoint (busPairCancelPass pw true))),
+  [ ("busPairCancelLate", VerifiedPassW.guardDegree (busPairCancelPass pw true)),
     -- Explode packed pair byte checks into singles so `dedupLate` collapses the same value
     -- byte-checked in several pairs and `redundantByteDrop` becomes operand-granular; the
     -- survivors are re-packed by `bytePackLate` below (a pair with nothing to shed round-trips).
