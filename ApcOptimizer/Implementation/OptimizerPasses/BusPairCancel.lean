@@ -1305,6 +1305,59 @@ theorem liveSeg_drop (arr : Array (BusInteraction (Expression p))) (alive : Arra
 def liveCount (arr : Array (BusInteraction (Expression p))) (alive : Array Bool) : Nat :=
   (liveSeg arr alive 0 arr.size).length
 
+/-! ### Tail-recursive runtime builder
+
+`liveSeg` is the proof-level *specification*, but as a runtime routine it is unsuitable on large
+blocks: it is not tail-recursive (`(if … [a] else []) ++ liveSeg …`), so materializing the whole
+projection or a large before-region recurses `n` deep, and it reads every element through a checked
+`Option` lookup (`arr[k]?`/`alive[k]?`). `liveArr` is the tail-recursive array-builder used at every
+runtime site (the per-candidate `A`/`B` regions and the one final materialization): it accumulates
+in reverse and reverses once, and — given the maintained size invariant `alive.size = arr.size` and
+`lo + n ≤ arr.size` — indexes with `arr[lo]`/`alive[lo]` (no `Option`). `liveArr_eq` proves it equal
+to `liveSeg`, so the correctness proofs continue to reason about `liveSeg` exclusively. -/
+def liveArrGo (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (halive : alive.size = arr.size) :
+    (lo n : Nat) → lo + n ≤ arr.size → List (BusInteraction (Expression p)) →
+      List (BusInteraction (Expression p))
+  | _, 0, _, acc => acc.reverse
+  | lo, n + 1, hb, acc =>
+    have hlo : lo < arr.size := by omega
+    liveArrGo arr alive halive (lo + 1) n (by omega)
+      (if alive[lo]'(by rw [halive]; exact hlo) then arr[lo]'hlo :: acc else acc)
+
+/-- Tail-recursive live projection of `[lo, lo+n)`. Equal to `liveSeg` (`liveArr_eq`). -/
+def liveArr (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (halive : alive.size = arr.size) (lo n : Nat) (hb : lo + n ≤ arr.size) :
+    List (BusInteraction (Expression p)) :=
+  liveArrGo arr alive halive lo n hb []
+
+theorem liveArrGo_eq (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (halive : alive.size = arr.size) :
+    ∀ (lo n : Nat) (hb : lo + n ≤ arr.size) (acc : List (BusInteraction (Expression p))),
+      liveArrGo arr alive halive lo n hb acc = acc.reverse ++ liveSeg arr alive lo n := by
+  intro lo n
+  induction n generalizing lo with
+  | zero => intro hb acc; simp [liveArrGo, liveSeg]
+  | succ n ih =>
+    intro hb acc
+    have hlo : lo < arr.size := by omega
+    have hla : lo < alive.size := by rw [halive]; exact hlo
+    have halo : alive[lo]?.getD false = alive[lo]'hla := by
+      rw [Array.getElem?_eq_getElem hla]; rfl
+    have haro : arr[lo]? = some (arr[lo]'hlo) := Array.getElem?_eq_getElem hlo
+    rw [liveArrGo, ih (lo + 1) (by omega)]
+    split
+    · rename_i hal
+      rw [liveSeg_peel arr alive lo n (arr[lo]'hlo) (by rw [halo]; exact hal) haro]
+      simp [List.reverse_cons]
+    · rename_i hal
+      rw [liveSeg_skip arr alive lo n (by rw [halo]; simpa using hal)]
+
+theorem liveArr_eq (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (halive : alive.size = arr.size) (lo n : Nat) (hb : lo + n ≤ arr.size) :
+    liveArr arr alive halive lo n hb = liveSeg arr alive lo n := by
+  rw [liveArr, liveArrGo_eq]; simp
+
 /-- The logical constraint system at a point in the loop: the original system with its interactions
     replaced by the live projection followed by the checks emitted so far. Materialized once, at the
     end of the loop; intermediate values live only inside the (erased) correctness proof. -/
@@ -1355,6 +1408,30 @@ def firstMatchAt {constraints : List (Expression p)}
         else firstMatchAt M arr alive busId S i rest
       | none => firstMatchAt M arr alive busId S i rest
     else firstMatchAt M arr alive busId S i rest
+
+/-- A match at `j` is strictly after `i` and live — recovered from the search's own guard, so the
+    caller need not re-look-up `alive[j]` (the lemma is erased). -/
+theorem firstMatchAt_spec {constraints : List (Expression p)}
+    (M : Thunk (EqConstraintMap p constraints)) (arr : Array (BusInteraction (Expression p)))
+    (alive : Array Bool) (busId : Nat) (S : BusInteraction (Expression p)) (i : Nat) :
+    ∀ (l : List Nat) {j : Nat}, firstMatchAt M arr alive busId S i l = some j →
+      i < j ∧ alive[j]?.getD false = true := by
+  intro l
+  induction l with
+  | nil => intro j h; simp [firstMatchAt] at h
+  | cons hd tl ih =>
+    intro j h
+    rw [firstMatchAt] at h
+    split at h
+    · rename_i hcond
+      rw [Bool.and_eq_true] at hcond
+      split at h
+      · split at h
+        · obtain rfl := Option.some.inj h
+          exact ⟨of_decide_eq_true hcond.1, hcond.2⟩
+        · exact ih h
+      · exact ih h
+    · exact ih h
 
 /-- Refute `m` as an active same-address message on `busId` (the "between" region test). The
     two-root address-disequality (`addrTwoRootNeq`) lets this step over interleaved other-pointer
@@ -1839,7 +1916,11 @@ def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
     (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
     (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
     (iP jP : Nat) (S R : BusInteraction (Expression p)) (slots : List Nat)
-    (checks : List (BusInteraction (Expression p))) (emitted : Bool) (dropIdx dropPos : Nat)
+    (checks : List (BusInteraction (Expression p)))
+    -- `checksNew` is passed literally (`checksOld` unchanged on the common no-emit path, so no
+    -- `checksOld ++ []` copy) with its defining equation for the proof.
+    (checksNew : List (BusInteraction (Expression p))) (hchecksNew : checksNew = checksOld ++ checks)
+    (emitted : Bool) (dropIdx dropPos : Nat)
     (hij : iP < jP) (hjsz : jP < arr.size)
     (hSget : arr[iP]? = some S) (hRget : arr[jP]? = some R)
     (hSalive : alive[iP]?.getD false = true) (hRalive : alive[jP]?.getD false = true)
@@ -1879,13 +1960,13 @@ def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
     liveSeg_drop arr alive iP jP arr.size hij hjsz hisz hjsz' aliveNew rfl
   have heq : { mkCs cs0 arr alive checksOld with
         busInteractions := A ++ B ++ (C' ++ checksOld) ++ checks }
-      = mkCs cs0 arr aliveNew (checksOld ++ checks) := by
+      = mkCs cs0 arr aliveNew checksNew := by
     show { cs0 with busInteractions := A ++ B ++ (C' ++ checksOld) ++ checks }
-        = { cs0 with busInteractions := liveSeg arr aliveNew 0 arr.size ++ (checksOld ++ checks) }
-    rw [hdropL]; congr 1; simp only [List.append_assoc]
+        = { cs0 with busInteractions := liveSeg arr aliveNew 0 arr.size ++ checksNew }
+    rw [hdropL, hchecksNew]; congr 1; simp only [List.append_assoc]
   refine {
     aliveNew := aliveNew
-    checksNew := checksOld ++ checks
+    checksNew := checksNew
     emitted := emitted
     dropIdx := dropIdx
     dropPos := dropPos
@@ -1925,55 +2006,64 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
       hshape T M domCsT candsT bcBus? arr alive checksOld hsz idx (i + 1)
     if haliveS : alive[i]?.getD false = true then
     if decide (multConst S = some 1) && decide (S.busId = busId) then
-      match firstMatchAt M arr alive busId S i (idx.getD
+      match hfm : firstMatchAt M arr alive busId S i (idx.getD
           (mixHash (hash busId)
             (if aggressive then addrHash shape S.payload else payloadHash S.payload)) []) with
       | some j =>
         match hR : arr[j]? with
         | some R =>
-          if hij : i < j then
-          if hRalive : alive[j]?.getD false = true then
-            let B := liveSeg arr alive (i + 1) (j - i - 1)
-            if hmidB : B.all (midRefuted shape T busId S) = true then
-            let A := liveSeg arr alive 0 i
-            if hshieldA : shieldOk shape T busId S A = true then
-            have hjlt : j < arr.size := by
-              by_contra hc
-              rw [Array.getElem?_eq_none (Nat.le_of_not_lt hc)] at hR; simp at hR
-            have hSget : arr[i]? = some S := Array.getElem?_eq_getElem hi
-            have hmid : ∀ m0 ∈ liveSeg arr alive (i + 1) (j - i - 1),
-                midRefuted shape T busId S m0 = true := fun m0 hm0 => List.all_eq_true.mp hmidB m0 hm0
-            match hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) with
-            | none => next ()
-            | some slots =>
-            if hchk0 : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
-                (dropWits facts arr alive S R checksOld []) busId slots S R [] = true then
+          -- The search's guard already established these, so no runtime re-lookup of `alive[j]`.
+          have hij : i < j := (firstMatchAt_spec M arr alive busId S i _ hfm).1
+          have hRalive : alive[j]?.getD false = true := (firstMatchAt_spec M arr alive busId S i _ hfm).2
+          have hjlt : j < arr.size := by
+            by_contra hc
+            rw [Array.getElem?_eq_none (Nat.le_of_not_lt hc)] at hR; simp at hR
+          have hSget : arr[i]? = some S := Array.getElem?_eq_getElem hi
+          let B := liveArr arr alive hsz (i + 1) (j - i - 1) (by omega)
+          if hmidB : B.all (midRefuted shape T busId S) = true then
+          let A := liveArr arr alive hsz 0 i (by omega)
+          if hshieldA : shieldOk shape T busId S A = true then
+          have hBeq : B = liveSeg arr alive (i + 1) (j - i - 1) :=
+            liveArr_eq arr alive hsz (i + 1) (j - i - 1) (by omega)
+          have hAeq : A = liveSeg arr alive 0 i := liveArr_eq arr alive hsz 0 i (by omega)
+          have hmid : ∀ m0 ∈ liveSeg arr alive (i + 1) (j - i - 1),
+              midRefuted shape T busId S m0 = true := by
+            rw [← hBeq]; exact fun m0 hm0 => List.all_eq_true.mp hmidB m0 hm0
+          have hshield : shieldOk shape T busId S (liveSeg arr alive 0 i) = true := by
+            rw [← hAeq]; exact hshieldA
+          match hslots : facts.recvByteSlots busId (R.payload.map Expression.constValue?) with
+          | none => next ()
+          | some slots =>
+          if hchk0 : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
+              (dropWits facts arr alive S R checksOld []) busId slots S R [] = true then
+            some (mkDropResult cs0 bs facts hp1 deep hdeep busId shape hshape T M
+              domCsT.get.val domCsT.get.property candsT.get.lookup (fun x => candsT.get.lookup_mem x)
+              arr alive checksOld hsz i j S R slots [] checksOld (List.append_nil checksOld).symm
+              false 0 i hij hjlt hSget hR haliveS hRalive hslots hmid hshield hchk0)
+          else
+          -- Unjustified byte slots are materialized as one explicit self-check on a `byteCheck`
+          -- bus. Such a check never re-enters the search and needs no index entry: its bus is
+          -- stateless (`facts.byteCheck_sound`), whereas every bus the scan visits satisfies
+          -- `facts.memShape … = some shape`, hence is stateful (`facts.memShape_stateful`) — a
+          -- check is therefore never a send/receive candidate. It lives only in the threaded
+          -- `checks` list (consulted by `dropWits` for byte justification), at the logical tail.
+          let unjust := unjustifiedSlots deep domCsT.get.val candsT.get.lookup bs facts
+            (dropWits facts arr alive S R checksOld []) slots R
+          let checks : List (BusInteraction (Expression p)) :=
+            match unjust, bcBus? with
+            | [slot], some bcBus => (R.payload[slot]?).elim [] (fun e =>
+                [{ busId := bcBus, multiplicity := .const 1,
+                   payload := [e, e, .const 0, .const 1] }])
+            | _, _ => []
+          if !checks.isEmpty && (aggressive || decide (S.payload = R.payload)) then
+            if hchk : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
+                (dropWits facts arr alive S R checksOld checks) busId slots S R checks = true then
               some (mkDropResult cs0 bs facts hp1 deep hdeep busId shape hshape T M
-                domCsT.get.val domCsT.get.property candsT.get.lookup
-                (fun x => candsT.get.lookup_mem x)
-                arr alive checksOld hsz i j S R slots [] false 0 i
-                hij hjlt hSget hR haliveS hRalive hslots hmid hshieldA hchk0)
-            else
-            let unjust := unjustifiedSlots deep domCsT.get.val candsT.get.lookup bs facts
-              (dropWits facts arr alive S R checksOld []) slots R
-            let checks : List (BusInteraction (Expression p)) :=
-              match unjust, bcBus? with
-              | [slot], some bcBus => (R.payload[slot]?).elim [] (fun e =>
-                  [{ busId := bcBus, multiplicity := .const 1,
-                     payload := [e, e, .const 0, .const 1] }])
-              | _, _ => []
-            if !checks.isEmpty && (aggressive || decide (S.payload = R.payload)) then
-              if hchk : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
-                  (dropWits facts arr alive S R checksOld checks) busId slots S R checks = true then
-                some (mkDropResult cs0 bs facts hp1 deep hdeep busId shape hshape T M
-                  domCsT.get.val domCsT.get.property candsT.get.lookup
-                  (fun x => candsT.get.lookup_mem x)
-                  arr alive checksOld hsz i j S R slots checks true 0 i
-                  hij hjlt hSget hR haliveS hRalive hslots hmid hshieldA hchk)
-              else next ()
+                domCsT.get.val domCsT.get.property candsT.get.lookup (fun x => candsT.get.lookup_mem x)
+                arr alive checksOld hsz i j S R slots checks (checksOld ++ checks) rfl
+                true 0 i hij hjlt hSget hR haliveS hRalive hslots hmid hshield hchk)
             else next ()
-            else next ()
-            else next ()
+          else next ()
           else next ()
           else next ()
         | none => next ()
@@ -2040,7 +2130,14 @@ def cancelLoop (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFact
     (hcur : PassCorrect cs0 (mkCs cs0 arr alive checksOld) [] bs) : PassResult cs0 bs :=
   match hfc : findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT arr alive
       checksOld hsz idx bcBus? resumeIdx resumePos 0 busIds with
-  | none => ⟨mkCs cs0 arr alive checksOld, [], hcur⟩
+  | none =>
+    -- Materialize the final compact interaction list once, tail-recursively (`liveArr`), and
+    -- reuse the accumulated correctness proof (rewritten from the `liveSeg` spec).
+    ⟨{ cs0 with busInteractions := liveArr arr alive hsz 0 arr.size (by omega) ++ checksOld }, [],
+      by rw [show { cs0 with
+              busInteractions := liveArr arr alive hsz 0 arr.size (by omega) ++ checksOld }
+            = mkCs cs0 arr alive checksOld from by unfold mkCs; rw [liveArr_eq]]
+         exact hcur⟩
   | some dr =>
     let nextIdx := if dr.emitted then 0 else dr.dropIdx
     let nextPos := if dr.emitted then 0 else dr.dropPos
