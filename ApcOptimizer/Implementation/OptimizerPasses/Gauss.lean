@@ -688,14 +688,66 @@ theorem foldl_descFoldStep (cl : Variable → Option (Variable × Nat))
               simp only [descFoldStep, hcl]]
           exact ih (argMerge Prod.snd init c)
 
-/-- The winning pivot descriptor of a linear form via two ordered `argMerge` folds over the terms:
-    `±1` candidates (`pm1Desc`) first, then unit candidates (`unitDesc`) seeded with the first
-    winner. `coeffIdx`/`total` are computed once and passed in, so no descriptor list is built. -/
+/-! ### Fused, allocation-light fold steps
+
+`descFoldStep (pm1Desc …)` compiles to a per-term `pm1Desc` closure plus a candidate
+`Option (Variable × Nat)` allocated for **every** term (then compared and mostly discarded).
+`pm1Step`/`unitStep` fuse the classifier and the `argMerge` into one step that reads `idx[v]` once,
+compares the raw `Nat` score in place, and allocates a `(variable, score)` pair **only when it
+becomes the new best** — no per-term closure, no transient candidate. Each is proved equal to the
+`descFoldStep` spec (`pm1Step_eq`/`unitStep_eq`), so `bestDesc_eq` (hence `fastBest_eq`) is unchanged. -/
+
+/-- `±1`-candidate fused fold step: `descFoldStep (pm1Desc idx total occ prot)`, inlined. -/
+def pm1Step (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (acc : Option (Variable × Nat)) (t : Variable × ZMod p) : Option (Variable × Nat) :=
+  let e := (idx[t.1]?).getD (0, 0)
+  if e.1 = 1 ∨ e.1 = -1 then
+    let s := gaussScore occ prot t.1 (total - e.2)
+    match acc with
+    | none => some (t.1, s)
+    | some c => if s < c.2 then some (t.1, s) else acc
+  else acc
+
+/-- Unit-candidate fused fold step: `descFoldStep (unitDesc idx total occ prot)`, inlined. -/
+def unitStep (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (acc : Option (Variable × Nat)) (t : Variable × ZMod p) : Option (Variable × Nat) :=
+  let e := (idx[t.1]?).getD (0, 0)
+  if ¬(e.1 = 1 ∨ e.1 = -1) ∧ e.1 * e.1⁻¹ = 1 then
+    let s := gaussScore occ prot t.1 (total - e.2)
+    match acc with
+    | none => some (t.1, s)
+    | some c => if s < c.2 then some (t.1, s) else acc
+  else acc
+
+theorem pm1Step_eq (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    pm1Step idx total occ prot = descFoldStep (pm1Desc idx total occ prot) := by
+  funext acc t
+  simp only [pm1Step, descFoldStep, pm1Desc]
+  by_cases h : ((idx[t.1]?).getD (0, 0)).1 = 1 ∨ ((idx[t.1]?).getD (0, 0)).1 = -1
+  · rw [if_pos h, if_pos h]; cases acc <;> simp [argMerge]
+  · rw [if_neg h, if_neg h]
+
+theorem unitStep_eq (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
+    unitStep idx total occ prot = descFoldStep (unitDesc idx total occ prot) := by
+  funext acc t
+  simp only [unitStep, descFoldStep, unitDesc]
+  by_cases h : ¬(((idx[t.1]?).getD (0, 0)).1 = 1 ∨ ((idx[t.1]?).getD (0, 0)).1 = -1)
+      ∧ ((idx[t.1]?).getD (0, 0)).1 * (((idx[t.1]?).getD (0, 0)).1)⁻¹ = 1
+  · rw [if_pos h, if_pos h]; cases acc <;> simp [argMerge]
+  · rw [if_neg h, if_neg h]
+
+/-- The winning pivot descriptor of a linear form via two ordered folds over the terms: `±1`
+    candidates (`pm1Step`) first, then unit candidates (`unitStep`) seeded with the first winner.
+    `coeffIdx`/`total` are computed once and passed in; no descriptor list, per-term closure, or
+    transient candidate is built. -/
 def bestDescAux (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
     (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
     (terms : List (Variable × ZMod p)) : Option (Variable × Nat) :=
-  terms.foldl (descFoldStep (unitDesc idx total occ prot))
-    (terms.foldl (descFoldStep (pm1Desc idx total occ prot)) none)
+  terms.foldl (unitStep idx total occ prot) (terms.foldl (pm1Step idx total occ prot) none)
 
 def bestDesc (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
     Option (Variable × Nat) :=
@@ -703,7 +755,8 @@ def bestDesc (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSe
 
 theorem bestDesc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
     bestDesc l occ prot = (pivotDescs l occ prot).argmin Prod.snd := by
-  simp only [bestDesc, bestDescAux, pivotDescs, argmin_eq_foldl]
+  rw [bestDesc, bestDescAux, pm1Step_eq, unitStep_eq]
+  simp only [pivotDescs, argmin_eq_foldl]
   rw [List.foldl_append,
     foldl_descFoldStep (pm1Desc (coeffIdx l.terms) l.terms.length occ prot) l.terms none,
     foldl_descFoldStep (unitDesc (coeffIdx l.terms) l.terms.length occ prot) l.terms _]
