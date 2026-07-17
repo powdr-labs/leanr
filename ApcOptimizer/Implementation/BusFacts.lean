@@ -184,7 +184,7 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       bs.admissible (A ++ S :: B ++ R :: C) →
       bs.admissible (A ++ B ++ C)
   /-- Variable-range-checker style *stateless* bus: the 2-ary message `[x, b]` is accepted
-      **iff** the requested width is supported and `x` fits (`b.val ≤ 25 ∧ x.val < 2 ^ b.val`).
+      **iff** the requested width is supported and `x` fits (`b.val ≤ 17 ∧ x.val < 2 ^ b.val`).
       `trivial` sets it `false`; the OpenVM instance proves it for the variable range checker. -/
   varRangeBus : (busId : Nat) → Bool
   varRangeBus_sound :
@@ -192,7 +192,7 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       bs.isStateful busId = false ∧
       ∀ (x b mult : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, b] }
-            = false ↔ (b.val ≤ 25 ∧ x.val < 2 ^ b.val)
+            = false ↔ (b.val ≤ 17 ∧ x.val < 2 ^ b.val)
   /-- Tuple-range-checker style *stateless* bus with fixed sizes: the 2-ary message `[x, y]` is
       accepted **iff** `x.val < s1 ∧ y.val < s2`, and at multiplicity `1` it never breaks an
       invariant. Lets a pass pack a byte obligation (`s1 = 256`) and an exact-width range check

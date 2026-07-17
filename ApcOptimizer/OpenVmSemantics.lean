@@ -89,8 +89,10 @@ def violates (busMap : BusMap) (msg : BusInteraction (ZMod p)) : Bool :=
 
   | some .variableRangeChecker, [x, bits] =>
     -- Check that x < 2^bits, and that the number of bits requested is one the checker
-    -- supports: OpenVM's variable range checker rejects any lookup of more than 25 bits.
-    !(decide (bits.val ≤ 25) && decide (x.val < 2 ^ bits.val))
+    -- supports: OpenVM's variable range checker rejects any lookup of more than 17 bits.
+    -- TODO: The maximum number of bits is configurable, but the default is 17 and the
+    -- OpenVM chips assume that it is at least 17, so we're being conservative here.
+    !(decide (bits.val ≤ 17) && decide (x.val < 2 ^ bits.val))
 
   | some (.tupleRangeChecker s1 s2), [x, y] =>
     -- Range check that x < s1 and y < s2.

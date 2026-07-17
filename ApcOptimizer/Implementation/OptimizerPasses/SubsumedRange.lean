@@ -24,7 +24,7 @@ The drop reuses two proven ingredients, exactly as `RedundantByteDrop`:
    variable could each justify the other and both would be dropped unsoundly.
 
 A recognized check `[x, w]` is dropped when the base bounds `x` by some `b' ≤ 2^w`: the retained
-source forces `x.val < b' ≤ 2^w`, and `w ≤ 25` (a wider check always violates and is never
+source forces `x.val < b' ≤ 2^w`, and `w ≤ 17` (a wider check always violates and is never
 recognized), so the message `[x, w]` is accepted. No new `BusFacts`; the bound comparison is a
 plain `Nat` `≤`, so the direction is exactly "the retained check is at least as strong".
 
@@ -36,8 +36,8 @@ namespace SubsumedRange
 variable {p : ℕ}
 
 /-- Recognize a single-variable range check `[x, width]` (multiplicity `1`) on a `varRangeBus`
-    bus whose width is a *satisfiable* constant (`width.val ≤ 25`), returning the checked variable
-    and the width constant. A width `> 25` check always violates, so dropping it would be unsound;
+    bus whose width is a *satisfiable* constant (`width.val ≤ 17`), returning the checked variable
+    and the width constant. A width `> 17` check always violates, so dropping it would be unsound;
     it is deliberately not recognized. -/
 def rangeCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) : Option (Variable × ZMod p) :=
@@ -48,7 +48,7 @@ def rangeCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
       match c.constValue? with
       | some cv =>
         if facts.varRangeBus bi.busId = true ∧ bi.multiplicity = Expression.const 1
-            ∧ cv.val ≤ 25 then some (x, cv) else none
+            ∧ cv.val ≤ 17 then some (x, cv) else none
       | none => none
     | _ => none
   | _ => none
@@ -58,7 +58,7 @@ def rangeCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
 theorem rangeCheck?_spec (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) (x : Variable) (cv : ZMod p)
     (h : rangeCheck? bs facts bi = some (x, cv)) :
-    facts.varRangeBus bi.busId = true ∧ bi.multiplicity = Expression.const 1 ∧ cv.val ≤ 25 ∧
+    facts.varRangeBus bi.busId = true ∧ bi.multiplicity = Expression.const 1 ∧ cv.val ≤ 17 ∧
       ∃ c, bi.payload = [Expression.var x, c] ∧ c.constValue? = some cv := by
   unfold rangeCheck? at h
   split at h

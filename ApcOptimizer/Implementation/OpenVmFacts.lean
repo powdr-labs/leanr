@@ -34,7 +34,7 @@ private def slotBoundImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat) 
   -- XOR output be cancelled (`byteJustified`).
   | some .bitwiseLookup, [_, _, _, some op], 2 => if op.val ≤ 1 then some 256 else none
   | some .variableRangeChecker, [_, some bits], 0 =>
-      if bits.val ≤ 25 then some (2 ^ bits.val) else none
+      if bits.val ≤ 17 then some (2 ^ bits.val) else none
   | some (.tupleRangeChecker s1 _), [_, _], 0 => some s1
   | some (.tupleRangeChecker _ s2), [_, _], 1 => some s2
   -- Data limbs of a memory *receive* (multiplicity -1) from a known register / main-memory
@@ -621,13 +621,13 @@ def openVmFacts (p : ℕ) [NeZero p]
     · show (match busMap busId with | some t => t.isStateful | none => false) = false
       rw [hbus]; rfl
     · intro x
-      -- variableRangeChecker `[x, 0]`: `!(0 ≤ 25 ∧ x.val < 2^0) = false ↔ x.val < 1 ↔ x = 0`.
+      -- variableRangeChecker `[x, 0]`: `!(0 ≤ 17 ∧ x.val < 2^0) = false ↔ x.val < 1 ↔ x = 0`.
       have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
       show violates busMap { busId := busId, multiplicity := 1, payload := [x, 0] } = false ↔ x = 0
       unfold violates; rw [hbus]
       rw [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq,
         hv0, pow_zero, Nat.lt_one_iff, ZMod.val_eq_zero]
-      exact ⟨fun h => h.2, fun h => ⟨Nat.zero_le 25, h⟩⟩
+      exact ⟨fun h => h.2, fun h => ⟨Nat.zero_le 17, h⟩⟩
   varRangeBus busId := match busMap busId with
     | some .variableRangeChecker => true
     | _ => false
@@ -642,7 +642,7 @@ def openVmFacts (p : ℕ) [NeZero p]
       rw [hbus]; rfl
     · intro x b mult
       show violates busMap { busId := busId, multiplicity := mult, payload := [x, b] }
-          = false ↔ (b.val ≤ 25 ∧ x.val < 2 ^ b.val)
+          = false ↔ (b.val ≤ 17 ∧ x.val < 2 ^ b.val)
       unfold violates; rw [hbus]
       simp
   tupleRangeBus busId := match busMap busId with
