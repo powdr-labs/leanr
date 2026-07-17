@@ -908,19 +908,19 @@ def fxLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) :
     (pending : List (BusInteraction (Expression p))) →
     (∀ bi ∈ pending, bi ∈ cs.busInteractions) →
-    List (FUSeen p cs) → Solved p cs bs → Solved p cs bs
+    Std.HashMap UInt64 (List (FUSeen p cs)) → Solved p cs bs → Solved p cs bs
   | [], _, _, σ => σ
   | c :: rest, hmem, seen, σ =>
     have hc : c ∈ cs.busInteractions := hmem c (List.mem_cons_self ..)
     let hrest := fun c' h' => hmem c' (List.mem_cons_of_mem _ h')
     let cands := fuCandidates c
     match cands.findSome? (fun xk =>
-        seen.findSome? (fun e => if e.key == xk.2 then some (e, xk.1) else none)) with
+        (seen.getD (fuKeyHash xk.2) []).findSome? (fun e => if e.key == xk.2 then some (e, xk.1) else none)) with
     | some ex =>
         match hdata : fuPairData? bs facts cs.algebraicConstraints ex.1.bi c ex.2 with
         | none =>
             fxLoop cs bs facts rest hrest
-              (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩) ++ seen) σ
+              (fuInsertAll seen (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩))) σ
         | some d =>
         let pairs := (d.ryVars.eraseDups.filter (fun v => !(v ∈ d.rxVars))).filterMap (fun vy =>
           if fxCheckWith d (buildE d vy) vy
@@ -960,17 +960,17 @@ def fxLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
           · rw [if_neg hck] at hif
             exact absurd hif (by simp)
         fxLoop cs bs facts rest hrest
-          (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩) ++ seen)
+          (fuInsertAll seen (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩)))
           (σ.insertAll pairs hpairs hpairsV)
     | none =>
         fxLoop cs bs facts rest hrest
-          (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩) ++ seen) σ
+          (fuInsertAll seen (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩))) σ
 
 /-- Part A as a standalone (unguarded) pass: substitute every certified interpolation. -/
 def fxSubstPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
   if hpB : pw.isPrime = true then
     haveI : Fact p.Prime := ⟨pw.correct hpB⟩
-    let σ := fxLoop cs bs facts cs.busInteractions (fun _ h => h) [] Solved.empty
+    let σ := fxLoop cs bs facts cs.busInteractions (fun _ h => h) ∅ Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs.substF σ.fn, [],
       cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)
