@@ -179,7 +179,7 @@ theorem tupleKey (bs : BusSemantics p) (facts : BusFacts p bs)
     (hspec : facts.byteXorSpec bcBus = some spec) (hbound : spec.bound = 256)
     (hvr : facts.varRangeBus vrBus = true)
     (htr : facts.tupleRangeBus trBus = some (s1, s2))
-    (hs1 : s1 = 256) (b : ZMod p) (hble : b.val ≤ 25) (hs2 : 2 ^ b.val = s2)
+    (hs1 : s1 = 256) (b : ZMod p) (hble : b.val ≤ 17) (hs2 : 2 ^ b.val = s2)
     (x y : Expression p) :
     ∀ env, bs.violatesConstraint ((tupleCheck trBus x y).eval env) = false ↔
       bs.violatesConstraint ((mkByteCheck spec bcBus x).eval env) = false ∧
@@ -193,7 +193,7 @@ theorem tupleKey (bs : BusSemantics p) (facts : BusFacts p bs)
   have hB : bs.violatesConstraint
       { busId := vrBus, multiplicity := 1,
         payload := [y.eval env, (Expression.const b).eval env] } = false ↔
-      (b.val ≤ 25 ∧ (y.eval env).val < 2 ^ b.val) :=
+      (b.val ≤ 17 ∧ (y.eval env).val < 2 ^ b.val) :=
     hvriff (y.eval env) b 1
   rw [hB, hs1, ← hs2]
   constructor
@@ -224,7 +224,7 @@ def matchRangeCheck {bs : BusSemantics p} (facts : BusFacts p bs) (s2 : Nat)
   if facts.varRangeBus bi.busId then
     match bi.multiplicity, bi.payload with
     | .const c, [y, .const b] =>
-        if decide (c = 1) && decide (b.val ≤ 25) && decide (2 ^ b.val = s2)
+        if decide (c = 1) && decide (b.val ≤ 17) && decide (2 ^ b.val = s2)
         then some (y, b) else none
     | _, _ => none
   else none
@@ -279,7 +279,7 @@ theorem matchRangeCheck_eq {bs : BusSemantics p} {facts : BusFacts p bs} {s2 : N
     {bi : BusInteraction (Expression p)} {y : Expression p} {b : ZMod p}
     (h : matchRangeCheck facts s2 bi = some (y, b)) :
     bi = rangeCheck1 bi.busId y (.const b) ∧ facts.varRangeBus bi.busId = true ∧
-      b.val ≤ 25 ∧ 2 ^ b.val = s2 := by
+      b.val ≤ 17 ∧ 2 ^ b.val = s2 := by
   obtain ⟨busId, mult, payload⟩ := bi
   simp only [matchRangeCheck] at h
   split at h
@@ -340,7 +340,7 @@ theorem packByteFirst_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (htr : facts.tupleRangeBus trBus = some (s1, s2)) (hs1 : s1 = 256)
     (x y : Expression p) (b : ZMod p) (spec : ByteXorSpec p)
     (hspec : facts.byteXorSpec bcBus = some spec) (hbound : spec.bound = 256)
-    (hvr : facts.varRangeBus vrBus = true) (hble : b.val ≤ 25) (hs2 : 2 ^ b.val = s2)
+    (hvr : facts.varRangeBus vrBus = true) (hble : b.val ≤ 17) (hs2 : 2 ^ b.val = s2)
     (pre mid post : List (BusInteraction (Expression p)))
     (hsplit : cs.busInteractions
       = pre ++ mkByteCheck spec bcBus x :: mid ++ rangeCheck1 vrBus y (.const b) :: post) :
@@ -379,7 +379,7 @@ theorem packRangeFirst_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
     (htr : facts.tupleRangeBus trBus = some (s1, s2)) (hs1 : s1 = 256)
     (x y : Expression p) (b : ZMod p) (spec : ByteXorSpec p)
     (hspec : facts.byteXorSpec bcBus = some spec) (hbound : spec.bound = 256)
-    (hvr : facts.varRangeBus vrBus = true) (hble : b.val ≤ 25) (hs2 : 2 ^ b.val = s2)
+    (hvr : facts.varRangeBus vrBus = true) (hble : b.val ≤ 17) (hs2 : 2 ^ b.val = s2)
     (pre mid post : List (BusInteraction (Expression p)))
     (hsplit : cs.busInteractions
       = pre ++ rangeCheck1 vrBus y (.const b) :: mid ++ mkByteCheck spec bcBus x :: post) :
