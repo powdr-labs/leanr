@@ -730,80 +730,101 @@ theorem fastBestFold_eq (c : Expression p) (occ : Std.HashMap Variable Nat)
 @[csimp] theorem fastBest_eq_fastBestFold : @fastBest = @fastBestFold := by
   funext p c occ prot; exact (fastBestFold_eq c occ prot).symm
 
-/-- Process the pending constraints: reduce each by the current solutions, adopt the cheapest
-    solvable pivot (if any), resolve it into the stored solutions, and continue. Structure of
-    the per-step proof: the reduced constraint evaluates like the original (which a satisfying
-    assignment makes `0`), so the chosen candidate's `pm1PivotsOf`/`unitPivotsOf` soundness
-    applies; stored solutions stay entailed under resolution because `env x = t.eval env`
-    makes `Function.update` a no-op. -/
+/-- Reduce one constraint by the current solutions, adopt the cheapest solvable pivot (if any),
+    and resolve it into the stored solutions — one step of the sweep, factored out of `gaussLoop`
+    so both the blind loop and the dirty sweep (`dirtyLoop`) can share it and reason about it. The
+    per-step proof: the reduced constraint evaluates like the original (which a satisfying
+    assignment makes `0`), so the chosen candidate's `pm1PivotsOf`/`unitPivotsOf` soundness applies;
+    stored solutions stay entailed under resolution because `env x = t.eval env` makes
+    `Function.update` a no-op. -/
+def gaussStep (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (c : Expression p) (hc : c ∈ cs.algebraicConstraints) (σ : Solved p cs bs) : Solved p cs bs :=
+  let c' := (c.substF σ.fn).normalize
+  match hbest : fastBest c' occ prot with
+  | none => σ
+  | some (x, t) =>
+      -- `fastBest` picks exactly the old `argmin` pivot (`fastBest_eq`), so every downstream
+      -- soundness/vars proof is discharged against the original candidate-list membership.
+      have hbest' : (pm1PivotsOf c' ++ unitPivotsOf c').argmin (pivotScore occ prot) = some (x, t) :=
+        (fastBest_eq c' occ prot).symm.trans hbest
+      have hx : ∀ env, cs.satisfies bs env → env x = t.eval env := by
+        intro env hsat
+        have hc0 : c.eval env = 0 := hsat.1 c hc
+        have hc' : c'.eval env = 0 := by
+          show ((c.substF σ.fn).normalize).eval env = 0
+          rw [σ.eval_reduce c env hsat, hc0]
+        rcases List.mem_append.1 (List.argmin_mem hbest') with h | h
+        · exact pm1PivotsOf_sound c' x t h env hc'
+        · exact unitPivotsOf_sound c' x t h env hc'
+      -- every variable of the reduced constraint (hence of any pivot solved from it) is a
+      -- variable of `cs`: reduction only substitutes stored solutions (all in `cs`) and folds
+      have hc'vars : ∀ z ∈ c'.vars, z ∈ cs.vars := by
+        intro z hz
+        rcases Expression.substF_vars σ.fn c z (Expression.normalize_vars _ z hz) with
+          h2 | ⟨y', t', hft', hzt'⟩
+        · exact ConstraintSystem.mem_vars_of_constraint hc h2
+        · exact σ.varsIn y' t' hft' z hzt'
+      have htvars : ∀ z ∈ t.vars, z ∈ cs.vars := by
+        intro z hz
+        rcases List.mem_append.1 (List.argmin_mem hbest') with h | h
+        · exact hc'vars z (pm1PivotsOf_vars c' x t h z hz)
+        · exact hc'vars z (unitPivotsOf_vars c' x t h z hz)
+      -- resolve `x` out of the stored solutions, then store `x := t`. Only the keys in `x`'s
+      -- reverse-dependency bucket can mention `x`; re-check `mentions` (buckets may be stale).
+      -- gather the stored solutions mentioning `x` from `x`'s reverse-dependency bucket. By
+      -- `mem_touchedOf` this is exactly the current solutions mentioning `x` (the full-map scan).
+      let touched := σ.touchedOf x
+      have htouched : ∀ y s, (y, s) ∈ touched → σ.map[y]? = some s :=
+        fun y s hys => ((σ.mem_touchedOf x y s).1 hys).1
+      let pairs := touched.map (fun ys => (ys.1, (ys.2.subst x t).normalize)) ++ [(x, t)]
+      have hpairs : ∀ env, cs.satisfies bs env → ∀ yt ∈ pairs, env yt.1 = yt.2.eval env := by
+        intro env hsat yt hyt
+        rcases List.mem_append.1 hyt with h | h
+        · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 h
+          have hmemys : σ.map[y]? = some s := htouched y s hys
+          have hy : env y = s.eval env := σ.sound env hsat y s hmemys
+          have hxe : env x = t.eval env := hx env hsat
+          show env y = ((s.subst x t).normalize).eval env
+          rw [Expression.normalize_eval, Expression.eval_subst, ← hxe,
+            Function.update_eq_self, hy]
+        · obtain rfl : yt = (x, t) := by simpa using h
+          exact hx env hsat
+      have hpairsV : ∀ yt ∈ pairs, ∀ z ∈ yt.2.vars, z ∈ cs.vars := by
+        intro yt hyt z hz
+        rcases List.mem_append.1 hyt with h | h
+        · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 h
+          have hmemys : σ.map[y]? = some s := htouched y s hys
+          rcases Expression.subst_vars s x t z (Expression.normalize_vars _ z hz) with h2 | h2
+          · exact σ.varsIn y s hmemys z h2
+          · exact htvars z h2
+        · obtain rfl : yt = (x, t) := by simpa using h
+          exact htvars z hz
+      σ.insertAll pairs hpairs hpairsV
+
+/-- `gaussStep` leaves `σ` unchanged when the reduced constraint has no solvable pivot. This is the
+    fact that lets the dirty sweep skip a clean position: a clean position's reduction has no pivot,
+    so the blind sweep's visit there would be a no-op. -/
+theorem gaussStep_noop (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
+    (c : Expression p) (hc : c ∈ cs.algebraicConstraints) (σ : Solved p cs bs)
+    (h : fastBest ((c.substF σ.fn).normalize) occ prot = none) :
+    gaussStep cs bs occ prot c hc σ = σ := by
+  simp only [gaussStep]
+  split
+  · rfl
+  · next x t hbest => rw [h] at hbest; exact absurd hbest (by simp)
+
+/-- Process the pending constraints left-to-right via `gaussStep`, then continue. Two invocations
+    (the current `algebraicConstraints ++ algebraicConstraints`) give the two-sweep behaviour. -/
 def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
     (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
     (pending : List (Expression p)) → (∀ c ∈ pending, c ∈ cs.algebraicConstraints) →
     Solved p cs bs → Solved p cs bs
   | [], _, σ => σ
   | c :: rest, hmem, σ =>
-    let hrest := fun c' hc' => hmem c' (List.mem_cons_of_mem _ hc')
-    let c' := (c.substF σ.fn).normalize
-    match hbest : fastBest c' occ prot with
-    | none => gaussLoop cs bs occ prot rest hrest σ
-    | some (x, t) =>
-        -- `fastBest` picks exactly the old `argmin` pivot (`fastBest_eq`), so every downstream
-        -- soundness/vars proof is discharged against the original candidate-list membership.
-        have hbest' : (pm1PivotsOf c' ++ unitPivotsOf c').argmin (pivotScore occ prot) = some (x, t) :=
-          (fastBest_eq c' occ prot).symm.trans hbest
-        have hx : ∀ env, cs.satisfies bs env → env x = t.eval env := by
-          intro env hsat
-          have hc0 : c.eval env = 0 := hsat.1 c (hmem c (List.mem_cons_self ..))
-          have hc' : c'.eval env = 0 := by
-            show ((c.substF σ.fn).normalize).eval env = 0
-            rw [σ.eval_reduce c env hsat, hc0]
-          rcases List.mem_append.1 (List.argmin_mem hbest') with h | h
-          · exact pm1PivotsOf_sound c' x t h env hc'
-          · exact unitPivotsOf_sound c' x t h env hc'
-        -- every variable of the reduced constraint (hence of any pivot solved from it) is a
-        -- variable of `cs`: reduction only substitutes stored solutions (all in `cs`) and folds
-        have hc'vars : ∀ z ∈ c'.vars, z ∈ cs.vars := by
-          intro z hz
-          rcases Expression.substF_vars σ.fn c z (Expression.normalize_vars _ z hz) with
-            h2 | ⟨y', t', hft', hzt'⟩
-          · exact ConstraintSystem.mem_vars_of_constraint (hmem c (List.mem_cons_self ..)) h2
-          · exact σ.varsIn y' t' hft' z hzt'
-        have htvars : ∀ z ∈ t.vars, z ∈ cs.vars := by
-          intro z hz
-          rcases List.mem_append.1 (List.argmin_mem hbest') with h | h
-          · exact hc'vars z (pm1PivotsOf_vars c' x t h z hz)
-          · exact hc'vars z (unitPivotsOf_vars c' x t h z hz)
-        -- resolve `x` out of the stored solutions, then store `x := t`. Only the keys in `x`'s
-        -- reverse-dependency bucket can mention `x`; re-check `mentions` (buckets may be stale).
-        -- gather the stored solutions mentioning `x` from `x`'s reverse-dependency bucket. By
-        -- `mem_touchedOf` this is exactly the current solutions mentioning `x` (the full-map scan).
-        let touched := σ.touchedOf x
-        have htouched : ∀ y s, (y, s) ∈ touched → σ.map[y]? = some s :=
-          fun y s hys => ((σ.mem_touchedOf x y s).1 hys).1
-        let pairs := touched.map (fun ys => (ys.1, (ys.2.subst x t).normalize)) ++ [(x, t)]
-        have hpairs : ∀ env, cs.satisfies bs env → ∀ yt ∈ pairs, env yt.1 = yt.2.eval env := by
-          intro env hsat yt hyt
-          rcases List.mem_append.1 hyt with h | h
-          · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 h
-            have hmemys : σ.map[y]? = some s := htouched y s hys
-            have hy : env y = s.eval env := σ.sound env hsat y s hmemys
-            have hxe : env x = t.eval env := hx env hsat
-            show env y = ((s.subst x t).normalize).eval env
-            rw [Expression.normalize_eval, Expression.eval_subst, ← hxe,
-              Function.update_eq_self, hy]
-          · obtain rfl : yt = (x, t) := by simpa using h
-            exact hx env hsat
-        have hpairsV : ∀ yt ∈ pairs, ∀ z ∈ yt.2.vars, z ∈ cs.vars := by
-          intro yt hyt z hz
-          rcases List.mem_append.1 hyt with h | h
-          · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 h
-            have hmemys : σ.map[y]? = some s := htouched y s hys
-            rcases Expression.subst_vars s x t z (Expression.normalize_vars _ z hz) with h2 | h2
-            · exact σ.varsIn y s hmemys z h2
-            · exact htvars z h2
-          · obtain rfl : yt = (x, t) := by simpa using h
-            exact htvars z hz
-        gaussLoop cs bs occ prot rest hrest (σ.insertAll pairs hpairs hpairsV)
+      gaussLoop cs bs occ prot rest (fun c' hc' => hmem c' (List.mem_cons_of_mem _ hc'))
+        (gaussStep cs bs occ prot c (hmem c (List.mem_cons_self ..)) σ)
 
 /-- The batch linear-elimination pass. Two sweeps over the constraints (so substitutions can
     unlock later pivots within one invocation), then a single full-system substitution. -/
