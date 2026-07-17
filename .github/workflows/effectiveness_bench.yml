@@ -1,6 +1,6 @@
 name: Effectiveness Bench
 
-# Run the effectiveness benchmark (OpenVmBenchmarks/benchmark.py): the circuit size metrics —
+# Run the effectiveness benchmark (Benchmarks/benchmark.py): the circuit size metrics —
 # variables / bus interactions / constraints, each `before / after` — for apc-optimizer vs powdr
 # over a benchmark set, and publish the summary table. By default the target is also compared
 # against `main`: the metrics are deterministic circuit sizes, so the comparison lists exactly
@@ -24,7 +24,7 @@ on:
         required: false
         default: "main"
       benchmark:
-        description: "benchmark set (a subdirectory of OpenVmBenchmarks/)"
+        description: "benchmark set (a subdirectory of Benchmarks/OpenVM/)"
         required: false
         default: "openvm-eth"
       n:
@@ -51,9 +51,9 @@ jobs:
           echo "TARGET_REF=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           # The baseline checkout below replaces the working tree, so keep this version of the
           # benchmark script (and its results) outside it.
-          cp OpenVmBenchmarks/benchmark.py "$RUNNER_TEMP/benchmark.py"
+          cp Benchmarks/benchmark.py "$RUNNER_TEMP/benchmark.py"
           N='${{ inputs.n }}'
-          python3 OpenVmBenchmarks/benchmark.py '${{ inputs.benchmark }}' \
+          python3 Benchmarks/benchmark.py '${{ inputs.benchmark }}' \
             --json "$RUNNER_TEMP/target.json" --md bench.md ${N:+--n "$N"}
       - name: Benchmark effectiveness (baseline)
         if: inputs.baseline != ''

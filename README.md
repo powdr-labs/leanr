@@ -29,31 +29,32 @@ The `apc-optimizer` executable runs the optimizer on powdr `SymbolicMachine` exp
 ```bash
 lake build
 
-# Optimize one case and report effectiveness
-lake exe apc-optimizer run OpenVmBenchmarks/openvm-eth/apc_001_pc0x4ecc54.json.gz
+# Optimize one case and report effectiveness (`[vm]` = openvm (default) | sp1)
+lake exe apc-optimizer run Benchmarks/OpenVM/openvm-eth/apc_001_pc0x4ecc54.json.gz
 
 # powdr's own effectiveness, from its serialized optimizer output
 lake exe apc-optimizer powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
 
-# Both, side by side
+# Both, side by side (add `sp1` after the subcommand for SP1 / KoalaBear inputs)
 lake exe apc-optimizer compare <unopt>.json.gz <unopt>.powdr_opt.json.gz
 
 # Optimize and write the result as {machine, bus_map} JSON (readable by powdr/compare above)
 lake exe apc-optimizer opt-export <unopt>.json.gz <out>.json
 ```
 
-The benchmark sets live in [`OpenVmBenchmarks/`](./OpenVmBenchmarks/) (see its README); the main one, used for optimization, is the top-100 `openvm-eth` set in [`OpenVmBenchmarks/openvm-eth/`](./OpenVmBenchmarks/openvm-eth/).
+The benchmark sets live under [`Benchmarks/`](./Benchmarks/), grouped by VM ([`Benchmarks/OpenVM/`](./Benchmarks/OpenVM/), [`Benchmarks/SP1/`](./Benchmarks/SP1/); see their READMEs); the main one, used for optimization, is the top-100 `openvm-eth` set in [`Benchmarks/OpenVM/openvm-eth/`](./Benchmarks/OpenVM/openvm-eth/).
 
 ## Benchmark
 
-As the main benchmark, we use `openvm-eth`: the 100 costliest basic blocks in [openvm-eth](https://github.com/powdr-labs/openvm-eth), a guest program verifying Ethereum blocks. For details, see [`OpenVmBenchmarks/README.md`](./OpenVmBenchmarks/README.md).
+As the main benchmark, we use `openvm-eth`: the 100 costliest basic blocks in [openvm-eth](https://github.com/powdr-labs/openvm-eth), a guest program verifying Ethereum blocks. For details, see [`Benchmarks/OpenVM/README.md`](./Benchmarks/OpenVM/README.md).
 
-To sweep a benchmark set in parallel and report aggregate apc-optimizer-vs-powdr effectiveness (the positional argument selects the benchmark by name, defaulting to `openvm-eth`):
+To sweep a benchmark set in parallel and report aggregate apc-optimizer-vs-powdr effectiveness (`--vm` selects the VM — `openvm` (default) or `sp1` — and the positional argument selects the set by name, defaulting to `openvm-eth` / `rsp`):
 
 ```bash
-OpenVmBenchmarks/benchmark.py                # all openvm-eth cases (--jobs = cores)
-OpenVmBenchmarks/benchmark.py --n 20         # top 20 by cost rank
-OpenVmBenchmarks/benchmark.py --n 10 --report report.html   # + interactive HTML report
+Benchmarks/benchmark.py                # all openvm-eth cases (--jobs = cores)
+Benchmarks/benchmark.py --n 20         # top 20 by cost rank
+Benchmarks/benchmark.py --vm sp1       # all rsp (SP1) cases
+Benchmarks/benchmark.py --n 10 --report report.html   # + interactive HTML report
 ```
 
 The on-demand `Effectiveness Bench` CI workflow runs the same script from GitHub, by default also
@@ -67,6 +68,6 @@ workflow (`gh workflow run "Runtime Bench" -f pr=<N>`) benches the full set from
 `main`, both sides on the same runner (cross-runner timings don't compare):
 
 ```bash
-OpenVmBenchmarks/runtime_bench.py            # all openvm-eth cases, serial (stable timings)
-OpenVmBenchmarks/runtime_bench.py --n 20 --repeat 3   # top 20, best-of-3 per case
+Benchmarks/runtime_bench.py            # all openvm-eth cases, serial (stable timings)
+Benchmarks/runtime_bench.py --n 20 --repeat 3   # top 20, best-of-3 per case
 ```

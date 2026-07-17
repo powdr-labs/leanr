@@ -1,0 +1,43 @@
+{
+  "entries": [
+    {
+      "files": {
+        "powdr_opt": "apc_001_pc0x78007bbc.powdr_opt.json.gz",
+        "unopt": "apc_001_pc0x78007bbc.json.gz"
+      },
+      "powdr_opt_stats": {
+        "bus_interactions": 2090,
+        "constraints": 263,
+        "main_columns": 2861
+      },
+      "rank": 1,
+      "start_pcs": [
+        2013297596
+      ],
+      "start_pcs_hex": [
+        "0x78007bbc"
+      ],
+      "stats": {
+        "after": {
+          "bus_interactions": 2090,
+          "constraints": 264,
+          "main_columns": 2862
+        },
+        "before": {
+          "bus_interactions": 6556,
+          "constraints": 8611,
+          "main_columns": 13759
+        }
+      }
+    }
+  ],
+  "source": {
+    "candidates_available": 211,
+    "exported": 1,
+    "field": "KoalaBear",
+    "note": "keccak-bench (manual=false), 100 hashes, cell PGO",
+    "powdr_opt_stage": "after optimize(), before add_guards (no is_valid guards)",
+    "top": 1
+  },
+  "version": 1
+}
