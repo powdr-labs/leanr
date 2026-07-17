@@ -783,12 +783,61 @@ def reencodeOut (cs : ConstraintSystem p) (xs bits : List Variable)
 def coveredCsOf (cs : ConstraintSystem p) (xs : List Variable) : List (Expression p) :=
   cs.algebraicConstraints.filter (coveredBy xs)
 
+/-- All covered constraints zero at a point, with the ring ops hoisted out of the per-point
+    evaluation (cf. `survivesAllCW` in `DomainBatch`): `add`/`mul` are extracted from the `ZMod p`
+    instances once by the caller and passed in, so each `IExpr` node is a direct closure call
+    instead of re-deriving the `CommRing (ZMod p)` chain. -/
+def survZeroCW (add mul : ZMod p → ZMod p → ZMod p) (ces : List (IExpr p))
+    (a : List (Variable × ZMod p)) : Bool :=
+  ces.all (fun ie => decide (ie.evalWith add mul a = 0))
+
+theorem survZeroCW_eq (add mul : ZMod p → ZMod p → ZMod p)
+    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
+    (ces : List (IExpr p)) (a : List (Variable × ZMod p)) :
+    survZeroCW add mul ces a = ces.all (fun ie => decide (ie.eval a = 0)) := by
+  simp only [survZeroCW, IExpr.evalWith_eq add mul hadd hmul]
+
 /-- The surviving group values from a **precomputed** covered set: enumerated over the group's
-    domains, filtered by the covered constraints. -/
+    domains, filtered by the covered constraints.
+
+    The enumerated points all share the key order of `doms` (`assignments_keys`), so the covered
+    constraints are compiled **once per target** to positional `IExpr`s (variable leaves → indices,
+    `compileEs`) and each box point is evaluated by index — no per-variable `envOf` scan — with the
+    ring ops hoisted out of the instances once (`survZeroCW`). This is the `domainBatch`
+    index-compile treatment, here shared by the re-encoder and `domainFold`. When a covered
+    constraint mentions a variable outside `doms`'s keys (`compileEs` returns `none`, not expected
+    for a covered set but handled for totality) it falls back to the direct `evalFast` filter. Both
+    compute the identical list (`groupSurvivorsE_eq`), so the output is unchanged. -/
 def groupSurvivorsE (es : List (Expression p))
     (doms : List (Variable × List (ZMod p))) : List (List (Variable × ZMod p)) :=
-  (assignments doms).filter
-    (fun a => es.all (fun c => decide (c.evalFast (envOf a) = 0)))
+  match compileEs (doms.map Prod.fst) es with
+  | some ces =>
+    -- `add`/`mul` extracted from the instances once, as args to the survivor test's partial
+    -- application (formed once per target, so the `CommRing` chain is not re-derived per point).
+    (assignments doms).filter
+      (survZeroCW (inferInstance : Add (ZMod p)).add (inferInstance : Mul (ZMod p)).mul ces)
+  | none =>
+    (assignments doms).filter (fun a => es.all (fun c => decide (c.evalFast (envOf a) = 0)))
+
+/-- `groupSurvivorsE` computes the identical list to the direct `evalFast`/`envOf` filter — the
+    index-compiled path is a pure speedup. Consumers that reason about the survivor set as a
+    `List.filter` rewrite through this. -/
+theorem groupSurvivorsE_eq (es : List (Expression p))
+    (doms : List (Variable × List (ZMod p))) :
+    groupSurvivorsE es doms =
+      (assignments doms).filter (fun a => es.all (fun c => decide (c.evalFast (envOf a) = 0))) := by
+  unfold groupSurvivorsE
+  split
+  · rename_i ces hce
+    refine List.filter_congr (fun a ha => ?_)
+    have hkeys : a.map Prod.fst = doms.map Prod.fst := assignments_keys doms a ha
+    have hfun : (fun e : Expression p => decide (e.eval (envOfFast a) = 0))
+        = (fun c : Expression p => decide (c.evalFast (envOf a) = 0)) := by
+      funext c; rw [envOfFast_eq, Expression.evalFast_eq]
+    rw [survZeroCW_eq (inferInstance : Add (ZMod p)).add (inferInstance : Mul (ZMod p)).mul
+        (fun _ _ => rfl) (fun _ _ => rfl) ces a,
+      compileEs_all (doms.map Prod.fst) es ces hce a hkeys, hfun]
+  · rfl
 
 /-- The surviving group values: enumerated over the group's domains, filtered by the covered
     constraints. The covered set is bound outside the filter so it is computed **once**, not once
@@ -1205,6 +1254,7 @@ theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : B
     have hamem : (doms.map (fun yd => (yd.1, env yd.1))) ∈ assignments doms :=
       mem_assignments doms env hdsound
     have hasurv : (doms.map (fun yd => (yd.1, env yd.1))) ∈ groupSurvivors cs xs doms := by
+      simp only [groupSurvivors, groupSurvivorsE_eq]
       refine List.mem_filter.2 ⟨hamem, ?_⟩
       rw [List.all_eq_true]
       intro c hc

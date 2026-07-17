@@ -265,7 +265,7 @@ theorem foldRewrite_agree_covered [Fact p.Prime] (cs : ConstraintSystem p) (xs :
     intro x hx
     rw [hs_def, envOf_map doms env x (by rw [hkeys]; exact hx)]
   have hsurv : s ∈ groupSurvivors cs xs doms := by
-    simp only [groupSurvivors, groupSurvivorsE, List.mem_filter]
+    simp only [groupSurvivors, groupSurvivorsE_eq, List.mem_filter]
     refine ⟨hsassign, ?_⟩
     rw [List.all_eq_true]
     intro c hc
