@@ -3621,3 +3621,28 @@ size-monotone; OpenVM keccak byte-identical (2021 v / 186 c / 1752 bus) and its 
 ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Remaining SP1 gap:
 the ALU-intermediate / dead-upper-bitwise-byte families (apc_024/040/030 lead) and RAM-vs-RAM
 telescoping — see `docs/ideas.md`. **Worked: yes.**
+
+### 94. Affine bound propagation justifies multi-limb memory slots (SP1 bus 2.236× → 2.301×, variable-neutral)
+
+Follow-up to entry 93. A telescoped memory read can only be *dropped* by `busPairCancel` once its
+data limbs are justified 16-bit (else the drop would lose the range obligation). SP1's k256-heavy
+blocks (apc_024/040/030) store affine limb recompositions — `256·hi + lo`, `result₀ + 256·result₁` —
+in memory data slots, which are genuinely `< 2¹⁶` when the limbs are bytes, but `byteJustifiedW` only
+recognized constants, single variables, and single-variable finite-domain expressions, so those
+slots stayed "unjustified" and the pairs could not cancel (the emit path can only make byte-256
+checks, not 16-bit ones).
+
+**New arm `affineJustified` in `byteJustifiedW` (`BusPairCancel.lean`, `Implementation/` only).**
+Linearize the slot; with a per-variable value bound `bᵥ` from `findVarBound`, the field value of
+`const + Σ cᵥ·v` is at most the natural number `const.val + Σ cᵥ.val·(bᵥ − 1)`, and equals it (no
+wraparound) when that bound is `< p` — so if the bound is also `< 2¹⁶` the slot is 16-bit. Pure
+natural-number bound arithmetic (`LinExpr.natBound` / `LinExpr.eval_val_lt`), field-general, no
+primality; strictly a new disjunct, so nothing else changed.
+
+**Impact (`benchmark.py --vm sp1`):** bus interactions **2.236× → 2.301×** agg (aggregate bus gap vs
+powdr 1902 → 1646, −256 interactions); variables unchanged (3.535×), constraints unchanged — a
+lexicographically clean bus win. Size-monotone ⇒ no OpenVM regression: keccak byte-identical
+(2021 v / 186 c / 1752 bus), runtime unchanged (200 s). Proof integrity green; no
+`sorry`/`axiom`/`native_decide`. The residual SP1 bus gap is the long same-register access chains
+whose interior pairs still don't telescope (busUnify pairing) and the dead upper bitwise bytes —
+see `docs/ideas.md`. **Worked: yes.**

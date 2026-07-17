@@ -397,13 +397,119 @@ theorem domainByteJustified_sound [Fact p.Prime] (domCs : List (Expression p)) (
           rw [Expression.fold_eval, hsubeval] at hfoldeval
           rw [hfoldeval]; exact hbyte
 
+/-! ## Affine bound propagation (multi-limb recomposition slots)
+
+A memory data slot is often an affine recomposition of byte limbs — `256·hi + lo`, or
+`result₀ + 256·result₁` — which is `< 2¹⁶` whenever each limb is a byte, but is neither a constant,
+a single variable, nor a single-variable domain expression, so the justifications above miss it and a
+telescoped register access cannot shed its (genuinely 16-bit) data. This propagates a per-variable
+value bound through a linearized form: with `(env v).val < bᵥ` for each variable, the field value of
+`const + Σ cᵥ·v` is at most `const.val + Σ cᵥ.val·(bᵥ − 1)` **provided that natural bound is below
+`p`** (no wraparound), and equals it exactly there. Purely arithmetic; needs no primality. -/
+
+/-- Natural upper bound of a term list `Σ cᵥ·v` under per-variable value bounds `bnd` (`bnd v` bounds
+    `(env v).val` strictly): `Σ cᵥ.val·(bnd v − 1)`; `none` if any variable is unbounded. -/
+def linTermsNatBound (bnd : Variable → Option Nat) : List (Variable × ZMod p) → Option Nat
+  | [] => some 0
+  | (v, c) :: rest =>
+    match bnd v, linTermsNatBound bnd rest with
+    | some b, some acc => some (c.val * (b - 1) + acc)
+    | _, _ => none
+
+/-- Natural upper bound of `L.eval`: `L.const.val + Σ cᵥ.val·(bnd v − 1)`. -/
+def LinExpr.natBound (bnd : Variable → Option Nat) (L : LinExpr p) : Option Nat :=
+  (linTermsNatBound bnd L.terms).map (fun s => L.const.val + s)
+
+/-- Over `ZMod p` a term-list sum equals the cast of its natural (`.val`-wise) sum. -/
+theorem terms_eval_eq_cast [NeZero p] (terms : List (Variable × ZMod p)) (env : Variable → ZMod p) :
+    (terms.map (fun t => t.2 * env t.1)).sum
+      = (((terms.map (fun t => t.2.val * (env t.1).val)).sum : ℕ) : ZMod p) := by
+  induction terms with
+  | nil => simp
+  | cons t rest ih =>
+    simp only [List.map_cons, List.sum_cons, ih, Nat.cast_add, Nat.cast_mul]
+    congr 1
+    rw [ZMod.natCast_val, ZMod.natCast_val, ZMod.cast_id, ZMod.cast_id]
+
+/-- The natural term-sum is bounded by `linTermsNatBound` when every variable is bounded. -/
+theorem linTermsNatBound_le (bnd : Variable → Option Nat) (env : Variable → ZMod p)
+    (terms : List (Variable × ZMod p)) (M : Nat) (h : linTermsNatBound bnd terms = some M)
+    (hbnd : ∀ v ∈ terms.map Prod.fst, ∀ b, bnd v = some b → (env v).val < b) :
+    (terms.map (fun t => t.2.val * (env t.1).val)).sum ≤ M := by
+  induction terms generalizing M with
+  | nil => simp only [linTermsNatBound, Option.some.injEq] at h; subst h; simp
+  | cons t rest ih =>
+    simp only [linTermsNatBound] at h
+    cases hb : bnd t.1 with
+    | none => rw [hb] at h; simp at h
+    | some b =>
+      cases hr : linTermsNatBound bnd rest with
+      | none => rw [hb, hr] at h; simp at h
+      | some Macc =>
+        rw [hb, hr] at h; simp only [Option.some.injEq] at h; subst h
+        have hvt : (env t.1).val < b := hbnd t.1 (by simp) b hb
+        have hacc : (rest.map (fun t => t.2.val * (env t.1).val)).sum ≤ Macc :=
+          ih Macc hr (fun v hv => hbnd v (by simp only [List.map_cons, List.mem_cons]; exact Or.inr hv))
+        simp only [List.map_cons, List.sum_cons]
+        have hmul : t.2.val * (env t.1).val ≤ t.2.val * (b - 1) :=
+          Nat.mul_le_mul_left _ (by omega)
+        omega
+
+/-- If `L`'s natural bound `M` is `< p`, then `L.eval` has value `≤ M` (in particular `< bound` when
+    `M < bound`): no wraparound, so the field value equals the natural value. -/
+theorem LinExpr.eval_val_lt (L : LinExpr p) (env : Variable → ZMod p) (bnd : Variable → Option Nat)
+    (hbnd : ∀ v ∈ L.terms.map Prod.fst, ∀ b, bnd v = some b → (env v).val < b)
+    (M : Nat) (hM : L.natBound bnd = some M) (bound : Nat) (hMb : M < bound) (hMp : M < p) :
+    (L.eval env).val < bound := by
+  have hNe : NeZero p := ⟨by omega⟩
+  unfold LinExpr.natBound at hM
+  cases hs : linTermsNatBound bnd L.terms with
+  | none => rw [hs] at hM; simp at hM
+  | some S =>
+    rw [hs] at hM
+    simp only [Option.map_some, Option.some.injEq] at hM
+    subst hM
+    have hsum := linTermsNatBound_le bnd env L.terms S hs hbnd
+    have hcast : L.eval env
+        = (((L.const.val + (L.terms.map (fun t => t.2.val * (env t.1).val)).sum : ℕ)) : ZMod p) := by
+      rw [LinExpr.eval, terms_eval_eq_cast, Nat.cast_add, ZMod.natCast_val, ZMod.cast_id]
+    have hlt : L.const.val + (L.terms.map (fun t => t.2.val * (env t.1).val)).sum < p := by omega
+    rw [hcast, ZMod.val_natCast, Nat.mod_eq_of_lt hlt]
+    omega
+
+/-- Affine byte/limb justification: `e` linearizes to a form whose per-variable-bounded natural value
+    is `< bound` (and `< p`, so it does not wrap). -/
+def affineJustified (bound : Nat) (bnd : Variable → Option Nat) (e : Expression p) : Bool :=
+  match linearize e with
+  | some L =>
+    match L.natBound bnd with
+    | some M => decide (M < bound) && decide (M < p)
+    | none => false
+  | none => false
+
+theorem affineJustified_sound (bound : Nat) (bnd : Variable → Option Nat) (e : Expression p)
+    (env : Variable → ZMod p)
+    (hbnd : ∀ v b, bnd v = some b → (env v).val < b)
+    (h : affineJustified bound bnd e = true) : (e.eval env).val < bound := by
+  unfold affineJustified at h
+  cases hL : linearize e with
+  | none => simp [hL] at h
+  | some L =>
+    cases hM : L.natBound bnd with
+    | none => simp [hL, hM] at h
+    | some M =>
+      simp only [hL, hM, Bool.and_eq_true, decide_eq_true_eq] at h
+      rw [linearize_eval e L hL env]
+      exact LinExpr.eval_val_lt L env bnd (fun v _ b hb => hbnd v b hb) M hM bound h.1 h.2
+
 /-- Is `e` provably a byte under every assignment satisfying the remaining system? Either a
     constant `< 256`, a variable with a proven bus-fact bound `≤ 256` derived from the remaining
     interactions (e.g. another receive of the same word, or an explicit byte-check
     lookup), or — when `deep` is set (prime `p` only) — a variable a constraint pins to a byte
     on every point of its selector flags' finite domains (`deepBoundOk`), or a single-variable
     expression whose variable's finite domain makes `e` a byte at every point
-    (`domainByteJustified`, e.g. the `255·b` sign-extension limbs).
+    (`domainByteJustified`, e.g. the `255·b` sign-extension limbs), or an affine recomposition of
+    bounded limbs (`affineJustified`, e.g. the `256·hi + lo` 16-bit memory slots).
 
     Parameterized form: the remaining interactions are consulted through the witness lookup
     `wits` (see `deepByteVars`), the single-variable constraints `domCs` and the per-variable
@@ -423,7 +529,8 @@ def byteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (Expression p))
         | none => false) ||
        (deep && decide (256 ≤ bound) && deepByteJustified domCs (candsOf x) bs facts wits x)
      | _ => false) ||
-    (deep && decide (256 ≤ bound) && domainByteJustified domCs e)
+    (deep && decide (256 ≤ bound) && domainByteJustified domCs e) ||
+    affineJustified bound (fun x => findVarBound bs facts (wits x) x) e
 
 /-- The plain full-scan form (used by the coda's `RedundantByteDrop`): witness lookup and
     precomputed constraint lists instantiated with the naive per-query filters. -/
@@ -458,8 +565,8 @@ theorem byteJustifiedW_sound (bound : Nat) (deep : Bool) (all domCs : List (Expr
   | none =>
     rw [hc] at h
     dsimp only at h
-    rw [Bool.or_eq_true] at h
-    rcases h with h | h
+    rw [Bool.or_eq_true, Bool.or_eq_true] at h
+    rcases h with (h | h) | h
     · -- variable path (bus-fact bound or deep selector-flag justification)
       cases e with
       | var x =>
@@ -489,6 +596,9 @@ theorem byteJustifiedW_sound (bound : Nat) (deep : Bool) (all domCs : List (Expr
       exact lt_of_lt_of_le
         (domainByteJustified_sound domCs e h.2 env (fun c' hc' => hall c' (hdomCs c' hc')))
         (of_decide_eq_true h.1.2)
+    · -- affine recomposition path (`256·hi + lo`, …)
+      exact affineJustified_sound bound (fun x => findVarBound bs facts (wits x) x) e env
+        (fun v b hb => findVarBound_sound bs facts (wits v) v b hb env (hbusW v)) h
 
 theorem byteJustified_sound (bound : Nat) (deep : Bool) (all : List (Expression p))
     (bs : BusSemantics p)
