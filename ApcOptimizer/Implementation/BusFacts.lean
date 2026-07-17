@@ -256,6 +256,22 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
         (op = spec.pairOp →
            (bs.violatesConstraint { busId := busId, multiplicity := mult, payload := pl } = false
              ↔ o1.val < spec.bound ∧ o2.val < spec.bound ∧ r = 0))
+  /-- A pure single-value range check at an arbitrary payload position, generalising the fixed
+      `[x, b]` layout: `rangeCheckAt busId pattern = some (valSlot, bound)` means every
+      multiplicity-`1` message on `busId` matching `pattern` breaks no invariant and is accepted
+      **iff** `payload[valSlot].val < bound`. Lets a subsumed-check dropper recognise a range check
+      whose value slot and bound live at bus-specific positions (SP1's op-6 `Range`, `[6, x, w, 0]`,
+      has `valSlot = 1`, `bound = 2 ^ w`). `trivial` declares none. -/
+  rangeCheckAt : (busId : Nat) → (pattern : List (Option (ZMod p))) → Option (Nat × Nat)
+  rangeCheckAt_sound :
+    ∀ (busId : Nat) (pattern : List (Option (ZMod p))) (valSlot bound : Nat),
+      rangeCheckAt busId pattern = some (valSlot, bound) →
+      bs.isStateful busId = false ∧
+      ∀ (m : BusInteraction (ZMod p)), m.busId = busId → m.multiplicity = 1 →
+        Matches m.payload pattern →
+        bs.breaksInvariant m = false ∧
+        ∀ (x : ZMod p), m.payload[valSlot]? = some x →
+          (bs.violatesConstraint m = false ↔ x.val < bound)
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
@@ -282,3 +298,5 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   zeroRangeEq_sound := by intro _ h; exact absurd h (by simp)
   byteXorSpec _ := none
   byteXorSpec_sound := by intro _ _ h; exact absurd h (by simp)
+  rangeCheckAt _ _ := none
+  rangeCheckAt_sound := by intro _ _ _ _ h; exact absurd h (by simp)

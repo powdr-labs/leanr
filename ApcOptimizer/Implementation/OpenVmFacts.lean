@@ -745,5 +745,9 @@ def openVmFacts (p : ℕ) [NeZero p]
           ↔ o1.val < 256 ∧ o2.val < 256 ∧ r = 0
         unfold violates; rw [hbus]
         simp [isByte, ZMod.val_eq_zero, and_assoc]
+  -- OpenVM keeps `SubsumedRange` (its dedicated variable-range-checker bus); the layout-agnostic
+  -- `rangeCheckAt` is only needed for SP1's op-6 byte-bus range check.
+  rangeCheckAt _ _ := none
+  rangeCheckAt_sound := by intro _ _ _ _ h; exact absurd h (by simp)
 
 end ApcOptimizer.OpenVM

@@ -45,12 +45,26 @@ private def slotFunImpl (busMap : Nat → Option Sp1BusType) (busId : Nat)
       else none
   | _, _, _ => none
 
-private def slotBoundImpl (busMap : Nat → Option Sp1BusType) (busId : Nat) (slot : Nat) :
-    Option Nat :=
+private def slotBoundImpl (busMap : Nat → Option Sp1BusType) (busId : Nat) (mult : ZMod p)
+    (pattern : List (Option (ZMod p))) (slot : Nat) : Option Nat :=
   match busMap busId, slot with
   -- The byte bus operands `b` (slot 2) and `c` (slot 3) are always bytes.
   | some .byteLookup, 2 => some 256
   | some .byteLookup, 3 => some 256
+  -- An op-6 (`Range`) byte-bus message `[6, a, b, 0]` range-checks its result `a` (slot 1) to
+  -- `a < 2^b`. When the op selector (slot 0) and width `b` (slot 2) are constant in the pattern,
+  -- that bounds slot 1 by `2^b` — the fact that lets `busPairCancel` justify SP1's 16-bit memory
+  -- data limbs (each carried by an op-6 width-16 range check) when telescoping.
+  | some .byteLookup, 1 =>
+    match pattern[0]?, pattern[2]? with
+    | some (some op), some (some w) => if op.val = 6 then some (2 ^ w.val) else none
+    | _, _ => none
+  -- The four data limbs (slots 5–8) of a memory `getPrevious` (multiplicity `1`, full ≥9-slot
+  -- record) are 16-bit; a surviving read thus justifies the telescoped same-register pairs' data.
+  | some .memory, 5 => if mult = 1 ∧ 9 ≤ pattern.length then some (2 ^ 16) else none
+  | some .memory, 6 => if mult = 1 ∧ 9 ≤ pattern.length then some (2 ^ 16) else none
+  | some .memory, 7 => if mult = 1 ∧ 9 ≤ pattern.length then some (2 ^ 16) else none
+  | some .memory, 8 => if mult = 1 ∧ 9 ≤ pattern.length then some (2 ^ 16) else none
   | _, _ => none
 
 /-- A payload matching a 4-entry pattern is a 4-entry list. -/
@@ -85,6 +99,50 @@ private theorem byte_operands (busMap : Nat → Option Sp1BusType)
              omega)
           | simp_all)
   · exact absurd hok (by simp)
+
+/-- An accepted op-6 (`Range`) byte-bus message `[6, a, b, c]` range-checks `a` to `a < 2^b`. -/
+private theorem byte_op6_bound (busMap : Nat → Option Sp1BusType)
+    (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .byteLookup)
+    (hok : violates busMap m = false)
+    (op a b c : ZMod p) (hpay : m.payload = [op, a, b, c]) (hop : op.val = 6) :
+    a.val < 2 ^ b.val := by
+  obtain ⟨bid, mult, payload⟩ := m
+  simp only at hbus hpay
+  subst hpay
+  unfold violates at hok
+  rw [hbus] at hok
+  dsimp only at hok
+  simp only [hop] at hok
+  rw [Bool.not_eq_false', Bool.and_eq_true] at hok
+  exact of_decide_eq_true hok.2
+
+/-- An op-6 `[6, a, b, c]` message with a supported width (`b ≤ 16`) and `c = 0` is accepted **iff**
+    its result is in range (`a < 2^b`). -/
+private theorem byte_op6_iff (busMap : Nat → Option Sp1BusType)
+    (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .byteLookup)
+    (op a b c : ZMod p) (hpay : m.payload = [op, a, b, c]) (hop : op.val = 6)
+    (hw : b.val ≤ 16) (hc : c.val = 0) :
+    violates busMap m = false ↔ a.val < 2 ^ b.val := by
+  obtain ⟨bid, mult, payload⟩ := m
+  simp only at hbus hpay
+  subst hpay
+  unfold violates
+  rw [hbus]
+  dsimp only
+  simp only [hop, Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq]
+  constructor
+  · intro h; exact h.2
+  · intro h; exact ⟨⟨hw, hc⟩, h⟩
+
+/-- Recognise SP1's op-6 (`Range`) byte-bus check as a pure single-value range check: a message
+    matching `[6, _, w, 0]` with a supported width `w ≤ 16` is accepted iff its result (slot 1) is
+    `< 2^w`. -/
+private def rangeCheckAtImpl (busMap : Nat → Option Sp1BusType) (busId : Nat)
+    (pattern : List (Option (ZMod p))) : Option (Nat × Nat) :=
+  match busMap busId, pattern with
+  | some .byteLookup, [some op, _, some w, some c] =>
+    if op.val = 6 ∧ w.val ≤ 16 ∧ c.val = 0 then some (1, 2 ^ w.val) else none
+  | _, _ => none
 
 /-- The fixed-zero cell of the SP1 memory bus: register `x0` = address `(0, 0, 0)` (the three
     address limbs at payload slots 2, 3 and 4), with the four data limbs at payload slots 5–8.
@@ -207,6 +265,22 @@ private theorem memory_getPrev_ok (busMap : Nat → Option Sp1BusType)
   have h3 : d3.val < 65536 := hslots 8 (by simp) d3 rfl
   simp [is16Bit, hm, h0, h1, h2, h3]
 
+/-- The four data limbs (payload slots 5–8) of an accepted memory `getPrevious` (multiplicity `1`,
+    full ≥9-slot record) are 16-bit — the converse of `memory_getPrev_ok`, used by `slotBound` so a
+    surviving read bounds the telescoped chain's data. -/
+private theorem memory_read_data (busMap : Nat → Option Sp1BusType)
+    (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .memory)
+    (hm : m.multiplicity = 1) (hok : violates busMap m = false) (hlen : 9 ≤ m.payload.length)
+    (slot : Nat) (hs : slot = 5 ∨ slot = 6 ∨ slot = 7 ∨ slot = 8)
+    (x : ZMod p) (hget : m.payload[slot]? = some x) : x.val < 2 ^ 16 := by
+  obtain ⟨bid, mult, payload⟩ := m
+  simp only at hbus hm hget hlen
+  unfold violates at hok
+  rw [hbus, hm] at hok
+  rcases hs with rfl | rfl | rfl | rfl <;>
+    (rcases payload with _ | ⟨c0, _ | ⟨c1, _ | ⟨a0, _ | ⟨a1, _ | ⟨a2, _ | ⟨d0, _ | ⟨d1, _ | ⟨d2,
+      _ | ⟨d3, rest⟩⟩⟩⟩⟩⟩⟩⟩⟩ <;> simp_all [is16Bit, List.all_cons, List.all_nil])
+
 /-- A memory `setNew` (multiplicity -1) never violates: either the characteristic is > 2 and a
     `setNew` is not a `getPrevious`, or `p ∣ 2` and every value is trivially 16-bit. -/
 private theorem memory_setNew_ok [NeZero p] (busMap : Nat → Option Sp1BusType)
@@ -234,7 +308,7 @@ def sp1Facts (p : ℕ) [NeZero p]
     (busMap : Nat → Option Sp1BusType := defaultBusMap) :
     BusFacts p (sp1BusSemantics p busMap) :=
   { BusFacts.trivial (sp1BusSemantics p busMap) with
-    slotBound := fun busId _ _ slot => slotBoundImpl busMap busId slot
+    slotBound := fun busId mult pattern slot => slotBoundImpl busMap busId mult pattern slot
     slotBound_sound := by
       intro m pattern slot bound x hfact hmatch hok hget
       have hok' : violates busMap m = false := hok
@@ -252,6 +326,57 @@ def sp1Facts (p : ℕ) [NeZero p]
         obtain ⟨op, a, b, c, hpay, hb, hc⟩ := byte_operands busMap m hbus hok'
         have hxc : c = x := by rw [hpay] at hget; simpa using hget
         rw [← hxc]; exact hc
+      · -- slot 1: an op-6 range check `[6, a, w, 0]` bounds `a` by `2^w`.
+        rename_i hbus
+        obtain ⟨op, a, b, c, hpay, _, _⟩ := byte_operands busMap m hbus hok'
+        rcases hp0 : pattern[0]? with _ | o0
+        · rw [hp0] at hfact; simp at hfact
+        · rcases o0 with _ | pop
+          · rw [hp0] at hfact; simp at hfact
+          · rcases hp2 : pattern[2]? with _ | o2
+            · rw [hp0, hp2] at hfact; simp at hfact
+            · rcases o2 with _ | pw
+              · rw [hp0, hp2] at hfact; simp at hfact
+              · rw [hp0, hp2] at hfact
+                dsimp only at hfact
+                split_ifs at hfact with hop6
+                · simp only [Option.some.injEq] at hfact; subst hfact
+                  have hpop : op = pop := by
+                    have := hmatch.2 0 pop (by rw [hp0]); rw [hpay] at this; simpa using this
+                  have hpw : b = pw := by
+                    have := hmatch.2 2 pw (by rw [hp2]); rw [hpay] at this; simpa using this
+                  have hax : a = x := by rw [hpay] at hget; simpa using hget
+                  have hopval : op.val = 6 := by rw [hpop]; exact hop6
+                  have hb6 := byte_op6_bound busMap m hbus hok' op a b c hpay hopval
+                  rw [hpw, hax] at hb6; exact hb6
+      · -- memory data slot 5: a full-record read has 16-bit data
+        rename_i hbus
+        split_ifs at hfact with hm1
+        obtain ⟨hm1', hlen⟩ := hm1
+        simp only [Option.some.injEq] at hfact; subst hfact
+        exact memory_read_data busMap m hbus hm1' hok' (by have h := hmatch.1; omega) 5
+          (by tauto) x hget
+      · -- memory data slot 6
+        rename_i hbus
+        split_ifs at hfact with hm1
+        obtain ⟨hm1', hlen⟩ := hm1
+        simp only [Option.some.injEq] at hfact; subst hfact
+        exact memory_read_data busMap m hbus hm1' hok' (by have h := hmatch.1; omega) 6
+          (by tauto) x hget
+      · -- memory data slot 7
+        rename_i hbus
+        split_ifs at hfact with hm1
+        obtain ⟨hm1', hlen⟩ := hm1
+        simp only [Option.some.injEq] at hfact; subst hfact
+        exact memory_read_data busMap m hbus hm1' hok' (by have h := hmatch.1; omega) 7
+          (by tauto) x hget
+      · -- memory data slot 8
+        rename_i hbus
+        split_ifs at hfact with hm1
+        obtain ⟨hm1', hlen⟩ := hm1
+        simp only [Option.some.injEq] at hfact; subst hfact
+        exact memory_read_data busMap m hbus hm1' hok' (by have h := hmatch.1; omega) 8
+          (by tauto) x hget
       · exact absurd hfact (by simp)
     slotFun := slotFunImpl busMap
     slotFun_sound := by
@@ -462,6 +587,37 @@ def sp1Facts (p : ℕ) [NeZero p]
                 = false ↔ o1.val < 256 ∧ o2.val < 256 ∧ r = 0
             unfold violates; rw [hbus]
             simp [hp3, isByte, ZMod.val_eq_zero, and_assoc]
-      · rw [if_neg hp] at hspec; exact absurd hspec (by simp) }
+      · rw [if_neg hp] at hspec; exact absurd hspec (by simp)
+    -- SP1's op-6 (`Range`) byte-bus check `[6, a, w, 0]` (w ≤ 16) is a pure range check on `a`
+    -- (`a < 2^w`), so a subsumed-check dropper can remove it when `a` is already bounded.
+    rangeCheckAt := fun busId pattern => rangeCheckAtImpl busMap busId pattern
+    rangeCheckAt_sound := by
+      intro busId pattern valSlot bound hfact
+      unfold rangeCheckAtImpl at hfact
+      split at hfact
+      · rename_i op e1 w c hbus
+        split_ifs at hfact with hcond
+        obtain ⟨hop, hw, hc⟩ := hcond
+        simp only [Option.some.injEq, Prod.mk.injEq] at hfact
+        obtain ⟨rfl, rfl⟩ := hfact
+        refine ⟨?_, fun m hbusId hmult hmatch => ?_⟩
+        · show (match busMap busId with | some t => t.isStateful | none => false) = false
+          rw [hbus]; rfl
+        · have hmbus : busMap m.busId = some .byteLookup := by rw [hbusId]; exact hbus
+          obtain ⟨q0, q1, q2, q3, hpe⟩ := payload_four hmatch
+          have hq0 : q0 = op := by
+            have := hmatch.2 0 op (by simp); rw [hpe] at this; simpa using this
+          have hq2 : q2 = w := by
+            have := hmatch.2 2 w (by simp); rw [hpe] at this; simpa using this
+          have hq3 : q3 = c := by
+            have := hmatch.2 3 c (by simp); rw [hpe] at this; simpa using this
+          rw [hq0, hq2, hq3] at hpe
+          have hbreak : breaksInvariant busMap m = false := by
+            unfold breaksInvariant; simp [hmbus, hmult]
+          refine ⟨hbreak, fun x hx => ?_⟩
+          have hxq : q1 = x := by rw [hpe] at hx; simpa using hx
+          rw [← hxq]
+          exact byte_op6_iff busMap m hmbus op q1 w c hpe hop hw hc
+      · exact absurd hfact (by simp) }
 
 end ApcOptimizer.SP1

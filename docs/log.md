@@ -3553,3 +3553,36 @@ this lever also recorded the remaining ones (ZMod dictionary reconstruction per 
 gauss's unconditional per-constraint renormalization, rootPairUnify's quadratic seen-join,
 `sizeKey`/`varCount` allocation, variable interning, runtime `p.Prime` decides) in
 `docs/ideas.md` under "Runtime leftovers II". **Worked: yes.**
+
+### 92. Activate SP1 memory pair cancellation + op-6 range-check subsumption (bus 1.494× → 1.957×, vars 2.652× → 2.938×)
+
+Builds on the VM-neutral bus-fact refactor (execution-bridge `direction` fix, `recvByteSlots` bound,
+`byteXorSpec` byte hygiene). Those set SP1 up but left memory cancellation inert: the receive index
+hard-coded the `-1` receive multiplicity and the byte justification hard-coded `< 256`, neither of
+which fits SP1's memory (reads carry `+1`, data is 16-bit). Three `Implementation/`-only changes
+close that (no audit surface, OpenVM a no-op throughout):
+
+- **`recvIndexAll`** now indexes the `getPrevious` at each bus's own `-shape.setNewMult` (was a
+  hard-coded `-1`), so SP1 memory reads (`+1`) are found as cancellation candidates. Purely
+  heuristic; every hit is still re-verified by `checkCancel`. OpenVM's `-1` is unchanged.
+- **`byteJustifiedW` / `recvSlotsJustified` / `dropPair_correct` / `checkCancel` gained a `bound`
+  parameter** (proving `payload[slot] < bound`, not a fixed `< 256`); the byte-specific deep/domain
+  paths stay sound behind a `256 ≤ bound` gate. This lets the 16-bit memory obligation
+  (`bound = 2^16`) be discharged directly instead of via the old `256 ≤ bound` bridge (now removed).
+- **SP1 `slotBound` gained op-6 and memory-read arms**: an op-6 `[6, a, w, 0]` bounds slot 1 by
+  `2^w`, and a full-record memory read (mult 1) bounds its four data limbs (slots 5–8) by `2^16`. So
+  a *surviving* register read justifies the 16-bit data of the telescoped same-register pairs.
+
+Plus a new **`SubsumedCheck`** coda pass + layout-agnostic **`BusFacts.rangeCheckAt`** fact
+(`some (valSlot, bound)` = accepted iff `payload[valSlot] < bound`): SP1's op-6 `[6, a, w, 0]`
+range check is dropped when `a` is already bounded `< 2^w` by the non-circular base (e.g. `a` is a
+16-bit memory limb bounded by its surviving read). Generalises `SubsumedRange` to SP1's byte-bus
+layout; OpenVM declares no `rangeCheckAt` and keeps `SubsumedRange`, so it is a no-op there.
+
+**Impact (`benchmark.py --vm sp1`, 100 rsp cases):** variables **2.652× → 2.938×**, bus
+**1.494× → 1.957×** (per-case-by-variables W/L/T 0/99/1 → 0/69/31); apc_001 mem 36 → 26, op-6
+43 → 34, bus 112 → 84. **No regression:** OpenVM's `setNewMult = 1` makes `recvIndexAll` and the
+`256`-bound path no-ops; OpenVM keccak byte-identical (2021 v / 186 c / 1752 bus); proof integrity
+green ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Remaining SP1
+gap = ALU-intermediate variables (free witnesses powdr inlines) and register-vs-RAM address
+disequality (powdr's sort-based memory argument) — see `docs/ideas.md`. **Worked: yes.**

@@ -409,42 +409,42 @@ theorem domainByteJustified_sound [Fact p.Prime] (domCs : List (Expression p)) (
     `wits` (see `deepByteVars`), the single-variable constraints `domCs` and the per-variable
     candidate constraints `candsOf` are precomputed by the caller (once per pass invocation,
     instead of two full filters of the constraint list per query). -/
-def byteJustifiedW (deep : Bool) (domCs : List (Expression p))
+def byteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (wits : Variable → List (BusInteraction (Expression p)))
     (e : Expression p) : Bool :=
   match e.constValue? with
-  | some c => decide (c.val < 256)
+  | some c => decide (c.val < bound)
   | none =>
     (match e with
      | .var x =>
        (match findVarBound bs facts (wits x) x with
-        | some bound => decide (bound ≤ 256)
+        | some b => decide (b ≤ bound)
         | none => false) ||
-       (deep && deepByteJustified domCs (candsOf x) bs facts wits x)
+       (deep && decide (256 ≤ bound) && deepByteJustified domCs (candsOf x) bs facts wits x)
      | _ => false) ||
-    (deep && domainByteJustified domCs e)
+    (deep && decide (256 ≤ bound) && domainByteJustified domCs e)
 
 /-- The plain full-scan form (used by the coda's `RedundantByteDrop`): witness lookup and
     precomputed constraint lists instantiated with the naive per-query filters. -/
-def byteJustified (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
+def byteJustified (bound : Nat) (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
     (e : Expression p) : Bool :=
-  byteJustifiedW deep (all.filter Expression.isSingleVar)
+  byteJustifiedW bound deep (all.filter Expression.isSingleVar)
     (fun x => all.filter (Expression.containsVar x)) bs facts (fun _ => rest) e
 
-theorem byteJustifiedW_sound (deep : Bool) (all domCs : List (Expression p))
+theorem byteJustifiedW_sound (bound : Nat) (deep : Bool) (all domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
     (wits : Variable → List (BusInteraction (Expression p))) (e : Expression p)
     (hdeep : deep = true → p.Prime)
     (hdomCs : ∀ c ∈ domCs, c ∈ all) (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ all)
     (hwits : ∀ v, ∀ bi ∈ wits v, bi ∈ rest)
-    (h : byteJustifiedW deep domCs candsOf bs facts wits e = true) (env : Variable → ZMod p)
+    (h : byteJustifiedW bound deep domCs candsOf bs facts wits e = true) (env : Variable → ZMod p)
     (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) :
-    (e.eval env).val < 256 := by
+    (e.eval env).val < bound := by
   have hbusW : ∀ v, ∀ bi ∈ wits v, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false :=
     fun v bi hbi => hbus bi (hwits v bi hbi)
@@ -464,66 +464,70 @@ theorem byteJustifiedW_sound (deep : Bool) (all domCs : List (Expression p))
       cases e with
       | var x =>
         dsimp only at h
-        show (env x).val < 256
+        show (env x).val < bound
         rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
         · cases hb : findVarBound bs facts (wits x) x with
-          | some bound =>
+          | some b =>
             rw [hb] at h'
             dsimp only at h'
-            exact lt_of_lt_of_le (findVarBound_sound bs facts (wits x) x bound hb env (hbusW x))
+            exact lt_of_lt_of_le (findVarBound_sound bs facts (wits x) x b hb env (hbusW x))
               (of_decide_eq_true h')
           | none => rw [hb] at h'; simp at h'
-        · rw [Bool.and_eq_true] at h'
-          haveI : Fact p.Prime := ⟨hdeep h'.1⟩
-          haveI : NeZero p := ⟨(hdeep h'.1).ne_zero⟩
-          exact deepByteJustified_sound all domCs (candsOf x) bs facts wits x hdomCs (hcands x)
-            h'.2 env hall hbusW
+        · rw [Bool.and_eq_true, Bool.and_eq_true] at h'
+          haveI : Fact p.Prime := ⟨hdeep h'.1.1⟩
+          haveI : NeZero p := ⟨(hdeep h'.1.1).ne_zero⟩
+          exact lt_of_lt_of_le
+            (deepByteJustified_sound all domCs (candsOf x) bs facts wits x hdomCs (hcands x)
+              h'.2 env hall hbusW)
+            (of_decide_eq_true h'.1.2)
       | const n => simp at h
       | add a b => simp at h
       | mul a b => simp at h
     · -- single-variable finite-domain expression path
-      rw [Bool.and_eq_true] at h
-      haveI : Fact p.Prime := ⟨hdeep h.1⟩
-      exact domainByteJustified_sound domCs e h.2 env
-        (fun c' hc' => hall c' (hdomCs c' hc'))
+      rw [Bool.and_eq_true, Bool.and_eq_true] at h
+      haveI : Fact p.Prime := ⟨hdeep h.1.1⟩
+      exact lt_of_lt_of_le
+        (domainByteJustified_sound domCs e h.2 env (fun c' hc' => hall c' (hdomCs c' hc')))
+        (of_decide_eq_true h.1.2)
 
-theorem byteJustified_sound (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
+theorem byteJustified_sound (bound : Nat) (deep : Bool) (all : List (Expression p))
+    (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p))) (e : Expression p)
     (hdeep : deep = true → p.Prime)
-    (h : byteJustified deep all bs facts rest e = true) (env : Variable → ZMod p)
+    (h : byteJustified bound deep all bs facts rest e = true) (env : Variable → ZMod p)
     (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) :
-    (e.eval env).val < 256 :=
-  byteJustifiedW_sound deep all (all.filter Expression.isSingleVar)
+    (e.eval env).val < bound :=
+  byteJustifiedW_sound bound deep all (all.filter Expression.isSingleVar)
     (fun x => all.filter (Expression.containsVar x)) bs facts rest (fun _ => rest) e hdeep
     (fun _ hc => List.mem_of_mem_filter hc) (fun _ _ hc => List.mem_of_mem_filter hc)
     (fun _ _ hbi => hbi) h env hall hbus
 
 /-- Are all of `R`'s payload entries at the declared byte slots justified (through the witness
     lookup `wits` and precomputed `domCs`/`candsOf`, see `byteJustifiedW`)? -/
-def recvSlotsJustified (deep : Bool) (domCs : List (Expression p))
+def recvSlotsJustified (bound : Nat) (deep : Bool) (domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (wits : Variable → List (BusInteraction (Expression p)))
     (slots : List Nat) (R : BusInteraction (Expression p)) : Bool :=
   slots.all (fun slot =>
     match R.payload[slot]? with
-    | some e => byteJustifiedW deep domCs candsOf bs facts wits e
+    | some e => byteJustifiedW bound deep domCs candsOf bs facts wits e
     | none => true)
 
-theorem recvSlotsJustified_sound (deep : Bool) (all domCs : List (Expression p))
+theorem recvSlotsJustified_sound (bound : Nat) (deep : Bool) (all domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
     (wits : Variable → List (BusInteraction (Expression p))) (slots : List Nat)
     (R : BusInteraction (Expression p)) (hdeep : deep = true → p.Prime)
     (hdomCs : ∀ c ∈ domCs, c ∈ all) (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ all)
     (hwits : ∀ v, ∀ bi ∈ wits v, bi ∈ rest)
-    (h : recvSlotsJustified deep domCs candsOf bs facts wits slots R = true)
+    (h : recvSlotsJustified bound deep domCs candsOf bs facts wits slots R = true)
     (env : Variable → ZMod p)
     (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) :
-    ∀ slot ∈ slots, ∀ x : ZMod p, (R.eval env).payload[slot]? = some x → x.val < 256 := by
+    ∀ slot ∈ slots, ∀ x : ZMod p, (R.eval env).payload[slot]? = some x → x.val < bound := by
   intro slot hslot x hget
   have hcheck := List.all_eq_true.mp h slot hslot
   -- the evaluated payload entry is the evaluation of the syntactic entry
@@ -536,7 +540,7 @@ theorem recvSlotsJustified_sound (deep : Bool) (all domCs : List (Expression p))
     rw [he] at hget' hcheck
     simp only [Option.map_some, Option.some.injEq] at hget'
     subst hget'
-    exact byteJustifiedW_sound deep all domCs candsOf bs facts rest wits e hdeep
+    exact byteJustifiedW_sound bound deep all domCs candsOf bs facts rest wits e hdeep
       hdomCs hcands hwits hcheck env hall hbus
 
 /-! ## Net-multiplicity bookkeeping -/
@@ -682,7 +686,6 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
     (busId : Nat) (shape : MemoryBusShape) (hshape : facts.memShape busId = some shape)
     (pattern : List (Option (ZMod p))) (slots : List Nat) (bound : Nat)
     (hslots : facts.recvByteSlots busId pattern = some (slots, bound))
-    (hbound : 256 ≤ bound)
     (hRmatch : ∀ env, Matches (R.eval env).payload pattern)
     (checks : List (BusInteraction (Expression p)))
     (hchecks : ∀ ck ∈ checks,
@@ -695,7 +698,7 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
       (∀ c ∈ cs.algebraicConstraints, c.eval env = 0) →
       (∀ bi ∈ A ++ B ++ C ++ checks, (bi.eval env).multiplicity ≠ 0 →
         bs.violatesConstraint (bi.eval env) = false) →
-      ∀ slot ∈ slots, ∀ x : ZMod p, (R.eval env).payload[slot]? = some x → x.val < 256)
+      ∀ slot ∈ slots, ∀ x : ZMod p, (R.eval env).payload[slot]? = some x → x.val < bound)
     (hsplit : cs.busInteractions = A ++ S :: B ++ R :: C)
     (hSbus : S.busId = busId) (hRbus : R.busId = busId)
     (hSm : S.multiplicity.constValue? = some shape.setNewMult)
@@ -753,13 +756,12 @@ theorem dropPair_correct (cs : ConstraintSystem p) (bs : BusSemantics p) (facts 
   have hnvR : ∀ env, out.satisfies bs env → bs.violatesConstraint (R.eval env) = false := by
     intro env hsat
     have hbyteEnv : ∀ slot ∈ slots, ∀ x : ZMod p, (R.eval env).payload[slot]? = some x →
-        x.val < 256 := by
+        x.val < bound := by
       refine hbyte env (fun c hc => hsat.1 c hc) ?_
       intro bi hbi hne
       exact hsat.2 bi (by rw [houtb]; exact hbi) hne
     refine (facts.recvByteSlots_sound busId shape hshape pattern slots bound hslots (R.eval env)
-      (show (R.eval env).busId = busId from hRbus)).2 (hRmEv env) (hRmatch env)
-      (fun slot hs x hx => Nat.lt_of_lt_of_le (hbyteEnv slot hs x hx) hbound)
+      (show (R.eval env).busId = busId from hRbus)).2 (hRmEv env) (hRmatch env) hbyteEnv
   -- Side effects are `≈`-equal (the pair contributes `0` net; the checks are stateless). The
   -- evaluated-payload equality is discharged from the constraints, which hold in **both**
   -- refinement directions — a drop leaves `algebraicConstraints` untouched.
@@ -905,9 +907,12 @@ def payloadHash (pl : List (Expression p)) : UInt64 :=
 def addrHash (shape : MemoryBusShape) (pl : List (Expression p)) : UInt64 :=
   shape.addressFields.foldl (fun h slot => mixHash h ((pl[slot]?).elim 5 Expression.structHash)) 7
 
-/-- Positions (ascending) of the candidate receives (constant `-1` multiplicity) on **every**
-    memory-shaped bus, keyed by the bus id mixed with the payload hash — one build serves the
-    whole sweep, instead of one O(#interactions) rebuild per bus. In the cycle
+/-- Positions (ascending) of the candidate receives (the `getPrevious`, multiplicity
+    `-shape.setNewMult`) on **every** memory-shaped bus, keyed by the bus id mixed with the payload
+    hash — one build serves the whole sweep, instead of one O(#interactions) rebuild per bus. The
+    receive multiplicity is read from each bus's own declared shape (`-shape.setNewMult`), so a bus
+    that sets-new with `-1` (SP1's memory, whose reads carry `+1`) is indexed correctly, not just
+    the `-1` convention of OpenVM memory / every VM's execution bridge. In the cycle
     (`aggressive = false`) the payload part of the key is the exact payload hash — tiny buckets,
     cheap syntactic probes. In the coda (`aggressive = true`) it is the *address-slot* hash
     (`addrHash`, computed against the bus's own declared shape), a coarsening under which
@@ -918,14 +923,14 @@ def recvIndexAll {bs : BusSemantics p} (facts : BusFacts p bs) (aggressive : Boo
     (arr : Array (BusInteraction (Expression p))) :
     Std.HashMap UInt64 (List Nat) :=
   (arr.toList.zipIdx).foldr (fun bij m =>
-    if decide (multConst bij.1 = some (-1)) then
-      match facts.memShape bij.1.busId with
-      | some shape =>
+    match facts.memShape bij.1.busId with
+    | some shape =>
+      if decide (multConst bij.1 = some (-shape.setNewMult)) then
         let h := mixHash (hash bij.1.busId)
           (if aggressive then addrHash shape bij.1.payload else payloadHash bij.1.payload)
         m.insert h (bij.2 :: m.getD h [])
-      | none => m
-    else m) ∅
+      else m
+    | none => m) ∅
 
 /-- Every element of a two-point split other than the two distinguished ones lies in the
     remaining region. -/
@@ -1685,13 +1690,13 @@ theorem emitOk_sound (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat)
     · exact absurd hrest (by simp)
 
 /-- The declared byte slots of `R` whose payload entries the witnesses do not justify. -/
-def unjustifiedSlots (deep : Bool) (domCs : List (Expression p))
+def unjustifiedSlots (bound : Nat) (deep : Bool) (domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (wits : Variable → List (BusInteraction (Expression p)))
     (slots : List Nat) (R : BusInteraction (Expression p)) : List Nat :=
   slots.filter (fun slot =>
     match R.payload[slot]? with
-    | some e => !byteJustifiedW deep domCs candsOf bs facts wits e
+    | some e => !byteJustifiedW bound deep domCs candsOf bs facts wits e
     | none => false)
 
 /-- The per-candidate certificate: address/multiplicity/payload of the pair, the emitted
@@ -1710,10 +1715,9 @@ def checkCancel (deep : Bool) {all : List (Expression p)} (bs : BusSemantics p)
     (checks : List (BusInteraction (Expression p))) : Bool :=
   decide (S.busId = busId) && decide (R.busId = busId) &&
   decide (multConst S = some shape.setNewMult) && decide (multConst R = some (-shape.setNewMult)) &&
-  decide (256 ≤ bound) &&
   payloadEntailedEq M S.payload R.payload &&
   checks.all (emitOk bs facts busId shape slots R) &&
-  recvSlotsJustified deep domCs candsOf bs facts wits slots R
+  recvSlotsJustified bound deep domCs candsOf bs facts wits slots R
 
 /-- A passing `checkCancel` — together with the split equation, the region hypotheses the scan
     established, and the witness/index membership facts — yields `PassCorrect` via
@@ -1742,15 +1746,15 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     PassCorrect cs { cs with busInteractions := A ++ B ++ C ++ checks } [] bs := by
   unfold checkCancel at h
   simp only [Bool.and_eq_true] at h
-  obtain ⟨⟨⟨⟨⟨⟨⟨hSb, hRb⟩, hSm⟩, hRm⟩, hbnd⟩, hpay⟩, hemit⟩, hjust⟩ := h
+  obtain ⟨⟨⟨⟨⟨⟨hSb, hRb⟩, hSm⟩, hRm⟩, hpay⟩, hemit⟩, hjust⟩ := h
   have hRmEv : ∀ env, (R.eval env).multiplicity = -shape.setNewMult :=
     fun env => R.multiplicity.constValue?_sound (-shape.setNewMult) (of_decide_eq_true hRm) env
   refine dropPair_correct cs bs facts hp1 A B C S R busId shape hshape
-    (R.payload.map Expression.constValue?) slots bound hslots (of_decide_eq_true hbnd)
+    (R.payload.map Expression.constValue?) slots bound hslots
     (fun env => matches_evalPattern R.payload env) checks
     (fun ck hck => emitOk_sound bs facts busId shape slots R ck
       (List.all_eq_true.mp hemit ck hck) (of_decide_eq_true hRb) hRmEv)
-    (fun env hall hbus => recvSlotsJustified_sound deep cs.algebraicConstraints domCs candsOf
+    (fun env hall hbus => recvSlotsJustified_sound bound deep cs.algebraicConstraints domCs candsOf
       bs facts (A ++ B ++ C ++ checks) wits slots R hdeep hdomCs hcands hwits hjust env hall hbus)
     hsplit
     (of_decide_eq_true hSb) (of_decide_eq_true hRb)
@@ -2060,7 +2064,7 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
           -- `facts.memShape … = some shape`, hence is stateful (`facts.memShape_stateful`) — a
           -- check is therefore never a send/receive candidate. It lives only in the threaded
           -- `checks` list (consulted by `dropWits` for byte justification), at the logical tail.
-          let unjust := unjustifiedSlots deep domCsT.get.val candsT.get.lookup bs facts
+          let unjust := unjustifiedSlots bound deep domCsT.get.val candsT.get.lookup bs facts
             (dropWits facts arr alive S R checksOld []) slots R
           let checks : List (BusInteraction (Expression p)) :=
             match unjust, bcBus? with
