@@ -25,12 +25,12 @@ jobs:
           path: .lake/build/bin/apc-optimizer
           retention-days: 30
 
-  # Effectiveness over the full openvm-eth and wasm-eth sets and the keccak stress set. The matrix
-  # crosses side (this PR vs the latest main build) with a benchmark group, so each cell is its own
-  # runner: circuit sizes are deterministic, so the sides needn't share a runner, and splitting the
-  # 100-case wasm-eth set into its own group keeps it off the openvm-eth critical path. `report`
-  # merges every cell. benchmark.py also captures a rough total runtime, used for the report-only
-  # runtime row.
+  # Effectiveness over the full OpenVM (openvm-eth, wasm-eth) and SP1 (rsp) sets plus the keccak
+  # stress sets. The matrix crosses side (this PR vs the latest main build) with a benchmark group,
+  # so each cell is its own runner: circuit sizes are deterministic, so the sides needn't share a
+  # runner, and splitting the 100-case wasm-eth set into its own group keeps it off the openvm-eth
+  # critical path. `report` merges every cell. benchmark.py also captures a rough total runtime, used
+  # for the report-only runtime row.
   effectiveness:
     if: github.event_name == 'pull_request'
     needs: build
@@ -40,11 +40,15 @@ jobs:
       fail-fast: false
       matrix:
         side: [pr, main]
-        # `key` names the artifact; `sets` is the space-separated list this cell runs. keccak is tiny
-        # (2 cases), so it rides along with openvm-eth rather than paying for its own runner.
+        # `key` names the artifact; `sets` is the space-separated list of `<vm>:<set>` tokens this
+        # cell runs (vm picks the Benchmarks/<VM>/ dir + fact-aware backend: openvm -> BabyBear,
+        # sp1 -> KoalaBear). Tiny sets ride along with a full one rather than paying for their own
+        # runner: the OpenVM and SP1 keccak stress sets sit with openvm-eth; the full 200-case SP1
+        # rsp set pairs with wasm-eth. Per-cell JSON/MD are keyed by a unique label (sp1 sets get an
+        # `sp1-` prefix) so the two `keccak` sets don't collide.
         group:
-          - { key: openvm, sets: openvm-eth keccak }
-          - { key: wasm, sets: wasm-eth }
+          - { key: openvm, sets: "openvm:openvm-eth openvm:keccak sp1:keccak" }
+          - { key: wasm, sets: "openvm:wasm-eth sp1:rsp" }
     permissions:
       contents: read
       actions: read
@@ -71,9 +75,14 @@ jobs:
         run: |
           [ -f bin/apc-optimizer ] || { echo "no binary for side '${{ matrix.side }}'"; exit 0; }
           chmod +x bin/apc-optimizer
-          for set in ${{ matrix.group.sets }}; do
-            python3 Benchmarks/benchmark.py "$set" --binary bin/apc-optimizer \
-              --json "$set.json" --md "$set.md"
+          for token in ${{ matrix.group.sets }}; do
+            vm=${token%%:*}; bset=${token#*:}
+            # Non-openvm sets get a `<vm>-` label prefix so SP1 keccak doesn't overwrite OpenVM's;
+            # openvm keeps the bare label the report assembler expects.
+            label=$bset
+            if [ "$vm" != openvm ]; then label="$vm-$bset"; fi
+            python3 Benchmarks/benchmark.py "$bset" --vm "$vm" --binary bin/apc-optimizer \
+              --json "$label.json" --md "$label.md"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -159,7 +168,8 @@ jobs:
       - name: Assemble comment
         run: |
           : > bench.md
-          for set in openvm-eth wasm-eth keccak; do
+          # Labels match the per-cell JSON/MD written by the effectiveness job (sp1 sets prefixed).
+          for set in openvm-eth wasm-eth keccak sp1-rsp sp1-keccak; do
             if [ -f "main/$set.json" ]; then
               python3 Benchmarks/benchmark.py --compare "main/$set.json" "pr/$set.json" \
                 --md "$set.md"
@@ -184,7 +194,7 @@ jobs:
           pr: ${{ github.event.pull_request.head.repo.full_name == github.repository
                   && github.event.number || '' }}
           note: >-
-            openvm-eth + wasm-eth + keccak, PR `${{ steps.base.outputs.psha }}`
+            openvm-eth + wasm-eth + keccak + sp1/rsp + sp1/keccak, PR `${{ steps.base.outputs.psha }}`
             ${{ steps.base.outputs.sha && format('vs main `{0}`', steps.base.outputs.sha)
                  || '(no main baseline binary)' }}.
             Effectiveness is exact; the runtime row and detail are report-only. Full runtime detail:

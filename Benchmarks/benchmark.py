@@ -209,9 +209,16 @@ def summarize(results):
     return summary
 
 
-def emit_summary_md(benchmark, summary, skipped):
+def _bench_label(benchmark, vm):
+    """Report label for a set: bare for openvm (the unmarked default), else `vm/set`, so
+    same-named sets across VMs (e.g. OpenVM `keccak` vs SP1 `keccak`) stay distinguishable."""
+    return benchmark if vm == "openvm" else f"{vm}/{benchmark}"
+
+
+def emit_summary_md(benchmark, summary, skipped, vm="openvm"):
     """Markdown summary of one benchmark run (apc-optimizer vs powdr)."""
-    lines = [f"### Effectiveness — {benchmark}, {summary['n']} cases, apc-optimizer vs powdr", "",
+    lines = [f"### Effectiveness — {_bench_label(benchmark, vm)}, {summary['n']} cases, "
+             "apc-optimizer vs powdr", "",
              "Effectiveness = size before / size after (larger is better); "
              "priority: variables > bus interactions > constraints. "
              "agg = Σbefore ⁄ Σafter, geo = geomean of per-case factors.", "",
@@ -246,8 +253,8 @@ def emit_compare_md(base, target):
     b_results = [(name, base["results"][name]) for name in common]
     ts, bs = summarize(t_results), summarize(b_results)
 
-    lines = [f"### Effectiveness — {target['benchmark']}, {len(common)} cases, "
-             "this branch vs main", "",
+    lines = [f"### Effectiveness — {_bench_label(target['benchmark'], target.get('vm', 'openvm'))}, "
+             f"{len(common)} cases, this branch vs main", "",
              "| measure | main | this branch | Δ | powdr |",
              "|---|---|---|---|---|"]
     for mt in METRICS:
@@ -406,7 +413,7 @@ def main():
                                          "skipped": skipped}))
         print(f"wrote {args.json}", file=sys.stderr)
     if args.md is not None:
-        args.md.write_text(emit_summary_md(benchmark, summary, skipped))
+        args.md.write_text(emit_summary_md(benchmark, summary, skipped, args.vm))
         print(f"wrote {args.md}", file=sys.stderr)
 
     if want_report:
