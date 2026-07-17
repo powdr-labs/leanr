@@ -118,6 +118,74 @@ theorem dedupStateless_evalFilter (bs : BusSemantics p) (env : Variable → ZMod
         List.map_cons,
         List.filter_cons_of_neg (by have hf : bs.isStateful (b.eval env).busId = false := (by simpa using h1); simp [hf]), ih]
 
+/-! ## Hash-bucketed stateless dedup
+
+`dedupStateless`' membership test `bi ∈ seen` scans the whole kept-so-far list — quadratic in the
+number of stateless interactions. Bucketing `seen` by a structural hash of the interaction turns
+each test into a one-bucket scan; `dedupStatelessFast_eq` proves the bucketed version returns the
+identical list, so the pass output — and the whole `dedup_correct` proof — are unchanged. -/
+
+/-- A structural hash of an expression (for bucketing). -/
+def Expression.bHash : Expression p → UInt64
+  | .const n => mixHash 11 (hash n.val)
+  | .var x => mixHash 13 (hash x)
+  | .add a b => mixHash 17 (mixHash a.bHash b.bHash)
+  | .mul a b => mixHash 19 (mixHash a.bHash b.bHash)
+
+/-- A structural hash of an interaction (bus id, multiplicity, payload). -/
+def BusInteraction.bHash (bi : BusInteraction (Expression p)) : UInt64 :=
+  mixHash (hash bi.busId)
+    (mixHash bi.multiplicity.bHash (bi.payload.foldl (fun h e => mixHash h e.bHash) 7))
+
+/-- `dedupStateless` with the `seen` set bucketed by `BusInteraction.bHash`: each membership test
+    scans only the matching bucket. -/
+def dedupStatelessFast (bs : BusSemantics p)
+    (seen : Std.HashMap UInt64 (List (BusInteraction (Expression p)))) :
+    List (BusInteraction (Expression p)) → List (BusInteraction (Expression p))
+  | [] => []
+  | bi :: rest =>
+    if bs.isStateful bi.busId then bi :: dedupStatelessFast bs seen rest
+    else if bi ∈ seen.getD bi.bHash [] then dedupStatelessFast bs seen rest
+    else bi :: dedupStatelessFast bs (seen.insert bi.bHash (bi :: seen.getD bi.bHash [])) rest
+
+/-- The bucketed dedup returns the identical list to `dedupStateless`, given a `seen` hash-map that
+    agrees with the `seen` list on membership (each interaction sits in its own hash bucket). -/
+theorem dedupStatelessFast_eq (bs : BusSemantics p)
+    (bis : List (BusInteraction (Expression p))) :
+    ∀ (seenL : List (BusInteraction (Expression p)))
+      (seenH : Std.HashMap UInt64 (List (BusInteraction (Expression p)))),
+      (∀ bi, bi ∈ seenL ↔ bi ∈ seenH.getD bi.bHash []) →
+      dedupStatelessFast bs seenH bis = dedupStateless bs seenL bis := by
+  induction bis with
+  | nil => intro _ _ _; rfl
+  | cons bi rest ih =>
+    intro seenL seenH h
+    rw [dedupStatelessFast, dedupStateless]
+    by_cases hst : bs.isStateful bi.busId = true
+    · rw [if_pos hst, if_pos hst, ih seenL seenH h]
+    · rw [if_neg hst, if_neg hst]
+      by_cases hmem : bi ∈ seenL
+      · rw [if_pos ((h bi).mp hmem), if_pos hmem, ih seenL seenH h]
+      · rw [if_neg (fun hc => hmem ((h bi).mpr hc)), if_neg hmem,
+          ih (bi :: seenL) (seenH.insert bi.bHash (bi :: seenH.getD bi.bHash []))
+            (by
+              intro x
+              rw [Std.HashMap.getD_insert]
+              by_cases hbh : bi.bHash = x.bHash
+              · rw [if_pos (by simpa using hbh), List.mem_cons, List.mem_cons]
+                have hx := h x
+                rw [← hbh] at hx
+                exact or_congr_right hx
+              · have hxne : x ≠ bi := fun he => hbh (by rw [he])
+                rw [if_neg (by simpa using hbh), List.mem_cons]
+                exact (or_iff_right hxne).trans (h x))]
+
+/-- The bucketed dedup, started empty, equals `dedupStateless` started empty. -/
+theorem dedupStatelessFast_eq_nil (bs : BusSemantics p)
+    (bis : List (BusInteraction (Expression p))) :
+    dedupStatelessFast bs ∅ bis = dedupStateless bs [] bis :=
+  dedupStatelessFast_eq bs bis [] ∅ (by intro bi; simp [Std.HashMap.getD_empty])
+
 /-! ## The pass -/
 
 /-- The deduplicated system. -/
@@ -166,6 +234,17 @@ theorem ConstraintSystem.dedup_correct (cs : ConstraintSystem p) (bs : BusSemant
     exact ⟨(hiff env).2 hsat, (hadm env).2 hadm',
       by rw [hside]; exact BusState.equiv_refl _⟩
 
-/-- The duplicate-removal pass. -/
+/-- The deduplicated system, computed with the hash-bucketed stateless dedup. Equal to
+    `ConstraintSystem.dedup` (`dedupFast_eq`), so it inherits `dedup_correct`. -/
+def ConstraintSystem.dedupFast (cs : ConstraintSystem p) (bs : BusSemantics p) :
+    ConstraintSystem p :=
+  { algebraicConstraints := cs.algebraicConstraints.dedup,
+    busInteractions := dedupStatelessFast bs ∅ cs.busInteractions }
+
+theorem ConstraintSystem.dedupFast_eq (cs : ConstraintSystem p) (bs : BusSemantics p) :
+    cs.dedupFast bs = cs.dedup bs := by
+  simp only [ConstraintSystem.dedupFast, ConstraintSystem.dedup, dedupStatelessFast_eq_nil]
+
+/-- The duplicate-removal pass (runs the hash-bucketed dedup; correctness via `dedupFast_eq`). -/
 def dedupPass : VerifiedPass p := fun cs bs =>
-  ⟨cs.dedup bs, [], cs.dedup_correct bs⟩
+  ⟨cs.dedupFast bs, [], (cs.dedupFast_eq bs).symm ▸ cs.dedup_correct bs⟩
