@@ -30,25 +30,29 @@ variable {p : ℕ}
 /-! ## Symbolic finite domains
 
 A variable's finite domain is either an **explicit** list of field elements (the roots of a
-product-of-affine-factors constraint) or the **range** `[0, bound)` cast into `ZMod p` (a
-fact-bounded raw payload slot). A range keeps only its `Nat` bound: its `bound`-element list —
-`(List.range bound).map Nat.cast`, a `2^16`-element materialization for a 16-bit limb — is
-built **only** when a target is actually enumerated (`toList`, inside `assignments`), and its
-`size` is read in O(1) without materializing anything. Every table/box decision that used
-`List.length` on the old materialized list now reads `size`; `size_eq` proves them equal, so
-the pass is byte-identical to the eager version. -/
+product-of-affine-factors constraint) or the **range** `[0, bound)` (a fact-bounded raw payload
+slot), which keeps only its `Nat` bound. Its `size` is read in O(1), and the box scan enumerates it
+with a `Nat` loop (`boxFold` / `FiniteDomain.foldElts`) that never builds an element list — a range
+recasts one `Nat` per point it actually visits, so an early-aborting scan touches only a handful.
+`toList` — `(List.range bound).map Nat.cast`, the `2^16`-element list a 16-bit limb would have
+materialized eagerly — is the **specification only**: it appears in the equivalence/soundness proofs
+(`foldElts_eq`, `boxFold_eq`, and the `matList` bridge) and never on the runtime path. Every
+table/box decision that used `List.length` on the old eagerly-materialized list now reads `size`;
+`size_eq` proves them equal, so the pass is byte-identical to the eager version. -/
 
 /-- A finite domain, kept symbolically: an explicit element list, or the range `[0, bound)`. -/
 inductive FiniteDomain (p : ℕ) where
   | explicit (values : List (ZMod p))
   | range (bound : Nat)
 
-/-- The materialized element list of a finite domain (the range is cast lazily, only here). -/
-@[inline] def FiniteDomain.toList : FiniteDomain p → List (ZMod p)
+/-- The element list a finite domain denotes — the **proof specification** for `size` and
+    `foldElts` (the range cast is materialized only here, in proofs). The runtime enumeration never
+    calls this; it streams the domain with the `Nat`-loop `FiniteDomain.foldElts`. -/
+def FiniteDomain.toList : FiniteDomain p → List (ZMod p)
   | .explicit vs => vs
   | .range b => (List.range b).map (Nat.cast : Nat → ZMod p)
 
-/-- The domain's cardinality — O(1) for a range (no materialization). -/
+/-- The domain's cardinality — O(1) for a range (no materialization). On the runtime path. -/
 @[inline] def FiniteDomain.size : FiniteDomain p → Nat
   | .explicit vs => vs.length
   | .range b => b
@@ -144,9 +148,10 @@ theorem doms_sound (T : DomainTable p cs bs) (xs : List Variable)
         · exact T.sound env hsat x d hd
         · exact ih ds' hr yd hyd
 
-/-- The materialized element lists of a table lookup, ready for `assignments`. Its keys are still
-    `xs` (`doms_matList_fst`) and each entry is entailed (`doms_matList_sound`), but the range
-    materialization happens here — only when a target with a small enough box is enumerated. -/
+/-- The element lists a table lookup denotes, as the eager `assignments` would consume them — the
+    **proof specification** bridging the symbolic table to the enumeration equivalences
+    (`matList_fst` / `matList_sound` / `matList_map_fst`, and `boxFold_eq` / `scanBox_eq`). The
+    runtime never builds this: enumeration streams the domains directly with `boxFold`. -/
 def matList (ds : List (Variable × FiniteDomain p)) : List (Variable × List (ZMod p)) :=
   ds.map (fun yd => (yd.1, yd.2.toList))
 
@@ -1240,7 +1245,7 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts
   match hdoms : T.doms xs with
   | none => []
   | some fdoms =>
-    -- box size from the O(1) `FiniteDomain.size` — no range is materialized to a list yet
+    -- box size from the O(1) `FiniteDomain.size` — no range is ever materialized to a list
     let boxSize := (fdoms.map (fun yd => yd.2.size)).prod
     if boxSize ≤ maxEnumSize then
       -- `esFull` (all covered constraints) drives the informativeness gate and the work cap, so
