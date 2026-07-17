@@ -267,16 +267,97 @@ theorem LinExpr.trySolveUnit_eq_none (l : LinExpr p) (v : Variable)
     (h : ¬l.coeff v * (l.coeff v)⁻¹ = 1) : l.trySolveUnit v = none := by
   unfold LinExpr.trySolveUnit; rw [if_neg h]
 
-/-- `±1`-pivot descriptor: `some (v, score)` exactly when `l.trySolve v` succeeds. -/
-def pm1Desc (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
-    (v : Variable) : Option (Variable × Nat) :=
-  if l.coeff v = 1 ∨ l.coeff v = -1 then some (v, gaussScore occ prot v (l.others v).terms.length)
+/-! ### Coefficient/occurrence index (linear pivot scoring)
+
+Scoring a constraint's candidates needs, per variable, its total coefficient (`l.coeff v`, to
+classify `±1`/unit) and the size of its solution (`(l.others v).terms.length`, the pivot's
+`varCount`). Computed directly those are O(terms) each, so scoring is O(terms²) per constraint.
+`coeffIdx` folds the term list once into a `Std.HashMap Variable (ZMod p × Nat)` = (coefficient sum,
+occurrence count) per variable; then `coeff = idx[v].1` and `others-length = |terms| - idx[v].2` are
+O(1). Proven equal to `l.coeff`/`l.others` (`coeffIdx_coeff`/`coeffIdx_others`), so the descriptors
+below are unchanged in meaning. -/
+
+/-- Coefficient sum of the terms whose variable is `v`. `l.coeff v` unfolds to `csum l.terms v`. -/
+def csum (terms : List (Variable × ZMod p)) (v : Variable) : ZMod p :=
+  ((terms.filter (fun t => t.1 = v)).map Prod.snd).sum
+
+/-- Occurrence count of `v` among the terms. -/
+def ccnt (terms : List (Variable × ZMod p)) (v : Variable) : Nat :=
+  (terms.filter (fun t => t.1 = v)).length
+
+/-- One index step: add `t`'s coefficient and one occurrence to `t.1`'s entry (0 if absent). -/
+def idxStep (m : Std.HashMap Variable (ZMod p × Nat)) (t : Variable × ZMod p) :
+    Std.HashMap Variable (ZMod p × Nat) :=
+  m.insert t.1 (((m[t.1]?).getD (0, 0)).1 + t.2, ((m[t.1]?).getD (0, 0)).2 + 1)
+
+/-- The coefficient/occurrence index of a term list. -/
+def coeffIdx (terms : List (Variable × ZMod p)) : Std.HashMap Variable (ZMod p × Nat) :=
+  terms.foldl idxStep ∅
+
+theorem idxStep_fold (terms : List (Variable × ZMod p)) :
+    ∀ (m : Std.HashMap Variable (ZMod p × Nat)) (v : Variable),
+      ((terms.foldl idxStep m)[v]?).getD (0, 0)
+        = (((m[v]?).getD (0, 0)).1 + csum terms v, ((m[v]?).getD (0, 0)).2 + ccnt terms v) := by
+  induction terms with
+  | nil => intro m v; simp [csum, ccnt]
+  | cons t rest ih =>
+      intro m v
+      rw [List.foldl_cons, ih (idxStep m t) v]
+      have hstep : ((idxStep m t)[v]?).getD (0, 0)
+          = (((m[v]?).getD (0, 0)).1 + (if t.1 = v then t.2 else 0),
+             ((m[v]?).getD (0, 0)).2 + (if t.1 = v then 1 else 0)) := by
+        unfold idxStep
+        rw [Std.HashMap.getElem?_insert]
+        by_cases htv : t.1 = v
+        · subst htv; simp
+        · rw [if_neg (by simpa using htv), if_neg htv, if_neg htv]
+          simp
+      rw [hstep]
+      have hcsum : csum (t :: rest) v = (if t.1 = v then t.2 else 0) + csum rest v := by
+        unfold csum; by_cases htv : t.1 = v <;> simp [htv]
+      have hccnt : ccnt (t :: rest) v = ccnt rest v + (if t.1 = v then 1 else 0) := by
+        unfold ccnt; by_cases htv : t.1 = v <;> simp [htv]
+      rw [hcsum, hccnt]
+      refine Prod.ext ?_ ?_ <;> ring
+
+theorem coeffIdx_get (terms : List (Variable × ZMod p)) (v : Variable) :
+    ((coeffIdx terms)[v]?).getD (0, 0) = (csum terms v, ccnt terms v) := by
+  simp [coeffIdx, idxStep_fold terms ∅ v]
+
+theorem coeffIdx_coeff (l : LinExpr p) (v : Variable) :
+    (((coeffIdx l.terms)[v]?).getD (0, 0)).1 = l.coeff v := by
+  rw [coeffIdx_get]; rfl
+
+theorem filter_eq_ne_length (terms : List (Variable × ZMod p)) (v : Variable) :
+    (terms.filter (fun t => t.1 ≠ v)).length + (terms.filter (fun t => t.1 = v)).length
+      = terms.length := by
+  induction terms with
+  | nil => rfl
+  | cons t rest ih => by_cases htv : t.1 = v <;> simp_all <;> omega
+
+theorem coeffIdx_others (l : LinExpr p) (v : Variable) :
+    l.terms.length - (((coeffIdx l.terms)[v]?).getD (0, 0)).2 = (l.others v).terms.length := by
+  rw [coeffIdx_get]
+  simp only [LinExpr.others, ccnt]
+  have h := filter_eq_ne_length l.terms v
+  omega
+
+/-- `±1`-pivot descriptor: `some (v, score)` exactly when `l.trySolve v` succeeds. The coefficient
+    and occurrence count come from the O(1) index (`total` = `|l.terms|`), so scanning all
+    candidates is O(terms) rather than O(terms²). -/
+def pm1Desc (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) (v : Variable) :
+    Option (Variable × Nat) :=
+  if ((idx[v]?).getD (0, 0)).1 = 1 ∨ ((idx[v]?).getD (0, 0)).1 = -1 then
+    some (v, gaussScore occ prot v (total - ((idx[v]?).getD (0, 0)).2))
   else none
 
 theorem pm1Desc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
     (v : Variable) :
-    pm1Desc l occ prot v = (l.trySolve v).map (fun xt => (xt.1, pivotScore occ prot xt)) := by
+    pm1Desc (coeffIdx l.terms) l.terms.length occ prot v
+      = (l.trySolve v).map (fun xt => (xt.1, pivotScore occ prot xt)) := by
   unfold pm1Desc
+  rw [coeffIdx_coeff l v, coeffIdx_others l v]
   by_cases h1 : l.coeff v = 1
   · rw [if_pos (Or.inl h1), LinExpr.trySolve_eq_of_one l v h1, Option.map_some,
       gaussScore_eq_pivotScore occ prot v (((l.others v).scale (-1)).toExpr)
@@ -290,19 +371,22 @@ theorem pm1Desc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.
         LinExpr.trySolve_eq_none l v (by rintro (h | h); exacts [h1 h, h2 h]), Option.map_none]
 
 /-- Unit-pivot descriptor: `some (v, score)` exactly when `l.trySolve v` fails but
-    `l.trySolveUnit v` succeeds. -/
-def unitDesc (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
-    (v : Variable) : Option (Variable × Nat) :=
-  if ¬(l.coeff v = 1 ∨ l.coeff v = -1) ∧ l.coeff v * (l.coeff v)⁻¹ = 1 then
-    some (v, gaussScore occ prot v (l.others v).terms.length)
+    `l.trySolveUnit v` succeeds. Index-driven, O(1), like `pm1Desc`. -/
+def unitDesc (idx : Std.HashMap Variable (ZMod p × Nat)) (total : Nat)
+    (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) (v : Variable) :
+    Option (Variable × Nat) :=
+  if ¬(((idx[v]?).getD (0, 0)).1 = 1 ∨ ((idx[v]?).getD (0, 0)).1 = -1)
+      ∧ ((idx[v]?).getD (0, 0)).1 * (((idx[v]?).getD (0, 0)).1)⁻¹ = 1 then
+    some (v, gaussScore occ prot v (total - ((idx[v]?).getD (0, 0)).2))
   else none
 
 theorem unitDesc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable)
     (v : Variable) :
-    unitDesc l occ prot v
+    unitDesc (coeffIdx l.terms) l.terms.length occ prot v
       = (match l.trySolve v with | some _ => none | none => l.trySolveUnit v).map
           (fun xt : Variable × Expression p => (xt.1, pivotScore occ prot xt)) := by
   unfold unitDesc
+  rw [coeffIdx_coeff l v, coeffIdx_others l v]
   by_cases h1 : l.coeff v = 1
   · rw [if_neg (fun hc => hc.1 (Or.inl h1)), LinExpr.trySolve_eq_of_one l v h1]; rfl
   · by_cases h2 : l.coeff v = -1
@@ -317,17 +401,23 @@ theorem unitDesc_eq (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std
         rfl
       · rw [if_neg (fun hc => h3 hc.2), LinExpr.trySolveUnit_eq_none l v h3]; rfl
 
-/-- All pivot descriptors, `±1` first (mirroring `pm1PivotsOf ++ unitPivotsOf`). -/
+/-- All pivot descriptors, `±1` first (mirroring `pm1PivotsOf ++ unitPivotsOf`). The coefficient/
+    occurrence index is built once (O(terms)); each descriptor is then O(1). -/
 def pivotDescs (l : LinExpr p) (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
     List (Variable × Nat) :=
-  (l.terms.map Prod.fst).filterMap (pm1Desc l occ prot)
-    ++ (l.terms.map Prod.fst).filterMap (unitDesc l occ prot)
+  let idx := coeffIdx l.terms
+  let total := l.terms.length
+  (l.terms.map Prod.fst).filterMap (pm1Desc idx total occ prot)
+    ++ (l.terms.map Prod.fst).filterMap (unitDesc idx total occ prot)
 
 theorem pivotDescs_eq (c : Expression p) (l : LinExpr p) (hlin : linearize c = some l)
     (occ : Std.HashMap Variable Nat) (prot : Std.HashSet Variable) :
     pivotDescs l occ prot
       = (pm1PivotsOf c ++ unitPivotsOf c).map (fun xt => (xt.1, pivotScore occ prot xt)) := by
-  unfold pivotDescs pm1PivotsOf unitPivotsOf
+  show (l.terms.map Prod.fst).filterMap (pm1Desc (coeffIdx l.terms) l.terms.length occ prot)
+      ++ (l.terms.map Prod.fst).filterMap (unitDesc (coeffIdx l.terms) l.terms.length occ prot)
+      = (pm1PivotsOf c ++ unitPivotsOf c).map (fun xt => (xt.1, pivotScore occ prot xt))
+  unfold pm1PivotsOf unitPivotsOf
   rw [hlin, List.map_append, map_filterMap, map_filterMap]
   congr 1
   · exact List.filterMap_congr (fun v _ => pm1Desc_eq l occ prot v)
