@@ -27,12 +27,48 @@ like `domainPropPass`); identity otherwise. -/
 
 variable {p : ℕ}
 
+/-! ## Symbolic finite domains
+
+A variable's finite domain is either an **explicit** list of field elements (the roots of a
+product-of-affine-factors constraint) or the **range** `[0, bound)` (a fact-bounded raw payload
+slot), which keeps only its `Nat` bound. Its `size` is read in O(1), and the box scan enumerates it
+with a `Nat` loop (`boxFold` / `FiniteDomain.foldElts`) that never builds an element list — a range
+recasts one `Nat` per point it actually visits, so an early-aborting scan touches only a handful.
+`toList` — `(List.range bound).map Nat.cast`, the `2^16`-element list a 16-bit limb would have
+materialized eagerly — is the **specification only**: it appears in the equivalence/soundness proofs
+(`foldElts_eq`, `boxFold_eq`, and the `matList` bridge) and never on the runtime path. Every
+table/box decision that used `List.length` on the old eagerly-materialized list now reads `size`;
+`size_eq` proves them equal, so the pass is byte-identical to the eager version. -/
+
+/-- A finite domain, kept symbolically: an explicit element list, or the range `[0, bound)`. -/
+inductive FiniteDomain (p : ℕ) where
+  | explicit (values : List (ZMod p))
+  | range (bound : Nat)
+
+/-- The element list a finite domain denotes — the **proof specification** for `size` and
+    `foldElts` (the range cast is materialized only here, in proofs). The runtime enumeration never
+    calls this; it streams the domain with the `Nat`-loop `FiniteDomain.foldElts`. -/
+def FiniteDomain.toList : FiniteDomain p → List (ZMod p)
+  | .explicit vs => vs
+  | .range b => (List.range b).map (Nat.cast : Nat → ZMod p)
+
+/-- The domain's cardinality — O(1) for a range (no materialization). On the runtime path. -/
+@[inline] def FiniteDomain.size : FiniteDomain p → Nat
+  | .explicit vs => vs.length
+  | .range b => b
+
+theorem FiniteDomain.size_eq (d : FiniteDomain p) : d.size = d.toList.length := by
+  cases d with
+  | explicit vs => rfl
+  | range b => simp only [FiniteDomain.toList, FiniteDomain.size, List.length_map,
+      List.length_range]
+
 /-! ## The proof-carrying domain table -/
 
 /-- Finite domains for variables, each entailed by every satisfying assignment of `cs`. -/
 structure DomainTable (p : ℕ) (cs : ConstraintSystem p) (bs : BusSemantics p) where
-  map : Std.HashMap Variable (List (ZMod p))
-  sound : ∀ env, cs.satisfies bs env → ∀ x d, map[x]? = some d → env x ∈ d
+  map : Std.HashMap Variable (FiniteDomain p)
+  sound : ∀ env, cs.satisfies bs env → ∀ x d, map[x]? = some d → env x ∈ d.toList
 
 namespace DomainTable
 
@@ -46,10 +82,10 @@ def empty : DomainTable p cs bs where
     exact absurd h (by simp)
 
 /-- Insert an entailed domain, keeping the smaller of two candidate domains for a variable. -/
-def insertEntry (T : DomainTable p cs bs) (x : Variable) (d : List (ZMod p))
-    (h : ∀ env, cs.satisfies bs env → env x ∈ d) : DomainTable p cs bs :=
+def insertEntry (T : DomainTable p cs bs) (x : Variable) (d : FiniteDomain p)
+    (h : ∀ env, cs.satisfies bs env → env x ∈ d.toList) : DomainTable p cs bs :=
   let keep : Bool := match T.map[x]? with
-    | some d0 => decide (d.length < d0.length)
+    | some d0 => decide (d.size < d0.size)
     | none => true
   if keep then
     { map := T.map.insert x d,
@@ -67,7 +103,7 @@ def insertEntry (T : DomainTable p cs bs) (x : Variable) (d : List (ZMod p))
   else T
 
 /-- The table's domains for a variable list, all-or-nothing (mirrors `buildDoms`). -/
-def doms (T : DomainTable p cs bs) : List Variable → Option (List (Variable × List (ZMod p)))
+def doms (T : DomainTable p cs bs) : List Variable → Option (List (Variable × FiniteDomain p))
   | [] => some []
   | x :: xs =>
     match T.map[x]?, T.doms xs with
@@ -75,7 +111,7 @@ def doms (T : DomainTable p cs bs) : List Variable → Option (List (Variable ×
     | _, _ => none
 
 theorem doms_fst (T : DomainTable p cs bs) (xs : List Variable)
-    (ds : List (Variable × List (ZMod p))) (h : T.doms xs = some ds) : ds.map Prod.fst = xs := by
+    (ds : List (Variable × FiniteDomain p)) (h : T.doms xs = some ds) : ds.map Prod.fst = xs := by
   induction xs generalizing ds with
   | nil => simp only [doms, Option.some.injEq] at h; subst h; rfl
   | cons x rest ih =>
@@ -92,8 +128,8 @@ theorem doms_fst (T : DomainTable p cs bs) (xs : List Variable)
         simp [ih ds' hr]
 
 theorem doms_sound (T : DomainTable p cs bs) (xs : List Variable)
-    (ds : List (Variable × List (ZMod p))) (h : T.doms xs = some ds) (env : Variable → ZMod p)
-    (hsat : cs.satisfies bs env) : ∀ yd ∈ ds, env yd.1 ∈ yd.2 := by
+    (ds : List (Variable × FiniteDomain p)) (h : T.doms xs = some ds) (env : Variable → ZMod p)
+    (hsat : cs.satisfies bs env) : ∀ yd ∈ ds, env yd.1 ∈ yd.2.toList := by
   induction xs generalizing ds with
   | nil => simp only [doms, Option.some.injEq] at h; subst h; simp
   | cons x rest ih =>
@@ -112,7 +148,181 @@ theorem doms_sound (T : DomainTable p cs bs) (xs : List Variable)
         · exact T.sound env hsat x d hd
         · exact ih ds' hr yd hyd
 
+/-- The element lists a table lookup denotes, as the eager `assignments` would consume them — the
+    **proof specification** bridging the symbolic table to the enumeration equivalences
+    (`matList_fst` / `matList_sound` / `matList_map_fst`, and `boxFold_eq` / `scanBox_eq`). The
+    runtime never builds this: enumeration streams the domains directly with `boxFold`. -/
+def matList (ds : List (Variable × FiniteDomain p)) : List (Variable × List (ZMod p)) :=
+  ds.map (fun yd => (yd.1, yd.2.toList))
+
+theorem matList_map_fst (ds : List (Variable × FiniteDomain p)) :
+    (matList ds).map Prod.fst = ds.map Prod.fst := by
+  rw [matList, List.map_map]
+  exact List.map_congr_left (fun yd _ => rfl)
+
+theorem matList_fst (T : DomainTable p cs bs) (xs : List Variable)
+    (ds : List (Variable × FiniteDomain p)) (h : T.doms xs = some ds) :
+    (matList ds).map Prod.fst = xs := by
+  rw [matList, List.map_map]
+  exact T.doms_fst xs ds h
+
+theorem matList_sound (T : DomainTable p cs bs) (xs : List Variable)
+    (ds : List (Variable × FiniteDomain p)) (h : T.doms xs = some ds) (env : Variable → ZMod p)
+    (hsat : cs.satisfies bs env) : ∀ yd ∈ matList ds, env yd.1 ∈ yd.2 := by
+  intro yd hyd
+  obtain ⟨yd', hyd', rfl⟩ := List.mem_map.1 hyd
+  exact T.doms_sound xs ds h env hsat yd' hyd'
+
 end DomainTable
+
+/-! ## Lazy box enumeration
+
+The box scan and the redundancy check both fold a predicate/state over `assignments doms` with an
+early exit (a scan aborts when its candidate set empties; `.all` stops at the first failure). The
+eager `assignments` materializes the whole Cartesian product first — and each `.range` factor would
+have to materialize its `2^16`-element element list. `boxFold` streams the product instead: it walks
+the domains with a `Nat` loop for each `range` (no element list is ever built) and stops the moment
+`stop` holds, so an aborted scan over a `2^16` box costs a handful of iterations, not 65536. It is
+proved equal to the eager `foldlStop f stop (assignments (matList doms))` (`boxFold_eq`), so the
+existing `assignments`-based soundness results carry over verbatim. -/
+
+/-- Left fold with an early exit: once `stop acc` holds, the remaining elements are skipped. -/
+def foldlStop {α β : Type} (f : β → α → β) (stop : β → Bool) : List α → β → β
+  | [], acc => acc
+  | a :: rest, acc => if stop acc then acc else foldlStop f stop rest (f acc a)
+
+theorem foldlStop_stopped {α β : Type} (f : β → α → β) (stop : β → Bool) (l : List α) (acc : β)
+    (h : stop acc = true) : foldlStop f stop l acc = acc := by
+  cases l with
+  | nil => rfl
+  | cons a rest => rw [foldlStop, if_pos h]
+
+theorem foldlStop_append {α β : Type} (f : β → α → β) (stop : β → Bool)
+    (xs ys : List α) (acc : β) :
+    foldlStop f stop (xs ++ ys) acc = foldlStop f stop ys (foldlStop f stop xs acc) := by
+  induction xs generalizing acc with
+  | nil => rfl
+  | cons a xs ih =>
+    rw [List.cons_append, foldlStop, foldlStop]
+    by_cases h : stop acc = true
+    · rw [if_pos h, if_pos h, foldlStop_stopped f stop ys acc h]
+    · rw [if_neg h, if_neg h, ih]
+
+theorem foldlStop_map {α β γ : Type} (f : β → γ → β) (stop : β → Bool) (k : α → γ)
+    (l : List α) (acc : β) :
+    foldlStop f stop (l.map k) acc = foldlStop (fun acc a => f acc (k a)) stop l acc := by
+  induction l generalizing acc with
+  | nil => rfl
+  | cons a rest ih =>
+    rw [List.map_cons, foldlStop, foldlStop]
+    by_cases h : stop acc = true
+    · rw [if_pos h, if_pos h]
+    · rw [if_neg h, if_neg h, ih]
+
+theorem foldlStop_flatMap {α β γ : Type} (f : β → γ → β) (stop : β → Bool) (h : α → List γ)
+    (l : List α) (acc : β) :
+    foldlStop (fun acc a => foldlStop f stop (h a) acc) stop l acc
+      = foldlStop f stop (l.flatMap h) acc := by
+  induction l generalizing acc with
+  | nil => rfl
+  | cons a rest ih =>
+    rw [List.flatMap_cons, foldlStop, foldlStop_append]
+    by_cases hs : stop acc = true
+    · rw [if_pos hs, foldlStop_stopped f stop (h a) acc hs,
+        foldlStop_stopped f stop (rest.flatMap h) acc hs]
+    · rw [if_neg hs, ih]
+
+theorem foldlStop_congr {α β : Type} (f g : β → α → β) (stop : β → Bool) (l : List α) (acc : β)
+    (h : ∀ acc a, f acc a = g acc a) : foldlStop f stop l acc = foldlStop g stop l acc := by
+  induction l generalizing acc with
+  | nil => rfl
+  | cons a rest ih =>
+    rw [foldlStop, foldlStop]
+    by_cases hs : stop acc = true
+    · rw [if_pos hs, if_pos hs]
+    · rw [if_neg hs, if_neg hs, h acc a, ih]
+
+/-- Ascending `Nat` loop `start, start+1, …, start+count-1`, casting each into `ZMod p` and folding
+    with an early exit — the `range` case of a domain fold, allocating no element list. -/
+def rangeFoldFrom {β : Type} (f : β → ZMod p → β) (stop : β → Bool) (start : Nat) :
+    Nat → β → β
+  | 0, acc => acc
+  | n + 1, acc =>
+    if stop acc then acc else rangeFoldFrom f stop (start + 1) n (f acc ((start : ℕ) : ZMod p))
+
+theorem rangeFoldFrom_eq {β : Type} (f : β → ZMod p → β) (stop : β → Bool)
+    (start count : Nat) (acc : β) :
+    rangeFoldFrom f stop start count acc
+      = foldlStop f stop ((List.range' start count).map (Nat.cast : Nat → ZMod p)) acc := by
+  induction count generalizing start acc with
+  | zero => rfl
+  | succ n ih =>
+    rw [rangeFoldFrom, List.range'_succ, List.map_cons, foldlStop]
+    by_cases h : stop acc = true
+    · rw [if_pos h, if_pos h]
+    · rw [if_neg h, if_neg h, ih]
+
+/-- Fold a function over a domain's elements with an early exit: a plain list fold for `explicit`,
+    a `Nat` loop for `range` (no `toList`). Equal to `foldlStop f stop d.toList` (`foldElts_eq`). -/
+def FiniteDomain.foldElts {β : Type} (f : β → ZMod p → β) (stop : β → Bool) :
+    FiniteDomain p → β → β
+  | .explicit vs, acc => foldlStop f stop vs acc
+  | .range b, acc => rangeFoldFrom f stop 0 b acc
+
+theorem FiniteDomain.foldElts_eq {β : Type} (f : β → ZMod p → β) (stop : β → Bool)
+    (d : FiniteDomain p) (acc : β) : d.foldElts f stop acc = foldlStop f stop d.toList acc := by
+  cases d with
+  | explicit vs => rfl
+  | range b =>
+    rw [FiniteDomain.foldElts, FiniteDomain.toList, rangeFoldFrom_eq, List.range_eq_range']
+
+/-- Stream the Cartesian product of the domains into `f`, threading `β` and stopping as soon as
+    `stop` holds. Ranges are enumerated by a `Nat` loop (`FiniteDomain.foldElts`); nothing is
+    materialized. Enumeration order and result match `foldlStop f stop (assignments (matList ·))`
+    (`boxFold_eq`). -/
+def boxFold {β : Type} (f : β → List (Variable × ZMod p) → β) (stop : β → Bool) :
+    List (Variable × FiniteDomain p) → β → β
+  | [], acc => if stop acc then acc else f acc []
+  | (x, d) :: rest, acc =>
+    boxFold (fun acc' a => d.foldElts (fun acc'' v => f acc'' ((x, v) :: a)) stop acc') stop rest acc
+
+theorem boxFold_eq {β : Type} (f : β → List (Variable × ZMod p) → β) (stop : β → Bool)
+    (doms : List (Variable × FiniteDomain p)) (acc : β) :
+    boxFold f stop doms acc = foldlStop f stop (assignments (DomainTable.matList doms)) acc := by
+  induction doms generalizing f acc with
+  | nil => simp only [boxFold, DomainTable.matList, List.map_nil, assignments, foldlStop]
+  | cons yd rest ih =>
+    obtain ⟨x, d⟩ := yd
+    have hml : DomainTable.matList ((x, d) :: rest)
+        = (x, d.toList) :: DomainTable.matList rest := rfl
+    rw [boxFold, ih, hml, assignments,
+      ← foldlStop_flatMap f stop (fun a => d.toList.map (fun v => (x, v) :: a))]
+    apply foldlStop_congr
+    intro acc' a
+    show d.foldElts (fun acc'' v => f acc'' ((x, v) :: a)) stop acc'
+      = foldlStop f stop (d.toList.map (fun v => (x, v) :: a)) acc'
+    rw [FiniteDomain.foldElts_eq, foldlStop_map]
+
+theorem foldlStop_all {α : Type} (pred : α → Bool) (l : List α) (acc : Bool) :
+    foldlStop (fun acc a => acc && pred a) (fun acc => !acc) l acc = (acc && l.all pred) := by
+  induction l generalizing acc with
+  | nil => simp [foldlStop]
+  | cons a rest ih =>
+    rw [foldlStop, List.all_cons]
+    by_cases hacc : acc = true
+    · subst hacc; rw [ih]; simp
+    · simp only [Bool.not_eq_true] at hacc; subst hacc; simp
+
+/-- `(assignments (matList doms)).all pred`, streamed lazily with an early exit at the first
+    failing point (`allBox_eq`), so no element list of any range is ever built. -/
+def allBox (pred : List (Variable × ZMod p) → Bool) (doms : List (Variable × FiniteDomain p)) :
+    Bool :=
+  boxFold (fun acc pt => acc && pred pt) (fun acc => !acc) doms true
+
+theorem allBox_eq (pred : List (Variable × ZMod p) → Bool)
+    (doms : List (Variable × FiniteDomain p)) :
+    allBox pred doms = (assignments (DomainTable.matList doms)).all pred := by
+  rw [allBox, boxFold_eq, foldlStop_all, Bool.true_and]
 
 /-! ## Building the table -/
 
@@ -131,7 +341,7 @@ def addConstraintDoms [Fact p.Prime] {cs : ConstraintSystem p} {bs : BusSemantic
       | x :: xs =>
         match hr : rootsIn x c with
         | some d =>
-            addVars xs (T.insertEntry x d
+            addVars xs (T.insertEntry x (.explicit d)
               (fun env hsat => rootsIn_sound x c d hr env (hsat.1 c hc)))
         | none => addVars xs T
     let vs := c.vars.dedup
@@ -141,98 +351,59 @@ def addConstraintDoms [Fact p.Prime] {cs : ConstraintSystem p} {bs : BusSemantic
 def payloadRawVars (bi : BusInteraction (Expression p)) : List Variable :=
   bi.payload.filterMap (fun e => match e with | .var x => some x | _ => none)
 
-/-! ### A cache for materialized range domains
+/-! ### Bus-sourced range domains
 
-`interactionDomain` materializes `(List.range bound).map Nat.cast` — a `bound`-element list
-with a `% p` per element — for **every** `(interaction, variable)` hit, though only a handful
-of distinct bounds (`2^16`, `2^8`, …) ever occur. The cache shares one materialization per
-bound; its entries provably equal the uncached list, so the built table is identical. -/
+A raw variable slot bounded by a proven fact yields the range `[0, bound)`, kept symbolically as
+`FiniteDomain.range bound`. The eager version materialized `(List.range bound).map Nat.cast` — a
+`2^16`-element list with a `% p` per element — for **every** `(interaction, variable)` hit, and
+threaded a `RangeCache` to share one materialization per distinct bound. Keeping only the bound
+removes the materialization at table-build time altogether, and with it the need for any cache. -/
 
-/-- Proof-carrying cache of materialized `[0, bound)` domains, keyed by bound. -/
-structure RangeCache (p : ℕ) where
-  map : Std.HashMap Nat (List (ZMod p))
-  sound : ∀ b l, map[b]? = some l → l = (List.range b).map (Nat.cast : Nat → ZMod p)
-
-def RangeCache.empty : RangeCache p where
-  map := ∅
-  sound := by
-    intro _ _ h
-    rw [Std.HashMap.getElem?_empty] at h
-    exact absurd h (by simp)
-
-/-- The materialized `[0, b)` domain, from the cache when present. -/
-def RangeCache.get (C : RangeCache p) (b : Nat) :
-    { l : List (ZMod p) // l = (List.range b).map (Nat.cast : Nat → ZMod p) } × RangeCache p :=
-  match h : C.map[b]? with
-  | some l => (⟨l, C.sound b l h⟩, C)
-  | none =>
-    let l := (List.range b).map (Nat.cast : Nat → ZMod p)
-    (⟨l, rfl⟩,
-     { map := C.map.insert b l,
-       sound := by
-         intro b' l' h'
-         rw [Std.HashMap.getElem?_insert] at h'
-         by_cases hb : (b == b') = true
-         · rw [if_pos hb] at h'
-           have hbb : b = b' := by simpa using hb
-           have hll : l = l' := by simpa using h'
-           subst hbb; subst hll
-           rfl
-         · rw [if_neg hb] at h'
-           exact C.sound b' l' h' })
-
-/-- `interactionDomain` through the cache: the same domain (`interactionDomainC_fst`), one
-    materialization per distinct bound. -/
-def interactionDomainC (bs : BusSemantics p) (facts : BusFacts p bs) (C : RangeCache p)
-    (bi : BusInteraction (Expression p)) (x : Variable) :
-    Option (List (ZMod p)) × RangeCache p :=
+/-- A bus obligation's range domain for `x`, kept symbolically (mirrors `interactionDomain`). -/
+def interactionDomainF (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : Variable) : Option (FiniteDomain p) :=
   match interactionBound bs facts bi x with
-  | none => (none, C)
-  | some bound =>
-    if bound ≤ maxDomainBound then
-      let r := C.get bound
-      (some r.1.val, r.2)
-    else (none, C)
+  | none => none
+  | some bound => if bound ≤ maxDomainBound then some (.range bound) else none
 
-theorem interactionDomainC_fst (bs : BusSemantics p) (facts : BusFacts p bs) (C : RangeCache p)
-    (bi : BusInteraction (Expression p)) (x : Variable) :
-    (interactionDomainC bs facts C bi x).1 = interactionDomain bs facts bi x := by
-  cases hb : interactionBound bs facts bi x with
-  | none => simp only [interactionDomainC, interactionDomain, hb]
-  | some bound =>
-    simp only [interactionDomainC, interactionDomain, hb]
-    by_cases hcap : bound ≤ maxDomainBound
-    · rw [if_pos hcap, if_pos hcap]
-      exact congrArg some (C.get bound).1.property
-    · rw [if_neg hcap, if_neg hcap]
+theorem interactionDomainF_sound [NeZero p] (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : Variable) (d : FiniteDomain p)
+    (h : interactionDomainF bs facts bi x = some d) (env : Variable → ZMod p)
+    (hob : (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false) :
+    env x ∈ d.toList := by
+  unfold interactionDomainF at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i bound hB
+    split_ifs at h with hcap
+    simp only [Option.some.injEq] at h
+    subst h
+    show env x ∈ (List.range bound).map (Nat.cast : Nat → ZMod p)
+    exact mem_range_cast (env x) bound
+      (interactionBound_sound bs facts bi x bound hB env hob)
 
-/-- Bus-sourced domains: proven slot bounds on raw variable slots of interactions with
-    constant nonzero multiplicity (mirrors `interactionDomain`). The range cache is threaded
-    through; by `interactionDomainC_fst` the resulting table equals the uncached one. -/
+/-- Bus-sourced domains: proven slot bounds on raw variable slots of interactions with constant
+    nonzero multiplicity (mirrors `interactionDomain`, kept symbolic — see `interactionDomainF`). -/
 def addBusDoms [NeZero p] {cs : ConstraintSystem p} {bs : BusSemantics p}
     (facts : BusFacts p bs) :
     (pending : List (BusInteraction (Expression p))) →
     (∀ bi ∈ pending, bi ∈ cs.busInteractions) →
-    RangeCache p → DomainTable p cs bs → DomainTable p cs bs
-  | [], _, _, T => T
-  | bi :: rest, hmem, C, T =>
+    DomainTable p cs bs → DomainTable p cs bs
+  | [], _, T => T
+  | bi :: rest, hmem, T =>
     let hbi := hmem bi (List.mem_cons_self ..)
     let hrest := fun bi' h => hmem bi' (List.mem_cons_of_mem _ h)
-    let rec addVars (xs : List Variable) (C : RangeCache p) (T : DomainTable p cs bs) :
-        RangeCache p × DomainTable p cs bs :=
+    let rec addVars (xs : List Variable) (T : DomainTable p cs bs) : DomainTable p cs bs :=
       match xs with
-      | [] => (C, T)
+      | [] => T
       | x :: xs =>
-        let rC := interactionDomainC bs facts C bi x
-        match hr : rC.1 with
+        match hr : interactionDomainF bs facts bi x with
         | some d =>
-            addVars xs rC.2 (T.insertEntry x d
-              (fun env hsat => interactionDomain_sound bs facts bi x d
-                (by rw [← interactionDomainC_fst bs facts C bi x]; exact hr) env
+            addVars xs (T.insertEntry x d
+              (fun env hsat => interactionDomainF_sound bs facts bi x d hr env
                 (hsat.2 bi hbi)))
-        | none => addVars xs rC.2 T
-    let r := addVars (payloadRawVars bi).dedup C T
-    addBusDoms facts rest hrest r.1 r.2
+        | none => addVars xs T
+    addBusDoms facts rest hrest (addVars (payloadRawVars bi).dedup T)
 
 /-! ## Joint enumeration against the table
 
@@ -730,10 +901,11 @@ def constraintRedundant {cs : ConstraintSystem p} {bs : BusSemantics p} (T : Dom
   match T.doms c.vars.dedup with
   | none => false
   | some d =>
-    (d.map (fun yd => yd.2.length)).prod ≤ maxEnumSize &&
+    (d.map (fun yd => yd.2.size)).prod ≤ maxEnumSize &&
       -- index-compiled evaluation with hoisted operations (`compileE_eval`/`IExpr.evalWith_eq`:
       -- same result — the check is proof-free, only the surviving `activeCs` membership matters
-      -- downstream)
+      -- downstream). Enumeration streams the box lazily (`allBox`), a `Nat` loop per range and an
+      -- early exit at the first non-zero point (`allBox_eq`: same value as the eager `.all`).
       match compileE (d.map Prod.fst) c with
       | some ic =>
         let addI : Add (ZMod p) := inferInstance
@@ -741,8 +913,8 @@ def constraintRedundant {cs : ConstraintSystem p} {bs : BusSemantics p} (T : Dom
         let dec : DecidableEq (ZMod p) := inferInstance
         let add := addI.add
         let mul := mulI.mul
-        (assignments d).all (fun a => @decide (ic.evalWith add mul a = 0) (dec _ 0))
-      | none => (assignments d).all (fun a => decide (c.eval (envOfFast a) = 0))
+        allBox (fun a => @decide (ic.evalWith add mul a = 0) (dec _ 0)) d
+      | none => allBox (fun a => decide (c.eval (envOfFast a) = 0)) d
 
 /-- The single-pass box scan, after the first survivor: walk the remaining points, intersecting
     the list of `(x, c)` candidates on which every survivor seen so far agrees. The moment no
@@ -858,19 +1030,97 @@ theorem scanInit_none (surv : List (Variable × ZMod p) → Bool) (keys : List V
       · exact Bool.eq_false_iff.mpr hs
       · exact ih h pt' hpt'
 
+/-! ### The box scan as an early-exit fold
+
+`scanInit`/`scanWith` are a fold over the enumerated points: `none` while still hunting the first
+survivor, `some cands` once tracking (an empty candidate set means the scan has aborted, forcing
+nothing more). Casting that fold as `foldlStop scanStep scanStop` lets `boxFold` drive it lazily
+(`scanBox`), so a target that forces nothing over a `2^16` box aborts after a couple of points
+rather than materializing and scanning the whole product. `scanBox_eq` proves it equals the eager
+`scanInit … (assignments …)`, so the scan certificates apply unchanged. -/
+
+/-- One `scanInit`/`scanWith` step as a state transition: `none` = searching for the first
+    survivor, `some cands` = tracking the values every survivor so far agrees on. -/
+def scanStep (surv : List (Variable × ZMod p) → Bool) (keys : List Variable) :
+    Option (List (Variable × ZMod p)) → List (Variable × ZMod p) →
+    Option (List (Variable × ZMod p))
+  | none, pt => if surv pt = true then some (keys.map (fun x => (x, envOfFast pt x))) else none
+  | some cands, pt =>
+    if surv pt = true then some (cands.filter (fun xc => decide (envOfFast pt xc.1 = xc.2)))
+    else some cands
+
+/-- The scan aborts once a tracked candidate set has emptied (nothing more can be forced). -/
+def scanStop : Option (List (Variable × ZMod p)) → Bool
+  | none => false
+  | some cands => cands.isEmpty
+
+theorem scanWith_empty (surv : List (Variable × ZMod p) → Bool)
+    (pts : List (List (Variable × ZMod p))) : scanWith surv pts [] = [] := by
+  induction pts with
+  | nil => rfl
+  | cons pt rest ih =>
+    rw [scanWith]
+    by_cases hs : surv pt = true
+    · rw [if_pos hs]; simp
+    · rw [if_neg hs]; exact ih
+
+theorem scanTrack (surv : List (Variable × ZMod p) → Bool) (keys : List Variable)
+    (pts : List (List (Variable × ZMod p))) (cands : List (Variable × ZMod p)) :
+    foldlStop (scanStep surv keys) scanStop pts (some cands) = some (scanWith surv pts cands) := by
+  induction pts generalizing cands with
+  | nil => rfl
+  | cons pt rest ih =>
+    rw [foldlStop]
+    cases cands with
+    | nil =>
+      rw [if_pos (show scanStop (some ([] : List (Variable × ZMod p))) = true from rfl), scanWith]
+      by_cases hs : surv pt = true
+      · rw [if_pos hs]; simp
+      · rw [if_neg hs, scanWith_empty]
+    | cons c cs =>
+      rw [if_neg (show ¬ scanStop (some (c :: cs)) = true by simp [scanStop]), scanStep, scanWith]
+      by_cases hs : surv pt = true
+      · rw [if_pos hs, ih, if_pos hs]
+        cases hfil : (c :: cs).filter (fun xc => decide (envOfFast pt xc.1 = xc.2)) with
+        | nil => rw [scanWith_empty]
+        | cons c' cs' => rfl
+      · rw [if_neg hs, ih, if_neg hs]
+
+theorem scanSearch (surv : List (Variable × ZMod p) → Bool) (keys : List Variable)
+    (pts : List (List (Variable × ZMod p))) :
+    foldlStop (scanStep surv keys) scanStop pts none = scanInit surv keys pts := by
+  induction pts with
+  | nil => rfl
+  | cons pt rest ih =>
+    rw [foldlStop, if_neg (show ¬ scanStop (none : Option (List (Variable × ZMod p))) = true by
+      simp [scanStop]), scanStep, scanInit]
+    by_cases hs : surv pt = true
+    · rw [if_pos hs, if_pos hs, scanTrack]
+    · rw [if_neg hs, if_neg hs, ih]
+
+/-- The box scan, streamed lazily over the symbolic domains (`scanBox_eq`). -/
+def scanBox (surv : List (Variable × ZMod p) → Bool) (keys : List Variable)
+    (doms : List (Variable × FiniteDomain p)) : Option (List (Variable × ZMod p)) :=
+  boxFold (scanStep surv keys) scanStop doms none
+
+theorem scanBox_eq (surv : List (Variable × ZMod p) → Bool) (keys : List Variable)
+    (doms : List (Variable × FiniteDomain p)) :
+    scanBox surv keys doms = scanInit surv keys (assignments (DomainTable.matList doms)) := by
+  rw [scanBox, boxFold_eq, scanSearch]
+
 /-- The restriction of a satisfying assignment to the target's domains survives every covered
     item: `es`/`bis` are only required to be members of the system covered by `xs` (via
     `hes`/`hbis`) — they may be any *sub-selection* of the covered items (e.g. after dropping
     redundant constraints or stateful obligations). -/
 theorem restriction_survives {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (T : DomainTable p cs bs) (xs : List Variable) (doms : List (Variable × List (ZMod p)))
-    (hdoms : T.doms xs = some doms)
+    (xs : List Variable) (doms : List (Variable × List (ZMod p)))
+    (hfst : doms.map Prod.fst = xs)
     (es : List (Expression p)) (bis : List (BusInteraction (Expression p)))
     (hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true)
     (hbis : ∀ bi ∈ bis, bi ∈ cs.busInteractions ∧ bi.varsIn xs = true)
     (env : Variable → ZMod p) (hsat : cs.satisfies bs env) :
     survivesAllM bs es bis (doms.map (fun yd => (yd.1, env yd.1))) = true := by
-  have hkeys : doms.map Prod.fst = xs := T.doms_fst xs doms hdoms
+  have hkeys : doms.map Prod.fst = xs := hfst
   set a₀ := doms.map (fun yd => (yd.1, env yd.1)) with ha₀
   unfold survivesAllM
   simp only [envOfFast_eq]
@@ -903,8 +1153,9 @@ theorem restriction_survives {cs : ConstraintSystem p} {bs : BusSemantics p}
     the restriction of any satisfying `env` is an enumerated point that survives
     (`restriction_survives`), so the candidate agrees with it (`scanInit_some`). -/
 theorem scanForced_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (T : DomainTable p cs bs) (xs : List Variable) (doms : List (Variable × List (ZMod p)))
-    (hdoms : T.doms xs = some doms)
+    (xs : List Variable) (doms : List (Variable × List (ZMod p)))
+    (hfst : doms.map Prod.fst = xs)
+    (hsound : ∀ env, cs.satisfies bs env → ∀ yd ∈ doms, env yd.1 ∈ yd.2)
     (es : List (Expression p)) (bis : List (BusInteraction (Expression p)))
     (hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true)
     (hbis : ∀ bi ∈ bis, bi ∈ cs.busInteractions ∧ bi.varsIn xs = true)
@@ -916,13 +1167,13 @@ theorem scanForced_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
     (xc : Variable × ZMod p) (hxc : xc ∈ res)
     (env : Variable → ZMod p) (hsat : cs.satisfies bs env) : env xc.1 = xc.2 := by
   have hmem : doms.map (fun yd => (yd.1, env yd.1)) ∈ assignments doms :=
-    mem_assignments doms env (T.doms_sound xs doms hdoms env hsat)
+    mem_assignments doms env (hsound env hsat)
   have hpt : (doms.map (fun yd => (yd.1, env yd.1))).map Prod.fst = doms.map Prod.fst := by
     rw [List.map_map]
     exact List.map_congr_left (fun yd _ => rfl)
   have hsurv : surv (doms.map (fun yd => (yd.1, env yd.1))) = true := by
     rw [hsurvEq _ hpt]
-    exact restriction_survives T xs doms hdoms es bis hes hbis env hsat
+    exact restriction_survives xs doms hfst es bis hes hbis env hsat
   obtain ⟨hkey, hagree⟩ := scanInit_some surv (doms.map Prod.fst)
     (assignments doms) res hscan xc hxc
   have hxc' := hagree _ hmem hsurv
@@ -932,8 +1183,9 @@ theorem scanForced_sound {cs : ConstraintSystem p} {bs : BusSemantics p}
 /-- When the scan finds no survivor at all, no satisfying assignment exists (its restriction
     would be a surviving enumerated point), so anything is entailed. -/
 theorem scanNone_unsat {cs : ConstraintSystem p} {bs : BusSemantics p}
-    (T : DomainTable p cs bs) (xs : List Variable) (doms : List (Variable × List (ZMod p)))
-    (hdoms : T.doms xs = some doms)
+    (xs : List Variable) (doms : List (Variable × List (ZMod p)))
+    (hfst : doms.map Prod.fst = xs)
+    (hsound : ∀ env, cs.satisfies bs env → ∀ yd ∈ doms, env yd.1 ∈ yd.2)
     (es : List (Expression p)) (bis : List (BusInteraction (Expression p)))
     (hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true)
     (hbis : ∀ bi ∈ bis, bi ∈ cs.busInteractions ∧ bi.varsIn xs = true)
@@ -943,13 +1195,13 @@ theorem scanNone_unsat {cs : ConstraintSystem p} {bs : BusSemantics p}
     (hscan : scanInit surv (doms.map Prod.fst) (assignments doms) = none)
     (env : Variable → ZMod p) (hsat : cs.satisfies bs env) : False := by
   have hmem : doms.map (fun yd => (yd.1, env yd.1)) ∈ assignments doms :=
-    mem_assignments doms env (T.doms_sound xs doms hdoms env hsat)
+    mem_assignments doms env (hsound env hsat)
   have hpt : (doms.map (fun yd => (yd.1, env yd.1))).map Prod.fst = doms.map Prod.fst := by
     rw [List.map_map]
     exact List.map_congr_left (fun yd _ => rfl)
   have hsurv : surv (doms.map (fun yd => (yd.1, env yd.1))) = true := by
     rw [hsurvEq _ hpt]
-    exact restriction_survives T xs doms hdoms es bis hes hbis env hsat
+    exact restriction_survives xs doms hfst es bis hes hbis env hsat
   have hdead := scanInit_none surv (doms.map Prod.fst) (assignments doms) hscan _ hmem
   rw [hsurv] at hdead
   exact absurd hdead (by simp)
@@ -992,8 +1244,9 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts
       ∀ env, cs.satisfies bs env → env x = c }) :=
   match hdoms : T.doms xs with
   | none => []
-  | some doms =>
-    let boxSize := (doms.map (fun yd => yd.2.length)).prod
+  | some fdoms =>
+    -- box size from the O(1) `FiniteDomain.size` — no range is ever materialized to a list
+    let boxSize := (fdoms.map (fun yd => yd.2.size)).prod
     if boxSize ≤ maxEnumSize then
       -- `esFull` (all covered constraints) drives the informativeness gate and the work cap, so
       -- exactly the same targets/boxes are enumerated as before the redundancy optimization. The
@@ -1022,17 +1275,33 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts
             fidx.arrBis fidx.harrBis (fun bi => bi.varsInF xs && !bs.isStateful bi.busId) xs hbi
           simp only [Bool.and_eq_true] at hQ
           exact ⟨hMem, by rw [← BusInteraction.varsInF_eq]; exact hQ.1⟩
-        let survC := compiledSurv bs es bis (doms.map Prod.fst)
-        match hscan : scanInit survC.val (doms.map Prod.fst) (assignments doms) with
+        -- the box cleared both caps: scan it lazily (`scanBox` streams the product, a `Nat` loop
+        -- per range and an early abort). The scan certificates are proved against
+        -- `scanInit … (assignments (matList fdoms))`; `scanBox_eq` / `matList_map_fst` bridge them.
+        let survC := compiledSurv bs es bis (fdoms.map Prod.fst)
+        match hscan : scanBox survC.val (fdoms.map Prod.fst) fdoms with
         | none =>
           -- no surviving point: the box is empty of solutions, everything is vacuously forced
-          (doms.map Prod.fst).map (fun x => ⟨x, 0, fun env hsat =>
-            (scanNone_unsat T xs doms hdoms es bis hes hbis survC.val survC.property
-              hscan env hsat).elim⟩)
+          (fdoms.map Prod.fst).map (fun x => ⟨x, 0, fun env hsat =>
+            (scanNone_unsat xs (DomainTable.matList fdoms)
+              (T.matList_fst xs fdoms hdoms)
+              (fun env hsat => T.matList_sound xs fdoms hdoms env hsat)
+              es bis hes hbis survC.val
+              (fun pt hpt => survC.property pt (by
+                rw [DomainTable.matList_map_fst] at hpt; exact hpt))
+              (by rw [DomainTable.matList_map_fst, ← scanBox_eq]; exact hscan)
+              env hsat).elim⟩)
         | some res =>
           res.attach.map (fun xc => ⟨xc.1.1, xc.1.2, fun env hsat =>
-            scanForced_sound T xs doms hdoms es bis hes hbis survC.val survC.property
-              res hscan xc.1 xc.2 env hsat⟩)
+            scanForced_sound xs (DomainTable.matList fdoms)
+              (T.matList_fst xs fdoms hdoms)
+              (fun env hsat => T.matList_sound xs fdoms hdoms env hsat)
+              es bis hes hbis survC.val
+              (fun pt hpt => survC.property pt (by
+                rw [DomainTable.matList_map_fst] at hpt; exact hpt))
+              res
+              (by rw [DomainTable.matList_map_fst, ← scanBox_eq]; exact hscan)
+              xc.1 xc.2 env hsat⟩)
       else []
     else []
 
@@ -1077,7 +1346,7 @@ def domainBatchPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =
     haveI : Fact p.Prime := ⟨hp⟩
     haveI : NeZero p := ⟨hp.ne_zero⟩
     let T : DomainTable p cs bs :=
-      addBusDoms facts cs.busInteractions (fun _ h => h) RangeCache.empty
+      addBusDoms facts cs.busInteractions (fun _ h => h)
         (addConstraintDoms cs.algebraicConstraints (fun _ h => h) DomainTable.empty)
     let targets := cs.algebraicConstraints.map (fun e => e.vars.dedup) ++
       cs.busInteractions.map (fun bi => bi.vars.dedup)
