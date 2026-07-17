@@ -1452,33 +1452,35 @@ theorem firstMatchAt_spec {constraints : List (Expression p)}
     for interior-pair telescoping on the heap. Sound under the constraints `T` was built from
     (`midRefuted_sound` takes their satisfaction). -/
 def midRefuted (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
+    (T : Thunk (AddrCerts p constraints)) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
   decide (m.busId ≠ busId) || decide (multConst m = some 0) || addrConstsNeq shape S m
-    || addrAffineNeq shape S m || addrTwoRootNeq shape T.get S m
+    || addrAffineNeq shape S m || addrTwoRootNeq shape T.get.tworoot S m
+    || addrNonzeroNeq shape T.get.nonzero S m
 
 /-- Refute `m` as an active same-address *send* on `busId` (the "before" region test: earliest-send). -/
 def preRefuted (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
+    (T : Thunk (AddrCerts p constraints)) (busId : Nat) (S m : BusInteraction (Expression p)) : Bool :=
   midRefuted shape T busId S m ||
     (match multConst m with | some c => decide (c ≠ shape.setNewMult) | none => false)
 
 theorem midRefuted_sound (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p))
+    (T : Thunk (AddrCerts p constraints)) (busId : Nat) (S m : BusInteraction (Expression p))
     (h : midRefuted shape T busId S m = true) (env : Variable → ZMod p)
     (hcon : ∀ c ∈ constraints, c.eval env = 0)
     (hbid : (m.eval env).busId = busId) (hmne : (m.eval env).multiplicity ≠ 0)
     (hmaddr : shape.address (m.eval env) = shape.address (S.eval env)) : False := by
   unfold midRefuted at h
-  rw [Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true] at h
-  rcases h with (((h | h) | h) | h) | h
+  rw [Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true] at h
+  rcases h with ((((h | h) | h) | h) | h) | h
   · exact absurd hbid (of_decide_eq_true h)
   · exact hmne (m.multiplicity.constValue?_sound 0 (of_decide_eq_true h) env)
   · exact addrConstsNeq_sound shape S m h env hmaddr.symm
   · exact addrAffineNeq_sound shape S m h env hmaddr.symm
-  · exact addrTwoRootNeq_sound shape T.get S m h env hcon hmaddr.symm
+  · exact addrTwoRootNeq_sound shape T.get.tworoot S m h env hcon hmaddr.symm
+  · exact addrNonzeroNeq_sound shape T.get.nonzero S m h env hcon hmaddr.symm
 
 theorem preRefuted_sound (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S m : BusInteraction (Expression p))
+    (T : Thunk (AddrCerts p constraints)) (busId : Nat) (S m : BusInteraction (Expression p))
     (h : preRefuted shape T busId S m = true) (env : Variable → ZMod p)
     (hcon : ∀ c ∈ constraints, c.eval env = 0)
     (hbid : (m.eval env).busId = busId) (hmne : (m.eval env).multiplicity ≠ 0)
@@ -1519,7 +1521,7 @@ theorem provRecv_sound (shape : MemoryBusShape) (busId : Nat) (hp1 : (1 : ZMod p
     processed so far (everything to the right) contains a provable active same-address receive; `ok`
     is whether every not-`preRefuted` message so far is followed by such a receive. O(n). -/
 def shieldScan (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S : BusInteraction (Expression p)) :
+    (T : Thunk (AddrCerts p constraints)) (busId : Nat) (S : BusInteraction (Expression p)) :
     List (BusInteraction (Expression p)) → Bool × Bool
   | [] => (false, true)
   | m0 :: rest =>
@@ -1532,13 +1534,13 @@ def shieldScan (shape : MemoryBusShape) {constraints : List (Expression p)}
     same-address receive after it" — the relaxed completeness side condition that admits chains led
     by a boundary store. Computed in one O(n) pass (`shieldScan`). -/
 def shieldOk (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : Thunk (TwoRootMap p constraints)) (busId : Nat) (S : BusInteraction (Expression p))
+    (T : Thunk (AddrCerts p constraints)) (busId : Nat) (S : BusInteraction (Expression p))
     (l : List (BusInteraction (Expression p))) : Bool :=
   (shieldScan shape T busId S l).2
 
 /-- If the scan's `hasRecv` flag is set, the list contains a provable receive. -/
 theorem shieldScan_hasRecv (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : Thunk (TwoRootMap p constraints)) (busId : Nat)
+    (T : Thunk (AddrCerts p constraints)) (busId : Nat)
     (S : BusInteraction (Expression p)) :
     ∀ (l : List (BusInteraction (Expression p))), (shieldScan shape T busId S l).1 = true →
       ∃ Rp ∈ l, provRecv shape busId S Rp = true
@@ -1555,7 +1557,7 @@ theorem shieldScan_hasRecv (shape : MemoryBusShape) {constraints : List (Express
     provably excluded (`¬preRefuted`), the suffix `A_suf` carries a provable active same-address
     receive. -/
 theorem shieldOk_sound (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : Thunk (TwoRootMap p constraints)) (busId : Nat)
+    (T : Thunk (AddrCerts p constraints)) (busId : Nat)
     (S m0 : BusInteraction (Expression p)) (A_suf : List (BusInteraction (Expression p))) :
     ∀ (A_pre : List (BusInteraction (Expression p))),
       shieldOk shape T busId S (A_pre ++ m0 :: A_suf) = true →
@@ -1727,7 +1729,7 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
     (slots : List Nat) (bound : Nat)
-    (T : Thunk (TwoRootMap p cs.algebraicConstraints))
+    (T : Thunk (AddrCerts p cs.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (domCs : List (Expression p)) (candsOf : Variable → List (Expression p))
     (wits : Variable → List (BusInteraction (Expression p)))
@@ -1925,7 +1927,7 @@ structure DropResult {p : ℕ} (cs0 : ConstraintSystem p) (bs : BusSemantics p)
 def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (busId : Nat) (shape : MemoryBusShape) (hshape : facts.memShape busId = some shape)
-    (T : Thunk (TwoRootMap p cs0.algebraicConstraints))
+    (T : Thunk (AddrCerts p cs0.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
     (domCs : List (Expression p)) (hdomCs : ∀ c ∈ domCs, c ∈ cs0.algebraicConstraints)
     (candsOf : Variable → List (Expression p))
@@ -2007,7 +2009,7 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
     (aggressive : Bool)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape)
-    (T : Thunk (TwoRootMap p cs0.algebraicConstraints))
+    (T : Thunk (AddrCerts p cs0.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
     (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
     (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
@@ -2096,7 +2098,7 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
 def findCancel (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (aggressive : Bool)
-    (T : Thunk (TwoRootMap p cs0.algebraicConstraints))
+    (T : Thunk (AddrCerts p cs0.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
     (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
     (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
@@ -2134,7 +2136,7 @@ def findCancel (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFact
 def cancelLoop (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (aggressive : Bool)
-    (T : Thunk (TwoRootMap p cs0.algebraicConstraints))
+    (T : Thunk (AddrCerts p cs0.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
     (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
     (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
@@ -2178,8 +2180,8 @@ def busPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : VerifiedPassW 
     -- Constraint-derived thunks (address disequality, entailed-payload equality, single-variable
     -- constraints, variable→constraints index): built at most once per invocation and reused
     -- across every drop (drops leave `algebraicConstraints` untouched, so they stay valid).
-    let T : Thunk (TwoRootMap p cs.algebraicConstraints) :=
-      Thunk.mk fun _ => TwoRootMap.build cs.algebraicConstraints
+    let T : Thunk (AddrCerts p cs.algebraicConstraints) :=
+      Thunk.mk fun _ => AddrCerts.build cs.algebraicConstraints
     let M : Thunk (EqConstraintMap p cs.algebraicConstraints) :=
       Thunk.mk fun _ =>
         if aggressive then EqConstraintMap.build cs.algebraicConstraints

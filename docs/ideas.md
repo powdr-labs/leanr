@@ -77,6 +77,31 @@ LANDED are done — the remainder still adds up to the current gaps):
 
 ---
 
+## 0b. SP1 (rsp): after the register-vs-RAM disequality (entry 93), the residual is bitwise + RAM-vs-RAM
+
+Entry 93 landed the reciprocal nonzero-witness address-disequality certificate (`addrNonzeroNeq`),
+closing 65 % of the SP1 variable gap (agg 2.938× → 3.535×; gap vs powdr 3715 → 1318 vars) and 41 %
+of the bus gap (1.957× → 2.236×; 3209 → 1902). Per-case-by-variables W/L/T now 1/54/45. Remaining,
+biggest first (measured on `sp1_both.json`):
+
+- **Dead upper bitwise-result bytes (var + bus).** SP1's bitwise chip decomposes a 32/16-bit op into
+  4 byte-XOR lookups producing `result_0..7`, but a store of a ≤16-bit result only writes
+  `result_0 + 256·result_1`; powdr proves the upper store limbs `= 0`, which makes the
+  `result_2..7` + `b/c_low_bytes_1..3` XOR cluster a **disconnected component** it drops entirely
+  (apc_001 residual = exactly this, 12 v / 12 bus). Dominates the big k256-like cases
+  (apc_024/040 bitwise_operation 152 v in powdr; apc still far above). Needs: prove the high store
+  limbs are `0` (from the operands' high bytes being `0`, or a width/mask fact), then a
+  disconnected-component / dead-witness drop. Size the residue; likely the single biggest SP1 lever
+  left. **Next target.**
+- **RAM-vs-RAM telescoping.** Two accesses to the *same* RAM pointer separated by accesses to a
+  *different* RAM pointer: needs two computed addresses proven `≠`. `addrTwoRootNeq` handles the
+  same-base-different-immediate case; genuinely different bases need either a two-root pin on both or
+  a nonzero-witness on their difference (extend `addrNonzeroNeq` to consult a witness for
+  `Σ(m_i − S_i)` directly, not only a subset-sum match — and to scalar multiples of a witness).
+- **Certificate generalizations** (cheap follow-ups to entry 93): match a witness up to a nonzero
+  *scalar* (`g = λ·Σ(m_i − S_i)`), not just `±1`; and recognize reciprocal constraints in more
+  additive shapes if a census finds `addrNonzeroNeq` missing live pairs.
+
 ## 0. wasm-eth: variable gap closed; global range-obligation repack is the last axis (after entries 87–89)
 
 The `wasm-eth` corpus (100 cases, merged #131) had apc **far behind** powdr — the worst cases

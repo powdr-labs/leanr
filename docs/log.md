@@ -3586,3 +3586,38 @@ layout; OpenVM declares no `rangeCheckAt` and keeps `SubsumedRange`, so it is a 
 green ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Remaining SP1
 gap = ALU-intermediate variables (free witnesses powdr inlines) and register-vs-RAM address
 disequality (powdr's sort-based memory argument) — see `docs/ideas.md`. **Worked: yes.**
+
+### 93. Register-vs-RAM address disequality via reciprocal nonzero-witnesses (SP1 vars 2.938× → 3.535×, bus 1.957× → 2.236×)
+
+Closes the larger of the two SP1 gaps entry 92 identified. powdr telescopes register read/write
+pairs *across* the interleaved RAM accesses of a basic block; apc's memory-cancellation shields
+(`busUnify` / `busPairCancel`, certificates in `AddrDiseq.lean`) could not, because none of
+`addrConstsNeq` / `addrAffineNeq` / `addrTwoRootNeq` can refute a RAM access as different-address
+from a register. A register address is a small constant with high limbs literally `0`; a RAM
+address `(e₂, e₃, e₄)` is pinned "not a register" by SP1's reciprocal constraint
+`inv·(e₃ + e₄) − 1 = 0`, i.e. `e₃ + e₄ ≠ 0`. No *single* address slot is provably nonzero (either
+high limb alone may be `0`), so all three existing certificates miss it and every register-access
+pair is blocked by the first interleaved RAM access.
+
+**New certificate `addrNonzeroNeq` (`AddrDiseq.lean`, `Implementation/` only, no audit surface).**
+Reads any constraint `a·b + k = 0` with `k` a nonzero constant as a pair of **nonzero witnesses**
+(both factors are nonzero, since `a·b = −k ≠ 0`; `reciprocalWits?` / `NonzeroWits.build`), then
+refutes an address match when some *subset* `T` of the shape's address slots has limb-difference sum
+`Σ_{i∈T}(mᵢ − Sᵢ)` structurally equal (up to sign) to a witness `g`: were the addresses equal that
+sum would vanish, contradicting `g ≠ 0`. Purely linear + one reciprocal constraint — no bounds, no
+primality. Strictly extends `addrAffineNeq` (a nonzero *constant* difference is the witness-free
+special case). Wired into both shields (`busUnify` `checkPair`/`findConsumer`, `busPairCancel`
+`midRefuted`); the two-root and nonzero tables are bundled into one memoized `AddrCerts` thunk so the
+`busPairCancel` threading changed only types, not call sites.
+
+**Impact (`benchmark.py --vm sp1`, 100 rsp cases):** variables **2.938× → 3.535×** agg
+(gap vs powdr −1.042× → −0.445×, i.e. the aggregate var gap 3715 → 1318, **65 % closed**); bus
+**1.957× → 2.236×** (gap −0.864× → −0.585×, bus gap 3209 → 1902); per-case-by-variables W/L/T
+0/69/31 → 1/54/45. apc_001 148 v / 84 bus → 125 v / 74 bus (powdr 113 / 62).
+
+**No OpenVM regression:** the certificate only *enables* more (sound) telescoping, so it is
+size-monotone; OpenVM keccak byte-identical (2021 v / 186 c / 1752 bus) and its runtime unchanged
+(198 s vs main's 202 s on this container, within variance). Proof integrity green
+({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Remaining SP1 gap:
+the ALU-intermediate / dead-upper-bitwise-byte families (apc_024/040/030 lead) and RAM-vs-RAM
+telescoping — see `docs/ideas.md`. **Worked: yes.**

@@ -138,13 +138,13 @@ theorem consecutivePayloadEq (cs : ConstraintSystem p) (bs : BusSemantics p)
     `checkPair_sound` as a hypothesis (the old per-candidate O(#interactions) structural
     comparison dominated this pass). -/
 def checkPair (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : TwoRootMap p constraints)
+    (T : TwoRootMap p constraints) (nw : NonzeroWits p constraints)
     (S : BusInteraction (Expression p))
     (mid : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p)) : Bool :=
   decide (multConst S = some shape.setNewMult) && decide (multConst R = some (-shape.setNewMult)) &&
   addrConstsEq shape S R &&
   mid.all (fun m => addrConstsNeq shape S m || addrAffineNeq shape S m
-    || addrTwoRootNeq shape T S m || decide (multConst m = some 0))
+    || addrTwoRootNeq shape T S m || addrNonzeroNeq shape nw S m || decide (multConst m = some 0))
 
 theorem checkPair_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0)
@@ -152,10 +152,10 @@ theorem checkPair_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
     (pre : List (BusInteraction (Expression p))) (S : BusInteraction (Expression p))
     (mid : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p))
     (post : List (BusInteraction (Expression p)))
-    (T : TwoRootMap p cs.algebraicConstraints)
+    (T : TwoRootMap p cs.algebraicConstraints) (nw : NonzeroWits p cs.algebraicConstraints)
     (hsplit : cs.busInteractions.filter (fun bi => bi.busId = busId)
       = pre ++ S :: mid ++ R :: post)
-    (hchk : checkPair shape T S mid R = true)
+    (hchk : checkPair shape T nw S mid R = true)
     (env : Variable → ZMod p) (hadm : cs.admissible bs env) (hsat : cs.satisfies bs env) :
     ∀ c ∈ memEqConstraints shape S R, c.eval env = 0 := by
   unfold checkPair at hchk
@@ -176,11 +176,13 @@ theorem checkPair_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
       shape.address (m.eval env) = shape.address (S.eval env) → False := by
     intro m hm hmne hmaddr
     rcases (Bool.or_eq_true _ _).mp (List.all_eq_true.mp hmidall m hm) with hcond | hz
-    · rcases (Bool.or_eq_true _ _).mp hcond with hcond2 | h2r
-      · rcases (Bool.or_eq_true _ _).mp hcond2 with hneq | haff
-        · exact addrConstsNeq_sound shape S m hneq env (hmaddr.symm)
-        · exact addrAffineNeq_sound shape S m haff env (hmaddr.symm)
-      · exact addrTwoRootNeq_sound shape T S m h2r env hcon (hmaddr.symm)
+    · rcases (Bool.or_eq_true _ _).mp hcond with hcond_a | hnz
+      · rcases (Bool.or_eq_true _ _).mp hcond_a with hcond2 | h2r
+        · rcases (Bool.or_eq_true _ _).mp hcond2 with hneq | haff
+          · exact addrConstsNeq_sound shape S m hneq env (hmaddr.symm)
+          · exact addrAffineNeq_sound shape S m haff env (hmaddr.symm)
+        · exact addrTwoRootNeq_sound shape T S m h2r env hcon (hmaddr.symm)
+      · exact addrNonzeroNeq_sound shape nw S m hnz env hcon (hmaddr.symm)
     · have : (m.eval env).multiplicity = 0 := by
         show m.multiplicity.eval env = 0
         exact m.multiplicity.constValue?_sound 0 (of_decide_eq_true hz) env
@@ -213,7 +215,8 @@ def SplitCand (p : ℕ) (L : List (BusInteraction (Expression p))) :=
     success — together with the recomposition proof `revMid.reverse ++ rest = mid ++ R :: post`
     — or `none` if a possibly-same-address active non-receive blocks the window. -/
 def findConsumer (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : TwoRootMap p constraints) (S : BusInteraction (Expression p)) :
+    (T : TwoRootMap p constraints) (nw : NonzeroWits p constraints)
+    (S : BusInteraction (Expression p)) :
     (revMid rest : List (BusInteraction (Expression p))) →
     Option ({ mrp : List (BusInteraction (Expression p)) × BusInteraction (Expression p)
       × List (BusInteraction (Expression p)) //
@@ -223,8 +226,8 @@ def findConsumer (shape : MemoryBusShape) {constraints : List (Expression p)}
       if decide (multConst r = some (-shape.setNewMult)) && addrConstsEq shape S r then
         some ⟨(revMid.reverse, r, rest), rfl⟩
       else if addrConstsNeq shape S r || addrAffineNeq shape S r || addrTwoRootNeq shape T S r
-          || decide (multConst r = some 0) then
-        (findConsumer shape T S (r :: revMid) rest).map (fun ⟨mrp, hmrp⟩ =>
+          || addrNonzeroNeq shape nw S r || decide (multConst r = some 0) then
+        (findConsumer shape T nw S (r :: revMid) rest).map (fun ⟨mrp, hmrp⟩ =>
           ⟨mrp, by
             rw [← hmrp, List.reverse_cons, List.append_assoc]
             rfl⟩)
@@ -234,14 +237,15 @@ def findConsumer (shape : MemoryBusShape) {constraints : List (Expression p)}
     each carrying its split equation by construction. Linear in the number of sends × scan
     length, so no O(n²) blow-up on large buses. `checkPair` re-verifies the pair conditions. -/
 def candidateSplits (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : TwoRootMap p constraints) (L : List (BusInteraction (Expression p))) :
+    (T : TwoRootMap p constraints) (nw : NonzeroWits p constraints)
+    (L : List (BusInteraction (Expression p))) :
     (revPre rest : List (BusInteraction (Expression p))) →
     (hinv : L = revPre.reverse ++ rest) →
     List (SplitCand p L)
   | _, [], _ => []
   | revPre, S :: rest, hinv =>
       (if decide (multConst S = some shape.setNewMult) then
-        match findConsumer shape T S [] rest with
+        match findConsumer shape T nw S [] rest with
         | some ⟨(mid, R, post), hmrp⟩ =>
           [⟨(revPre.reverse, S, mid, R, post), by
             rw [hinv]
@@ -249,12 +253,13 @@ def candidateSplits (shape : MemoryBusShape) {constraints : List (Expression p)}
             rw [h]
             simp⟩]
         | none => []
-       else []) ++ candidateSplits shape T L (S :: revPre) rest
+       else []) ++ candidateSplits shape T nw L (S :: revPre) rest
         (by rw [hinv, List.reverse_cons, List.append_assoc]; rfl)
 
 /-- Collect the entailed equalities for one bus, with proof. -/
 def collectForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (T : TwoRootMap p cs.algebraicConstraints)
+    (nw : NonzeroWits p cs.algebraicConstraints)
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape) :
     List (SplitCand p (cs.busInteractions.filter (fun bi => bi.busId = busId))) →
@@ -262,29 +267,30 @@ def collectForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
         ∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0 }
   | [] => ⟨[], fun _ _ _ _ h => absurd h (by simp)⟩
   | ⟨(pre, S, mid, R, post), hsplit⟩ :: rest =>
-    let ⟨acc, hacc⟩ := collectForBus cs bs facts hp1 T busId shape hshape rest
-    if hchk : checkPair shape T S mid R = true then
+    let ⟨acc, hacc⟩ := collectForBus cs bs facts hp1 T nw busId shape hshape rest
+    if hchk : checkPair shape T nw S mid R = true then
       ⟨memEqConstraints shape S R ++ acc, by
         intro env hadm hsat c hc
         rcases List.mem_append.1 hc with h | h
-        · exact checkPair_sound cs bs facts hp1 busId shape hshape pre S mid R post T hsplit
+        · exact checkPair_sound cs bs facts hp1 busId shape hshape pre S mid R post T nw hsplit
             hchk env hadm hsat c h
         · exact hacc env hadm hsat c h⟩
     else ⟨acc, hacc⟩
 
 /-- Collect over every declared bus, with proof. -/
 def collectAllBuses (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (hp1 : (1 : ZMod p) ≠ 0) (T : TwoRootMap p cs.algebraicConstraints) :
+    (hp1 : (1 : ZMod p) ≠ 0) (T : TwoRootMap p cs.algebraicConstraints)
+    (nw : NonzeroWits p cs.algebraicConstraints) :
     List Nat →
     { out : List (Expression p) //
         ∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0 }
   | [] => ⟨[], fun _ _ _ _ h => absurd h (by simp)⟩
   | busId :: rest =>
-    let ⟨acc, hacc⟩ := collectAllBuses cs bs facts hp1 T rest
+    let ⟨acc, hacc⟩ := collectAllBuses cs bs facts hp1 T nw rest
     match hshape : facts.memShape busId with
     | some shape =>
-      let ⟨eqs, heqs⟩ := collectForBus cs bs facts hp1 T busId shape hshape
-        (candidateSplits shape T _ []
+      let ⟨eqs, heqs⟩ := collectForBus cs bs facts hp1 T nw busId shape hshape
+        (candidateSplits shape T nw _ []
           (cs.busInteractions.filter (fun bi => bi.busId = busId)) rfl)
       ⟨eqs ++ acc, by
         intro env hadm hsat c hc
@@ -301,7 +307,9 @@ def busUnifyPass : VerifiedPassW p := fun cs bs facts =>
     -- precompute the per-variable two-root data once (memoized `twoRootOf?`), so the
     -- address-disequality certificate is a constant-time hash lookup per candidate pair
     let T := TwoRootMap.build cs.algebraicConstraints
-    let ⟨eqs, heqs⟩ := collectAllBuses cs bs facts hp1 T
+    -- reciprocal (nonzero-witness) forms, for the register-vs-RAM address-disequality certificate
+    let nw := NonzeroWits.build cs.algebraicConstraints
+    let ⟨eqs, heqs⟩ := collectAllBuses cs bs facts hp1 T nw
       ((cs.busInteractions.map (fun bi => bi.busId)).dedup)
     -- keep only equalities over existing columns, so the pass introduces no new variable
     -- (the real slot equalities are built from `cs`'s payloads, so none are dropped).
