@@ -55,24 +55,62 @@ def Expression.isVar : Expression p → Bool
 
 /-! ## The proof-carrying solution map -/
 
+/-- Posting `x` into the reverse-dependency bucket of every variable in a list never removes an
+    existing membership (the buckets only grow). Modelled on `CoveredIndex.inner_getD_mono`. -/
+theorem revDeps_foldl_mono (x z y : Variable) (vs : List Variable) :
+    ∀ (m : Std.HashMap Variable (Std.HashSet Variable)), y ∈ (m[z]?).getD ∅ →
+      y ∈ ((vs.foldl (fun rd w => rd.insert w (((rd[w]?).getD ∅).insert x)) m)[z]?).getD ∅ := by
+  induction vs with
+  | nil => intro m hy; simpa using hy
+  | cons w0 rest ih =>
+      intro m hy
+      simp only [List.foldl_cons]
+      apply ih
+      rw [Std.HashMap.getElem?_insert]
+      by_cases h : (w0 == z) = true
+      · rw [if_pos h]
+        have hwz : w0 = z := by simpa using h
+        subst hwz
+        simp only [Option.getD_some]
+        exact Std.HashSet.mem_insert.2 (Or.inr hy)
+      · rw [if_neg h]; exact hy
+
+/-- After posting `x` into every bucket of `vs`, `x` is in the bucket of each `z ∈ vs`.
+    Modelled on `CoveredIndex.inner_getD_self`. -/
+theorem revDeps_foldl_self (x z : Variable) (vs : List Variable) :
+    ∀ (m : Std.HashMap Variable (Std.HashSet Variable)), z ∈ vs →
+      x ∈ ((vs.foldl (fun rd w => rd.insert w (((rd[w]?).getD ∅).insert x)) m)[z]?).getD ∅ := by
+  induction vs with
+  | nil => intro m hz; simp at hz
+  | cons w0 rest ih =>
+      intro m hz
+      simp only [List.foldl_cons]
+      rcases List.mem_cons.1 hz with rfl | hz
+      · refine revDeps_foldl_mono x z x rest _ ?_
+        rw [Std.HashMap.getElem?_insert, if_pos (by simp), Option.getD_some]
+        exact Std.HashSet.mem_insert_self
+      · exact ih _ hz
+
 /-- A set of solved variables `x := t`, each entailed by every satisfying assignment of `cs`.
     The `Std.HashMap` makes both lookup during reduction and the final `substF` application
     cheap; the bundled proof is exactly the hypothesis `ConstraintSystem.substF_correct`
     consumes. -/
 structure Solved (p : ℕ) (cs : ConstraintSystem p) (bs : BusSemantics p) where
   map : Std.HashMap Variable (Expression p)
-  /-- Reverse-dependency index: `revDeps[z]` is a *superset* of the solution keys `y` whose stored
+  /-- Reverse-dependency index: `revDeps[z]` is a superset of the solution keys `y` whose stored
       right-hand side `map[y]` mentions `z`. Used to resolve a newly-adopted pivot `x := t` into
       only the affected stored solutions (`revDeps[x]`) instead of scanning the whole map (which is
-      O(K²) over K pivots). It carries no proof field — a stale/superset entry only costs a
-      re-checked `mentions`, and soundness holds for whatever entailed pairs are produced; the
-      index's completeness (hence full resolution, hence byte-identical output) is verified by the
-      output tests, per the task's "retain the entailment proof + strong output comparison" option.
-      Buckets are `HashSet`s so re-posting a repeatedly-rewritten key is idempotent (a `List` bucket
-      would accumulate duplicates and blow up the re-insertion work). -/
+      O(K²) over K pivots). Buckets are `HashSet`s so re-posting a repeatedly-rewritten key is
+      idempotent (a `List` bucket would accumulate duplicates and blow up the re-insertion work). -/
   revDeps : Std.HashMap Variable (Std.HashSet Variable)
   sound : ∀ env, cs.satisfies bs env → ∀ y t, map[y]? = some t → env y = t.eval env
   varsIn : ∀ (y : Variable) (t : Expression p), map[y]? = some t → ∀ z ∈ t.vars, z ∈ cs.vars
+  /-- The reverse-dependency index is *complete*: if a stored solution `map[y]`'s right-hand side
+      mentions `z`, then `y` is in `z`'s bucket. This makes the `revDeps`-driven resolution of a
+      pivot equal to the full-map scan (every affected solution is found), so the output stays
+      byte-identical — a proof, not just an output test. Erases at runtime. -/
+  revComplete : ∀ (y : Variable) (t : Expression p) (z : Variable),
+    map[y]? = some t → z ∈ t.vars → y ∈ (revDeps[z]?).getD ∅
 
 namespace Solved
 
@@ -87,6 +125,10 @@ def empty : Solved p cs bs where
     exact absurd h (by simp)
   varsIn := by
     intro y t h
+    rw [Std.HashMap.getElem?_empty] at h
+    exact absurd h (by simp)
+  revComplete := by
+    intro y t z h
     rw [Std.HashMap.getElem?_empty] at h
     exact absurd h (by simp)
 
@@ -139,7 +181,20 @@ def insertAll (σ : Solved p cs bs) (pairs : List (Variable × Expression p))
               subst hts
               exact Hv (x, t) (List.mem_cons_self ..)
             · rw [if_neg hxy] at hys
-              exact σ.varsIn y s hys }
+              exact σ.varsIn y s hys
+          revComplete := by
+            intro y s z hys hz
+            rw [Std.HashMap.getElem?_insert] at hys
+            by_cases hxy : (x == y) = true
+            · -- new/overwritten key `x`: `s = t`, and `x` was posted to every bucket of `t.vars ∋ z`
+              rw [if_pos hxy] at hys
+              have hxy' : x = y := by simpa using hxy
+              have hts : t = s := by simpa using hys
+              subst hxy'; subst hts
+              exact revDeps_foldl_self x z t.vars σ.revDeps hz
+            · -- untouched key: old completeness gives `y ∈ σ.revDeps[z]`, monotone under posting
+              rw [if_neg hxy] at hys
+              exact revDeps_foldl_mono x z y t.vars σ.revDeps (σ.revComplete y s z hys hz) }
       σ'.insertAll rest (fun env hsat yt hyt => H env hsat yt (List.mem_cons_of_mem _ hyt))
         (fun yt hyt => Hv yt (List.mem_cons_of_mem _ hyt))
 
