@@ -53,6 +53,26 @@ def Expression.isVar : Expression p → Bool
   | .var _ => true
   | _ => false
 
+/-- Bridge from the runtime `mentions` predicate to membership in `vars` (the converse of
+    `Reencode.mentions_false_not_mem_vars`). Lets the reverse-dependency completeness invariant,
+    stated over `t.vars`, discharge the `mentions`-based touched recheck. -/
+theorem mem_vars_of_mentions (x : Variable) (e : Expression p) (h : e.mentions x = true) :
+    x ∈ e.vars := by
+  induction e with
+  | const n => simp [Expression.mentions] at h
+  | var y =>
+      simp only [Expression.mentions] at h
+      simp only [Expression.vars, List.mem_singleton]
+      exact (beq_iff_eq.1 h).symm
+  | add a b iha ihb =>
+      simp only [Expression.mentions, Bool.or_eq_true] at h
+      simp only [Expression.vars, List.mem_append]
+      exact h.imp iha ihb
+  | mul a b iha ihb =>
+      simp only [Expression.mentions, Bool.or_eq_true] at h
+      simp only [Expression.vars, List.mem_append]
+      exact h.imp iha ihb
+
 /-! ## The proof-carrying solution map -/
 
 /-- Posting `x` into the reverse-dependency bucket of every variable in a list never removes an
@@ -198,6 +218,59 @@ def insertAll (σ : Solved p cs bs) (pairs : List (Variable × Expression p))
       σ'.insertAll rest (fun env hsat yt hyt => H env hsat yt (List.mem_cons_of_mem _ hyt))
         (fun yt hyt => Hv yt (List.mem_cons_of_mem _ hyt))
 
+/-! ### The reverse-dependency-indexed touched-solution selection
+
+When adopting a pivot `x := t`, Gauss must rewrite `x` out of every stored solution whose RHS
+mentions `x`. `touchedOf` gathers exactly those `(key, rhs)` pairs from `x`'s reverse-dependency
+bucket (re-checking `mentions` since buckets may be stale), instead of scanning the whole map.
+`mem_touchedOf` proves it emits **exactly** the current solutions mentioning `x` — both directions:
+soundness (every emitted pair is a current solution mentioning `x`) and, using `revComplete`,
+completeness (every such solution is emitted). It is thus extensionally the same set as the
+full-map scan `fullScanTouched` (`mem_touchedOf_iff_fullScan`); `HashSet` bucket uniqueness gives
+each pair once. -/
+
+/-- The touched-solution selection for a pivot on `x`: the current solutions whose RHS mentions
+    `x`, gathered from `x`'s reverse-dependency bucket. -/
+def touchedOf (σ : Solved p cs bs) (x : Variable) : List (Variable × Expression p) :=
+  ((σ.revDeps[x]?).getD ∅).toList.filterMap (fun y =>
+    (σ.map[y]?).bind (fun s => if s.mentions x then some (y, s) else none))
+
+/-- The full-map-scan reference: every stored solution whose RHS mentions `x`. -/
+def fullScanTouched (σ : Solved p cs bs) (x : Variable) : List (Variable × Expression p) :=
+  σ.map.toList.filter (fun ys => ys.2.mentions x)
+
+theorem mem_touchedOf (σ : Solved p cs bs) (x y : Variable) (s : Expression p) :
+    (y, s) ∈ σ.touchedOf x ↔ σ.map[y]? = some s ∧ s.mentions x = true := by
+  unfold touchedOf
+  constructor
+  · intro hys
+    obtain ⟨y', _, hy'⟩ := List.mem_filterMap.1 hys
+    obtain ⟨s', hs', hif⟩ := Option.bind_eq_some_iff.1 hy'
+    by_cases hm : s'.mentions x
+    · rw [if_pos hm] at hif
+      simp only [Option.some.injEq, Prod.mk.injEq] at hif
+      obtain ⟨rfl, rfl⟩ := hif
+      exact ⟨hs', hm⟩
+    · rw [if_neg hm] at hif; exact absurd hif (by simp)
+  · rintro ⟨hmap, hmen⟩
+    refine List.mem_filterMap.2 ⟨y, ?_, ?_⟩
+    · rw [Std.HashSet.mem_toList]
+      exact σ.revComplete y s x hmap (mem_vars_of_mentions x s hmen)
+    · rw [hmap]
+      show (if s.mentions x then some (y, s) else none) = some (y, s)
+      rw [if_pos hmen]
+
+theorem mem_fullScanTouched (σ : Solved p cs bs) (x y : Variable) (s : Expression p) :
+    (y, s) ∈ σ.fullScanTouched x ↔ σ.map[y]? = some s ∧ s.mentions x = true := by
+  unfold fullScanTouched
+  rw [List.mem_filter, Std.HashMap.mem_toList_iff_getElem?_eq_some]
+
+/-- The indexed selection is extensionally the full-map scan. -/
+theorem mem_touchedOf_iff_fullScan (σ : Solved p cs bs) (x : Variable)
+    (ys : Variable × Expression p) : ys ∈ σ.touchedOf x ↔ ys ∈ σ.fullScanTouched x := by
+  obtain ⟨y, s⟩ := ys
+  rw [mem_touchedOf, mem_fullScanTouched]
+
 end Solved
 
 /-! ## Pivot choice -/
@@ -234,10 +307,8 @@ from the linear form's coefficients and term counts *without materialising any s
 builds `toExpr` only for the winner. It is proven equal to the old `argmin` over
 `pm1PivotsOf ++ unitPivotsOf` (`fastBest_eq`), so `gaussLoop`'s decisions and output are unchanged.
 
-Remaining opportunity (not taken here): `pm1Desc`/`unitDesc` still build `l.others v` and rescan
-`l.coeff v` per candidate, so scoring is O(terms²) per constraint. On the measured corpora affine
-forms are short, so this is below the win; a single coefficient/others-count index pass would make
-scoring linear if longer forms ever dominate. -/
+Each candidate's coefficient and solution size are read from the `coeffIdx` (built once per
+constraint), so scoring is O(terms), not O(terms²). -/
 
 /-- `argmin` commutes with a key-preserving map: when `g` carries the key (`kγ (g a) = kα a`), the
     winner of the mapped list is the mapped winner. This lets us score cheap descriptors in place
@@ -603,17 +674,11 @@ def gaussLoop (cs : ConstraintSystem p) (bs : BusSemantics p)
           · exact hc'vars z (unitPivotsOf_vars c' x t h z hz)
         -- resolve `x` out of the stored solutions, then store `x := t`. Only the keys in `x`'s
         -- reverse-dependency bucket can mention `x`; re-check `mentions` (buckets may be stale).
-        let touched := ((σ.revDeps[x]?).getD ∅).toList.filterMap (fun y =>
-          (σ.map[y]?).bind (fun s => if s.mentions x then some (y, s) else none))
-        have htouched : ∀ y s, (y, s) ∈ touched → σ.map[y]? = some s := by
-          intro y s hys
-          obtain ⟨y', _, hy'⟩ := List.mem_filterMap.1 hys
-          obtain ⟨s', hs', hif⟩ := Option.bind_eq_some_iff.1 hy'
-          by_cases hm : s'.mentions x
-          · rw [if_pos hm] at hif
-            simp only [Option.some.injEq, Prod.mk.injEq] at hif
-            obtain ⟨rfl, rfl⟩ := hif; exact hs'
-          · rw [if_neg hm] at hif; exact absurd hif (by simp)
+        -- gather the stored solutions mentioning `x` from `x`'s reverse-dependency bucket. By
+        -- `mem_touchedOf` this is exactly the current solutions mentioning `x` (the full-map scan).
+        let touched := σ.touchedOf x
+        have htouched : ∀ y s, (y, s) ∈ touched → σ.map[y]? = some s :=
+          fun y s hys => ((σ.mem_touchedOf x y s).1 hys).1
         let pairs := touched.map (fun ys => (ys.1, (ys.2.subst x t).normalize)) ++ [(x, t)]
         have hpairs : ∀ env, cs.satisfies bs env → ∀ yt ∈ pairs, env yt.1 = yt.2.eval env := by
           intro env hsat yt hyt
