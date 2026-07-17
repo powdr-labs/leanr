@@ -19,10 +19,66 @@ interaction, so facts can be conditional on e.g. an op-selector slot (see `ApcOp
 
 variable {p : ℕ}
 
+/-- XOR-ing a byte with the all-ones byte `255` is the byte complement. The 256-case `decide` is a
+    one-shot kernel check (no runtime cost). Shared by the VM byte-bus fact instances and the
+    byte-check / XOR passes. -/
+theorem nat_xor_255 : ∀ n, n < 256 → Nat.xor n 255 = 255 - n := by
+  set_option maxRecDepth 4000 in decide
+
 /-- Does a payload match a pattern? Same length, and every constant pattern entry agrees. -/
 def Matches (payload : List (ZMod p)) (pattern : List (Option (ZMod p))) : Prop :=
   payload.length = pattern.length ∧
   ∀ (slot : Nat) (c : ZMod p), pattern[slot]? = some (some c) → payload[slot]? = some c
+
+/-- **VM-neutral description of a bitwise / byte-lookup bus**, hiding the payload *layout* so the
+    byte-check and XOR passes work for any VM. `decode` reorders a physical 4-element payload into
+    the logical tuple `(op, operand₁, operand₂, result)` — OpenVM's `[x, y, z, op]` decodes to
+    `(op, x, y, z)`, SP1's `[op, a, b, c]` to `(op, b, c, a)`. `xorOp` / `pairOp` are the op-selector
+    values for the two affine relations the passes exploit: the XOR relation `result = op₁ ⊕ op₂`
+    (both operands bytes) and the pair range-check (`op₁, op₂` bytes, `result = 0`). `bound` is the
+    byte bound (`256`). Being layout-generic in `α`, the same `decode` serves both the `ZMod`-level
+    soundness and the `Expression`-level pass recognizers. -/
+structure ByteXorSpec (p : ℕ) where
+  /-- Byte bound (`256`). -/
+  bound : Nat
+  /-- Op-selector value denoting the XOR relation `result = op₁ ⊕ op₂`. -/
+  xorOp : ZMod p
+  /-- Op-selector value denoting the pair range-check (`op₁, op₂` bytes, `result = 0`). -/
+  pairOp : ZMod p
+  /-- Reorder a physical payload into logical `(op, operand₁, operand₂, result)`. -/
+  decode : {α : Type} → List α → Option (α × α × α × α)
+  /-- Build a physical payload from logical `(op, operand₁, operand₂, result)` — the inverse
+      reordering of `decode`. Lets a pass *emit* a byte check in the VM's own layout without
+      knowing it (OpenVM `[o₁, o₂, r, op]`, SP1 `[op, o₁, o₂, r]`). -/
+  encode : {α : Type} → α → α → α → α → List α
+  /-- `decode` is a pure reordering, so it commutes with mapping — this transports a decode of a
+      syntactic (`Expression`) payload to a decode of its evaluation. -/
+  decode_map : ∀ {α β : Type} (f : α → β) (pl : List α),
+    decode (pl.map f) = (decode pl).map (fun t => (f t.1, f t.2.1, f t.2.2.1, f t.2.2.2))
+  /-- `decode`'s logical operands and result are drawn from the physical payload (it reorders),
+      so a pass adding a constraint from them introduces no new variables. -/
+  decode_mem : ∀ {α : Type} (pl : List α) (op o1 o2 r : α),
+    decode pl = some (op, o1, o2, r) → o1 ∈ pl ∧ o2 ∈ pl ∧ r ∈ pl
+  /-- `encode` inverts `decode`: an emitted payload decodes back to its logical fields. -/
+  decode_encode : ∀ {α : Type} (op o1 o2 r : α),
+    decode (encode op o1 o2 r) = some (op, o1, o2, r)
+  /-- `decode` recovers the payload (it is injective on decodable payloads): a payload that decodes
+      equals the re-encoding of its fields. Lets a pass reconstruct a recognized interaction as an
+      `encode`-built one. -/
+  decode_eq_encode : ∀ {α : Type} (pl : List α) (op o1 o2 r : α),
+    decode pl = some (op, o1, o2, r) → pl = encode op o1 o2 r
+  /-- `encode` is a pure reordering, so it commutes with mapping — this evaluates an emitted
+      syntactic payload slot-by-slot. -/
+  encode_map : ∀ {α β : Type} (f : α → β) (op o1 o2 r : α),
+    (encode op o1 o2 r).map f = encode (f op) (f o1) (f o2) (f r)
+  /-- Every slot of an emitted payload is one of the logical fields (it reorders), so an emitted
+      byte check introduces no variables beyond those of its operands. -/
+  encode_mem : ∀ {α : Type} (op o1 o2 r x : α),
+    x ∈ encode op o1 o2 r → x = op ∨ x = o1 ∨ x = o2 ∨ x = r
+  /-- A byte bus lives in a field of nonzero characteristic (`ZMod.val` is then injective), which a
+      generic pass needs to lift the value-level XOR relation to a field equality. The VM instances
+      carry `[NeZero p]`, so they discharge this by `inferInstance`. -/
+  pNeZero : NeZero p
 
 /-- Proven, pass-consumable knowledge about the bus semantics `bs`. -/
 structure BusFacts (p : ℕ) (bs : BusSemantics p) where
@@ -60,29 +116,32 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
   neverViolates_sound :
     ∀ (m : BusInteraction (ZMod p)),
       neverViolates m.busId = true → bs.violatesConstraint m = false
-  /-- Send/receive table obligations of a memory-style stateful bus, for pair cancellation:
-      `recvByteSlots busId pattern = some slots` asserts that a *send* (multiplicity `1`) on
-      `busId` never violates a constraint (regardless of the pattern), and a *receive*
-      (multiplicity `-1`) whose payload matches `pattern` does not violate provided every payload
-      slot listed in `slots` (where present) holds a value `< 256`. The pattern lets a fact make
-      the receive obligation conditional on constant payload entries — e.g. a memory receive
-      whose address-space slot is a known constant ∉ {1,2} carries *no* byte obligation
-      (`slots = []`), because the VM's `violates` only rejects non-byte data on address spaces
-      1/2. `some []` is "this receive (and every send) never violates"; `none` claims nothing.
-      Pattern-blind facts simply ignore the argument. -/
-  recvByteSlots : (busId : Nat) → (pattern : List (Option (ZMod p))) → Option (List Nat)
-  recvByteSlots_sound :
-    ∀ (busId : Nat) (pattern : List (Option (ZMod p))) (slots : List Nat),
-      recvByteSlots busId pattern = some slots →
-      ∀ (m : BusInteraction (ZMod p)), m.busId = busId →
-        (m.multiplicity = 1 → bs.violatesConstraint m = false) ∧
-        (m.multiplicity = -1 → Matches m.payload pattern →
-          (∀ slot ∈ slots, ∀ x : ZMod p, m.payload[slot]? = some x → x.val < 256) →
-          bs.violatesConstraint m = false)
   /-- The last-write-wins shape declared for a bus, or `none`. Passes read `addressFields` to
       group same-address accesses; this is the VM-side memory knowledge (`ApcOptimizer/MemoryBus.lean`)
       the spec's abstract `admissible` predicate deliberately omits. -/
   memShape : (busId : Nat) → Option MemoryBusShape
+  /-- Send/receive table obligations of a memory-style stateful bus, for pair cancellation:
+      `recvByteSlots busId pattern = some (slots, bound)` asserts that a `setNew` (multiplicity
+      `shape.setNewMult`, per the bus's `memShape`) never violates, and a `getPrevious` (multiplicity
+      `-shape.setNewMult`) whose payload matches `pattern` does not violate provided every payload
+      slot listed in `slots` (where present) holds a value `< bound`. The `bound` is the VM's
+      declared word width for those slots — `256` for a byte-limbed memory (OpenVM), `2^16` for a
+      16-bit-limbed memory (SP1) — so the fact is not tied to a single VM's limb size. The pattern
+      lets a fact make the `getPrevious` obligation conditional on constant payload entries — e.g. a
+      memory `getPrevious` whose address-space slot is a known constant ∉ {1,2} carries *no*
+      obligation (`slots = []`), because the VM's `violates` only rejects out-of-range data on
+      address spaces 1/2. `some ([], _)` is "this `getPrevious` (and every `setNew`) never
+      violates"; `none` claims nothing. Pattern-blind facts simply ignore the argument. -/
+  recvByteSlots : (busId : Nat) → (pattern : List (Option (ZMod p))) → Option (List Nat × Nat)
+  recvByteSlots_sound :
+    ∀ (busId : Nat) (shape : MemoryBusShape), memShape busId = some shape →
+    ∀ (pattern : List (Option (ZMod p))) (slots : List Nat) (bound : Nat),
+      recvByteSlots busId pattern = some (slots, bound) →
+      ∀ (m : BusInteraction (ZMod p)), m.busId = busId →
+        (m.multiplicity = shape.setNewMult → bs.violatesConstraint m = false) ∧
+        (m.multiplicity = -shape.setNewMult → Matches m.payload pattern →
+          (∀ slot ∈ slots, ∀ x : ZMod p, m.payload[slot]? = some x → x.val < bound) →
+          bs.violatesConstraint m = false)
   /-- Every bus with a declared shape is stateful — so its messages survive the active∧stateful
       filter that `ConstraintSystem.admissible` applies before consulting `bs.admissible`. -/
   memShape_stateful : ∀ (busId : Nat) (shape : MemoryBusShape),
@@ -113,69 +172,17 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
     ∀ (busId : Nat) (shape : MemoryBusShape), memShape busId = some shape →
     ∀ (A B C : List (BusInteraction (ZMod p))) (S R : BusInteraction (ZMod p)),
       S.busId = busId → R.busId = busId →
-      S.multiplicity = 1 → R.multiplicity = -1 →
+      S.multiplicity = shape.setNewMult → R.multiplicity = -shape.setNewMult →
       shape.address S = shape.address R →
       (∀ m ∈ B, m.busId = busId → m.multiplicity ≠ 0 → shape.address m = shape.address S → False) →
       (∀ (A₁ : List (BusInteraction (ZMod p))) (Sx : BusInteraction (ZMod p))
          (A₂ : List (BusInteraction (ZMod p))),
          A = A₁ ++ Sx :: A₂ → Sx.busId = busId → Sx.multiplicity ≠ 0 →
-         shape.address Sx = shape.address S → Sx.multiplicity = 1 →
+         shape.address Sx = shape.address S → Sx.multiplicity = shape.setNewMult →
          ∃ m ∈ A₂, m.busId = busId ∧ m.multiplicity ≠ 0 ∧ shape.address m = shape.address S ∧
-           m.multiplicity = -1) →
+           m.multiplicity = -shape.setNewMult) →
       bs.admissible (A ++ S :: B ++ R :: C) →
       bs.admissible (A ++ B ++ C)
-  /-- Byte-check pairing on a bitwise-style *stateless* bus. If `bytePairBus busId = true` then the
-      bus is stateless and, for every pair of operand values and any multiplicity, the pair-check
-      message `[x, y, 0, 0]` is accepted exactly when the two single-value checks `[x, x, 0, 1]` and
-      `[y, y, 0, 1]` are. So two single-value byte checks pack losslessly into one pair check, with
-      the *same* satisfying set (each side imposes "both operands are bytes") — a bus-interaction
-      win. `trivial` sets it `false` (recovering fact-free behavior); the OpenVM instance proves it
-      for the bitwise-lookup bus against the concrete table (see `ApcOptimizer/Implementation/OpenVmFacts.lean`). -/
-  bytePairBus : (busId : Nat) → Bool
-  bytePairBus_sound :
-    ∀ (busId : Nat), bytePairBus busId = true →
-      bs.isStateful busId = false ∧
-      (∀ (x y : ZMod p),
-        bs.breaksInvariant { busId := busId, multiplicity := 1, payload := [x, y, 0, 0] } = false) ∧
-      ∀ (x y mult : ZMod p),
-        (bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, y, 0, 0] }
-            = false ↔
-          bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, x, 0, 1] }
-              = false ∧
-            bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [y, y, 0, 1] }
-              = false)
-  /-- Byte-check *emission* on a stateless bitwise-style bus: the self-check `[x, x, 0, 1]`
-      (multiplicity 1) never breaks an invariant and is accepted **iff** `x` is a byte. This is
-      the absolute counterpart of `bytePairBus`'s relative pairing law: it lets a pass
-      materialize a proven byte obligation as an explicit check — e.g. when cancelling a memory
-      send/receive pair whose receive carried the only byte guarantee for a data limb.
-      `trivial` sets it `false`. -/
-  byteCheck : (busId : Nat) → Bool
-  byteCheck_sound :
-    ∀ (busId : Nat), byteCheck busId = true →
-      bs.isStateful busId = false ∧
-      (∀ (x : ZMod p),
-        bs.breaksInvariant { busId := busId, multiplicity := 1, payload := [x, x, 0, 1] } = false) ∧
-      ∀ (x mult : ZMod p),
-        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, x, 0, 1] }
-            = false ↔ x.val < 256
-  /-- Byte-check *via XOR-with-zero*: on a stateless bitwise-style bus the checks `[x, 0, x, 1]`
-      (`x ⊕ 0 = x`) and its mirror `[0, x, x, 1]` (`0 ⊕ x = x`) — multiplicity any — are each
-      accepted **iff** `x` is a byte. The XOR-with-zero encoding is how OpenVM materializes a bare
-      "this operand is a byte" obligation that was not packed into a pair; the zero can sit in
-      *either* operand slot (`Nat.xor_zero` / `Nat.zero_xor`). Recognising both mirrors lets the
-      redundant-byte-check dropper and the byte-check packer reach every such interaction.
-      `trivial` sets it `false`. -/
-  xorZeroCheck : (busId : Nat) → Bool
-  xorZeroCheck_sound :
-    ∀ (busId : Nat), xorZeroCheck busId = true →
-      bs.isStateful busId = false ∧
-      (∀ (x mult : ZMod p),
-        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, 0, x, 1] }
-            = false ↔ x.val < 256) ∧
-      (∀ (x mult : ZMod p),
-        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [0, x, x, 1] }
-            = false ↔ x.val < 256)
   /-- Variable-range-checker style *stateless* bus: the 2-ary message `[x, b]` is accepted
       **iff** the requested width is supported and `x` fits (`b.val ≤ 25 ∧ x.val < 2 ^ b.val`).
       `trivial` sets it `false`; the OpenVM instance proves it for the variable range checker. -/
@@ -228,57 +235,27 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
       ∀ (x : ZMod p),
         bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, 0] } = false
           ↔ x = 0
-  /-- Bitwise XOR-with-zero equality: on a bitwise-style bus where an accepted multiplicity-1
-      message `[a, b, c, 1]` asserts `c = a ⊕ b`, a zero operand linearizes the XOR to an equality —
-      `[0, y, z, 1]` accepted ⟹ `z = y`, and `[x, 0, z, 1]` accepted ⟹ `z = x`. apc keeps these
-      equalities on the bus, so Gaussian elimination never uses them to eliminate the intermediate
-      byte the identity pins. Recognising them lets a pass add the entailed equality (keeping the
-      interaction, which still imposes byte-ness) for Gauss to consume. `trivial` sets it `false`. -/
-  xorZeroEq : (busId : Nat) → Bool
-  xorZeroEq_sound :
-    ∀ (busId : Nat), xorZeroEq busId = true →
-      (∀ (y z : ZMod p),
-        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [0, y, z, 1] }
-          = false → z = y) ∧
-      (∀ (x z : ZMod p),
-        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, 0, z, 1] }
-          = false → z = x)
-  /-- Bitwise XOR-with-255 (byte complement): the sibling of `xorZeroEq`. On the same bitwise bus
-      where an accepted multiplicity-1 `[a, b, c, 1]` asserts `c = a ⊕ b` with byte operands, an
-      operand pinned to the all-ones byte `255` linearizes the XOR to the byte **complement** —
-      `[x, 255, z, 1]` accepted ⟹ `z = 255 − x`, and `[255, y, z, 1]` accepted ⟹ `z = 255 − y`
-      (`n ⊕ 255 = 255 − n` for a byte `n`). Together with `xorZeroEq` (operand 0 ⟹ identity) these
-      are exactly the two constant operands for which the XOR is *affine* in the other operand, so
-      Gauss can eliminate the pinned NOT-result — apc otherwise keeps these complement equalities
-      only on the bus. Sound only when `255` is a genuine byte of the field (`256 ≤ p`); a small
-      field, and `trivial`, set it `false`. -/
-  xorComplEq : (busId : Nat) → Bool
-  xorComplEq_sound :
-    ∀ (busId : Nat), xorComplEq busId = true →
-      (∀ (x z : ZMod p),
-        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, 255, z, 1] }
-          = false → z = 255 - x) ∧
-      (∀ (y z : ZMod p),
-        bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [255, y, z, 1] }
-          = false → z = 255 - y)
-  /-- Byte-check *via XOR-with-255* (the NOT form): the sibling of `xorZeroCheck`. On a stateless
-      bitwise-style bus the checks `[x, 255, 255 − x, 1]` (`x ⊕ 255 = 255 − x`) and its mirror
-      `[255, x, 255 − x, 1]` — multiplicity any — are each accepted **iff** `x` is a byte. After
-      `xorEqExtractPass` (C4b) linearizes a `255`-operand XOR and Gauss substitutes the NOT-result
-      `z := 255 − x`, exactly this shape is left on the bus; its sole obligation is "`x` is a byte"
-      (the third slot being `255 − x` is then vacuous), so the redundant-byte-check dropper and the
-      byte-check packer should treat it as a single-value byte check on `x`. Sound only when `255`
-      is a genuine byte of the field (`256 ≤ p`); a small field, and `trivial`, set it `false`. -/
-  xorComplCheck : (busId : Nat) → Bool
-  xorComplCheck_sound :
-    ∀ (busId : Nat), xorComplCheck busId = true →
+  /-- **VM-neutral bitwise/byte-lookup fact** (`ByteXorSpec`): the layout-hiding replacement the
+      byte-check and XOR passes consume through a shared recognizer/builder. For a bus with a
+      `ByteXorSpec`, a payload decoding to `(op, o₁, o₂, r)` is accepted, when `op = xorOp`, exactly
+      when `o₁, o₂` are bytes and `r = o₁ ⊕ o₂`; and when `op = pairOp`, exactly when `o₁, o₂` are
+      bytes and `r = 0`. The bus is stateless and, at multiplicity `1`, breaks no invariant — so a
+      pass may also *emit* a byte check (via `spec.encode`) as a genuine interaction. OpenVM provides
+      it for the bitwise-lookup bus, SP1 for the byte-lookup bus; `trivial` declares none. -/
+  byteXorSpec : (busId : Nat) → Option (ByteXorSpec p)
+  byteXorSpec_sound :
+    ∀ (busId : Nat) (spec : ByteXorSpec p), byteXorSpec busId = some spec →
       bs.isStateful busId = false ∧
-      (∀ (x mult : ZMod p),
-        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [x, 255, 255 - x, 1] }
-            = false ↔ x.val < 256) ∧
-      (∀ (x mult : ZMod p),
-        bs.violatesConstraint { busId := busId, multiplicity := mult, payload := [255, x, 255 - x, 1] }
-            = false ↔ x.val < 256)
+      (∀ (pl : List (ZMod p)),
+        bs.breaksInvariant { busId := busId, multiplicity := 1, payload := pl } = false) ∧
+      ∀ (pl : List (ZMod p)) (op o1 o2 r mult : ZMod p),
+        spec.decode pl = some (op, o1, o2, r) →
+        (op = spec.xorOp →
+           (bs.violatesConstraint { busId := busId, multiplicity := mult, payload := pl } = false
+             ↔ o1.val < spec.bound ∧ o2.val < spec.bound ∧ r.val = Nat.xor o1.val o2.val)) ∧
+        (op = spec.pairOp →
+           (bs.violatesConstraint { busId := busId, multiplicity := mult, payload := pl } = false
+             ↔ o1.val < spec.bound ∧ o2.val < spec.bound ∧ r = 0))
 
 /-- The fact-free instance: claims nothing, exists for every semantics. Declares no memory
     shapes, so the memory/exec unify passes degrade to no-ops. -/
@@ -290,17 +267,11 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   neverViolates _ := false
   neverViolates_sound := by intro _ h; exact absurd h (by simp)
   recvByteSlots _ _ := none
-  recvByteSlots_sound := by intro _ _ _ h; exact absurd h (by simp)
+  recvByteSlots_sound := by intro _ _ h; exact absurd h (by simp)
   memShape _ := none
   memShape_stateful := by intro _ _ h; exact absurd h (by simp)
   admissible_sound := by intro _ _ _ _ h; exact absurd h (by simp)
   admissible_dropPair := by intro _ _ _ h; exact absurd h (by simp)
-  bytePairBus _ := false
-  bytePairBus_sound := by intro _ h; exact absurd h (by simp)
-  byteCheck _ := false
-  byteCheck_sound := by intro _ h; exact absurd h (by simp)
-  xorZeroCheck _ := false
-  xorZeroCheck_sound := by intro _ h; exact absurd h (by simp)
   varRangeBus _ := false
   varRangeBus_sound := by intro _ h; exact absurd h (by simp)
   tupleRangeBus _ := none
@@ -309,9 +280,5 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   zeroCell_sound := by intro _ _ _ _ _ h; exact absurd h (by simp)
   zeroRangeEq _ := false
   zeroRangeEq_sound := by intro _ h; exact absurd h (by simp)
-  xorZeroEq _ := false
-  xorZeroEq_sound := by intro _ h; exact absurd h (by simp)
-  xorComplEq _ := false
-  xorComplEq_sound := by intro _ h; exact absurd h (by simp)
-  xorComplCheck _ := false
-  xorComplCheck_sound := by intro _ h; exact absurd h (by simp)
+  byteXorSpec _ := none
+  byteXorSpec_sound := by intro _ _ h; exact absurd h (by simp)

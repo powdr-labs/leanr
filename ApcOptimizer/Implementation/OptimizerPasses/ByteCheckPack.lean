@@ -6,28 +6,25 @@ set_option autoImplicit false
 
 /-! # Generalized single-value byte-check packing (`byteCheckPackPass`)
 
-On a bitwise-style lookup bus a single value is byte-range-checked in one of several multiplicity-1
-encodings that all impose exactly "this value is a byte":
-
-* the self-check `[x, x, 0, 1]` (`BusFacts.byteCheck`),
-* the XOR-with-zero form `[x, 0, x, 1]` and its mirror `[0, x, x, 1]` (`BusFacts.xorZeroCheck`),
-* the NOT (XOR-with-255) form `[x, 255, 255 − x, 1]` and its mirror `[255, x, 255 − x, 1]`
-  (`BusFacts.xorComplCheck`, where the third slot normalizes to `255 − x`) — the shape
-  `xorEqExtractPass` (C4b) + Gauss leave when a `255`-operand XOR's NOT-result is substituted.
+On a byte-lookup bus a single value is byte-range-checked in one of several multiplicity-1 encodings
+that all impose exactly "this value is a byte" — the self-check, the two XOR-with-zero mirrors, and
+the two NOT (XOR-with-255) forms (the last shape `xorEqExtractPass` (C4b) + Gauss leave when a
+`255`-operand XOR's NOT-result is substituted). All are recognized VM-neutrally through
+`BusFacts.byteXorSpec` (decoded op `= xorOp`, byte bound `256`).
 
 Two such single-value checks — in *any* combination of these forms — pack into **one** pair check
-`[eA, eB, 0, 0]` (`BusFacts.bytePairBus`), which imposes the identical obligation "both operands are
-bytes". Because these lookups are stateless, the swap leaves every stateful side effect and the
-memory discipline untouched: a pure bus-interaction win, variables and constraints unchanged. This
-generalizes `bytePackPass` (which only recognized the canonical self-check `[x, x, 0, 1]`); the extra
-mirror forms are exactly the ones OpenVM emits for keccak state limbs.
+(`spec.encode pairOp`, i.e. OpenVM `[eA, eB, 0, 0]`), which imposes the identical obligation "both
+operands are bytes". Because these lookups are stateless, the swap leaves every stateful side effect
+and the memory discipline untouched: a pure bus-interaction win, variables and constraints unchanged.
+This generalizes `bytePackPass` (which only recognized the canonical self-check); the extra mirror
+forms are exactly the ones OpenVM emits for keccak state limbs.
 
 The correctness of one packing step is the *general* stateless two-for-one swap
 `mergeStateless2_correct` (from `TupleRange.lean`): given that each replaced interaction's acceptance
 is equivalent to its value being a byte (`svCheck?_sound`), and the pair check's acceptance is the
-conjunction of both byte obligations (`bytePairBus` + `byteCheck`), the swap preserves the satisfying
-set. No new correctness lemma is needed. VM-agnostic: with `BusFacts.trivial` every fact is `false`,
-so `svCheck?` returns `none` and the pass is the identity. One pair is packed per invocation;
+conjunction of both byte obligations (`mkBytePair_accepted`), the swap preserves the satisfying set.
+No new correctness lemma is needed. VM-agnostic: with `BusFacts.trivial` `byteXorSpec` is `none`, so
+`svCheck?` returns `none` and the pass is the identity. One pair is packed per invocation;
 `iterateToFixpoint` drains them (the bus length strictly drops by one each time). -/
 
 namespace ByteCheckPack
@@ -58,23 +55,29 @@ theorem isByteCompl_sound (a b : Expression p) (h : isByteCompl a b = true)
 
 /-! ## Recognizing a single-value byte check in any encoding -/
 
-/-- The value byte-checked by a multiplicity-1 single-value bitwise byte check: the self-check
-    `[x, x, 0, 1]` (`byteCheck`), the two XOR-with-zero mirrors `[x, 0, x, 1]` / `[0, x, x, 1]`
-    (`xorZeroCheck`), and the two NOT (XOR-with-255) forms `[x, 255, 255 − x, 1]` /
-    `[255, x, 255 − x, 1]` (`xorComplCheck`) all return `some x`; `none` otherwise. -/
+/-- The value byte-checked by a multiplicity-1 single-value byte check, recognized through the
+    VM-neutral `byteXorSpec` (byte bound `256`, decoded op `= xorOp`): the self-check (`o₁ = o₂`,
+    `r = 0`), the two XOR-with-zero mirrors (`o₂ = 0, o₁ = r` / `o₁ = 0, o₂ = r`), and the two NOT
+    (XOR-with-255) forms (`o₂ = 255, r = 255 − o₁` / `o₁ = 255, r = 255 − o₂`, when `256 ≤ p`) all
+    return the checked operand; `none` otherwise. -/
 def svCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) : Option (Expression p) :=
-  match bi.payload with
-  | [e1, e2, e3, e4] =>
-    if bi.multiplicity = Expression.const 1 ∧ e4 = Expression.const 1 then
-      if facts.byteCheck bi.busId = true ∧ e1 = e2 ∧ e3 = Expression.const 0 then some e1
-      else if facts.xorZeroCheck bi.busId = true ∧ e2 = Expression.const 0 ∧ e1 = e3 then some e1
-      else if facts.xorZeroCheck bi.busId = true ∧ e1 = Expression.const 0 ∧ e2 = e3 then some e2
-      else if facts.xorComplCheck bi.busId = true ∧ e2 = Expression.const 255 ∧ isByteCompl e1 e3 = true then some e1
-      else if facts.xorComplCheck bi.busId = true ∧ e1 = Expression.const 255 ∧ isByteCompl e2 e3 = true then some e2
-      else none
+  match facts.byteXorSpec bi.busId with
+  | none => none
+  | some spec =>
+    if decide (spec.bound = 256) then
+      match spec.decode bi.payload with
+      | none => none
+      | some (op, o1, o2, r) =>
+        if bi.multiplicity = Expression.const 1 ∧ op = Expression.const spec.xorOp then
+          if o1 = o2 ∧ r = Expression.const 0 then some o1
+          else if o2 = Expression.const 0 ∧ o1 = r then some o1
+          else if o1 = Expression.const 0 ∧ o2 = r then some o2
+          else if decide (256 ≤ p) ∧ o2 = Expression.const 255 ∧ isByteCompl o1 r = true then some o1
+          else if decide (256 ≤ p) ∧ o1 = Expression.const 255 ∧ isByteCompl o2 r = true then some o2
+          else none
+        else none
     else none
-  | _ => none
 
 /-- A membership helper for `BusInteraction.vars`: a variable of a payload expression is a variable
     of the interaction. -/
@@ -82,6 +85,25 @@ theorem mem_biVars_of_payload (bi : BusInteraction (Expression p)) (e : Expressi
     (he : e ∈ bi.payload) {v : Variable} (hv : v ∈ e.vars) : v ∈ bi.vars := by
   rw [BusInteraction.vars]
   exact List.mem_append_right _ (List.mem_flatMap.2 ⟨e, he, hv⟩)
+
+/-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. -/
+private theorem val_255_sub {p : ℕ} (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
+    (255 - a).val = Nat.xor a.val 255 := by
+  haveI : NeZero p := ⟨by omega⟩
+  have hle : a.val ≤ 255 := by omega
+  have ha' : a = ((a.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse a).symm
+  have hcast : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
+  have hval : (255 - a).val = 255 - a.val := by
+    calc (255 - a).val
+        = ((255 : ZMod p) - ((a.val : ℕ) : ZMod p)).val := by rw [← ha']
+      _ = (((255 - a.val : ℕ) : ZMod p)).val := by rw [Nat.cast_sub hle, hcast]
+      _ = 255 - a.val := ZMod.val_natCast_of_lt (by omega)
+  rw [hval]; exact (nat_xor_255 _ ha).symm
+
+/-- `(255 : ZMod p).val = 255` when `256 ≤ p`. -/
+private theorem val_255 {p : ℕ} (hp : 256 ≤ p) : (255 : ZMod p).val = 255 := by
+  have hc : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
+  rw [← hc, ZMod.val_natCast_of_lt (by omega)]
 
 /-- A recognized single-value byte check is stateless, has multiplicity 1, its value is a payload
     entry, and its acceptance is exactly "the value is a byte". -/
@@ -91,77 +113,74 @@ theorem svCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
       (∀ env, bs.violatesConstraint (bi.eval env) = false ↔ (e.eval env).val < 256) := by
   unfold svCheck? at h
   split at h
-  case h_2 => exact absurd h (by simp)
-  case h_1 e1 e2 e3 e4 hpay =>
-    -- payload shape and multiplicity
-    have hmem : ∀ x ∈ ([e1, e2, e3, e4] : List (Expression p)), x ∈ bi.payload := by
-      intro x hx; rw [hpay]; exact hx
-    split_ifs at h with hmo hA hB hC hD hE
-    · -- self-check `[x, x, 0, 1]`
-      obtain ⟨hm, he4⟩ := hmo; obtain ⟨hfact, he12, he3⟩ := hA
-      obtain rfl : e1 = e := by simpa using h
-      refine ⟨(facts.byteCheck_sound bi.busId hfact).1, hm, hmem e1 (by simp), fun env => ?_⟩
-      have heq : bi.eval env
-          = { busId := bi.busId, multiplicity := 1, payload := [e1.eval env, e1.eval env, 0, 1] } := by
-        unfold BusInteraction.eval
-        rw [hm, hpay, ← he12, he3, he4]; simp [Expression.eval]
-      rw [heq]
-      exact (facts.byteCheck_sound bi.busId hfact).2.2 (e1.eval env) 1
-    · -- XOR-with-zero `[x, 0, x, 1]`
-      obtain ⟨hm, he4⟩ := hmo; obtain ⟨hfact, he2, he13⟩ := hB
-      obtain rfl : e1 = e := by simpa using h
-      refine ⟨(facts.xorZeroCheck_sound bi.busId hfact).1, hm, hmem e1 (by simp), fun env => ?_⟩
-      have heq : bi.eval env
-          = { busId := bi.busId, multiplicity := 1, payload := [e1.eval env, 0, e1.eval env, 1] } := by
-        unfold BusInteraction.eval
-        rw [hm, hpay, he2, ← he13, he4]; simp [Expression.eval]
-      rw [heq]
-      exact ((facts.xorZeroCheck_sound bi.busId hfact).2.1 (e1.eval env) 1)
-    · -- mirror XOR-with-zero `[0, x, x, 1]`
-      obtain ⟨hm, he4⟩ := hmo; obtain ⟨hfact, he1, he23⟩ := hC
-      obtain rfl : e2 = e := by simpa using h
-      refine ⟨(facts.xorZeroCheck_sound bi.busId hfact).1, hm, hmem e2 (by simp), fun env => ?_⟩
-      have heq : bi.eval env
-          = { busId := bi.busId, multiplicity := 1, payload := [0, e2.eval env, e2.eval env, 1] } := by
-        unfold BusInteraction.eval
-        rw [hm, hpay, he1, ← he23, he4]; simp [Expression.eval]
-      rw [heq]
-      exact ((facts.xorZeroCheck_sound bi.busId hfact).2.2 (e2.eval env) 1)
-    · -- NOT-form `[x, 255, 255 - x, 1]`
-      obtain ⟨hm, he4⟩ := hmo; obtain ⟨hfact, he2, hcompl⟩ := hD
-      obtain rfl : e1 = e := by simpa using h
-      refine ⟨(facts.xorComplCheck_sound bi.busId hfact).1, hm, hmem e1 (by simp), fun env => ?_⟩
-      have he3 : e3.eval env = 255 - e1.eval env := isByteCompl_sound e1 e3 hcompl env
-      have heq : bi.eval env
-          = { busId := bi.busId, multiplicity := 1,
-              payload := [e1.eval env, 255, 255 - e1.eval env, 1] } := by
-        unfold BusInteraction.eval
-        rw [hm, hpay, he2, he4]; simp [Expression.eval, he3]
-      rw [heq]
-      exact ((facts.xorComplCheck_sound bi.busId hfact).2.1 (e1.eval env) 1)
-    · -- mirror NOT-form `[255, x, 255 - x, 1]`
-      obtain ⟨hm, he4⟩ := hmo; obtain ⟨hfact, he1, hcompl⟩ := hE
-      obtain rfl : e2 = e := by simpa using h
-      refine ⟨(facts.xorComplCheck_sound bi.busId hfact).1, hm, hmem e2 (by simp), fun env => ?_⟩
-      have he3 : e3.eval env = 255 - e2.eval env := isByteCompl_sound e2 e3 hcompl env
-      have heq : bi.eval env
-          = { busId := bi.busId, multiplicity := 1,
-              payload := [255, e2.eval env, 255 - e2.eval env, 1] } := by
-        unfold BusInteraction.eval
-        rw [hm, hpay, he1, he4]; simp [Expression.eval, he3]
-      rw [heq]
-      exact ((facts.xorComplCheck_sound bi.busId hfact).2.2 (e2.eval env) 1)
-
-/-! ## Acceptance of a pair check -/
-
-/-- A pair check `[x, y, 0, 0]` (multiplicity 1) on a `bytePairBus` that also carries `byteCheck` is
-    accepted exactly when both operands are bytes. -/
-theorem pairAccept (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat)
-    (hbp : facts.bytePairBus busId = true) (hbc : facts.byteCheck busId = true) (x y : ZMod p) :
-    bs.violatesConstraint { busId := busId, multiplicity := 1, payload := [x, y, 0, 0] } = false
-      ↔ x.val < 256 ∧ y.val < 256 :=
-  ((facts.bytePairBus_sound busId hbp).2.2 x y 1).trans
-    (and_congr ((facts.byteCheck_sound busId hbc).2.2 x 1) ((facts.byteCheck_sound busId hbc).2.2 y 1))
+  · exact absurd h (by simp)
+  · rename_i spec hspec
+    split at h
+    · rename_i hb
+      have hbound : spec.bound = 256 := of_decide_eq_true hb
+      split at h
+      · exact absurd h (by simp)
+      · rename_i op o1 o2 r hdec
+        have hstateless := (facts.byteXorSpec_sound bi.busId spec hspec).1
+        obtain ⟨hmemO1, hmemO2, _⟩ := spec.decode_mem bi.payload op o1 o2 r hdec
+        have key := byteXorSpec_decode_iff bs facts spec bi hspec op o1 o2 r hdec
+        split_ifs at h with hmo hA hB hC hD hE
+        · -- self-check: o₁ = o₂, r = 0
+          obtain ⟨hm, hop⟩ := hmo; obtain ⟨he12, hr0⟩ := hA
+          obtain rfl : o1 = e := by simpa using h
+          refine ⟨hstateless, hm, hmemO1, fun env => ?_⟩
+          have hopEv : op.eval env = spec.xorOp := by rw [hop]; rfl
+          rw [(key env).1 hopEv, hbound]
+          refine ⟨fun hh => hh.1, fun hh => ⟨hh, he12 ▸ hh, ?_⟩⟩
+          rw [show r.eval env = 0 by rw [hr0]; rfl, ZMod.val_zero, ← he12]
+          exact (Nat.xor_self _).symm
+        · -- XOR-with-zero: o₂ = 0, o₁ = r
+          obtain ⟨hm, hop⟩ := hmo; obtain ⟨hz, heq⟩ := hB
+          obtain rfl : o1 = e := by simpa using h
+          refine ⟨hstateless, hm, hmemO1, fun env => ?_⟩
+          have hopEv : op.eval env = spec.xorOp := by rw [hop]; rfl
+          rw [(key env).1 hopEv, hbound]
+          refine ⟨fun hh => hh.1, fun hh => ⟨hh, ?_, ?_⟩⟩
+          · rw [show o2.eval env = 0 by rw [hz]; rfl, ZMod.val_zero]; omega
+          · rw [show r.eval env = o1.eval env by rw [heq], show o2.eval env = 0 by rw [hz]; rfl,
+              ZMod.val_zero]
+            exact (Nat.xor_zero _).symm
+        · -- mirror XOR-with-zero: o₁ = 0, o₂ = r
+          obtain ⟨hm, hop⟩ := hmo; obtain ⟨hz, heq⟩ := hC
+          obtain rfl : o2 = e := by simpa using h
+          refine ⟨hstateless, hm, hmemO2, fun env => ?_⟩
+          have hopEv : op.eval env = spec.xorOp := by rw [hop]; rfl
+          rw [(key env).1 hopEv, hbound]
+          refine ⟨fun hh => hh.2.1, fun hh => ⟨?_, hh, ?_⟩⟩
+          · rw [show o1.eval env = 0 by rw [hz]; rfl, ZMod.val_zero]; omega
+          · rw [show r.eval env = o2.eval env by rw [heq], show o1.eval env = 0 by rw [hz]; rfl,
+              ZMod.val_zero]
+            exact (Nat.zero_xor _).symm
+        · -- NOT-form: o₂ = 255, r = 255 − o₁
+          obtain ⟨hm, hop⟩ := hmo; obtain ⟨hp, hz, hcompl⟩ := hD
+          obtain rfl : o1 = e := by simpa using h
+          have hple : 256 ≤ p := of_decide_eq_true hp
+          refine ⟨hstateless, hm, hmemO1, fun env => ?_⟩
+          have hopEv : op.eval env = spec.xorOp := by rw [hop]; rfl
+          have ho2 : o2.eval env = 255 := by rw [hz]; rfl
+          have hr : r.eval env = 255 - o1.eval env := isByteCompl_sound o1 r hcompl env
+          rw [(key env).1 hopEv, hbound]
+          refine ⟨fun hh => hh.1, fun hh => ⟨hh, ?_, ?_⟩⟩
+          · rw [ho2, val_255 hple]; omega
+          · rw [hr, ho2, val_255 hple, val_255_sub hple _ hh]
+        · -- mirror NOT-form: o₁ = 255, r = 255 − o₂
+          obtain ⟨hm, hop⟩ := hmo; obtain ⟨hp, hz, hcompl⟩ := hE
+          obtain rfl : o2 = e := by simpa using h
+          have hple : 256 ≤ p := of_decide_eq_true hp
+          refine ⟨hstateless, hm, hmemO2, fun env => ?_⟩
+          have hopEv : op.eval env = spec.xorOp := by rw [hop]; rfl
+          have ho1 : o1.eval env = 255 := by rw [hz]; rfl
+          have hr : r.eval env = 255 - o2.eval env := isByteCompl_sound o2 r hcompl env
+          rw [(key env).1 hopEv, hbound]
+          refine ⟨fun hh => hh.2.1, fun hh => ⟨?_, hh, ?_⟩⟩
+          · rw [ho1, val_255 hple]; omega
+          · rw [hr, ho1, val_255 hple, val_255_sub hple _ hh]; exact Nat.xor_comm _ _
+    · exact absurd h (by simp)
 
 /-! ## The pass: find and pack one pair per invocation -/
 
@@ -213,38 +232,39 @@ def findGo (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p b
     | some eA =>
       match hfs : findSecond bs facts a.busId [] rest with
       | some (mid, b, eB, post) =>
-        if hbp : facts.bytePairBus a.busId = true then
-          if hbc : facts.byteCheck a.busId = true then
+        match hbx : facts.byteXorSpec a.busId with
+        | some spec =>
+          if hbound : spec.bound = 256 then
             if hsplit : cs.busInteractions = revPre.reverse ++ a :: mid ++ b :: post then
               some ⟨{ cs with busInteractions :=
-                        revPre.reverse ++ byteCheck2 a.busId eA eB :: mid ++ post }, [],
+                        revPre.reverse ++ mkBytePair spec a.busId eA eB :: mid ++ post }, [],
                     by
                       have hsb : svCheck? bs facts b = some eB :=
                         findSecond_sound bs facts a.busId [] rest mid b eB post hfs
                       have hsa := svCheck?_sound bs facts a eA ha
                       have hsbd := svCheck?_sound bs facts b eB hsb
-                      refine mergeStateless2_correct cs bs hp1 a b (byteCheck2 a.busId eA eB)
+                      refine mergeStateless2_correct cs bs hp1 a b (mkBytePair spec a.busId eA eB)
                         hsa.1 hsbd.1 hsa.1 hsa.2.1 hsbd.2.1 rfl (fun env => ?_) (fun env => ?_)
                         (fun v hv => ?_) revPre.reverse mid post hsplit
                       · -- obligation equivalence
-                        rw [byteCheck2_eval,
-                          pairAccept bs facts a.busId hbp hbc (eA.eval env) (eB.eval env)]
+                        rw [mkBytePair_accepted bs facts spec a.busId hbx eA eB env, hbound]
                         exact and_congr (hsa.2.2.2 env).symm (hsbd.2.2.2 env).symm
                       · -- the pair check breaks no invariant
-                        rw [byteCheck2_eval]
-                        exact (facts.bytePairBus_sound a.busId hbp).2.1 (eA.eval env) (eB.eval env)
+                        exact mkBytePair_breaks bs facts spec a.busId hbx eA eB env
                       · -- the pair check's variables come from `a` and `b`
                         have hvab : v ∈ eA.vars ∨ v ∈ eB.vars := by
-                          simp only [byteCheck2, BusInteraction.vars, Expression.vars,
-                            List.flatMap_cons, List.flatMap_nil, List.append_nil,
-                            List.nil_append, List.mem_append] at hv
-                          tauto
+                          rw [BusInteraction.vars, List.mem_append] at hv
+                          rcases hv with hm | hp
+                          · simp only [mkBytePair, Expression.vars, List.not_mem_nil] at hm
+                          · rw [List.mem_flatMap] at hp
+                            obtain ⟨pe, hpe, hx⟩ := hp
+                            exact mkBytePair_payload_vars spec a.busId eA eB pe hpe hx
                         rcases hvab with h | h
                         · exact Or.inl (mem_biVars_of_payload a eA hsa.2.2.1 h)
                         · exact Or.inr (mem_biVars_of_payload b eB hsbd.2.2.1 h)⟩
             else findGo cs bs facts hp1 (a :: revPre) rest
           else findGo cs bs facts hp1 (a :: revPre) rest
-        else findGo cs bs facts hp1 (a :: revPre) rest
+        | none => findGo cs bs facts hp1 (a :: revPre) rest
       | none => findGo cs bs facts hp1 (a :: revPre) rest
     | none => findGo cs bs facts hp1 (a :: revPre) rest
 

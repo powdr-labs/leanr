@@ -152,12 +152,12 @@ def x0ReturnsZero (busMap : BusMap) (msgs : List (BusInteraction (ZMod p))) : Pr
 def memShapeOf (busMap : BusMap) (busId : Nat) : Option MemoryBusShape :=
   match busMap busId with
   -- The *actual* memory bus, with address (address space, pointer) in payload slots 0 and 1.
-  | some .memory => some { addressFields := [0, 1] }
+  | some .memory => some { addressFields := [0, 1], direction := .receiveThenSend }
   -- The execution bridge can also be viewed as a memory bus with a single global cell (address `[]`).
   -- Note that in this bus, the memory discipline (for any consecutive send/receive pair, the values
   -- must match) is *not* enforced by the bus itself. By adding the execution bridge here, make
   -- completeness partial: We assume that the prover will always *chose* to prove consecutive cycles.
-  | some .executionBridge => some { addressFields := [] }
+  | some .executionBridge => some { addressFields := [], direction := .receiveThenSend }
   | _ => none
 
 /-- The OpenVM bus semantics for a given bus map (default: the hard-coded default bus map). -/

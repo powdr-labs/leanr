@@ -9,9 +9,9 @@ apc-optimizer is designed to have a small auditing surface. The audited files li
 the theorems below. To audit
 apc-optimizer, it should be sufficient to review:
 1. [`ApcOptimizer/Spec.lean`](./ApcOptimizer/Spec.lean): Defining the notion of circuit equivalence and optimizer correctness.
-2. [`ApcOptimizer/OpenVmSemantics.lean`](./ApcOptimizer/OpenVmSemantics.lean): The OpenVM-specific semantics. These are needed for our OpenVM-specific optimizations. If you are instead interested in a different VM, you can skip this file, but must provide semantics for your VM in order to use apc-optimizer.
-3. [`ApcOptimizer/MemoryBus.lean`](./ApcOptimizer/MemoryBus.lean): Utility used in the OpenVM semantics above (and likely useful for other VMs as well).
-4. The correctness theorems in [`ApcOptimizer/Optimizer.lean`](./ApcOptimizer/Optimizer.lean): `optimizerWithBusFacts_maintainsCorrectness` — the master statement that the optimizer maintains correctness for *any* proven bus facts — together with its two instances, `simpleOptimizer_maintainsCorrectness` (the fact-free optimizer) and `openVmOptimizer_maintainsCorrectness` (the `openVmOptimizer` the CLI actually runs). Audit the statements and check that the proofs are correct by running `lake build`.
+2. [`ApcOptimizer/OpenVmSemantics.lean`](./ApcOptimizer/OpenVmSemantics.lean) and [`ApcOptimizer/Sp1Semantics.lean`](./ApcOptimizer/Sp1Semantics.lean): The OpenVM- and SP1-specific semantics, needed for the corresponding VM-specific optimizations. You only need to audit the semantics of the VM you use; to support a further VM, provide its semantics (an audited file like these) in order to use apc-optimizer.
+3. [`ApcOptimizer/MemoryBus.lean`](./ApcOptimizer/MemoryBus.lean): The memory-discipline utility the semantics above build on (its `direction` selects OpenVM's send-then-receive convention or SP1's reverse); likely useful for other VMs as well.
+4. The correctness theorems in [`ApcOptimizer/Optimizer.lean`](./ApcOptimizer/Optimizer.lean): `optimizerWithBusFacts_maintainsCorrectness` — the master statement that the optimizer maintains correctness for *any* proven bus facts — together with its instances, `simpleOptimizer_maintainsCorrectness` (the fact-free optimizer), `openVmOptimizer_maintainsCorrectness` (the `openVmOptimizer` the CLI actually runs), and `sp1Optimizer_maintainsCorrectness` (the SP1 optimizer). Audit the statements and check that the proofs are correct by running `lake build`.
 
 ### Assumptions (OpenVM)
 

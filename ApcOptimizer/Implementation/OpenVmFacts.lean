@@ -22,11 +22,6 @@ namespace ApcOptimizer.OpenVM
 
 variable {p : ℕ}
 
-/-- XOR-ing a byte with the all-ones byte `255` is the byte complement. Used by `xorComplEq_sound`
-    to linearize a bitwise interaction with a `255` operand into an affine equality. The 256-case
-    `decide` is a one-shot kernel check (no runtime cost). -/
-private theorem nat_xor_255 : ∀ n, n < 256 → Nat.xor n 255 = 255 - n := by
-  set_option maxRecDepth 4000 in decide
 
 private def slotBoundImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat) (mult : ZMod p)
     (pattern : List (Option (ZMod p))) (slot : Nat) : Option Nat :=
@@ -78,20 +73,62 @@ private def neverViolatesImpl (busMap : Nat → Option OpenVmBusType) (busId : N
   | _ => false
 
 /-- Byte-slot obligation for a memory-style pair cancellation, conditioned on the receive's
-    constant pattern. A memory receive whose address-space slot (payload slot 0) is a known
-    constant ∉ {1,2} carries **no** byte obligation (`some []`) — the VM's `violates` only rejects
-    non-byte data on address spaces 1 and 2 — so it can be cancelled freely (e.g. the wasm
-    frame-pointer cell at AS 5). Otherwise the data limbs (slots 2–5) must be bytes, as before.
-    The execution bridge never violates (`some []`); every other bus claims nothing (`none`). -/
+    constant pattern. OpenVM's memory limbs are bytes, so the declared bound is `256`. A memory
+    `getPrevious` whose address-space slot (payload slot 0) is a known constant ∉ {1,2} carries
+    **no** byte obligation (`some ([], 256)`) — the VM's `violates` only rejects non-byte data on
+    address spaces 1 and 2 — so it can be cancelled freely (e.g. the wasm frame-pointer cell at
+    AS 5). Otherwise the data limbs (slots 2–5) must be bytes, as before. The execution bridge
+    never violates (`some ([], 256)`); every other bus claims nothing (`none`). -/
 private def recvByteSlotsImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat)
-    (pattern : List (Option (ZMod p))) : Option (List Nat) :=
+    (pattern : List (Option (ZMod p))) : Option (List Nat × Nat) :=
   match busMap busId with
   | some .memory =>
     match pattern[0]? with
-    | some (some as) => some (if as.val = 1 ∨ as.val = 2 then [2, 3, 4, 5] else [])
-    | _ => some [2, 3, 4, 5]
-  | some .executionBridge => some []
+    | some (some as) => some ((if as.val = 1 ∨ as.val = 2 then [2, 3, 4, 5] else []), 256)
+    | _ => some ([2, 3, 4, 5], 256)
+  | some .executionBridge => some ([], 256)
   | _ => none
+
+/-- OpenVM bitwise payload `[x, y, z, op]` decodes to logical `(op, operand₁, operand₂, result)`
+    `= (op, x, y, z)`. Layout-generic in `α` so the same reordering serves the `ZMod`-level fact
+    soundness and the `Expression`-level pass recognizers. -/
+def bitwiseDecode {α : Type} : List α → Option (α × α × α × α)
+  | [x, y, z, op] => some (op, x, y, z)
+  | _ => none
+
+theorem bitwiseDecode_some {α : Type} {pl : List α} {a b c d : α} :
+    bitwiseDecode pl = some (a, b, c, d) ↔ pl = [b, c, d, a] := by
+  constructor
+  · intro h
+    rcases pl with _ | ⟨x, _ | ⟨y, _ | ⟨z, _ | ⟨w, _ | ⟨e, tl⟩⟩⟩⟩⟩ <;> simp_all [bitwiseDecode]
+  · intro h; subst h; rfl
+
+theorem bitwiseDecode_map {α β : Type} (f : α → β) (pl : List α) :
+    bitwiseDecode (pl.map f)
+      = (bitwiseDecode pl).map (fun t => (f t.1, f t.2.1, f t.2.2.1, f t.2.2.2)) := by
+  rcases pl with _ | ⟨x, _ | ⟨y, _ | ⟨z, _ | ⟨w, _ | ⟨e, tl⟩⟩⟩⟩⟩ <;> rfl
+
+theorem bitwiseDecode_mem {α : Type} (pl : List α) (op o1 o2 r : α)
+    (h : bitwiseDecode pl = some (op, o1, o2, r)) : o1 ∈ pl ∧ o2 ∈ pl ∧ r ∈ pl := by
+  rw [bitwiseDecode_some] at h; subst h; simp
+
+/-- Emit an OpenVM bitwise payload from logical `(op, operand₁, operand₂, result)`: the layout is
+    `[operand₁, operand₂, result, op]`, inverting `bitwiseDecode`. -/
+def bitwiseEncode {α : Type} (op o1 o2 r : α) : List α := [o1, o2, r, op]
+
+theorem bitwiseDecode_encode {α : Type} (op o1 o2 r : α) :
+    bitwiseDecode (bitwiseEncode op o1 o2 r) = some (op, o1, o2, r) := rfl
+
+theorem bitwiseDecode_eq_encode {α : Type} (pl : List α) (op o1 o2 r : α)
+    (h : bitwiseDecode pl = some (op, o1, o2, r)) : pl = bitwiseEncode op o1 o2 r := by
+  rw [bitwiseDecode_some] at h; exact h
+
+theorem bitwiseEncode_map {α β : Type} (f : α → β) (op o1 o2 r : α) :
+    (bitwiseEncode op o1 o2 r).map f = bitwiseEncode (f op) (f o1) (f o2) (f r) := rfl
+
+theorem bitwiseEncode_mem {α : Type} (op o1 o2 r x : α)
+    (h : x ∈ bitwiseEncode op o1 o2 r) : x = op ∨ x = o1 ∨ x = o2 ∨ x = r := by
+  simp only [bitwiseEncode, List.mem_cons, List.not_mem_nil, or_false] at h; tauto
 
 /-- The fixed-zero cell of the OpenVM memory bus: register `x0` = address `(as, ptr) = (1, 0)`,
     with the four data limbs at payload slots `2..5`. Backs the `zeroRegisterReads` admissibility
@@ -240,6 +277,18 @@ theorem openVm_isStateful_of_memShape {p : ℕ} (busMap : Nat → Option OpenVmB
   cases o with
   | none => simp at h
   | some t => cases t <;> simp_all [OpenVmBusType.isStateful]
+
+/-- Every shape OpenVM declares uses `direction := .receiveThenSend`, so its `setNewMult` reduces
+    to `1`. Lets the multiplicity-generic memory facts specialize to OpenVM's send `1` / receive
+    `-1` convention. -/
+private theorem memShapeOf_setNewMult_eq_one {p : ℕ} (busMap : Nat → Option OpenVmBusType)
+    (busId : Nat) (shape : MemoryBusShape) (h : memShapeOf busMap busId = some shape) :
+    (shape.setNewMult : ZMod p) = 1 := by
+  unfold memShapeOf at h
+  split at h
+  · obtain rfl := Option.some.inj h; rfl
+  · obtain rfl := Option.some.inj h; rfl
+  · exact absurd h (by simp)
 
 /-- The proven facts about `openVmBusSemantics`, for any bus map. -/
 def openVmFacts (p : ℕ) [NeZero p]
@@ -441,7 +490,10 @@ def openVmFacts (p : ℕ) [NeZero p]
     · exact absurd h (by simp)
   recvByteSlots := recvByteSlotsImpl busMap
   recvByteSlots_sound := by
-    intro busId pattern slots hfact m hbusId
+    intro busId shape hmemshape pattern slots bound hfact m hbusId
+    have hw : (shape.setNewMult : ZMod p) = 1 :=
+      memShapeOf_setNewMult_eq_one busMap busId shape hmemshape
+    simp only [hw]
     subst hbusId
     unfold recvByteSlotsImpl at hfact
     cases hbus : busMap m.busId with
@@ -450,30 +502,30 @@ def openVmFacts (p : ℕ) [NeZero p]
       cases bt with
       | executionBridge =>
         rw [hbus] at hfact
-        simp only [Option.some.injEq] at hfact
-        subst hfact
+        simp only [Option.some.injEq, Prod.mk.injEq] at hfact
+        obtain ⟨rfl, rfl⟩ := hfact
         exact ⟨fun _ => execBridge_ok busMap m hbus, fun _ _ _ => execBridge_ok busMap m hbus⟩
       | memory =>
         rw [hbus] at hfact
         cases hp0 : pattern[0]? with
         | none =>
           rw [hp0] at hfact
-          simp only [Option.some.injEq] at hfact
-          subst hfact
+          simp only [Option.some.injEq, Prod.mk.injEq] at hfact
+          obtain ⟨rfl, rfl⟩ := hfact
           exact ⟨fun hm => memory_send_ok busMap m hbus hm,
                  fun hm _ hbytes => memory_recv_ok busMap m hbus hm hbytes⟩
         | some oas =>
           cases oas with
           | none =>
             rw [hp0] at hfact
-            simp only [Option.some.injEq] at hfact
-            subst hfact
+            simp only [Option.some.injEq, Prod.mk.injEq] at hfact
+            obtain ⟨rfl, rfl⟩ := hfact
             exact ⟨fun hm => memory_send_ok busMap m hbus hm,
                    fun hm _ hbytes => memory_recv_ok busMap m hbus hm hbytes⟩
           | some as =>
             rw [hp0] at hfact
-            simp only [Option.some.injEq] at hfact
-            subst hfact
+            simp only [Option.some.injEq, Prod.mk.injEq] at hfact
+            obtain ⟨rfl, rfl⟩ := hfact
             refine ⟨fun hm => memory_send_ok busMap m hbus hm, fun hm hmatch hbytes => ?_⟩
             split_ifs at hbytes with hcase
             · exact memory_recv_ok busMap m hbus hm hbytes
@@ -556,107 +608,6 @@ def openVmFacts (p : ℕ) [NeZero p]
         simp only [List.mem_append, List.mem_cons] at hm ⊢
         tauto
       exact hzero m hmem hbus h0 h1
-  bytePairBus busId := match busMap busId with
-    | some .bitwiseLookup => true
-    | _ => false
-  bytePairBus_sound := by
-    intro busId h
-    -- `h` forces the bus to be the bitwise-lookup bus.
-    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
-      revert h; cases hb : busMap busId with
-      | none => simp
-      | some t => cases t <;> simp
-    refine ⟨?_, ?_, ?_⟩
-    · -- the bitwise-lookup bus is stateless
-      show (match busMap busId with | some t => t.isStateful | none => false) = false
-      rw [hbus]; rfl
-    · -- a multiplicity-1 packed check never breaks an invariant
-      intro x y
-      show breaksInvariant busMap { busId := busId, multiplicity := 1, payload := [x, y, 0, 0] }
-        = false
-      unfold breaksInvariant; rw [hbus]; simp
-    · intro x y mult
-      -- `(0 : ZMod p).val = 0` and `(1 : ZMod p).val ≤ 1` reduce the `match op.val` branches;
-      -- `isByte` stays opaque — the accepted conditions on both sides coincide by boolean logic.
-      have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
-      have h1le : (1 : ZMod p).val ≤ 1 := by
-        rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_le 1 p
-      show violates busMap { busId := busId, multiplicity := mult, payload := [x, y, 0, 0] } = false ↔
-        violates busMap { busId := busId, multiplicity := mult, payload := [x, x, 0, 1] } = false ∧
-        violates busMap { busId := busId, multiplicity := mult, payload := [y, y, 0, 1] } = false
-      unfold violates; rw [hbus]
-      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1 <;> simp [h1, hv0]
-  byteCheck busId := match busMap busId with
-    | some .bitwiseLookup => true
-    | _ => false
-  byteCheck_sound := by
-    intro busId h
-    -- `h` forces the bus to be the bitwise-lookup bus.
-    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
-      revert h; cases hb : busMap busId with
-      | none => simp
-      | some t => cases t <;> simp
-    refine ⟨?_, ?_, ?_⟩
-    · -- the bitwise-lookup bus is stateless
-      show (match busMap busId with | some t => t.isStateful | none => false) = false
-      rw [hbus]; rfl
-    · -- a multiplicity-1 self-check never breaks an invariant
-      intro x
-      show breaksInvariant busMap { busId := busId, multiplicity := 1, payload := [x, x, 0, 1] }
-        = false
-      unfold breaksInvariant; rw [hbus]; simp
-    · intro x mult
-      -- both `match op.val` branches reduce to "`x` is a byte": op 1 asserts `x ⊕ x = 0`
-      -- (true) plus byte-ness; the degenerate op-0 branch (`p ∣ 2`) asserts `z = 0` (true)
-      -- plus byte-ness.
-      have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
-      have h1le : (1 : ZMod p).val ≤ 1 := by
-        rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_le 1 p
-      show violates busMap { busId := busId, multiplicity := mult, payload := [x, x, 0, 1] }
-          = false ↔ x.val < 256
-      unfold violates; rw [hbus]
-      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1 <;>
-        simp [h1, hv0, isByte, Nat.xor_self]
-  xorZeroCheck busId := match busMap busId with
-    | some .bitwiseLookup => true
-    | _ => false
-  xorZeroCheck_sound := by
-    intro busId h
-    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
-      revert h; cases hb : busMap busId with
-      | none => simp
-      | some t => cases t <;> simp
-    have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
-    have h1le : (1 : ZMod p).val ≤ 1 := by
-      rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_le 1 p
-    refine ⟨?_, ?_, ?_⟩
-    · show (match busMap busId with | some t => t.isStateful | none => false) = false
-      rw [hbus]; rfl
-    · intro x mult
-      -- op 1 asserts `x ⊕ 0 = x` (true) plus byte-ness of `x`; the degenerate op-0 branch
-      -- (`(1 : ZMod p).val = 0`, i.e. `p = 1`) makes every value the byte `0`.
-      show violates busMap { busId := busId, multiplicity := mult, payload := [x, 0, x, 1] }
-          = false ↔ x.val < 256
-      unfold violates; rw [hbus]
-      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1
-      · have hp1 : p = 1 := Nat.dvd_one.mp (Nat.dvd_of_mod_eq_zero (by
-          rwa [ZMod.val_one_eq_one_mod] at h1))
-        subst hp1
-        have hx0 : x.val = 0 := Nat.lt_one_iff.1 (ZMod.val_lt x)
-        simp [h1, hv0, hx0, isByte]
-      · simp [h1, hv0, isByte, Nat.xor_zero]
-    · intro x mult
-      -- mirror: op 1 asserts `0 ⊕ x = x` (true) plus byte-ness of `x`; degenerate branch as above.
-      show violates busMap { busId := busId, multiplicity := mult, payload := [0, x, x, 1] }
-          = false ↔ x.val < 256
-      unfold violates; rw [hbus]
-      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1
-      · have hp1 : p = 1 := Nat.dvd_one.mp (Nat.dvd_of_mod_eq_zero (by
-          rwa [ZMod.val_one_eq_one_mod] at h1))
-        subst hp1
-        have hx0 : x.val = 0 := Nat.lt_one_iff.1 (ZMod.val_lt x)
-        simp [h1, hv0, hx0, isByte]
-      · simp [h1, hv0, isByte, Nat.zero_xor]
   zeroRangeEq busId := match busMap busId with
     | some .variableRangeChecker => true
     | _ => false
@@ -677,143 +628,6 @@ def openVmFacts (p : ℕ) [NeZero p]
       rw [Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq,
         hv0, pow_zero, Nat.lt_one_iff, ZMod.val_eq_zero]
       exact ⟨fun h => h.2, fun h => ⟨Nat.zero_le 25, h⟩⟩
-  xorZeroEq busId := match busMap busId with
-    | some .bitwiseLookup => true
-    | _ => false
-  xorZeroEq_sound := by
-    intro busId h
-    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
-      revert h; cases hb : busMap busId with
-      | none => simp
-      | some t => cases t <;> simp
-    have h1le : (1 : ZMod p).val ≤ 1 := by
-      rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_le 1 p
-    -- `ZMod.val` is injective (via its right inverse `Nat.cast`).
-    have valeq : ∀ a b : ZMod p, a.val = b.val → a = b := fun a b hab =>
-      (ZMod.natCast_rightInverse a).symm.trans ((congrArg _ hab).trans (ZMod.natCast_rightInverse b))
-    -- The degenerate `p = 1` case: `ZMod 1` is a subsingleton, so any equality holds.
-    have degen : (1 : ZMod p).val = 0 → ∀ a b : ZMod p, a = b := by
-      intro h1 a b
-      have hp1 : p = 1 := Nat.dvd_one.mp (Nat.dvd_of_mod_eq_zero (by
-        rwa [ZMod.val_one_eq_one_mod] at h1))
-      subst hp1; exact Subsingleton.elim a b
-    refine ⟨?_, ?_⟩
-    · intro y z hviol
-      replace hviol : violates busMap
-          { busId := busId, multiplicity := 1, payload := [0, y, z, 1] } = false := hviol
-      unfold violates at hviol; rw [hbus] at hviol
-      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1
-      · exact degen h1 z y
-      · simp only [h1, ZMod.val_zero, isByte, Bool.not_eq_false',
-          Bool.and_eq_true, decide_eq_true_eq] at hviol
-        exact valeq z y (hviol.2.trans (Nat.zero_xor y.val))
-    · intro x z hviol
-      replace hviol : violates busMap
-          { busId := busId, multiplicity := 1, payload := [x, 0, z, 1] } = false := hviol
-      unfold violates at hviol; rw [hbus] at hviol
-      rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1
-      · exact degen h1 z x
-      · simp only [h1, ZMod.val_zero, isByte, Bool.not_eq_false',
-          Bool.and_eq_true, decide_eq_true_eq] at hviol
-        exact valeq z x (hviol.2.trans (Nat.xor_zero x.val))
-  xorComplEq busId := match busMap busId with
-    | some .bitwiseLookup => decide (256 ≤ p)
-    | _ => false
-  xorComplEq_sound := by
-    intro busId h
-    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
-      revert h; cases hb : busMap busId with
-      | none => simp
-      | some t => cases t <;> simp
-    have hple : 256 ≤ p := by
-      have h' : (match busMap busId with
-          | some OpenVmBusType.bitwiseLookup => decide (256 ≤ p) | _ => false) = true := h
-      rw [hbus] at h'; exact of_decide_eq_true h'
-    have hp2 : 1 < p := by omega
-    have h1val : (1 : ZMod p).val = 1 := by
-      rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_eq_of_lt hp2
-    have hcast255 : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
-    have h255val : (255 : ZMod p).val = 255 := by
-      rw [← hcast255, ZMod.val_natCast_of_lt (by omega : (255 : ℕ) < p)]
-    have hle_of : ∀ w : ZMod p, w.val < 256 → w.val ≤ 255 := fun w hw => Nat.le_of_lt_succ (by omega)
-    refine ⟨?_, ?_⟩
-    · intro x z hviol
-      replace hviol : violates busMap
-          { busId := busId, multiplicity := 1, payload := [x, 255, z, 1] } = false := hviol
-      unfold violates at hviol; rw [hbus] at hviol
-      simp only [h1val, isByte, Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq] at hviol
-      obtain ⟨⟨hxb, _⟩, hzxor⟩ := hviol
-      rw [h255val] at hzxor
-      have hzv : z.val = 255 - x.val := by rw [hzxor]; exact nat_xor_255 x.val hxb
-      have hz : z = ((z.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse z).symm
-      rw [hz, hzv, Nat.cast_sub (hle_of x hxb), ZMod.natCast_rightInverse x, hcast255]
-    · intro y z hviol
-      replace hviol : violates busMap
-          { busId := busId, multiplicity := 1, payload := [255, y, z, 1] } = false := hviol
-      unfold violates at hviol; rw [hbus] at hviol
-      simp only [h1val, isByte, Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq] at hviol
-      obtain ⟨⟨_, hyb⟩, hzxor⟩ := hviol
-      rw [h255val] at hzxor
-      have hzv : z.val = 255 - y.val := by
-        have hc : Nat.xor 255 y.val = Nat.xor y.val 255 := Nat.xor_comm 255 y.val
-        rw [hzxor, hc]; exact nat_xor_255 y.val hyb
-      have hz : z = ((z.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse z).symm
-      rw [hz, hzv, Nat.cast_sub (hle_of y hyb), ZMod.natCast_rightInverse y, hcast255]
-  xorComplCheck busId := match busMap busId with
-    | some .bitwiseLookup => decide (256 ≤ p)
-    | _ => false
-  xorComplCheck_sound := by
-    intro busId h
-    have hbus : busMap busId = some OpenVmBusType.bitwiseLookup := by
-      revert h; cases hb : busMap busId with
-      | none => simp
-      | some t => cases t <;> simp
-    have hple : 256 ≤ p := by
-      have h' : (match busMap busId with
-          | some OpenVmBusType.bitwiseLookup => decide (256 ≤ p) | _ => false) = true := h
-      rw [hbus] at h'; exact of_decide_eq_true h'
-    have hp2 : 1 < p := by omega
-    have h1val : (1 : ZMod p).val = 1 := by
-      rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_eq_of_lt hp2
-    have hcast255 : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
-    have h255val : (255 : ZMod p).val = 255 := by
-      rw [← hcast255, ZMod.val_natCast_of_lt (by omega : (255 : ℕ) < p)]
-    -- `(255 − x).val = 255 − x.val` when `x` is a byte (no wrap: `x.val ≤ 255 < p`).
-    have hsubval : ∀ x : ZMod p, x.val < 256 → (255 - x).val = 255 - x.val := by
-      intro x hx
-      have hxle : x.val ≤ 255 := Nat.le_of_lt_succ (by omega)
-      have hx' : x = ((x.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse x).symm
-      calc (255 - x).val
-          = ((255 : ZMod p) - ((x.val : ℕ) : ZMod p)).val := by rw [← hx']
-        _ = (((255 - x.val : ℕ) : ZMod p)).val := by
-              rw [Nat.cast_sub hxle, hcast255]
-        _ = 255 - x.val := ZMod.val_natCast_of_lt (by omega)
-    -- both checks reduce to "`x` is a byte": op = 1, `255` is a byte, and `255 − x = x ⊕ 255`.
-    refine ⟨?_, ?_, ?_⟩
-    · show (match busMap busId with | some t => t.isStateful | none => false) = false
-      rw [hbus]; rfl
-    · intro x mult
-      show violates busMap { busId := busId, multiplicity := mult, payload := [x, 255, 255 - x, 1] }
-          = false ↔ x.val < 256
-      unfold violates; rw [hbus]
-      simp only [h1val, h255val, isByte, Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq]
-      constructor
-      · rintro ⟨⟨hxb, _⟩, _⟩; exact hxb
-      · intro hxb
-        refine ⟨⟨hxb, by omega⟩, ?_⟩
-        rw [hsubval x hxb, ← nat_xor_255 x.val hxb]
-    · intro x mult
-      show violates busMap { busId := busId, multiplicity := mult, payload := [255, x, 255 - x, 1] }
-          = false ↔ x.val < 256
-      unfold violates; rw [hbus]
-      simp only [h1val, h255val, isByte, Bool.not_eq_false', Bool.and_eq_true, decide_eq_true_eq]
-      constructor
-      · rintro ⟨⟨_, hxb⟩, _⟩; exact hxb
-      · intro hxb
-        refine ⟨⟨by omega, hxb⟩, ?_⟩
-        have hc : Nat.xor 255 x.val = Nat.xor x.val 255 := Nat.xor_comm 255 x.val
-        rw [hsubval x hxb, hc]
-        exact (nat_xor_255 x.val hxb).symm
   varRangeBus busId := match busMap busId with
     | some .variableRangeChecker => true
     | _ => false
@@ -881,5 +695,55 @@ def openVmFacts (p : ℕ) [NeZero p]
       · rw [hget] at hz; exact Option.some.inj hz.2.2.1
       · rw [hget] at hz; exact Option.some.inj hz.2.2.2
     · exact absurd hfact (by simp)
+  byteXorSpec busId := match busMap busId with
+    | some .bitwiseLookup =>
+        some { bound := 256, xorOp := 1, pairOp := 0, decode := bitwiseDecode,
+               encode := bitwiseEncode, decode_map := bitwiseDecode_map,
+               decode_mem := bitwiseDecode_mem, decode_encode := bitwiseDecode_encode,
+               decode_eq_encode := bitwiseDecode_eq_encode, encode_map := bitwiseEncode_map,
+               encode_mem := bitwiseEncode_mem, pNeZero := inferInstance }
+    | _ => none
+  byteXorSpec_sound := by
+    intro busId spec hspec
+    have hbus : busMap busId = some .bitwiseLookup := by
+      revert hspec; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    simp only [hbus] at hspec
+    obtain rfl := (Option.some.inj hspec).symm
+    have hv0 : (0 : ZMod p).val = 0 := ZMod.val_zero
+    have h1le : (1 : ZMod p).val ≤ 1 := by rw [ZMod.val_one_eq_one_mod]; exact Nat.mod_le 1 p
+    refine ⟨?_, ?_, ?_⟩
+    · show (match busMap busId with | some t => t.isStateful | none => false) = false
+      rw [hbus]; rfl
+    · intro pl
+      show breaksInvariant busMap { busId := busId, multiplicity := 1, payload := pl } = false
+      unfold breaksInvariant; rw [hbus]; simp
+    · intro pl op o1 o2 r mult hdec
+      rw [bitwiseDecode_some] at hdec
+      subst hdec
+      refine ⟨fun hxor => ?_, fun hpair => ?_⟩
+      · -- op = xorOp = 1
+        have hop1 : op = 1 := hxor
+        subst hop1
+        show violates busMap { busId := busId, multiplicity := mult, payload := [o1, o2, r, 1] } = false
+          ↔ o1.val < 256 ∧ o2.val < 256 ∧ r.val = Nat.xor o1.val o2.val
+        unfold violates; rw [hbus]
+        rcases Nat.le_one_iff_eq_zero_or_eq_one.1 h1le with h1 | h1
+        · have hp1 : p = 1 := Nat.dvd_one.mp (Nat.dvd_of_mod_eq_zero (by
+            rwa [ZMod.val_one_eq_one_mod] at h1))
+          subst hp1
+          have ho1 : o1.val = 0 := Nat.lt_one_iff.1 (ZMod.val_lt o1)
+          have ho2 : o2.val = 0 := Nat.lt_one_iff.1 (ZMod.val_lt o2)
+          have hrr : r.val = 0 := Nat.lt_one_iff.1 (ZMod.val_lt r)
+          simp [h1, isByte, ho1, ho2, hrr]
+        · simp [h1, isByte, and_assoc]
+      · -- op = pairOp = 0
+        have hop0 : op = 0 := hpair
+        subst hop0
+        show violates busMap { busId := busId, multiplicity := mult, payload := [o1, o2, r, 0] } = false
+          ↔ o1.val < 256 ∧ o2.val < 256 ∧ r = 0
+        unfold violates; rw [hbus]
+        simp [isByte, ZMod.val_eq_zero, and_assoc]
 
 end ApcOptimizer.OpenVM
