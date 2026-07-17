@@ -353,6 +353,21 @@ structure FUSeen (p : ℕ) (cs : ConstraintSystem p) where
   x : Variable
   key : Nat × Option (ZMod p) × ZMod p × Variable
 
+/-- Hash of an `FUSeen` match key, used to bucket the `seen` accumulator of `fuLoop`/`fxLoop`. It
+    reads only fields the `key == key'` test compares, so equal keys share a bucket (a match is
+    never hidden); unequal keys that collide are separated by the retained exact `e.key == xk.2`
+    check inside the scan. -/
+def fuKeyHash (key : Nat × Option (ZMod p) × ZMod p × Variable) : UInt64 :=
+  mixHash (hash key.1) (mixHash (hash (key.2.1.map ZMod.val))
+    (mixHash (hash key.2.2.1.val) (hash key.2.2.2)))
+
+/-- Prepend seen-entries into their key-hash buckets. `foldr` keeps each bucket in the same order
+    as the old flat `es ++ seen` list, so the bucketed scan returns the identical earliest twin —
+    output unchanged, per-candidate scan now over one bucket instead of the whole history. -/
+def fuInsertAll {cs : ConstraintSystem p} (m : Std.HashMap UInt64 (List (FUSeen p cs)))
+    (es : List (FUSeen p cs)) : Std.HashMap UInt64 (List (FUSeen p cs)) :=
+  es.foldr (fun e acc => acc.insert (fuKeyHash e.key) (e :: acc.getD (fuKeyHash e.key) [])) m
+
 /-- Scaled-check candidates of one interaction: carrier variables of the first payload slot
     with a constant-coefficient decomposition and a *nonempty* offset part (raw checks have
     nothing to unify). -/
@@ -386,21 +401,21 @@ def fuLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) :
     (pending : List (BusInteraction (Expression p))) →
     (∀ bi ∈ pending, bi ∈ cs.busInteractions) →
-    List (FUSeen p cs) → Solved p cs bs → Solved p cs bs
+    Std.HashMap UInt64 (List (FUSeen p cs)) → Solved p cs bs → Solved p cs bs
   | [], _, _, σ => σ
   | c :: rest, hmem, seen, σ =>
     have hc : c ∈ cs.busInteractions := hmem c (List.mem_cons_self ..)
     let hrest := fun c' h' => hmem c' (List.mem_cons_of_mem _ h')
     let cands := fuCandidates c
     match cands.findSome? (fun xk =>
-        seen.findSome? (fun e => if e.key == xk.2 then some (e, xk.1) else none)) with
+        (seen.getD (fuKeyHash xk.2) []).findSome? (fun e => if e.key == xk.2 then some (e, xk.1) else none)) with
     | some ex =>
         -- pair-level work once per match; per-target checks share it (definitionally the
         -- same value as `fuCheck` — see its definition)
         match hdata : fuPairData? bs facts cs.algebraicConstraints ex.1.bi c ex.2 with
         | none =>
             fuLoop cs bs facts rest hrest
-              (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩) ++ seen) σ
+              (fuInsertAll seen (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩))) σ
         | some d =>
         let pairs := (fuTargets ex.1.bi c ex.2).filterMap (fun t =>
           if fuCheckWith d t.2 t.1
@@ -437,11 +452,11 @@ def fuLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
           · rw [if_neg hck] at hif
             exact absurd hif (by simp)
         fuLoop cs bs facts rest hrest
-          (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩) ++ seen)
+          (fuInsertAll seen (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩)))
           (σ.insertAll pairs hpairs hpairsV)
     | none =>
         fuLoop cs bs facts rest hrest
-          (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩) ++ seen) σ
+          (fuInsertAll seen (cands.map (fun xk => ⟨c, hc, xk.1, xk.2⟩))) σ
 
 /-- Flag unification across duplicate scaled range checks. Prime `p` only (re-checked at
     runtime). Runs after `rootPairUnifyPass` — the carrier limbs must already be shared — and
@@ -449,7 +464,7 @@ def fuLoop [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
 def flagUnifyPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =>
   if hpB : pw.isPrime = true then
     haveI : Fact p.Prime := ⟨pw.correct hpB⟩
-    let σ := fuLoop cs bs facts cs.busInteractions (fun _ h => h) [] Solved.empty
+    let σ := fuLoop cs bs facts cs.busInteractions (fun _ h => h) ∅ Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs.substF σ.fn, [],
       cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)

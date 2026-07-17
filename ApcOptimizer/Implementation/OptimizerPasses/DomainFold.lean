@@ -265,7 +265,7 @@ theorem foldRewrite_agree_covered [Fact p.Prime] (cs : ConstraintSystem p) (xs :
     intro x hx
     rw [hs_def, envOf_map doms env x (by rw [hkeys]; exact hx)]
   have hsurv : s ∈ groupSurvivors cs xs doms := by
-    simp only [groupSurvivors, groupSurvivorsE, List.mem_filter]
+    simp only [groupSurvivors, groupSurvivorsE_eq, List.mem_filter]
     refine ⟨hsassign, ?_⟩
     rw [List.all_eq_true]
     intro c hc
@@ -596,8 +596,13 @@ def foldStep [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (fid
         have hsurv : groupSurvivors cs xs doms = survs := by
           show groupSurvivors cs xs doms = groupSurvivorsE es doms
           rw [hes]; rfl
-        ⟨⟨foldOut cs xs survs, [], hsurv ▸ foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩,
-         fidx.refresh (foldOut cs xs survs)⟩
+        -- Compute the rewritten system once (it was built twice: as the output and as the index
+        -- refresh argument). `foldOut` maps `foldRewrite` over the whole system, so this halves the
+        -- per-accepted-fold cost; the `let` zeta-reduces, so the correctness term is unchanged.
+        let ro := foldOut cs xs survs
+        ⟨⟨ro, [], (hsurv ▸ foldOut_correct cs bs xs doms (hes ▸ hdoms) :
+            PassCorrect cs (foldOut cs xs survs) [] bs)⟩,
+         fidx.refresh ro⟩
       else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
     else ⟨⟨cs, [], PassCorrect.refl cs bs⟩, fidx⟩
 

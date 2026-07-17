@@ -447,3 +447,72 @@ busPairCancel 52 s, rootPairUnify 51 s, domainBatch 34 s. Levers not yet taken, 
 - Lower priority: `withPtrEq`-shortcut structural equality for `Expression`/`BusInteraction`
   (safe, Implementation-only; helps `dedup`'s quadratic `bi ∈ seen` and remaining split
   decides); `substF` no-change signaling to preserve sharing; incremental lengths in `sizeKey`.
+
+## Runtime leftovers III (post the "de-quadratify seen-scans / dedup / enumeration" PR)
+
+That PR **cleared** these earlier leftovers (all output-preserving, proven, verified byte-identical):
+- **rootPairUnify seen-join** and **flagUnify/flagFold-A seen-scans** — the `seen` history is now a
+  `Std.HashMap UInt64 (List …Seen)` bucketed by a hash of the match key; the O(C²)/O(B²) scan
+  becomes a per-bucket scan (the search is proof-free — a re-checked certificate — so bucketing
+  preserves the picked element and every proof).
+- **dedup bus-side `bi ∈ seen`** — bucketed by `BusInteraction.bHash`; `dedupStatelessFast_eq`
+  proves the identical list via a HashMap↔list-agreement induction; **keccak dedup 16.6 s → 7.0 s**.
+- **reencode/domainFold enumeration eval** (the entry-54 `evalFast`/`envOf` tax) — `groupSurvivorsE`
+  compiles the covered constraints once per target to positional `IExpr` with hoisted ring ops
+  (`compileEs`/`survZeroCW`, the `domainBatch` `compiledSurv` treatment); `groupSurvivorsE_eq` proves
+  the identical survivor list. Helps the DIRECT path (<8192 constraints); keccak already indexed.
+- **flagFold-B O(N²) eraseDups**, **domainFold double `foldOut`**, **domainBatch `fdoms.map fst`**
+  recompute — hoisted / linearized.
+
+**Dropped after measuring** (do NOT re-propose without new evidence): domainFold index-threshold
+lowering (index is circuit-dependent — helped some large eth cases, regressed others); constraint-
+side dedup hash-pair (keccak dedup is bus-side-dominated → pure overhead); gauss substF-rebuild-skip
+for solved-var-disjoint constraints (neutral on keccak — the solution map is large, few disjoint).
+
+### Remaining quadratic (or worse) algorithms, rough value order
+
+- **The cleanup fixpoint is an O(size) structural multiplier**: `iterateToFixpoint cleanupCycle`
+  runs ~O(#vars+#bus) cycles (keccak 9), each re-running every pass over the whole system, and the
+  enumeration passes rediscover the same negatives every cycle. Cross-cycle memoization (a pass-state
+  channel threaded through `VerifiedPassW`) would cut every pass's steady-state tail at once — but it
+  needs a `Basic.lean` glue change; weigh against the audit-surface rule.
+- **Finite-domain enumeration trio (keccak's dominant ~57 %) — near-linear-with-large-constant, not
+  quadratic, on keccak** (indexed paths, >8192 constraints). The residual is `CoveredIndex.coveredIdx`
+  gather + `CoveredIndex.build` **rebuild-per-accept** in `reencode`. A **position-stable
+  `reencodeOut`** (keep covered constraints in place, marked dead, so positions don't shift) would let
+  it use `FoldIdx.refresh` like `domainFold` instead of a full rebuild — **the single biggest keccak
+  lever left**. `domainBatch`'s box scan is already `compiledSurv`-hoisted; its residual is the
+  pinned-(domain-1)-var box bloat — substitute pinned constants and enumerate only free vars, needs
+  `forcedOver` soundness reproven against the reduced box.
+- **gauss — O(V²) resolved-map maintenance** (`σ.map.toList.filter (·.mentions x)` per adopted pivot,
+  `Gauss.lean` ~line 200): materializes the whole solution map per pivot. Needs a proof-carrying
+  reverse index `var → keys-whose-value-mentions-it` in `Solved`, with a **completeness invariant
+  maintained through resolution** (adopting `x:=t` moves entries from `depIdx[x]` to `depIdx[t.vars]`)
+  — that invariant is the hard part.
+- **busPairCancel — O(B²), worst O(B³)**: the from-index-0 live-prefix rebuild + `shieldOk` scan per
+  drop, inside its own `iterateToFixpoint` (one pair/drop). The shield depends on the prefix, so this
+  is **positional/consecutive, NOT value-bucketable** — needs incremental shield state. Just
+  array-optimized in #151; high risk.
+- **busUnify — O(B²)**: `candidateSplits` per active send × `findConsumer` forward scan, no
+  amortization. Positional (first forward consumer), not value-bucketable.
+- **dedup constraint-side — O(C²)**: `cs.algebraicConstraints.dedup` (`List.dedup`, deep `Expression`
+  equality). A `(structHash c, c)` hash-pair + `dedup_map_of_injective` is a cheap CONSTANT-factor win
+  (short-circuit on the hash) but stays O(C²); a true O(C) needs `List.dedup`'s keep-last order
+  preserved through a HashMap dedup (a mem-iff / list-equality proof).
+- **oneHotAnnihilate O(C²)** (`hasProd` scans all constraints per marker; in the cleanup cycle →
+  O(C³) compounded), **hintCollapse O(C²+C·B)** (`occursOnlyInTarget` full-system scan per
+  single-occurrence variable), **seqzCollapse O(G²·C)** (self-fixpoint, one gadget/full-scan step,
+  coda) — smaller absolute cost; per-container / bucket-by-shape indexes would help.
+- **reencode/domainFold DIRECT paths O(C²)** — only reached below 8192 constraints (small, fast);
+  harmless, noted for completeness.
+
+**Why keccak vs SHA differ**: keccak is dominated by the near-linear-large-constant enumeration
+(above the index threshold), so it scales ~n^1.4; the genuinely-quadratic passes above are a smaller
+keccak slice. For larger circuits (SHA) the O(B²)/O(V²)/O(C²) passes outgrow the enumeration and
+dominate (~n^2.5 effective). The seen-scan/dedup fixes above are asymptotic, so they help SHA-scale
+disproportionately; a full "massive SHA" result also needs busPairCancel/gauss/busUnify de-quadratified.
+
+Cross-cutting constant factors (from leftovers II, still open): `Variable` is a fresh `String` per
+occurrence → equality/hash walk the full name (~10–15 % of big-case time; intern in the parser,
+Implementation-only); ZMod-instance reconstruction per scalar op (extend the `IExpr.evalWith` /
+`Expression.evalFast` hoist to `addCoeff`/`mergeTerms`).

@@ -1278,11 +1278,12 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts
         -- the box cleared both caps: scan it lazily (`scanBox` streams the product, a `Nat` loop
         -- per range and an early abort). The scan certificates are proved against
         -- `scanInit … (assignments (matList fdoms))`; `scanBox_eq` / `matList_map_fst` bridge them.
-        let survC := compiledSurv bs es bis (fdoms.map Prod.fst)
-        match hscan : scanBox survC.val (fdoms.map Prod.fst) fdoms with
+        let keys := fdoms.map Prod.fst
+        let survC := compiledSurv bs es bis keys
+        match hscan : scanBox survC.val keys fdoms with
         | none =>
           -- no surviving point: the box is empty of solutions, everything is vacuously forced
-          (fdoms.map Prod.fst).map (fun x => ⟨x, 0, fun env hsat =>
+          keys.map (fun x => ⟨x, 0, fun env hsat =>
             (scanNone_unsat xs (DomainTable.matList fdoms)
               (T.matList_fst xs fdoms hdoms)
               (fun env hsat => T.matList_sound xs fdoms hdoms env hsat)
