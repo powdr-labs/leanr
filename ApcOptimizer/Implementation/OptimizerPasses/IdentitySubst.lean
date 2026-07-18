@@ -138,39 +138,40 @@ theorem identityPairAt_sound {bs : BusSemantics p} (facts : BusFacts p bs)
     rw [ho1e, ho2e, ZMod.val_zero] at hrval
     exact val_inj (by rw [hrval]; simp)
 
-/-- Candidate operands for a result `y`: the operand of every recognised identity whose result is `y`. -/
-def identityCandidates {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
-    (y : Variable) : List (Expression p) :=
-  cs.busInteractions.filterMap (fun bi =>
-    match identityPairAt facts bi with
-    | some (rv, o1v) => if rv = y then some (Expression.var o1v) else none
-    | none => none)
+/-- All recognised `(result, operand)` identity pairs in the system, computed once. Hoisting this out
+    of the per-variable lookup below keeps `substF` — which calls the map once per variable
+    occurrence — from re-`filterMap`ping (and re-decoding) every bus interaction on each visit; the
+    lookup becomes a linear scan of this (small) list instead. -/
+def identityPairs {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p) :
+    List (Variable × Variable) :=
+  cs.busInteractions.filterMap (identityPairAt facts)
 
-/-- The identity map: `result ↦ operand` for every recognised OR identity (first per key). -/
+/-- The identity map: `result ↦ operand` for every recognised OR identity (first per key). The pair
+    list is captured once (see `identityPairs`), so this is cheap to apply repeatedly. -/
 def identityF {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p) :
     Variable → Option (Expression p) :=
-  fun y => (identityCandidates facts cs y).head?
+  let pairs := identityPairs facts cs
+  fun y => (pairs.filterMap (fun pr => if pr.1 = y then some (Expression.var pr.2) else none)).head?
 
 theorem identityF_mem {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
     (y : Variable) (t : Expression p) (h : identityF facts cs y = some t) :
     ∃ (o1v : Variable) (bi : BusInteraction (Expression p)), t = Expression.var o1v ∧
       bi ∈ cs.busInteractions ∧ identityPairAt facts bi = some (y, o1v) := by
-  unfold identityF at h
-  have hmem : t ∈ identityCandidates facts cs y := by
-    cases hc : identityCandidates facts cs y with
+  have hmem : t ∈ (identityPairs facts cs).filterMap
+      (fun pr => if pr.1 = y then some (Expression.var pr.2) else none) := by
+    simp only [identityF] at h
+    cases hc : (identityPairs facts cs).filterMap
+        (fun pr => if pr.1 = y then some (Expression.var pr.2) else none) with
     | nil => rw [hc] at h; simp at h
     | cons a l => rw [hc] at h; simp only [List.head?_cons, Option.some.injEq] at h; subst h; simp
-  obtain ⟨bi, hbi, hmap⟩ := List.mem_filterMap.1 hmem
-  cases hp : identityPairAt facts bi with
-  | none => rw [hp] at hmap; simp at hmap
-  | some pr =>
-    obtain ⟨rv, o1v⟩ := pr
-    rw [hp] at hmap
-    dsimp only at hmap
-    split_ifs at hmap with hrv
-    simp only [Option.some.injEq] at hmap
-    subst hmap; subst hrv
-    exact ⟨o1v, bi, rfl, hbi, hp⟩
+  obtain ⟨pr, hpr, hval⟩ := List.mem_filterMap.1 hmem
+  obtain ⟨rv, o1v⟩ := pr
+  obtain ⟨bi, hbi, hpair⟩ := List.mem_filterMap.1 hpr
+  simp only at hval
+  split_ifs at hval with hy
+  simp only [Option.some.injEq] at hval
+  subst hval; subst hy
+  exact ⟨o1v, bi, rfl, hbi, hpair⟩
 
 /-- The pass: batch-substitute every OR-identity result by its operand. -/
 def identitySubstStep : VerifiedPassW p := fun cs bs facts =>
