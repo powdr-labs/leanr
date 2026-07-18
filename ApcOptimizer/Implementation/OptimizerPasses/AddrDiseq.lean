@@ -320,3 +320,243 @@ theorem addrAffineNeq_sound (shape : MemoryBusShape) (S bi : BusInteraction (Exp
           simp only [hL, hL'] at hcond
           exact constDiffNZ_sound L L' hcond env
             (by rw [← linearize_eval e L hL env, ← linearize_eval e' L' hL' env]; exact key)
+
+/-! ## The nonzero-witness (register-vs-RAM) address-disequality certificate
+
+The `addrAffineNeq`/`addrTwoRootNeq` certificates refute an address match only when *some single*
+address slot differs by a provable constant (or two-root gap). But SP1 (and any VM with a flat
+multi-limb address space) distinguishes a **register** access — a small constant address `(c, 0, 0)`
+whose high limbs are literally `0` — from a **RAM** access `(e₂, e₃, e₄)` by a *reciprocal*
+constraint `inv · (e₃ + e₄) − 1 = 0`, which pins the high-limb *sum* nonzero (`e₃ + e₄ ≠ 0`). No
+single slot is provably nonzero (`e₃` or `e₄` alone may be `0`), so neither existing certificate
+fires, and register accesses never telescope across the interleaved RAM ones.
+
+This certificate closes that. It reads reciprocal constraints `a · b + k = 0` (`k ≠ 0`) as
+**nonzero witnesses** — each factor `a`, `b` is nonzero, since `a·b = −k ≠ 0` — and refutes an
+address match when some *subset* `T` of the address slots has its limb-difference sum
+`Σ_{i∈T}(mᵢ − Sᵢ)` equal (up to sign) to a nonzero witness `g`: were the addresses equal, that sum
+would be `0`, contradicting `g ≠ 0`. Purely linear arithmetic plus one reciprocal constraint — no
+bounds, and (unlike two-root) no primality. It strictly extends `addrAffineNeq` (a nonzero *constant*
+difference is the `T`-singleton, witness-free case, still handled there) to nonzero *symbolic*
+differences. Corpus-agnostic: any flat address space that pins "not a register" (or any two accesses
+separated by a proved-nonzero limb combination) benefits. -/
+
+/-- A linear form is identically zero (empty terms and zero constant after normalization). -/
+def isZeroLin (l : LinExpr p) : Bool :=
+  l.norm.terms.isEmpty && decide (l.norm.const = 0)
+
+theorem isZeroLin_sound (l : LinExpr p) (h : isZeroLin l = true) (env : Variable → ZMod p) :
+    l.eval env = 0 := by
+  unfold isZeroLin at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨hterms, hconst⟩ := h
+  have hz : l.norm.eval env = l.norm.const := by
+    simp only [LinExpr.eval, List.isEmpty_iff.1 hterms, List.map_nil, List.sum_nil, add_zero]
+  rw [← LinExpr.norm_eval, hz, hconst]
+
+/-- Nonzero linear factors of a single reciprocal product `a * b + r` with `r` a nonzero constant:
+    `a·b = −r ≠ 0`, so each factor that linearizes is a nonzero witness. -/
+def reciprocalWitsProd (a b r : Expression p) : List (LinExpr p) :=
+  match linearize r with
+  | some lr =>
+    if lr.terms.isEmpty && decide (lr.const ≠ 0) then
+      (match linearize a with | some la => [la] | none => []) ++
+      (match linearize b with | some lb => [lb] | none => [])
+    else []
+  | none => []
+
+theorem reciprocalWitsProd_sound (a b r : Expression p) (g : LinExpr p)
+    (h : g ∈ reciprocalWitsProd a b r) (env : Variable → ZMod p)
+    (hc : a.eval env * b.eval env + r.eval env = 0) : g.eval env ≠ 0 := by
+  unfold reciprocalWitsProd at h
+  cases hr : linearize r with
+  | none => simp [hr] at h
+  | some lr =>
+    simp only [hr] at h
+    split_ifs at h with hcond
+    · simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
+      obtain ⟨hterms, hne⟩ := hcond
+      have hrconst : r.eval env = lr.const := by
+        rw [linearize_eval r lr hr env]
+        simp only [LinExpr.eval, List.isEmpty_iff.1 hterms, List.map_nil, List.sum_nil, add_zero]
+      have hrne : r.eval env ≠ 0 := by rw [hrconst]; exact hne
+      have hprodne : a.eval env * b.eval env ≠ 0 := by
+        intro hp0; rw [hp0] at hc; exact hrne (by linear_combination hc)
+      have hane : a.eval env ≠ 0 := fun ha => hprodne (by rw [ha, zero_mul])
+      have hbne : b.eval env ≠ 0 := fun hb => hprodne (by rw [hb, mul_zero])
+      rw [List.mem_append] at h
+      rcases h with hla | hlb
+      · cases ha : linearize a with
+        | none => rw [ha] at hla; simp at hla
+        | some la =>
+          rw [ha] at hla; simp only [List.mem_singleton] at hla
+          rw [hla, ← linearize_eval a la ha env]; exact hane
+      · cases hb : linearize b with
+        | none => rw [hb] at hlb; simp at hlb
+        | some lb =>
+          rw [hb] at hlb; simp only [List.mem_singleton] at hlb
+          rw [hlb, ← linearize_eval b lb hb env]; exact hbne
+    · simp at h
+
+/-- Nonzero linear witnesses recognized from a constraint of the form `a·b + r = 0` (in either
+    additive order), with `r` a nonzero constant. -/
+def reciprocalWits? (c : Expression p) : List (LinExpr p) :=
+  match c with
+  | .add e1 e2 =>
+    match e1 with
+    | .mul a b => reciprocalWitsProd a b e2
+    | _ => match e2 with
+           | .mul a b => reciprocalWitsProd a b e1
+           | _ => []
+  | _ => []
+
+theorem reciprocalWits?_sound (c : Expression p) (g : LinExpr p) (h : g ∈ reciprocalWits? c)
+    (env : Variable → ZMod p) (hc : c.eval env = 0) : g.eval env ≠ 0 := by
+  unfold reciprocalWits? at h
+  split at h
+  · rename_i e1 e2
+    split at h
+    · rename_i a b
+      exact reciprocalWitsProd_sound a b e2 g h env (by rw [← hc]; simp [Expression.eval])
+    · split at h
+      · rename_i a b
+        exact reciprocalWitsProd_sound a b e1 g h env
+          (by rw [← hc]; simp only [Expression.eval]; ring)
+      · simp at h
+  · simp at h
+
+/-- Linear forms provably nonzero under `constraints` (each backed by a reciprocal constraint). -/
+structure NonzeroWits (p : ℕ) (constraints : List (Expression p)) where
+  wits : List (LinExpr p)
+  sound : ∀ g ∈ wits, ∀ env : Variable → ZMod p,
+    (∀ c ∈ constraints, c.eval env = 0) → g.eval env ≠ 0
+
+/-- Collect every reciprocal-witness linear form from the constraint list. -/
+def NonzeroWits.build (constraints : List (Expression p)) : NonzeroWits p constraints where
+  wits := constraints.flatMap reciprocalWits?
+  sound := by
+    intro g hg env hcon
+    rw [List.mem_flatMap] at hg
+    obtain ⟨c, hc, hgc⟩ := hg
+    exact reciprocalWits?_sound c g hgc env (hcon c hc)
+
+/-- Equal addresses agree at every declared address slot (the per-slot half of `addrAffineNeq`). -/
+theorem addr_eq_slot (shape : MemoryBusShape) (S m : BusInteraction (Expression p))
+    (env : Variable → ZMod p) (heq : shape.address (S.eval env) = shape.address (m.eval env))
+    (f : Nat) (hf : f ∈ shape.addressFields) :
+    (S.eval env).payload[f]? = (m.eval env).payload[f]? := by
+  obtain ⟨j, hj⟩ : ∃ j, shape.addressFields[j]? = some f := List.getElem?_of_mem hf
+  have e1 : (shape.address (S.eval env))[j]? = some ((S.eval env).payload[f]?) := by
+    simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
+  have e2 : (shape.address (m.eval env))[j]? = some ((m.eval env).payload[f]?) := by
+    simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
+  rw [heq, e2] at e1
+  exact (Option.some.inj e1).symm
+
+/-- `Σ_{f ∈ fields} (m.payload[f] − S.payload[f])` as a linear form; `none` if any listed slot is
+    absent from either payload or is nonlinear. -/
+def diffSumOver (S m : BusInteraction (Expression p)) : List Nat → Option (LinExpr p)
+  | [] => some ⟨0, []⟩
+  | f :: fs =>
+    match diffSumOver S m fs with
+    | none => none
+    | some acc =>
+      match S.payload[f]?, m.payload[f]? with
+      | some eS, some eM =>
+        match linearize eS, linearize eM with
+        | some lS, some lM => some ((lM.add (lS.scale (-1))).add acc)
+        | _, _ => none
+      | _, _ => none
+
+/-- If the two interactions agree at every listed slot (under `env`), the difference sum is `0`. -/
+theorem diffSumOver_eval_zero (S m : BusInteraction (Expression p)) (fields : List Nat)
+    (D : LinExpr p) (h : diffSumOver S m fields = some D) (env : Variable → ZMod p)
+    (hslots : ∀ f ∈ fields, (S.eval env).payload[f]? = (m.eval env).payload[f]?) :
+    D.eval env = 0 := by
+  induction fields generalizing D with
+  | nil =>
+    simp only [diffSumOver, Option.some.injEq] at h; subst h
+    simp [LinExpr.eval]
+  | cons f fs ih =>
+    simp only [diffSumOver] at h
+    cases hacc : diffSumOver S m fs with
+    | none => simp [hacc] at h
+    | some acc =>
+      cases hSp : S.payload[f]? with
+      | none => simp [hacc, hSp] at h
+      | some eS =>
+        cases hmp : m.payload[f]? with
+        | none => simp [hacc, hSp, hmp] at h
+        | some eM =>
+          cases hlS : linearize eS with
+          | none => simp [hacc, hSp, hmp, hlS] at h
+          | some lS =>
+            cases hlM : linearize eM with
+            | none => simp [hacc, hSp, hmp, hlS, hlM] at h
+            | some lM =>
+              simp only [hacc, hSp, hmp, hlS, hlM, Option.some.injEq] at h
+              subst h
+              have haccz : acc.eval env = 0 :=
+                ih acc hacc (fun f' hf' => hslots f' (List.mem_cons_of_mem _ hf'))
+              have hkey : (S.eval env).payload[f]? = (m.eval env).payload[f]? :=
+                hslots f (List.mem_cons_self ..)
+              have hSev : (S.eval env).payload[f]? = some (eS.eval env) := by
+                show (S.payload.map (fun e => e.eval env))[f]? = _
+                rw [List.getElem?_map, hSp]; rfl
+              have hMev : (m.eval env).payload[f]? = some (eM.eval env) := by
+                show (m.payload.map (fun e => e.eval env))[f]? = _
+                rw [List.getElem?_map, hmp]; rfl
+              rw [hSev, hMev] at hkey
+              have hval : eS.eval env = eM.eval env := (Option.some.inj hkey)
+              have hlMe := linearize_eval eM lM hlM env
+              have hlSe := linearize_eval eS lS hlS env
+              rw [LinExpr.add_eval, LinExpr.add_eval, LinExpr.scale_eval]
+              linear_combination -hlMe + hlSe - hval + haccz
+
+/-- The address slots of `S` and `m` provably differ: some subset `T` of the shape's address fields
+    has limb-difference sum `Σ_{i∈T}(mᵢ − Sᵢ)` equal (up to sign) to a nonzero witness `g`.  Were
+    the addresses equal every difference would vanish, contradicting `g ≠ 0`. -/
+def addrNonzeroNeq (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (nw : NonzeroWits p constraints) (S m : BusInteraction (Expression p)) : Bool :=
+  shape.addressFields.sublists.any (fun T =>
+    match diffSumOver S m T with
+    | some D => nw.wits.any (fun g => isZeroLin (D.add (g.scale (-1))) || isZeroLin (D.add g))
+    | none => false)
+
+theorem addrNonzeroNeq_sound (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (nw : NonzeroWits p constraints) (S m : BusInteraction (Expression p))
+    (h : addrNonzeroNeq shape nw S m = true) (env : Variable → ZMod p)
+    (hcon : ∀ c ∈ constraints, c.eval env = 0) :
+    shape.address (S.eval env) ≠ shape.address (m.eval env) := by
+  intro heq
+  unfold addrNonzeroNeq at h
+  rw [List.any_eq_true] at h
+  obtain ⟨T, hT, hcond⟩ := h
+  have hTsub : List.Sublist T shape.addressFields := List.mem_sublists.mp hT
+  cases hD : diffSumOver S m T with
+  | none => rw [hD] at hcond; simp at hcond
+  | some D =>
+    rw [hD] at hcond
+    rw [List.any_eq_true] at hcond
+    obtain ⟨g, hg, hzero⟩ := hcond
+    have hDzero : D.eval env = 0 :=
+      diffSumOver_eval_zero S m T D hD env (fun f hf =>
+        addr_eq_slot shape S m env heq f (hTsub.subset hf))
+    have hgne : g.eval env ≠ 0 := nw.sound g hg env hcon
+    rcases (Bool.or_eq_true _ _).mp hzero with hz | hz
+    · have hzz := isZeroLin_sound _ hz env
+      rw [LinExpr.add_eval, LinExpr.scale_eval, hDzero] at hzz
+      exact hgne (by linear_combination -hzz)
+    · have hzz := isZeroLin_sound _ hz env
+      rw [LinExpr.add_eval, hDzero] at hzz
+      exact hgne (by linear_combination hzz)
+
+/-- The address-disequality certificates a memory-telescoping pass consults, bundled so both the
+    two-root and the reciprocal-nonzero data thread through the pass as one memoized value. -/
+structure AddrCerts (p : ℕ) (constraints : List (Expression p)) where
+  tworoot : TwoRootMap p constraints
+  nonzero : NonzeroWits p constraints
+
+/-- Build both certificate tables from the constraint list. -/
+def AddrCerts.build (constraints : List (Expression p)) : AddrCerts p constraints :=
+  ⟨TwoRootMap.build constraints, NonzeroWits.build constraints⟩
