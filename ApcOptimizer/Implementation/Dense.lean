@@ -23,6 +23,7 @@ import ApcOptimizer.Implementation.Dense.CarryBranch
 import ApcOptimizer.Implementation.Dense.ZeroWidthRange
 import ApcOptimizer.Implementation.Dense.DomainFold
 import ApcOptimizer.Implementation.Dense.DomainFoldNative
+import ApcOptimizer.Implementation.Dense.DomainFoldNativeProof
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 
