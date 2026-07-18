@@ -28,6 +28,7 @@ import ApcOptimizer.Implementation.Dense.AddrDiseq
 import ApcOptimizer.Implementation.Dense.AddrDiseqProof
 import ApcOptimizer.Implementation.Dense.BusUnifyNative
 import ApcOptimizer.Implementation.Dense.BusUnifyNativeProof
+import ApcOptimizer.Implementation.Dense.RootPairUnifyNative
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 
