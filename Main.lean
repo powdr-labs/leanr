@@ -315,12 +315,18 @@ partial def runCycleTimed {p : ℕ} (passes : List (String × VerifiedPassW p))
   pure (c, a)
 
 /-- Iterate the cleanup cycle to a fixpoint (mirroring `iterateToFixpoint`), accumulating per-pass
-    time and counting iterations. -/
+    time and counting iterations. Reports each iteration's resulting sizes and wall time, so the
+    fixpoint's convergence tail (how little the late cycles shrink) is visible. -/
 partial def profileLoop {p : ℕ} (passes : List (String × VerifiedPassW p))
     (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (acc : Std.HashMap String Nat) (iter : Nat) :
     IO (ConstraintSystem p × Std.HashMap String Nat × Nat) := do
+  let t0 ← IO.monoMsNow
   let (cs', acc') ← runCycleTimed passes cs bs facts acc
+  let t1 ← IO.monoMsNow
+  let st := statsOf cs'
+  IO.println s!"  cycle {iter}: {st.vars} vars, {st.busInteractions} bus, \
+    {st.constraints} constraints ({t1 - t0} ms)"
   if cs'.sizeKey < cs.sizeKey then
     profileLoop passes cs' bs facts acc' (iter + 1)
   else

@@ -92,21 +92,157 @@ global rebuild — collect every surviving range obligation, drop solver-implied
 exact-cover — is bus-only and variable-neutral. Caution: 2–7-bit checks must not be packed as
 bytes (weakens them).
 
-## Runtime notes
+## Runtime
 
-- CI's effectiveness-matrix runtime row is parallel-contended and rough (±10% swings between
-  identical-code runs are common in the history); the serial `Runtime Bench` workflow is the real
-  measure. Entry 101–103 local serial A/B on the four heaviest rsp cases was flat-to-better
-  (apc_030 22.6 → 21.9 s; busPairCancel itself got faster — fewer surviving pairs to rescan).
-- `domainBatch` dominates heavy SP1 cases (16 of apc_030's 22 s). The still-open leftovers from
-  the entry-90 audit that matter at SP1 scale: cross-cycle memoization of enumeration negatives
-  (needs a `Basic.lean` glue change — weigh against the audit-surface rule), gauss's O(V²)
-  resolved-map maintenance, busUnify/busPairCancel positional O(B²) scans. Variable interning in
-  the parser (names are fresh strings per occurrence; ~10–15 % of big-case time) remains the best
-  cross-cutting constant-factor lever, `Implementation/`-only.
-- Never feed a whole-region lookup into a per-query justification arm (the entry-102 lesson:
-  63 s/case). Untrusted, re-checked position indexes (`buildFormIdx`, `recvIndexAll`) are the
-  pattern — they cost time on a bad entry, never soundness.
+Rewritten 2026-07-18 from a fresh profiling session (per-pass `profile`, per-cycle timing, gdb
+stack sampling, and a size-scaling sweep — all on this container, serial). **Runtime is
+end-to-end quadratic in circuit size** (openvm-eth sweep: input 2.3k → 8.8k items costs
+1.8 s → 24.6 s, exponent ≈ 1.95), and the largest inputs are exactly where it hurts: openvm
+keccak (28.6k constraints / 13.3k interactions / 27.5k vars) takes **252 s**; openvm SHA is ~8×
+keccak, so anything superlinear is fatal there.
+
+### Where the time goes (measured)
+
+- keccak per-pass (254 s profile): domainFold 48 s, domainBatch 48 s, reencode 42 s,
+  busPairCancel 26 s, intervalForce 21 s, flagFold 16 s, busUnify 12.5 s, rootPairUnify 9.4 s,
+  dedup 6.6 s, bytePack 5.5 s, gauss 4.5 s — no single villain; the cost is systemic.
+- keccak per-cycle (10 cycles): **cycles 0–2 are ~80 % of the total** (system still 28k→9.7k
+  constraints there); the tail cycles 6–9 are ~1 % each. Fixing the big-system per-pass
+  quadratics matters more than fixing the fixpoint tail.
+- eth apc_100 (5.7k constraints, 24.6 s, 8 cycles): reencode 6.2 s is the top pass (unindexed —
+  see idea R3); the last three cycles cost 20 % to remove 24 vars + 5 bus; the final (no-change)
+  cycle burns 1.7 s.
+- SP1 apc_030 (26.8 s): domainBatch 19 s, **all in one cycle** (the enumeration unlocks late);
+  identitySubst 2.7 s.
+- gdb samples (keccak, mid-run): `findConsumer` (busUnify), `reencodeLoop`, `foldLoopDirect`
+  (domainFold's unindexed path), `collectForBus` — matching the analysis below.
+
+### Open runtime ideas, priority order
+
+Priority = impact at SHA scale (8× keccak) ÷ effort. The pattern for all index work stays the
+entry-90 discipline: *untrusted, re-checked-at-use* candidate indexes (`buildFormIdx`,
+`recvIndexAll`, `CoveredIndex`) — a wrong index entry costs time, never soundness, so most of
+these need no new proof.
+
+**R1. Kill the true O(N²) loops that dominate the big early cycles**  ·  *high value, mostly
+proof-free*. Confirmed quadratics, in rough per-case cost order:
+   - `busUnify.findConsumer` scans forward through the whole tail per send, and `checkPair`
+     re-scans the mid region `findConsumer` just stepped over (`BusUnify.lean:217/146`); each
+     step can hit `addrNonzeroNeq` = O(2^A·C) (`AddrDiseq.lean:519`). Fix: `(busId, addrHash)`
+     position buckets (port `recvIndexAll`), and thunk the eager `TwoRootMap`/`NonzeroWits`
+     builds (`BusUnify.lean:309-311`) so no-op invocations skip them.
+   - `busPairCancel`: `shieldOk` re-scans (and `liveArr` **materializes**) the whole before-region
+     per candidate send (`BusPairCancel.lean:1861/2428`) — O(B²) time *and* allocation on the long
+     same-address chains the pass exists for. A per-sweep suffix table of `shieldScan` results (or
+     a left-to-right open-sends accumulator) makes it O(B); the Bool is identical so
+     `checkCancel_sound` keeps its hypothesis. Same file: `dropWits` scans the whole array from
+     position 0 per queried variable (`:2146`) — give it the `buildFormIdx` treatment; in coda
+     mode the `addrHash` bucket is O(B) per hot address (`:1255`) — add a position cursor.
+   - `dedup`: the constraint side is still `List.dedup` = O(C²·E) structural comparisons
+     (`Dedup.lean:241`) — 28k constraints in keccak cycle 0, ~230k for SHA. Bucket by the
+     existing `Expression.bHash` exactly as `dedupStatelessFast` already does for interactions;
+     the `dedupStatelessFast_eq` proof pattern transfers.
+   - `intervalForce`: per-seed `cs.vars.contains` over the *non-deduped occurrence list* and
+     per-seed `algebraicConstraints.contains` (`IntervalForce.lean:618-619`), `eraseDups` =
+     O(seeds²·E) (`:585`), the O(t²) `walk` with `seen ++ rest` re-summing (`:245`), and O(P²)
+     payload `List` indexing (`:531`). Fix: one `HashSet` of vars + one hash-bucketed constraint
+     set per invocation, running window sums, arrays.
+   - `rootPairUnify`: `twoRootOf?` re-linearizes both factors per candidate var and again per
+     checked pair (`RootPairUnify.lean:74/427`), and `anyVarBound` re-scans all interactions per
+     pair with no memo (`:397`). Linearize once per constraint, carry the decomposition in
+     `RPSeen`, memoize `anyVarBound` per variable.
+   - `flagFold`: `c.vars.eraseDups` (O(E_c²)) recomputed 3-4× per constraint across
+     `singleVarCs`/`btPre`/`btCert` (`FlagFold.lean:25/43/32`); compute once, via HashSet.
+
+**R2. domainBatch setup: stop re-gathering and re-dedup-ing**  ·  *high value on SP1 + keccak,
+proof-free*. Four measured hot spots (`DomainBatch.lean`): (a) the covered-set gather runs
+**three times per target** (`forcedOver:1259-1262`) and `es ⊆ esFull` makes the third gather pure
+duplication — gather once, filter by a redundancy flag; hot-variable buckets (selector/is_real
+vars with O(C) buckets) are re-gathered and mostly Q-rejected per target — cap or skip oversized
+buckets (index incompleteness only costs effectiveness of *this* probe, and only via `seen`-dedup
+order). (b) `c.vars.dedup` = O(occ²) recomputed 3× per item (`:347/1352/901`) — compute each
+item's deduped var set once per invocation. (c) `constraintRedundant` full-box scans (`:899`).
+(d) `interactionBound` re-maps `constValue?` over the whole payload per raw slot (O(P²) per
+interaction, `DomainProp.lean:318`) — cache the constant-pattern per interaction. Also applies to
+`biInformative` (`:887`).
+
+**R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
+index gate**  ·  *high value at eth/mid-keccak scale*. Both passes have a proven-equal inverted
+index (`coveredCsIdx_eq`) that is **disabled below 8192 constraints**
+(`DomainFold.lean:658/682`, `Reencode.lean:1498/1621`) — so every eth case and keccak cycles 3+
+run the direct O(targets × system) path (reencode is apc_100's single most expensive pass). The
+gate exists because dense small systems lose on bucket gathering; replace raw count with a
+sharing-density criterion, or make the index path cheap enough to win everywhere. Independent of
+the gate: domainFold evaluates `coveredBy` twice per (target × constraint)
+(`coveredCsOf` + `systemHasFoldable`, `DomainFold.lean:651/443`) — thread the covered set through;
+reencode's `checkReencode` re-runs the *third* full covered scan after `buildReencode`'s
+(`Reencode.lean:852/858`) — thread `es` + `doms` through (small `hes ▸` plumbing, transport core
+untouched); and both passes recompute `c.vars.dedup` twice per constraint in setup
+(`DomainFold.lean:674/678`, `Reencode.lean:1613/1617`).
+
+**R4. Constant-factor levers that touch every pass**  ·  *medium value, cheap*:
+   - **Variable interning-lite, `Implementation/`-only**: the parser mints a fresh `String` per
+     occurrence (`Variable.ofPowdrName`, `JsonParser.lean:101`); intern one shared object per
+     distinct name so the runtime's pointer fast-path (`lean_string_eq`: `s1 == s2 || …`) makes
+     every hit-comparison O(1). Swap the `Hashable Variable` instance
+     (`Implementation/Variable.lean:19`, unaudited) to hash `powdrId?` first — O(1) vs O(name
+     length) on almost every key. `Spec.lean`'s `Variable` stays untouched.
+   - `identitySubst`: the substitution closure linear-scans the pair list per variable occurrence
+     (`IdentitySubst.lean:154`) — 2.7 s on apc_030. HashMap it; optionally resolve
+     operand→operand chains up front to drop the `iterateToFixpoint` wrapper.
+   - `normalize`: `linearize` re-runs on the whole subtree at every node along non-affine paths
+     (O(E·depth), `Normalize.lean:306`); fuse into one bottom-up pass returning per-node linear
+     forms. Also feeds gauss's per-constraint reduce.
+   - `gauss`: skip `c.substF σ.fn |> normalize` for constraints mentioning no solved key, and skip
+     sweep 2 when sweep 1 adopted nothing (`Gauss.lean:592`). (PR #156 has a proven dirty-sweep
+     variant of this — check its status before redoing.)
+
+**R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
+*medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs
+`withinDegreeB` — a full AST walk — on every pass output, ~30×/cycle, ~245×/run
+(`FactPass.lean:98`), even though most invocations return `cs` itself (the #146 measurement: ~61 %
+of invocations are no-op full scans). Add an `unchanged : Option (out = cs ∧ derivs = [])` field
+(default `none`) to `PassResult`; no-op branches supply `some ⟨rfl, rfl⟩`; `guardDegree` returns
+`r` directly when set (out = cs is within-degree by the pipeline invariant — provable, not
+pointer magic); `andThen` propagates; `iterateToFixpoint` skips both `sizeKey` recomputations
+when the whole cycle is unchanged, and carries the previous cycle's `sizeKey` forward instead of
+recomputing `cs.sizeKey` (`FactPass.lean:77`, one redundant O(E) HashSet build per cycle today).
+
+**R6. Cross-cycle dirtiness (the real fix for no-op rescans)**  ·  *large refactor, do after
+R1-R5*. Even with all per-pass fixes, every cycle re-runs every pass over the whole system, and
+~61 % of invocations find nothing (#146's measurement; whole-system version gating catches 0 %
+because the fixpoint only retains changing cycles). The powdr-style fix is a worklist: stable
+item positions + tombstones + a variable→positions occurrence index, passes consume/produce
+dirty-sets, substitutions dirty only the items mentioning the substituted variables. PR #146
+(`IndexedState`, stacked on #145 `FactStore`) built the substrate but nothing consumes it; PR
+#145's lesson stands — input-dependent caches without incremental maintenance don't pay. If R1-R5
+land and large cases are still cycle-bound, this is the next mountain; budget for reworking
+`Basic.lean`/`FactPass.lean` pass signatures (allowed: it is implementation, not audited surface).
+
+**R7. Intra-pass parallelism**  ·  *wall-clock lever, orthogonal*. The per-target enumeration in
+domainBatch/reencode/domainFold is embarrassingly parallel and pure; `Task.spawn`/`Task.get` with
+ordered joins keeps the output deterministic. CI runners have 32 cores; the serial Runtime Bench
+would show the win directly. Worth it only after the algorithmic waste is gone (parallelizing a
+triple-redundant gather is throwing cores at garbage).
+
+### Runtime dead ends (measured; do not re-propose without new evidence)
+
+- **Whole-system content-hash gating of passes across cycles**: catches ~0 % — the fixpoint only
+  retains cycles that changed something, so some pass always dirties the hash (#146 measurement).
+  Only fine-grained dirtiness (R6) reaches the ~61 % no-op invocations.
+- **Unsafe pointer-identity freshness checks** (`@[implemented_by]` ptr-eq): rejected — breaks the
+  fully-machine-checked, three-axioms-only guarantee (#145 discussion). The safe variant is the
+  `unchanged` *proof* field of R5.
+- **Eager per-sweep variable→bound witness maps in busPairCancel**: ~30× the work of the
+  early-exit query-time scan on eth (entry 90). Query-time scans + per-variable *position*
+  indexes are the pattern.
+- **Feeding whole regions into per-query justification arms**: 63 s/case for −3 interactions
+  (entry 102). Use a position index or nothing.
+- CI notes: the effectiveness-matrix runtime row is parallel-contended (±10 % noise); the serial
+  `Runtime Bench` workflow (dispatch-only, openvm sets only) is the real A/B. This container has
+  ±15 % run-to-run variance; keccak numbers above were taken serially, and the per-cycle keccak
+  run was inflated ~30 % by a concurrent gdb sampler — compare shapes, not absolutes, and let CI
+  arbitrate.
 
 ## Measured dead ends (do not re-propose without new evidence)
 
