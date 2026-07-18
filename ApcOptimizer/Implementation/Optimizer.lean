@@ -37,6 +37,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.ScaledZero
+import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZero
 
 set_option autoImplicit false
 
@@ -89,6 +90,7 @@ def cleanupPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
   -- the `Bool` in O(1) instead of re-running `decide (Nat.Prime p)` per invocation per iteration).
   let pw := PrimeWitness.of p
   [ ("zeroWidthRange", (ZeroWidthRange.zeroWidthRangePass pw).guardDegree b),
+    ("rangeForceZero", RangeForceZero.rangeForceZeroPass.guardDegree b),
     ("xorEqExtract", XorEqExtract.xorEqExtractPass.guardDegree b),
     ("carryBranch", (carryBranchPass pw).guardDegree b),
     ("gauss", gaussElimPass.withFacts.guardDegree b),

@@ -3729,3 +3729,23 @@ and has no huge-scale byte slots, so both mechanisms are no-ops there — keccak
 `sorry`/`axiom`/`native_decide`. Residual SP1 gap: the carry / negative-coefficient memory slots
 (`65536·(h₂₆ − h₂₇) + …`), only 16-bit modulo a telescoping relation apc's local pair-cancellation
 can't establish — see `docs/ideas.md`. **Worked: yes.**
+
+### 98. Width-0 range check → equality on SP1's op-6 (`RangeForceZero.lean`, vars 3.735× → 3.743×, bus 2.523× → 2.539×)
+
+The `rangeCheckAt` generalization of `ZeroWidthRange`'s width-0 arm. `ZeroWidthRange` converts a
+width-0 range check `[expr, 0]` (`expr < 2⁰ = 1`, i.e. `expr = 0`) on OpenVM's variable-range bus to
+the algebraic equality `expr = 0`; SP1 carries the same degenerate checks on its byte bus as op-6
+`[6, expr, 0, 0]`, whose value slot is often a whole linear form — a decomposition equality like
+`higher_limb = result₀ + 256·result₁ + …`. The new `rangeForceZeroPass` reads them through the
+layout-agnostic `BusFacts.rangeCheckAt` fact (already used by `SubsumedCheck`): when it reports
+`bound = 1`, an accepted mult-1 message forces that slot's expression to `0`, so the pass seeds it as
+a constraint (`addConstraints_correct`). Gauss eliminates a variable; the now-constant `[6, 0, 0, 0]`
+check is dropped by `tautoBus`. A non-constant guard keeps the pass from re-seeding a trivial `0`
+before the drop lands.
+
+**Impact (`benchmark.py --vm sp1`):** variables **3.735× → 3.743×**, bus **2.523× → 2.539×**
+(aggregate var gap vs powdr 687 → 664, bus gap 860 → 809; 7 cases improved, 0 regressed). Cumulative
+over entries 97–98: SP1 vars 3.672× → 3.743×, bus 2.488× → 2.539× (var gap 880 → 664, bus gap
+976 → 809). **No OpenVM regression:** OpenVM declares no `rangeCheckAt`, so the pass is a no-op there
+(keeps `ZeroWidthRange` on its own bus) — keccak byte-identical. Proof integrity green
+({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
