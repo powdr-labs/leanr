@@ -1563,7 +1563,7 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (b : DegreeBound) (useId
            (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsB x hx))
            (fun b hbm => of_decide_eq_true (List.all_eq_true.mp hbn b hbm))
            hchk⟩,
-         (if useIdx then CoveredIndex.build Expression.vars ro.algebraicConstraints else ⟨∅, []⟩),
+         (CoveredIndex.buildPruned Expression.vars 8 ro.algebraicConstraints),
          ro.algebraicConstraints.toArray,
          ⟨Std.HashSet.ofList ro.vars, fun x hx => by
            rw [Std.HashSet.contains_ofList] at hx
@@ -1609,18 +1609,19 @@ def reencodePass (b : DegreeBound) : VerifiedPass p := fun cs bsem =>
     -- Same single-variable-constraint prefilter as `domainFoldPass`: a group variable without
     -- one can never obtain a domain, so `buildReencode`'s `groupDoms` would reject the target
     -- after paying its covered-set lookup.
-    let svSet : Std.HashSet Variable := cs.algebraicConstraints.foldl (init := ∅) fun s c =>
-      match c.vars.dedup with
+    -- Each constraint's deduped variable list is computed once (`hashedDedup_eq` keeps it the
+    -- exact `List.dedup` value) and shared between the single-variable set and the target list.
+    let csVs := cs.algebraicConstraints.map (fun c => HashedDedup.hashedDedup (hash ·) c.vars)
+    let svSet : Std.HashSet Variable := csVs.foldl (init := ∅) fun s vs =>
+      match vs with
       | [x] => s.insert x
       | _ => s
-    let targets := dedupHash (cs.algebraicConstraints.filterMap (fun c =>
-      let vs := c.vars.dedup
+    let targets := dedupHash (csVs.filterMap (fun vs =>
       if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
         some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
-    let useIdx := 8192 ≤ cs.algebraicConstraints.length
-    reencodeLoop bsem b useIdx targets 0 cs
-      (if useIdx then CoveredIndex.build Expression.vars cs.algebraicConstraints else ⟨∅, []⟩)
+    reencodeLoop bsem b true targets 0 cs
+      (CoveredIndex.buildPruned Expression.vars 8 cs.algebraicConstraints)
       cs.algebraicConstraints.toArray
       ⟨Std.HashSet.ofList cs.vars, fun x hx => by
         rw [Std.HashSet.contains_ofList] at hx

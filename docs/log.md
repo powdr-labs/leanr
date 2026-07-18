@@ -3955,3 +3955,35 @@ the authoritative number. apc_030 26.9 s: the remaining cost is the cycle-5 doma
 enumeration itself (19 s, productive — cross-cycle memoization is the lever, ideas R6) and
 identitySubst's fixpoint (2.8 s, cause not yet attributed). **Worked: yes (asymptotics), CI
 pending (wall time).**
+
+### 105. Runtime: busPairCancel witness index, domainFold scan fusion, reencode always-indexed via pruning (output byte-identical)
+
+Second runtime batch (plan R1/R3 in `docs/ideas.md`; entry 104 was the first). CI's serial
+Runtime Bench for entry 104 landed at **0.95× total on openvm-eth** (intervalForce 0.26×, dedup
+0.32×, rootPairUnify 0.80×) with the effectiveness matrix at **+0.000× and per-case sizes
+identical on all five benchmark sets** — the byte-identity discipline holds at corpus scale.
+This batch, same discipline:
+
+- **busPairCancel `dropWits`**: the byte-justification witness lookup scanned the whole stable
+  array from position 0 per queried variable (O(B) per query, O(B²·P) across a drop chain). New
+  per-variable position index `buildBoundIdx` (built once per invocation, multiplicity/pattern
+  hoisted via `interactionBoundPat`); `dropWitsIdxGo` walks the variable's ascending candidate
+  positions re-checking liveness, the dropped pair, and the bound at use — the exact interaction
+  the full scan found first, at bucket cost, untrusted-index discipline (`dropWitsIdxGo_mem`
+  mirrors the old membership lemma).
+- **domainFold direct path**: one `List.partition` per target now feeds both the covered set and
+  the no-op gate (`systemHasFoldableW` takes the precomputed complement), where `coveredBy` was
+  evaluated twice per (target × constraint); setup computes each constraint's deduped variable
+  list once (`hashedDedup`) for the single-variable set and the target list.
+- **reencode**: the 8192-constraint index gate is retired — the pass is **always indexed**
+  through the new `CoveredIndex.buildPruned`: items with more than 8 distinct variables are left
+  out of the buckets, which keeps the covered sets *identical* (a ≤8-variable target can never
+  cover them) while shrinking exactly the hot-variable buckets that made the index lose on dense
+  small systems (the gate's raison d'être). Proof-free: reencode's covered set was already
+  untrusted (`checkReencode` re-derives everything). Setup dedup shared as in domainFold.
+
+**Verification**: output byte-identical on the 11-case export set (batch4: dropWits index +
+domainFold fusion + setup dedups; batch5: + pruned-index reencode). Build warning-free; proof
+integrity green. The remaining structural item is the domainFold *indexed* path (keccak cycles
+0-2): generalize `foldOut_correct` to untrusted covered subsets so the pruned index and
+stale-bucket refresh apply there too — recorded in `docs/ideas.md` R3. **Worked: pending CI.**

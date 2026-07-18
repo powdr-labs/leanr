@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
+import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
@@ -47,6 +48,19 @@ def buildStep (varsOf : α → List Variable) (ai : α × Nat) (idx : CovIndex) 
     variables it mentions (or into `varless` when it mentions none). -/
 def build (varsOf : α → List Variable) (items : List α) : CovIndex :=
   items.zipIdx.foldr (buildStep varsOf) ⟨∅, []⟩
+
+/-- `build`, skipping items with more than `maxVars` distinct variables. An item is *covered* by
+    a target `xs` only when **all** its variables lie in `xs`, so for consumers whose targets
+    never exceed `maxVars` variables the pruned index yields the identical covered sets — while
+    hot-variable buckets stay small: a selector-style variable occurs in hundreds of wide items,
+    none of which a small target can ever cover, and exactly those items are pruned. Only for
+    *untrusted* consumers (the re-check-at-use discipline) or callers that separately know
+    `|xs| ≤ maxVars`. -/
+def buildPruned (varsOf : α → List Variable) (maxVars : Nat) (items : List α) : CovIndex :=
+  items.zipIdx.foldr (fun ai idx =>
+    if (HashedDedup.hashedEraseDups (hash ·) (varsOf ai.1)).length ≤ maxVars then
+      buildStep varsOf ai idx
+    else idx) ⟨∅, []⟩
 
 /-- The candidate positions for target `xs`: every position bucketed under a variable of `xs`,
     plus the variable-less positions. -/

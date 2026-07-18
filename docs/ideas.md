@@ -137,10 +137,10 @@ proof-free*. Confirmed quadratics, in rough per-case cost order:
      left-fold reformulation `ok' = (pr m ∨ ok) ∧ ref m` is exact but pairwise in `S`).
    - `busPairCancel`: `shieldOk` re-scans (and `liveArr` **materializes**) the whole before-region
      per candidate send (`BusPairCancel.lean:1861/2428`) — O(B²) time *and* allocation on the long
-     same-address chains the pass exists for. Same file: `dropWits` scans the whole array from
-     position 0 per queried variable (`:2146`) — give it the `buildFormIdx` treatment; in coda
-     mode the `addrHash` bucket is O(B) per hot address (`:1255`) — add a position cursor.
-     **Still open.**
+     same-address chains the pass exists for; in coda mode the `addrHash` bucket is O(B) per hot
+     address (`:1255`) — add a position cursor. **Still open.** ~~`dropWits` from-0 array scan per
+     queried variable~~ **done (entry 105)**: per-variable position index (`buildBoundIdx`),
+     re-checked at use.
    - ~~`dedup` constraint-side `List.dedup` O(C²·E)~~ **done (entry 104)**: bucketed
      proven-identical twin (`HashedDedup.hashedDedup`), keccak 6.6 s → noise.
    - ~~`intervalForce` seed filters / `eraseDups` / per-slot pattern re-maps~~ **done (entry
@@ -161,18 +161,26 @@ enumeration core itself (SP1 apc_030's 19 s single-cycle spike) is untouched: th
 substrate), not setup cost.
 
 **R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
-index gate**  ·  *high value at eth/mid-keccak scale*. Both passes have a proven-equal inverted
-index (`coveredCsIdx_eq`) that is **disabled below 8192 constraints**
-(`DomainFold.lean:658/682`, `Reencode.lean:1498/1621`) — so every eth case and keccak cycles 3+
-run the direct O(targets × system) path (reencode is apc_100's single most expensive pass). The
-gate exists because dense small systems lose on bucket gathering; replace raw count with a
-sharing-density criterion, or make the index path cheap enough to win everywhere. Independent of
-the gate: domainFold evaluates `coveredBy` twice per (target × constraint)
-(`coveredCsOf` + `systemHasFoldable`, `DomainFold.lean:651/443`) — thread the covered set through;
-reencode's `checkReencode` re-runs the *third* full covered scan after `buildReencode`'s
-(`Reencode.lean:852/858`) — thread `es` + `doms` through (small `hes ▸` plumbing, transport core
-untouched); and both passes recompute `c.vars.dedup` twice per constraint in setup
-(`DomainFold.lean:674/678`, `Reencode.lean:1613/1617`).
+index gate**  ·  *high value at eth/mid-keccak scale*. Partially **done (entry 105)**:
+   - ~~reencode's 8192 gate~~ **done**: always-indexed via `CoveredIndex.buildPruned` — items
+     with more than 8 distinct variables can never be covered by a ≤8-variable target, so pruning
+     them keeps the covered sets identical *and* keeps hot-variable buckets small (the reason the
+     gate existed). Proof-free: reencode's covered set was already untrusted (`checkReencode` is
+     the authority).
+   - ~~domainFold's direct-path double `coveredBy` sweep~~ **done**: one `partition` per target
+     feeds both the covered set and the no-op gate (`systemHasFoldableW`).
+   - ~~both passes' doubled `c.vars.dedup` setup~~ **done** (`hashedDedup`, computed once).
+   - **Still open — the domainFold indexed path** (keccak cycles 0-2, C ≥ 8192): its covered set
+     is proof-bearing (`coveredCsIdx_eq` demands the exact build tie), so the pruned index and
+     stale-bucket refresh don't directly apply. The right fix: generalize `foldOut_correct` to
+     any `es ⊆` the covered set (soundness only needs survivor *supersets* — fewer constraints →
+     more survivors → `constOnSurvs` more conservative), making the gather fully untrusted; then
+     prune + stale-refresh apply and the per-accept `CoveredIndex.build` rebuild (O(S) × #accepts)
+     disappears. Note `systemHasFoldableIdx` may only *over*-approximate, never under — a pruned
+     gate misses wide items with foldable sub-nodes inside `xs`, so the gate needs the unpruned
+     buckets (or no gate: always `foldOut`, content-identical when nothing folds).
+   - **Still open — reencode's `checkReencode`** re-runs the covered scan after `buildReencode`
+     (`Reencode.lean:852/858`); rarely reached (post-gates), so low value now.
 
 **R4. Constant-factor levers that touch every pass**  ·  *medium value, cheap*:
    - **Variable interning-lite, `Implementation/`-only**: the parser mints a fresh `String` per

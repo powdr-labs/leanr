@@ -444,6 +444,17 @@ def systemHasFoldable (cs : ConstraintSystem p) (xs : List Variable)
     cs.busInteractions.any (fun bi =>
       bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
 
+/-- `systemHasFoldable` with the non-covered constraints (`rest = coveredBy`'s complement)
+    precomputed by the caller — the direct path partitions the constraint list once per target,
+    so the gate does not re-evaluate `coveredBy` per constraint. Same Bool (`any` over the
+    complement filter ⟺ `any` with the conjunction). Purely an efficiency gate, like
+    `systemHasFoldable` itself. -/
+def systemHasFoldableW (cs : ConstraintSystem p) (xs : List Variable)
+    (survs : List (List (Variable × ZMod p))) (rest : List (Expression p)) : Bool :=
+  rest.any (fun c => c.hasFoldable xs survs) ||
+    cs.busInteractions.any (fun bi =>
+      bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
+
 /-! ### The index-local gate
 
 `systemHasFoldable` is a full-system scan run once per target — the dominant cost of this pass.
@@ -627,15 +638,18 @@ covered set is computed **once** per target and reused for the survivor filter
 (`groupSurvivorsE es`, provably `groupSurvivors cs xs doms` — the old code paid the full filter
 a second time inside `groupSurvivors`). -/
 
-/-- One checked fold for a candidate group, given the covered set `es = coveredCsOf cs xs`. -/
+/-- One checked fold for a candidate group, given the covered set `es = coveredCsOf cs xs` and
+    its complement `csRest` (the non-covered constraints, feeding the no-op gate without a second
+    `coveredBy` sweep). -/
 def foldStepWith [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (xs : List Variable)
-    (es : List (Expression p)) (hes : es = coveredCsOf cs xs) : PassResult cs bs :=
+    (es : List (Expression p)) (csRest : List (Expression p))
+    (hes : es = coveredCsOf cs xs) : PassResult cs bs :=
   match hdoms : groupDoms es xs with
   | none => ⟨cs, [], PassCorrect.refl cs bs⟩
   | some doms =>
     if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
       let survs := groupSurvivorsE es doms
-      if 1 ≤ survs.length && systemHasFoldable cs xs survs then
+      if 1 ≤ survs.length && systemHasFoldableW cs xs survs csRest then
         have hsurv : groupSurvivors cs xs doms = survs := by
           show groupSurvivors cs xs doms = groupSurvivorsE es doms
           rw [hes]; rfl
@@ -643,14 +657,20 @@ def foldStepWith [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) 
       else ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs, [], PassCorrect.refl cs bs⟩
 
-/-- Direct-path fold loop: recompute `coveredCsOf cs xs` per target (no index). -/
+/-- Direct-path fold loop: one `partition` per target computes the covered set and its complement
+    together (no index, and no second `coveredBy` sweep for the gate). -/
 def foldLoopDirect [Fact p.Prime] (bs : BusSemantics p) :
     List (List Variable) → (cs : ConstraintSystem p) → PassResult cs bs
   | [], cs => ⟨cs, [], PassCorrect.refl cs bs⟩
   | xs :: rest, cs =>
-    let r1 := foldStepWith bs cs xs (coveredCsOf cs xs) rfl
-    let r2 := foldLoopDirect bs rest r1.out
-    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
+    match hpr : cs.algebraicConstraints.partition (coveredBy xs) with
+    | (es, csRest) =>
+      let r1 := foldStepWith bs cs xs es csRest (by
+        rw [List.partition_eq_filter_filter] at hpr
+        injection hpr with h1 _
+        exact h1.symm)
+      let r2 := foldLoopDirect bs rest r1.out
+      ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
 
 /-- Systems with at least this many algebraic constraints use the inverted index; smaller ones use
     the direct per-target `coveredCsOf` scan (see the section comment). Purely a runtime gate —
@@ -670,12 +690,14 @@ def domainFoldPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bsem =>
     -- with a variable that has *no* single-variable constraint anywhere can never pass
     -- `groupDoms`. Skipping those targets up front (one hash lookup per variable) avoids the
     -- per-target covered-set scan for the ubiquitous byte-limb groups, exactly.
-    let svSet : Std.HashSet Variable := cs.algebraicConstraints.foldl (init := ∅) fun s c =>
-      match c.vars.dedup with
+    -- Each constraint's deduped variable list is computed once (`hashedDedup_eq` keeps it the
+    -- exact `List.dedup` value) and shared between the single-variable set and the target list.
+    let csVs := cs.algebraicConstraints.map (fun c => HashedDedup.hashedDedup (hash ·) c.vars)
+    let svSet : Std.HashSet Variable := csVs.foldl (init := ∅) fun s vs =>
+      match vs with
       | [x] => s.insert x
       | _ => s
-    let targets := dedupHash (cs.algebraicConstraints.filterMap (fun c =>
-      let vs := c.vars.dedup
+    let targets := dedupHash (csVs.filterMap (fun vs =>
       if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
         some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
