@@ -77,7 +77,7 @@ LANDED are done — the remainder still adds up to the current gaps):
 
 ---
 
-## 0b. SP1 (rsp): after entries 93–99, the residual is the identity-result packing sensitivity + memory telescoping
+## 0b. SP1 (rsp): after entries 93–100, the residual is memory telescoping (identity-result packing solved, entry 100)
 
 **Entries 97–99 landed the dead-byte clusters and the degenerate range checks.** SP1 rsp
 **variables 3.686× → 3.745×, bus 2.518× → 2.553×** (aggregate var gap vs powdr 837 → 658, bus gap
@@ -89,21 +89,26 @@ LANDED are done — the remainder still adds up to the current gaps):
 - **Entry 99** (`RangeBool.lean`): SP1 op-6 width-1 check `[6, x, 1, 0]` → booleanity `x·(x−1)=0` +
   drop (the `rangeCheckAt` half of `ZeroWidthRange`'s width-1 arm). −44 bus gap (+44 constraints).
 
-The k256 blocks (apc_024/030/040) still trail (apc_024 550 v vs powdr 490). Two residual levers,
-both **investigated and found to need architectural work, not an incremental pass**:
+The k256 blocks (apc_024/030/040) still trail (apc_024 518 v vs powdr 490, after entry 100). Entry
+100 landed the first of the two residual levers below (identity-result substitution, done late);
+memory telescoping remains and needs architectural work, not an incremental pass:
 
-### The identity-result packing sensitivity (biggest var lever, ~60 vars/k256-case) · BLOCKED
+### The identity-result packing sensitivity (biggest var lever, ~60 vars/k256-case) · SOLVED (entry 100)
 
-The `[1, result, byte_var, 0]` OR interactions (`result = OR(byte_var, 0) = byte_var`) leave `result`
-as a redundant copy powdr substitutes away (`result := byte_var`). Enabling that in `xorEqExtract`
-(a bare-variable target, not just a constant) is **correct** — but measured a **regression** on
-apc_024 (556→612 v, 431→561 bus). Diagnosis (single-var vs const-only export diff): **memory is
-untouched (32/32 both)**; the blow-up is a **range-check re-packing/re-encode explosion** — op-3
-byte-pairs +44, op-6 +88, and `reencode` materialises +56 fresh byte variables when the substitution
-changes the byte-check expressions. So the win requires making the packing/`reencode` passes
-*representation-robust* (idempotent under a `result := byte_var` rename), not the extraction itself.
-The extraction infrastructure (`ByteXorSpec.orOp/andOp`, `byteBoolSound`, `boolEq?`) is landed and
-proven — only the constant-target guard holds it back.
+The `[1, result, byte_var, 0]` OR interactions (`result = OR(byte_var, 0) = byte_var`), and their
+mirror `[1, result, 0, byte_var]`, leave `result` as a redundant copy powdr substitutes away
+(`result := byte_var`). Enabling that *in the cleanup cycle* (a bare-variable target in `xorEqExtract`)
+is **correct** but measured a **regression** on apc_024 (556→612 v, 431→561 bus): the diagnosis
+(single-var vs const-only export diff) was **memory untouched (32/32 both)**, the blow-up a
+**range-check re-packing/re-encode explosion** — op-3 byte-pairs +44, op-6 +88, and `reencode`
+materialises +56 fresh byte variables when the substitution changes the byte-check expressions *before*
+the coda re-packs them. The earlier note concluded the win needed *representation-robust* packing.
+**The actual fix was simpler: do the rename LATE.** `IdentitySubst.lean` (entry 100) runs a single
+batch `substF` in the coda *after* all packing (`splitBytePair`/`bytePack`/`reencode`) has finished, so
+the interactions are only renamed — bus and constraint counts are untouched and the `result` variables
+just vanish. Variable-monotone by construction; **SP1 rsp var gap 658 → 542 (−116), 0 regressions**,
+bus/constraints byte-identical, OpenVM a structural no-op (`orOp = none`). The extraction
+infrastructure (`ByteXorSpec.orOp/andOp`, `byteBoolSound`) it reuses was landed in entry 97.
 
 
 Entries 93–96 landed four general, proven, `Implementation/`-only mechanisms — the reciprocal

@@ -39,6 +39,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.ScaledZero
 import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZero
 import ApcOptimizer.Implementation.OptimizerPasses.RangeBool
+import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubst
 
 set_option autoImplicit false
 
@@ -142,6 +143,9 @@ def codaPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
     -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
     ("tupleRange", tupleRangePass.guardDegree b),
     ("bytePackLate", VerifiedPassW.guardDegree b (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
+    -- After all packing has run, rename each OR-identity result to its operand: a variable win with
+    -- no re-packing (doing it in the cleanup cycle instead explodes the byte-check packing).
+    ("identitySubst", IdentitySubst.identitySubstPass.guardDegree b),
     ("monicScale", monicScalePass.withFacts.guardDegree b),
     ("constFoldEnd", constantFoldPass.withFacts.guardDegree b),
     -- Collapse recognised `sltu x, 1` (seqz) LessThan gadgets to the two-line is-zero gadget,

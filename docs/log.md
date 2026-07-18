@@ -3771,3 +3771,38 @@ finite-domain passes) — the dropped checks become +44 degree-2 constraints (th
 no `rangeCheckAt` and the pass is prime-gated, so it is a no-op there (keeps `ZeroWidthRange`) —
 keccak byte-identical. Proof integrity green ({propext, Classical.choice, Quot.sound}); no
 `sorry`/`axiom`/`native_decide`. **Worked: yes.**
+
+### 100. Late OR-identity result substitution (`IdentitySubst.lean`, SP1 vars 3.745× → 3.784×)
+
+powdr's optimizer substitutes away every OR interaction that computes `result = byte_var | 0`: with
+one operand fixed to the constant `0`, `result` is a redundant copy of the surviving operand, so the
+`result` variable can be renamed to it. SP1's k256 blocks emit these on the byte bus as
+`[orOp, byte_var, 0, result]` and its mirror `[orOp, 0, byte_var, result]` (the `BusFacts` decode
+gives logical `(op, o1, o2, r)`); apc kept the `result` variables, powdr dropped them all.
+
+The naive fix — seed `result = byte_var` as an equality in the *cleanup* cycle so Gauss eliminates
+it — is correct but *regresses* the k256 blocks: the substitution rewrites the byte-check
+expressions, and the *coda* re-packing (`splitBytePair` / `bytePack`) plus `reencode` then
+materialise a swarm of fresh byte checks and variables, a net loss. `IdentitySubst` instead does the
+rename **late** — a single batch `substF` in the coda *after* all packing has run (right after
+`bytePackLate`): the interactions are only renamed, so bus and constraint counts are untouched and
+the `result` variables simply disappear. `identityPairAt` reads the `orOp` through the
+layout-agnostic `BusFacts.byteXorSpec` / `byteBoolSound` facts, recognises a mult-1 message whose
+result slot is a bare variable and one operand slot (either one) is the constant `0`, and emits the
+`result ↦ operand` pair; `identityF` collects them into a map and `ConstraintSystem.substF_correct`
+discharges soundness (each pair is forced by the OR relation at an accepting assignment). Wrapped in
+`iterateToFixpoint` so operand→operand chains collapse. The pass is **variable-monotone by
+construction**: `substF` deletes the substituted `result` variables and preserves the bus- and
+constraint-interaction *structure* exactly, so it can only lower the variable count and never touches
+the other two axes.
+
+**Impact (`benchmark.py --vm sp1`, rsp 100 cases):** variables **3.745× → 3.784×** (aggregate var
+gap vs powdr **658 → 542**, −116), bus interactions **unchanged at 2.553×** (gap 765) and constraints
+unchanged (the rename adds/drops nothing). Largest k256 case apc_024: **553 → 518** vars (powdr 490).
+**0 regressions** — per-case diff vs the #161 baseline: 13 cases improved on variables (116 saved),
+and *every* case has `Δbus = 0, Δconstraints = 0` (the pass is variable-monotone). SP1 keccak is
+covered by the same monotonicity guarantee (bus/constraints untouched). **No OpenVM regression:**
+OpenVM's bitwise bus declares no `orOp` (XOR + range only), so `identityPairAt` returns `none`
+everywhere → empty substitution map → genuine no-op; keccak byte-identical (2021 vars / 186
+constraints / 1752 bus interactions). Proof integrity green ({propext, Classical.choice, Quot.sound});
+no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
