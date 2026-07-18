@@ -218,16 +218,19 @@ pointer magic); `andThen` propagates; `iterateToFixpoint` skips both `sizeKey` r
 when the whole cycle is unchanged, and carries the previous cycle's `sizeKey` forward instead of
 recomputing `cs.sizeKey` (`FactPass.lean:77`, one redundant O(E) HashSet build per cycle today).
 
-**R6. Cross-cycle dirtiness (the real fix for no-op rescans)**  ·  *large refactor, do after
-R1-R5*. Even with all per-pass fixes, every cycle re-runs every pass over the whole system, and
-~61 % of invocations find nothing (#146's measurement; whole-system version gating catches 0 %
-because the fixpoint only retains changing cycles). The powdr-style fix is a worklist: stable
-item positions + tombstones + a variable→positions occurrence index, passes consume/produce
-dirty-sets, substitutions dirty only the items mentioning the substituted variables. PR #146
-(`IndexedState`, stacked on #145 `FactStore`) built the substrate but nothing consumes it; PR
-#145's lesson stands — input-dependent caches without incremental maintenance don't pay. If R1-R5
-land and large cases are still cycle-bound, this is the next mountain; budget for reworking
-`Basic.lean`/`FactPass.lean` pass signatures (allowed: it is implementation, not audited surface).
+**R6. Cross-cycle dirtiness (the real fix for no-op rescans)**  ·  *large refactor; the cheap
+slice is now a measured dead end*. **Do not build a cross-cycle negative-memo for domainBatch**:
+per-target fingerprints (target vars + domain descriptors + covered es/bis content hashes) were
+measured across invocations — keccak repeats only **62 of 16,748** enumerations with unchanged
+inputs (0.4 %), apc_030 257 of 1,641 (16 %, and its expensive cycle-5 enumeration is first-time)
+— gauss's per-cycle substitutions rewrite the covered sets, so the fingerprints churn. Any
+cross-cycle scheme must therefore be *finer* than whole-target skipping (powdr-style dirty
+worklists where a substitution dirties only the items mentioning substituted variables — the full
+#146 architecture), and its payoff must be re-estimated per pass first: at target granularity the
+~61 % invocation-level no-op measurement does **not** translate into reusable work. domainBatch's
+remaining cost is *productive first-time enumeration*; the levers there are effectiveness-side
+(replace enumeration classes with algebra, cf. the quadratic-roots effectiveness idea 1) or
+intra-enumeration (survivor-scan compilation is already tuned).
 
 **R7. Intra-pass parallelism**  ·  *wall-clock lever, orthogonal*. The per-target enumeration in
 domainBatch/reencode/domainFold is embarrassingly parallel and pure; `Task.spawn`/`Task.get` with

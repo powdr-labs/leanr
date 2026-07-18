@@ -4044,3 +4044,20 @@ busPairCancel 0.32×, intervalForce 0.04×, dedup 0.06×; openvm-eth total 0.95�
 Remaining keccak: domainFold 30.8 s / reencode 29.9 s / domainBatch 21.9 s — the per-accept
 `foldOut` + rebuild and the enumeration core; next levers recorded in ideas (R6 cross-cycle
 negatives, position-remap refresh). **Worked: yes.**
+
+### 108. Runtime: cross-cycle negative-memo for domainBatch measured — dead end (no code change)
+
+Before building the R6 pass-state substrate (thread a scratch state through the cleanup fixpoint,
+memoize per-target enumeration fingerprints so a target that forced nothing is skipped next
+cycle), the hit rate was measured directly: per-enumeration signatures (target-variable hash +
+box size + covered constraint/interaction content hashes) traced across all invocations.
+**keccak: 16,748 enumerations, 62 repeats with unchanged inputs (0.4 %). apc_030: 1,641 / 257
+(16 %), with the dominant cycle-5 enumeration all first-time.** Gauss's per-cycle batch
+substitution rewrites the covered items, so the fingerprints churn every cycle — whole-target
+cross-cycle memoization has nothing to reuse, on exactly the cases that matter. Recorded as a
+measured dead end in `docs/ideas.md` R6 (any cross-cycle scheme must be finer-grained than
+target skipping, and per-pass payoff must be measured first — the invocation-level "61 % no-op"
+figure does not translate to target-level reuse). domainBatch's remaining cost is productive
+first-time enumeration; its levers are effectiveness-side (quadratic-root algebra replacing
+enumeration classes). Instrumentation reverted; no behavioral change. **Worked: n/a
+(measurement; saved the refactor).**
