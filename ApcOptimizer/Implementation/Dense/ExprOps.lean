@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.Dense.Pass
+import ApcOptimizer.Implementation.Dense.Bridge
 import ApcOptimizer.Implementation.OptimizerPasses.ConstantFold
 
 set_option autoImplicit false
@@ -8,11 +8,13 @@ set_option autoImplicit false
 The reusable machinery for building dense passes as *eval-preserving expression maps*, and the first
 concrete pass (constant folding) built on it.
 
-`DenseConstraintSystem.mapExpr g` applies a dense expression transform to every expression. Its key
-property, `decodeCS_mapExpr`, is a **commutation lemma**: if `g` commutes with `decode` against a
-spec transform `g'` (`decode (g e) = g' (decode e)`), then `decode (d.mapExpr g) = (decode d).mapExpr
-g'`. That is the bridge that lets a dense pass reuse the *existing* spec pass's `PassCorrect`: the
-dense output decodes to exactly the spec pass's output, so no correctness is re-proved. -/
+`DenseConstraintSystem.mapExpr g` applies a dense expression transform to every expression. When `g`
+is *eval-preserving* (`(g e).eval denv = e.eval denv`) and introduces no new variables, `mapExpr g`
+preserves the dense semantics — satisfaction, admissibility, stateful-bus effects, invariant
+preservation, and the occurrence set — proved natively here (`mapExpr_satisfies` etc.). The dense
+constant-fold pass then discharges its `DensePassCorrect` **natively** (no dependency on the spec
+`constantFoldPass`) and is lifted to the spec `PassCorrect` once, at the pipeline edge, by
+`DenseVerifiedPassW.ofNative`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -26,16 +28,6 @@ def DenseConstraintSystem.mapExpr (d : DenseConstraintSystem p) (g : DenseExpr p
   { algebraicConstraints := d.algebraicConstraints.map g,
     busInteractions := d.busInteractions.map
       (fun bi => { bi with multiplicity := g bi.multiplicity, payload := bi.payload.map g }) }
-
-/-- **Commutation of `mapExpr` with `decode`.** If the dense transform `g` decodes to the spec
-    transform `g'`, then decoding after `g` equals `g'` after decoding — the identity a dense
-    eval-preserving pass uses to inherit its spec counterpart's `PassCorrect`. -/
-theorem VarRegistry.decodeCS_mapExpr (reg : VarRegistry) {g : DenseExpr p → DenseExpr p}
-    {g' : Expression p → Expression p} (hg : ∀ e, reg.decodeExpr (g e) = g' (reg.decodeExpr e))
-    (d : DenseConstraintSystem p) :
-    reg.decodeCS (d.mapExpr g) = (reg.decodeCS d).mapExpr g' := by
-  simp only [DenseConstraintSystem.mapExpr, VarRegistry.decodeCS, ConstraintSystem.mapExpr,
-    BusInteraction.mapExpr, VarRegistry.decodeBI, List.map_map, Function.comp_def, hg]
 
 /-- If `g` introduces no new dense variables per expression, `mapExpr g` preserves coverage. -/
 theorem DenseConstraintSystem.mapExpr_covered {reg : VarRegistry} {g : DenseExpr p → DenseExpr p}
@@ -138,21 +130,150 @@ theorem DenseExpr.fold_vars (e : DenseExpr p) : ∀ i ∈ e.fold.vars, i ∈ e.v
       · exact List.mem_append.2 (Or.inl (iha i h))
       · exact List.mem_append.2 (Or.inr (ihb i h))
 
-/-! ## The dense constant-fold pass -/
+/-! ## Native eval-preservation of the dense fold -/
 
-/-- The dense constant-folding pass: normalize every dense expression. Its `PassCorrect` is inherited
-    from the spec `constantFoldPass` — the dense output decodes to exactly `(decode d).mapExpr fold`,
-    which is the spec pass's output. -/
-def denseConstantFoldPass : DenseVerifiedPassW p := fun reg d hcov bs _ =>
-  { reg' := reg
-    out := d.mapExpr DenseExpr.fold
-    derivs := []
-    ext := VarRegistry.Extends.refl reg
-    covered := DenseConstraintSystem.mapExpr_covered DenseExpr.fold_vars hcov
-    dcovered := by intro x hx; simp at hx
-    correct := by
-      rw [reg.decodeCS_mapExpr (fun e => reg.decodeExpr_fold e) d]
-      exact ConstraintSystem.mapExpr_correct (g := Expression.fold)
-        (fun e env => Expression.fold_eval e env) (reg.decodeCS d) bs Expression.fold_vars }
+/-- Dense `foldAdd` preserves value. -/
+theorem DenseExpr.foldAdd_eval (a b : DenseExpr p) (denv : VarId → ZMod p) :
+    (a.foldAdd b).eval denv = a.eval denv + b.eval denv := by
+  unfold DenseExpr.foldAdd
+  split <;> (try split_ifs) <;> simp_all [DenseExpr.eval]
+
+/-- Dense `foldMul` preserves value. -/
+theorem DenseExpr.foldMul_eval (a b : DenseExpr p) (denv : VarId → ZMod p) :
+    (a.foldMul b).eval denv = a.eval denv * b.eval denv := by
+  unfold DenseExpr.foldMul
+  split <;> (try split_ifs) <;> simp_all [DenseExpr.eval]
+
+/-- **Dense `fold` preserves value** (the native analogue of `Expression.fold_eval`). -/
+theorem DenseExpr.fold_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
+    e.fold.eval denv = e.eval denv := by
+  induction e with
+  | const n => rfl
+  | var i => rfl
+  | add a b iha ihb => rw [DenseExpr.fold, DenseExpr.foldAdd_eval, iha, ihb]; rfl
+  | mul a b iha ihb => rw [DenseExpr.fold, DenseExpr.foldMul_eval, iha, ihb]; rfl
+
+/-! ## `mapExpr` with an eval-preserving map preserves the dense semantics
+
+These are the native, reusable ingredients a dense eval-preserving pass discharges its
+`DensePassCorrect` with. `hg` is value-preservation of `g`; `hgv` is "introduces no new variables". -/
+
+variable {g : DenseExpr p → DenseExpr p}
+
+/-- A `mapExpr`-mapped bus interaction evaluates identically when `g` preserves value. -/
+theorem denseBIEval_mapExpr (hg : ∀ (e : DenseExpr p) (denv : VarId → ZMod p),
+    (g e).eval denv = e.eval denv) (bi : BusInteraction (DenseExpr p)) (denv : VarId → ZMod p) :
+    denseBIEval { bi with multiplicity := g bi.multiplicity, payload := bi.payload.map g } denv
+      = denseBIEval bi denv := by
+  simp only [denseBIEval, hg, List.map_map, Function.comp_def]
+
+/-- `mapExpr g` preserves satisfaction when `g` preserves value. -/
+theorem DenseConstraintSystem.mapExpr_satisfies (hg : ∀ (e : DenseExpr p) (denv : VarId → ZMod p),
+    (g e).eval denv = e.eval denv) (d : DenseConstraintSystem p) (bs : BusSemantics p)
+    (denv : VarId → ZMod p) : (d.mapExpr g).satisfies bs denv ↔ d.satisfies bs denv := by
+  unfold DenseConstraintSystem.satisfies DenseConstraintSystem.mapExpr
+  simp only [List.mem_map, forall_exists_index, and_imp]
+  constructor
+  · rintro ⟨h1, h2⟩
+    refine ⟨fun c hc => ?_, fun bi hbi => ?_⟩
+    · have := h1 (g c) c hc rfl; rwa [hg] at this
+    · have := h2 _ bi hbi rfl; rwa [denseBIEval_mapExpr hg] at this
+  · rintro ⟨h1, h2⟩
+    refine ⟨?_, ?_⟩
+    · rintro c c0 hc0 rfl; rw [hg]; exact h1 c0 hc0
+    · rintro bi bi0 hbi0 rfl; rw [denseBIEval_mapExpr hg]; exact h2 bi0 hbi0
+
+/-- The busInteraction map underlying `mapExpr`, as a `rfl` projection. -/
+theorem DenseConstraintSystem.mapExpr_busInteractions (d : DenseConstraintSystem p)
+    (g : DenseExpr p → DenseExpr p) :
+    (d.mapExpr g).busInteractions = d.busInteractions.map
+      (fun bi => { bi with multiplicity := g bi.multiplicity, payload := bi.payload.map g }) := rfl
+
+/-- `mapExpr g` preserves admissibility when `g` preserves value. -/
+theorem DenseConstraintSystem.mapExpr_admissible (hg : ∀ (e : DenseExpr p) (denv : VarId → ZMod p),
+    (g e).eval denv = e.eval denv) (d : DenseConstraintSystem p) (bs : BusSemantics p)
+    (denv : VarId → ZMod p) : (d.mapExpr g).admissible bs denv ↔ d.admissible bs denv := by
+  have hmap : (d.mapExpr g).busInteractions.map (fun bi => denseBIEval bi denv)
+      = d.busInteractions.map (fun bi => denseBIEval bi denv) := by
+    rw [DenseConstraintSystem.mapExpr_busInteractions, List.map_map]
+    refine List.map_congr_left (fun bi _ => ?_)
+    simp only [Function.comp_apply]; exact denseBIEval_mapExpr hg bi denv
+  have heq : (d.mapExpr g).admissible bs denv = d.admissible bs denv := by
+    unfold DenseConstraintSystem.admissible; rw [hmap]
+  exact iff_of_eq heq
+
+/-- `mapExpr g` preserves stateful-bus side effects when `g` preserves value. -/
+theorem DenseConstraintSystem.mapExpr_sideEffects (hg : ∀ (e : DenseExpr p) (denv : VarId → ZMod p),
+    (g e).eval denv = e.eval denv) (d : DenseConstraintSystem p) (bs : BusSemantics p)
+    (denv : VarId → ZMod p) : (d.mapExpr g).sideEffects bs denv = d.sideEffects bs denv := by
+  unfold DenseConstraintSystem.sideEffects
+  rw [DenseConstraintSystem.mapExpr_busInteractions,
+    filter_map_busId_comm d.busInteractions
+      (fun bi => { bi with multiplicity := g bi.multiplicity, payload := bi.payload.map g }) bs
+      (fun _ => rfl),
+    List.map_map]
+  refine List.map_congr_left (fun bi _ => ?_)
+  simp only [Function.comp_apply, denseBIEval_mapExpr hg]
+
+/-- `mapExpr g` preserves invariant guarantees when `g` preserves value. -/
+theorem DenseConstraintSystem.mapExpr_guaranteesInvariants
+    (hg : ∀ (e : DenseExpr p) (denv : VarId → ZMod p), (g e).eval denv = e.eval denv)
+    {d : DenseConstraintSystem p} {bs : BusSemantics p} (h : d.guaranteesInvariants bs) :
+    (d.mapExpr g).guaranteesInvariants bs := by
+  intro denv hsat bi' hbi'
+  have hsatd : d.satisfies bs denv := (DenseConstraintSystem.mapExpr_satisfies hg d bs denv).mp hsat
+  rw [DenseConstraintSystem.mapExpr_busInteractions, List.mem_map] at hbi'
+  obtain ⟨bi0, hbi0, rfl⟩ := hbi'
+  rw [denseBIEval_mapExpr hg]
+  exact h denv hsatd bi0 hbi0
+
+/-- `mapExpr g` introduces no new occurrences when `g` introduces no new variables. -/
+theorem DenseConstraintSystem.mapExpr_occ_subset
+    (hgv : ∀ (e : DenseExpr p) (i : VarId), i ∈ (g e).vars → i ∈ e.vars)
+    (d : DenseConstraintSystem p) : ∀ i ∈ (d.mapExpr g).occ, i ∈ d.occ := by
+  intro i hi
+  simp only [DenseConstraintSystem.occ, DenseConstraintSystem.mapExpr, List.mem_append,
+    List.mem_flatMap, List.mem_map] at hi
+  rcases hi with ⟨c, ⟨c0, hc0, rfl⟩, hic⟩ | ⟨bi, ⟨bi0, hbi0, rfl⟩, hib⟩
+  · exact DenseConstraintSystem.mem_occ_of_constraint hc0 (hgv c0 i hic)
+  · refine DenseConstraintSystem.mem_occ_of_bi hbi0 ?_
+    simp only [denseBIVars, List.mem_append, List.mem_flatMap, List.mem_map] at hib ⊢
+    rcases hib with hm | ⟨e, ⟨e0, he0, rfl⟩, hie⟩
+    · exact Or.inl (hgv bi0.multiplicity i hm)
+    · exact Or.inr ⟨e0, he0, hgv e0 i hie⟩
+
+/-! ## The dense constant-fold pass (native proof) -/
+
+/-- The dense constant-folding pass: normalize every dense expression. Its correctness is proved
+    **natively** as a `DensePassCorrect` (the fold is eval-preserving and introduces no variables) and
+    lifted to the spec `PassCorrect` by `DenseVerifiedPassW.ofNative` — no dependency on the spec
+    `constantFoldPass`. -/
+def denseConstantFoldPass : DenseVerifiedPassW p :=
+  DenseVerifiedPassW.ofNative
+    (fun _ _ d => d.mapExpr DenseExpr.fold)
+    (fun _ _ _ => [])
+    (fun _ _ _ _ hcov => DenseConstraintSystem.mapExpr_covered DenseExpr.fold_vars hcov)
+    (fun _ _ _ _ _ => by intro x hx; simp at hx)
+    (fun reg bs _ d _ => by
+      have hfe : ∀ (e : DenseExpr p) (denv : VarId → ZMod p),
+          (DenseExpr.fold e).eval denv = e.eval denv := fun e denv => DenseExpr.fold_eval e denv
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · -- soundness: `(mapExpr fold).implies d`
+        intro denv hsat
+        refine ⟨denv, (DenseConstraintSystem.mapExpr_satisfies hfe d bs denv).mp hsat, ?_⟩
+        rw [DenseConstraintSystem.mapExpr_sideEffects hfe]
+        exact BusState.equiv_refl _
+      · -- invariants
+        exact fun h => DenseConstraintSystem.mapExpr_guaranteesInvariants hfe h
+      · -- no new powdr column
+        exact fun i hi _ => DenseConstraintSystem.mapExpr_occ_subset DenseExpr.fold_vars d i hi
+      · -- completeness (witness = input env; no derivations)
+        intro denv hadm hsat
+        refine ⟨denv, (DenseConstraintSystem.mapExpr_satisfies hfe d bs denv).mpr hsat,
+          (DenseConstraintSystem.mapExpr_admissible hfe d bs denv).mpr hadm, ?_, fun _ _ => rfl, ?_⟩
+        · rw [DenseConstraintSystem.mapExpr_sideEffects hfe]
+          exact BusState.equiv_refl _
+        · intro _ _ i hi _
+          exact ⟨DenseConstraintSystem.mapExpr_occ_subset DenseExpr.fold_vars d i hi, rfl⟩)
 
 end ApcOptimizer.Dense
