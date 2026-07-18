@@ -161,14 +161,14 @@ def insertEntry (T : BoundsMap p cs bs) (x : Variable) (b : Nat)
   else T
 
 /-- The raw-variable payload entries of an interaction. -/
-private def rawVarsOf (bi : BusInteraction (Expression p)) : List Variable :=
+def rawVarsOf (bi : BusInteraction (Expression p)) : List Variable :=
   bi.payload.filterMap (fun e => match e with | .var x => some x | _ => none)
 
 /-- Cheap once-per-interaction pre-scan for probed-bound candidates: an output slot `j` whose
     content is affine in a single variable `y` can only ever bound `y`, so the expensive
     `probedSlotBoundAt` (which rebuilds the pattern and probes up to 256 values) runs only on
     these `(y, j)` pairs instead of every (variable, slot) combination. -/
-private def probeCandidatesOf (bi : BusInteraction (Expression p)) : List (Variable × Nat) :=
+def probeCandidatesOf (bi : BusInteraction (Expression p)) : List (Variable × Nat) :=
   if (bi.multiplicity.constValue?).isSome then
     (List.range bi.payload.length).filterMap (fun j =>
       match bi.payload[j]? with
