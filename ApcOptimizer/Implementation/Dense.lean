@@ -4,6 +4,7 @@ import ApcOptimizer.Implementation.Dense.Measure
 import ApcOptimizer.Implementation.Dense.Pass
 import ApcOptimizer.Implementation.Dense.ExprOps
 import ApcOptimizer.Implementation.Dense.Adapter
+import ApcOptimizer.Implementation.Dense.Bridge
 import ApcOptimizer.Implementation.Dense.Subst
 import ApcOptimizer.Implementation.Dense.SubstMap
 import ApcOptimizer.Implementation.Dense.Affine
