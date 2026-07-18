@@ -134,14 +134,27 @@ def denseSurvivesAllMV (bs : BusSemantics p) (es : List (DenseExpr p))
           payload := bi.payload.map (fun e => e.eval (denseEnvOfKeysV keys pt)) }
       decide (v.multiplicity = 0) || !bs.violatesConstraint v)
 
+/-- A per-target survivor predicate, boxed in a one-field structure. This mirrors the spec's
+    `compiledSurv`, whose return type is a `Subtype` (a non-`Pi` type): boxing the closure caps the
+    compiled arity of `denseCompiledSurvV` at its explicit arguments, so the ring-instance chain, the
+    `denseCompileEs`/`denseCompileBis` compilation, and the `isZero`-closure allocation run **once
+    per target** (when the box is built) rather than being eta-expanded into the per-point call path.
+    Returning a bare `List (ZMod p) → Bool` instead would let the compiler pull the point argument
+    into the arity and re-run that whole setup on every enumerated box point. -/
+structure DenseSurvV (p : ℕ) where
+  /-- The per-point survivor test (see `DenseSurvV`). -/
+  run : List (ZMod p) → Bool
+
 /-- The per-point survivor predicate for a target, over value-only points (mirrors
-    `compiledSurv`/`denseCompiledSurv`, plain function — no carried property; the prover states its
-    correspondence). Compiles the covered items against `keys` once, hoists the ring operations and
+    `compiledSurv`/`denseCompiledSurv`, boxed in `DenseSurvV` — no carried property; the prover states
+    its correspondence). Compiles the covered items against `keys` once, hoists the ring operations and
     the zero test out of the per-point evaluation exactly as the spec does, and falls back to the
-    uncompiled predicate only if compilation fails (dead for covered items). -/
+    uncompiled predicate only if compilation fails (dead for covered items). The `DenseSurvV` box (a
+    non-`Pi` return type, like the spec's `Subtype`) is what keeps this setup off the per-point path;
+    see `DenseSurvV`. -/
 def denseCompiledSurvV (bs : BusSemantics p) (es : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId) :
-    List (ZMod p) → Bool :=
+    DenseSurvV p :=
   match denseCompileEs keys es, denseCompileBis keys bis with
   | some ces, some cbis =>
     let addI : Add (ZMod p) := inferInstance
@@ -150,8 +163,8 @@ def denseCompiledSurvV (bs : BusSemantics p) (es : List (DenseExpr p))
     let add := addI.add
     let mul := mulI.mul
     let isZero : ZMod p → Bool := fun v => @decide (v = 0) (dec v 0)
-    fun pt => denseSurvivesAllCWV add mul isZero bs ces cbis pt
-  | _, _ => denseSurvivesAllMV bs es bis keys
+    ⟨fun pt => denseSurvivesAllCWV add mul isZero bs ces cbis pt⟩
+  | _, _ => ⟨denseSurvivesAllMV bs es bis keys⟩
 
 /-! ## Value-only lazy box enumeration
 
@@ -267,7 +280,7 @@ def denseForcedOverV (bs : BusSemantics p) (facts : BusFacts p bs) (T : DenseDom
         let keys := fdoms.map Prod.fst
         let doms := fdoms.map Prod.snd
         let survC := denseCompiledSurvV bs es bis keys
-        match denseScanBoxV survC doms with
+        match denseScanBoxV survC.run doms with
         | none =>
           -- no surviving point at all: everything is vacuously forced (the box has no solutions)
           keys.map (fun x => (x, (0 : ZMod p)))

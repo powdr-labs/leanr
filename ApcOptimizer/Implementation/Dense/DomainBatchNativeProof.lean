@@ -948,10 +948,11 @@ theorem denseSurvivesAllCWV_eq (add mul : ZMod p → ZMod p → ZMod p)
   · exact denseCompileEs_allV add mul hadd hmul isZero hz keys pt es ces hce
   · exact denseCompileBis_allV add mul hadd hmul isZero hz bs keys pt bis cbis hcb
 
-/-- The value-only compiled survivor predicate agrees with the uncompiled one on every point. -/
+/-- The value-only compiled survivor predicate agrees with the uncompiled one on every point.
+    (`.run` projects the boxed closure out of `DenseSurvV`; see `denseCompiledSurvV`.) -/
 theorem denseCompiledSurvV_eq (bs : BusSemantics p) (es : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId) (pt : List (ZMod p)) :
-    denseCompiledSurvV bs es bis keys pt = denseSurvivesAllMV bs es bis keys pt := by
+    (denseCompiledSurvV bs es bis keys).run pt = denseSurvivesAllMV bs es bis keys pt := by
   unfold denseCompiledSurvV
   cases hce : denseCompileEs keys es with
   | none => rfl
@@ -1001,7 +1002,7 @@ theorem denseCompiledSurvV_restriction (bs : BusSemantics p) (es : List (DenseEx
       bs.violatesConstraint (denseBIEval bi denv) = false)
     (hesk : ∀ e ∈ es, ∀ i ∈ e.vars, i ∈ keys)
     (hbik : ∀ bi ∈ bis, ∀ i ∈ denseBIVars bi, i ∈ keys) :
-    denseCompiledSurvV bs es bis keys (keys.map denv) = true := by
+    (denseCompiledSurvV bs es bis keys).run (keys.map denv) = true := by
   rw [denseCompiledSurvV_eq]
   exact denseSurvivesAllMV_restriction bs es bis keys denv hes0 hbi0 hesk hbik
 
@@ -1079,11 +1080,11 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
       rw [List.map_map]; exact mem_assignmentsV denv fdoms hmem
     dsimp only
     split_ifs with hbox hwork
-    · have hsurv : denseCompiledSurvV bs
+    · have hsurv : (denseCompiledSurvV bs
           (denseCoveredIdxUnord fidx.activeIdx fidx.arrActive (fun c => c.varsInF xs) xs)
           (denseCoveredIdxUnord fidx.bisIdx fidx.arrBis
             (fun bi => denseBIVarsInF xs bi && !bs.isStateful bi.busId) xs)
-          (fdoms.map Prod.fst) ((fdoms.map Prod.fst).map denv) = true := by
+          (fdoms.map Prod.fst)).run ((fdoms.map Prod.fst).map denv) = true := by
         apply denseCompiledSurvV_restriction
         · exact fun e he => (hes e he).1
         · exact fun bi hbi => (hbis bi hbi).1
@@ -1093,7 +1094,7 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
           (denseCoveredIdxUnord fidx.activeIdx fidx.arrActive (fun c => c.varsInF xs) xs)
           (denseCoveredIdxUnord fidx.bisIdx fidx.arrBis
             (fun bi => denseBIVarsInF xs bi && !bs.isStateful bi.busId) xs)
-          (fdoms.map Prod.fst)) (fdoms.map Prod.snd) with
+          (fdoms.map Prod.fst)).run (fdoms.map Prod.snd) with
       | none =>
           intro f hf
           have hcontra := denseScanBoxV_none_unsat _ _ hscan _ hinbox
