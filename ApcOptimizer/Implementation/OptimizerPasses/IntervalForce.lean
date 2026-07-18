@@ -1,5 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
+import ApcOptimizer.Implementation.OptimizerPasses.Dedup
+import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
@@ -519,6 +521,16 @@ end BoundIdx
 
 /-! ## The pass -/
 
+/-- The per-slot seed walk of `interactionSeeds`, with the constant-payload pattern `pat`
+    computed once by the caller instead of once per slot. -/
+def interactionSeedsGo {bs : BusSemantics p} (facts : BusFacts p bs)
+    (bnd : Variable → Option Nat) (bi : BusInteraction (Expression p)) (mval : ZMod p)
+    (pat : List (Option (ZMod p))) : List (Expression p) :=
+  (List.range bi.payload.length).flatMap (fun i =>
+    match bi.payload[i]?, facts.slotBound bi.busId mval pat i with
+    | some e, some B => slotSeeds bnd B e
+    | _, _ => [])
+
 /-- All seeds of one interaction: every payload slot with a `slotBound`. -/
 def interactionSeeds {bs : BusSemantics p} (facts : BusFacts p bs)
     (bnd : Variable → Option Nat) (bi : BusInteraction (Expression p)) :
@@ -527,12 +539,7 @@ def interactionSeeds {bs : BusSemantics p} (facts : BusFacts p bs)
   | none => []
   | some mval =>
     if mval = 0 then []
-    else
-      (List.range bi.payload.length).flatMap (fun i =>
-        match bi.payload[i]?,
-              facts.slotBound bi.busId mval (bi.payload.map Expression.constValue?) i with
-        | some e, some B => slotSeeds bnd B e
-        | _, _ => [])
+    else interactionSeedsGo facts bnd bi mval (bi.payload.map Expression.constValue?)
 
 theorem interactionSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs)
     (bnd : Variable → Option Nat) (bi : BusInteraction (Expression p))
@@ -550,6 +557,7 @@ theorem interactionSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs)
     · rw [if_pos hmz] at hs
       exact absurd hs (by simp)
     rw [if_neg hmz] at hs
+    unfold interactionSeedsGo at hs
     rw [List.mem_flatMap] at hs
     obtain ⟨i, _, hsi⟩ := hs
     cases hpe : bi.payload[i]? with
@@ -584,8 +592,9 @@ theorem interactionSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs)
     consumed as a bound-`1` slot (an equality pins the integer window to `{0}`). -/
 def allSeeds {bs : BusSemantics p} (facts : BusFacts p bs) (bnd : Variable → Option Nat)
     (cs : ConstraintSystem p) : List (Expression p) :=
-  (cs.busInteractions.flatMap (interactionSeeds facts bnd) ++
-    cs.algebraicConstraints.flatMap (fun c => slotSeeds bnd 1 c)).eraseDups
+  HashedDedup.hashedEraseDups Expression.bHash
+    (cs.busInteractions.flatMap (interactionSeeds facts bnd) ++
+      cs.algebraicConstraints.flatMap (fun c => slotSeeds bnd 1 c))
 
 theorem allSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs)
     (bnd : Variable → Option Nat) (cs : ConstraintSystem p) (env : Variable → ZMod p)
@@ -594,6 +603,7 @@ theorem allSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs)
     ∀ s ∈ allSeeds facts bnd cs, s.eval env = 0 := by
   intro s hs
   unfold allSeeds at hs
+  rw [HashedDedup.hashedEraseDups_eq] at hs
   rcases List.mem_append.1 (List.mem_eraseDups.1 hs) with h | h
   · obtain ⟨bi, hbi, hsi⟩ := List.mem_flatMap.1 h
     exact interactionSeeds_sound facts bnd bi env hbnd (hsat.2 bi hbi) s hsi
@@ -615,8 +625,13 @@ theorem allSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs)
 def intervalForcePass : VerifiedPassW p := fun cs bs facts =>
   let idx := BoundIdx.build bs facts cs.busInteractions
   let seeds := allSeeds facts (fun v => idx.map[v]?) cs
-  let new := (seeds.filter (fun e => e.vars.all (fun z => cs.vars.contains z))).filter
-    (fun e => !cs.algebraicConstraints.contains e)
+  -- One hash set / one hash-bucket map instead of per-seed scans of the occurrence list and the
+  -- constraint list (both O(system) per seed). Same Bools, so the output is unchanged.
+  let varSet : Std.HashSet Variable := Std.HashSet.ofList cs.vars
+  let csBuckets : Std.HashMap UInt64 (List (Expression p)) :=
+    cs.algebraicConstraints.foldl (fun m c => m.insert c.bHash (c :: m.getD c.bHash [])) ∅
+  let new := (seeds.filter (fun e => e.vars.all (fun z => varSet.contains z))).filter
+    (fun e => !(csBuckets.getD e.bHash []).contains e)
   if new.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
   else
     ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new }, [],
@@ -628,6 +643,8 @@ def intervalForcePass : VerifiedPassW p := fun cs bs facts =>
        (fun e he z hz => by
          have hp := (List.mem_filter.1 (List.mem_of_mem_filter he)).2
          simp only [List.all_eq_true] at hp
-         exact List.contains_iff_mem.mp (hp z hz))⟩
+         have hz' := hp z hz
+         rw [Std.HashSet.contains_ofList] at hz'
+         exact List.contains_iff_mem.mp hz')⟩
 
 end IntervalForce

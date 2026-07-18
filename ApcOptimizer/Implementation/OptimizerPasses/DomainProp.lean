@@ -317,6 +317,28 @@ def interactionBound (bs : BusSemantics p) (facts : BusFacts p bs)
       | none => none
       | some slot => facts.slotBound bi.busId mval (bi.payload.map Expression.constValue?) slot
 
+/-- `interactionBound` with the multiplicity constant and the constant-payload pattern computed
+    once by the caller — they are per-*interaction* values, and callers that query every payload
+    variable of an interaction would otherwise recompute the pattern (a full payload fold) per
+    variable. Definitionally the same function at the canonical arguments
+    (`interactionBoundPat_eq`). -/
+def interactionBoundPat (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (mval? : Option (ZMod p))
+    (pat : List (Option (ZMod p))) (x : Variable) : Option Nat :=
+  match mval? with
+  | none => none
+  | some mval =>
+    if mval = 0 then none
+    else
+      match varSlot x bi.payload with
+      | none => none
+      | some slot => facts.slotBound bi.busId mval pat slot
+
+theorem interactionBoundPat_eq (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : Variable) :
+    interactionBoundPat bs facts bi bi.multiplicity.constValue?
+      (bi.payload.map Expression.constValue?) x = interactionBound bs facts bi x := rfl
+
 theorem interactionBound_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) (x : Variable) (bound : Nat)
     (h : interactionBound bs facts bi x = some bound) (env : Variable → ZMod p)

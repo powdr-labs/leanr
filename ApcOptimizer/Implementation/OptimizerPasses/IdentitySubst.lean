@@ -146,32 +146,54 @@ def identityPairs {bs : BusSemantics p} (facts : BusFacts p bs) (cs : Constraint
     List (Variable × Variable) :=
   cs.busInteractions.filterMap (identityPairAt facts)
 
-/-- The identity map: `result ↦ operand` for every recognised OR identity (first per key). The pair
-    list is captured once (see `identityPairs`), so this is cheap to apply repeatedly. -/
+/-- First-wins key→value map of a pair list: the value stored for `y` is the first pair keyed `y`,
+    exactly the `filterMap … |>.head?` semantics, at one hash lookup per query. -/
+def firstWins : List (Variable × Variable) → Std.HashMap Variable Variable →
+    Std.HashMap Variable Variable
+  | [], m => m
+  | pr :: rest, m => firstWins rest (if m.contains pr.1 then m else m.insert pr.1 pr.2)
+
+theorem firstWins_mem : ∀ (pairs : List (Variable × Variable))
+    (m : Std.HashMap Variable Variable) (y v : Variable),
+    (firstWins pairs m)[y]? = some v → m[y]? = some v ∨ (y, v) ∈ pairs := by
+  intro pairs
+  induction pairs with
+  | nil => intro m y v h; exact Or.inl h
+  | cons pr rest ih =>
+    intro m y v h
+    rcases ih _ y v h with hm | hr
+    · by_cases hc : m.contains pr.1
+      · rw [if_pos hc] at hm
+        exact Or.inl hm
+      · rw [if_neg hc, Std.HashMap.getElem?_insert] at hm
+        by_cases hy : (pr.1 == y) = true
+        · rw [if_pos hy] at hm
+          simp only [Option.some.injEq] at hm
+          have h1 : pr.1 = y := by simpa using hy
+          exact Or.inr (List.mem_cons.2 (Or.inl (by rw [← h1, ← hm])))
+        · rw [if_neg hy] at hm
+          exact Or.inl hm
+    · exact Or.inr (List.mem_cons_of_mem _ hr)
+
+/-- The identity map: `result ↦ operand` for every recognised OR identity (first per key). Backed
+    by a first-wins hash map built once, so `substF` — which queries it per variable occurrence —
+    pays one hash lookup instead of a pair-list scan per occurrence. -/
 def identityF {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p) :
     Variable → Option (Expression p) :=
-  let pairs := identityPairs facts cs
-  fun y => (pairs.filterMap (fun pr => if pr.1 = y then some (Expression.var pr.2) else none)).head?
+  let m := firstWins (identityPairs facts cs) ∅
+  fun y => m[y]?.map Expression.var
 
 theorem identityF_mem {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
     (y : Variable) (t : Expression p) (h : identityF facts cs y = some t) :
     ∃ (o1v : Variable) (bi : BusInteraction (Expression p)), t = Expression.var o1v ∧
       bi ∈ cs.busInteractions ∧ identityPairAt facts bi = some (y, o1v) := by
-  have hmem : t ∈ (identityPairs facts cs).filterMap
-      (fun pr => if pr.1 = y then some (Expression.var pr.2) else none) := by
-    simp only [identityF] at h
-    cases hc : (identityPairs facts cs).filterMap
-        (fun pr => if pr.1 = y then some (Expression.var pr.2) else none) with
-    | nil => rw [hc] at h; simp at h
-    | cons a l => rw [hc] at h; simp only [List.head?_cons, Option.some.injEq] at h; subst h; simp
-  obtain ⟨pr, hpr, hval⟩ := List.mem_filterMap.1 hmem
-  obtain ⟨rv, o1v⟩ := pr
-  obtain ⟨bi, hbi, hpair⟩ := List.mem_filterMap.1 hpr
-  simp only at hval
-  split_ifs at hval with hy
-  simp only [Option.some.injEq] at hval
-  subst hval; subst hy
-  exact ⟨o1v, bi, rfl, hbi, hpair⟩
+  simp only [identityF, Option.map_eq_some_iff] at h
+  obtain ⟨v, hv, rfl⟩ := h
+  rcases firstWins_mem _ _ y v hv with hm | hpair
+  · rw [Std.HashMap.getElem?_empty] at hm
+    exact absurd hm (by simp)
+  · obtain ⟨bi, hbi, hpairAt⟩ := List.mem_filterMap.1 hpair
+    exact ⟨v, bi, rfl, hbi, hpairAt⟩
 
 /-- The pass: batch-substitute every OR-identity result by its operand. When the system has no
     recognised identities — e.g. any OpenVM circuit, whose bitwise bus declares no `orOp` — the `[]`

@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
+import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
@@ -38,11 +39,13 @@ def btCert (singles : List (Expression p)) (c : Expression p) : Bool :=
 
 /-- Cheap mirror of `btCert` over a precomputed (pure, memoized) domain lookup — a prefilter
     only; accepted candidates re-run the real certificate, so the proofs consume `btCert`
-    alone. -/
+    alone. The distinct-variable list is computed once (bucketed, `hashedEraseDups_eq` keeps it
+    the identical list) instead of three `eraseDups` scans per constraint. -/
 def btPre (domOf : Variable → Option (List (ZMod p))) (c : Expression p) : Bool :=
-  2 ≤ c.vars.eraseDups.length &&
-  (let doms := c.vars.eraseDups.filterMap (fun v => (domOf v).map (fun d => (v, d)))
-   decide (doms.map Prod.fst = c.vars.eraseDups) &&
+  let vs := HashedDedup.hashedEraseDups (hash ·) c.vars
+  2 ≤ vs.length &&
+  (let doms := vs.filterMap (fun v => (domOf v).map (fun d => (v, d)))
+   decide (doms.map Prod.fst = vs) &&
    decide ((doms.map (fun vd => vd.2.length)).prod ≤ 32) &&
    (assignments doms).all (fun pt => decide (c.eval (envOf pt) = 0)))
 

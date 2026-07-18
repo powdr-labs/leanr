@@ -3906,3 +3906,52 @@ eth spot checks identical (OpenVM declares no `orOp`, so both arms are structura
 the reorder is output-neutral on the checked cases). Cumulative today (entries 101–103): SP1
 vars 3.784× → 3.922×, bus 2.553× → 2.703× (var gap 442 → 55, bus gap 765 → 319). Proof integrity
 green; no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
+
+### 104. Runtime: de-quadratify per-pass hot loops — bucketed dedups, hoisted patterns, single covered gather (output byte-identical)
+
+Pure **runtime** work following a fresh profiling session (measurements and the full prioritized
+plan are in the rewritten `docs/ideas.md` Runtime section): end-to-end scaling is quadratic
+(openvm-eth size sweep exponent ≈ 1.95), keccak (28.6k constraints / 13.3k interactions) takes
+252 s, and openvm SHA is ~8× keccak — the quadratic loops are what matters. This entry lands the
+proof-cheap slice of R1/R2/R4; every change is output-preserving and verified byte-identical.
+
+**New shared module `HashedDedup.lean`**: hash-bucketed twins of `List.eraseDups` (keep-first)
+and `List.dedup` (keep-last), each **proven to return the identical list**
+(`hashedEraseDups_eq` / `hashedDedup_eq`, generic over `LawfulBEq`/`DecidableEq` with any
+`α → UInt64` hash) — so callers rewrite along the equality and keep their proofs and their exact
+output. The O(n²) whole-tail membership tests become one-bucket scans.
+
+- **dedup**: the constraint side was still plain `List.dedup` = O(C²·E) deep comparisons —
+  the single clearest quadratic at SHA scale (230k constraints). Now `hashedDedup
+  Expression.bHash`. keccak: 6.6 s → below the profiler's noise floor.
+- **intervalForce** (keccak **20.7 s → 1.1 s**, apc_030 231 → 99 ms): `allSeeds`'s O(seeds²·E)
+  `eraseDups` → `hashedEraseDups`; the per-seed `cs.vars.contains` scan over the ~10⁵-entry
+  occurrence list → one `Std.HashSet` (`contains_ofList` transports the load-bearing "no new
+  variable" check); the per-seed `algebraicConstraints.contains` deep scan → one `bHash`-bucket
+  map; the per-slot recomputation of the constant-payload pattern → hoisted per interaction
+  (`interactionSeedsGo`).
+- **domainBatch**: each item's deduped variable list is computed **once** and shared between the
+  domain-table build, the redundancy filter, and the target list (was 3 × O(occ²) per item);
+  `forcedOver`'s three per-target covered gathers become **one** (`CoveredIndex.gatherBoth`
+  returns the covered set and its non-redundant subset off per-position flags — the third index
+  build is gone too); `interactionBound`'s per-variable payload re-fold is hoisted per
+  interaction (`interactionBoundPat`/`interactionDomainFPat`, definitional `rfl` equalities, also
+  applied to `biInformative`).
+- **identitySubst**: the substitution closure linear-scanned the pair list per variable
+  occurrence; now a first-wins `Std.HashMap` (`firstWins_mem` keeps the membership proof).
+- **flagFold** (`btPre`): the distinct-variable list is computed once per constraint (was 3
+  `eraseDups` scans); `btPre` is a proof-opaque prefilter, so nothing else moves.
+- **rootPairUnify** (`rpCandidates`): the two factors are linearized **once per constraint**
+  instead of once per candidate variable (`twoRootOf?` re-walked both trees per variable).
+
+**Verification**: output **byte-identical** on an 11-case set (openvm keccak, 4 eth, 2 wasm-eth,
+3 sp1-rsp incl. the k256-heavy apc_024/030, sp1 keccak) via `opt-export` diff. `lake build`
+warning-free; proof integrity green ({propext, Classical.choice, Quot.sound}).
+
+**Measured** (this container, ±15 % run-to-run): keccak `profile` 254 → 258 s *total* — the two
+clean wins above (−26 s) are offset by same-code swings in domainFold/reencode/domainBatch
+(+18 % on unchanged code between two same-binary runs), so the serial Runtime Bench CI A/B is
+the authoritative number. apc_030 26.9 s: the remaining cost is the cycle-5 domainBatch
+enumeration itself (19 s, productive — cross-cycle memoization is the lever, ideas R6) and
+identitySubst's fixpoint (2.8 s, cause not yet attributed). **Worked: yes (asymptotics), CI
+pending (wall time).**

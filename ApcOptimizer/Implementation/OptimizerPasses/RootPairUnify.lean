@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
+import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
@@ -523,13 +524,26 @@ structure RPSeen (p : ℕ) (cs : ConstraintSystem p) where
     otherwise make every boolean variable a (never-unifiable, expensive-to-reject) candidate. -/
 def rpCandidates (c : Expression p) :
     List (Variable × (ZMod p × List (Variable × ZMod p) × ZMod p × ZMod p)) :=
-  c.vars.eraseDups.filterMap (fun x =>
-    match twoRootOf? c x with
-    | some (k, A, δ) =>
-      if 256 ≤ min (k⁻¹ * δ).val (p - (k⁻¹ * δ).val) then
-        some (x, (k, A.terms, A.const, δ))
-      else none
-    | none => none)
+  -- The two factors are linearized **once**, not once per candidate variable (`twoRootOf?`
+  -- would re-walk both factor trees per variable); each `x` then reads its coefficient and
+  -- x-free part off the shared linear forms — exactly `twoRootOf?`'s values, so the candidate
+  -- list (and the pass output) is unchanged.
+  match c with
+  | .mul f1 f2 =>
+    (match linearize f1, linearize f2 with
+     | some l1, some l2 =>
+       (HashedDedup.hashedEraseDups (hash ·) c.vars).filterMap (fun x =>
+         let k := l1.coeff x
+         let A := (l1.others x).norm
+         let A2 := (l2.others x).norm
+         if k ≠ 0 ∧ l2.coeff x = k ∧ A2.terms = A.terms then
+           let δ := A2.const - A.const
+           if 256 ≤ min (k⁻¹ * δ).val (p - (k⁻¹ * δ).val) then
+             some (x, (k, A.terms, A.const, δ))
+           else none
+         else none)
+     | _, _ => [])
+  | _ => []
 
 /-- Hash of a candidate key, used to bucket the `seen` accumulator. It reads only fields that the
     `key == key'` test compares, so equal keys hash equally — bucketing never hides a twin — while

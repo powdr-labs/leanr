@@ -72,6 +72,64 @@ def coveredIdxUnord (idx : CovIndex) (arr : Array α) (Q : α → Bool) (xs : Li
   uniq.filterMap (fun i =>
     if h : i < arr.size then (if Q arr[i] then some arr[i] else none) else none)
 
+/-- One walk of the candidate positions returning both the `Q`-covered items and the sub-list of
+    those whose position is flagged in `act` — one gather with `Q` evaluated once per position and
+    no per-item hashing. Consumers needing a covered set *and* its flagged (e.g. non-redundant)
+    subset get both from a single scan. -/
+def gatherBoth (arr : Array α) (Q : α → Bool) (act : Array Bool) : List Nat → List α × List α
+  | [] => ([], [])
+  | i :: rest =>
+    let r := gatherBoth arr Q act rest
+    if h : i < arr.size then
+      if Q arr[i] then
+        (arr[i] :: r.1, if act[i]?.getD false then arr[i] :: r.2 else r.2)
+      else r
+    else r
+
+/-- Every item of the flagged sublist is a genuine `Q`-passing item of `arr`. -/
+theorem gatherBoth_snd_mem (arr : Array α) (Q : α → Bool) (act : Array Bool) :
+    ∀ (l : List Nat) {e : α}, e ∈ (gatherBoth arr Q act l).2 →
+      ∃ i, ∃ _h : i < arr.size, arr[i] = e ∧ Q e = true := by
+  intro l
+  induction l with
+  | nil => intro e he; simp [gatherBoth] at he
+  | cons i rest ih =>
+    intro e he
+    rw [gatherBoth] at he
+    by_cases h : i < arr.size
+    · rw [dif_pos h] at he
+      by_cases hq : Q arr[i]
+      · rw [if_pos hq] at he
+        dsimp only at he
+        by_cases ha : (act[i]?.getD false) = true
+        · rw [if_pos ha] at he
+          rcases List.mem_cons.1 he with rfl | he'
+          · exact ⟨i, h, rfl, hq⟩
+          · exact ih he'
+        · rw [if_neg ha] at he
+          exact ih he
+      · rw [if_neg hq] at he
+        exact ih he
+    · rw [dif_neg h] at he
+      exact ih he
+
+/-- The `gatherBoth` covered set and flagged subset over the deduplicated candidate positions of
+    target `xs` (the `coveredIdxUnord` gather, done once for both lists). -/
+def coveredIdxBoth (idx : CovIndex) (arr : Array α) (Q : α → Bool) (act : Array Bool)
+    (xs : List Variable) : List α × List α :=
+  let uniq := ((candidates idx xs).foldl (·.insert ·) (∅ : Std.HashSet Nat)).toList
+  gatherBoth arr Q act uniq
+
+/-- Soundness of the flagged sublist for an array threaded with its list equation. -/
+theorem coveredIdxBoth_snd_mem_of_eq (idx : CovIndex) (l : List α) (arr : Array α)
+    (harr : arr = l.toArray) (Q : α → Bool) (act : Array Bool) (xs : List Variable)
+    {e : α} (he : e ∈ (coveredIdxBoth idx arr Q act xs).2) : e ∈ l ∧ Q e = true := by
+  subst harr
+  obtain ⟨i, hi, hei, hq⟩ := gatherBoth_snd_mem l.toArray Q act _ he
+  subst hei
+  have hi' : i < l.length := by simpa using hi
+  exact ⟨by simp [l.getElem_mem hi'], hq⟩
+
 /-- **Soundness.** Every item `coveredIdx` returns is a genuine item of `arr` (hence of the
     underlying list) that satisfies `Q`. This is all the enumeration proofs need; the index need
     not be complete for correctness (completeness only affects effectiveness, checked empirically). -/

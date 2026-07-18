@@ -130,41 +130,35 @@ proof-free*. Confirmed quadratics, in rough per-case cost order:
      re-scans the mid region `findConsumer` just stepped over (`BusUnify.lean:217/146`); each
      step can hit `addrNonzeroNeq` = O(2^A·C) (`AddrDiseq.lean:519`). Fix: `(busId, addrHash)`
      position buckets (port `recvIndexAll`), and thunk the eager `TwoRootMap`/`NonzeroWits`
-     builds (`BusUnify.lean:309-311`) so no-op invocations skip them.
+     builds (`BusUnify.lean:309-311`) so no-op invocations skip them. **Still open.** Note the
+     scan semantics are load-bearing: every stepped-over message must be *excluded*, so an
+     address-bucketed jump cannot skip the blocker checks — the win is bounding the scan via
+     per-position precomputed address forms, or a per-address-key incremental fold (complex; the
+     left-fold reformulation `ok' = (pr m ∨ ok) ∧ ref m` is exact but pairwise in `S`).
    - `busPairCancel`: `shieldOk` re-scans (and `liveArr` **materializes**) the whole before-region
      per candidate send (`BusPairCancel.lean:1861/2428`) — O(B²) time *and* allocation on the long
-     same-address chains the pass exists for. A per-sweep suffix table of `shieldScan` results (or
-     a left-to-right open-sends accumulator) makes it O(B); the Bool is identical so
-     `checkCancel_sound` keeps its hypothesis. Same file: `dropWits` scans the whole array from
+     same-address chains the pass exists for. Same file: `dropWits` scans the whole array from
      position 0 per queried variable (`:2146`) — give it the `buildFormIdx` treatment; in coda
      mode the `addrHash` bucket is O(B) per hot address (`:1255`) — add a position cursor.
-   - `dedup`: the constraint side is still `List.dedup` = O(C²·E) structural comparisons
-     (`Dedup.lean:241`) — 28k constraints in keccak cycle 0, ~230k for SHA. Bucket by the
-     existing `Expression.bHash` exactly as `dedupStatelessFast` already does for interactions;
-     the `dedupStatelessFast_eq` proof pattern transfers.
-   - `intervalForce`: per-seed `cs.vars.contains` over the *non-deduped occurrence list* and
-     per-seed `algebraicConstraints.contains` (`IntervalForce.lean:618-619`), `eraseDups` =
-     O(seeds²·E) (`:585`), the O(t²) `walk` with `seen ++ rest` re-summing (`:245`), and O(P²)
-     payload `List` indexing (`:531`). Fix: one `HashSet` of vars + one hash-bucketed constraint
-     set per invocation, running window sums, arrays.
-   - `rootPairUnify`: `twoRootOf?` re-linearizes both factors per candidate var and again per
-     checked pair (`RootPairUnify.lean:74/427`), and `anyVarBound` re-scans all interactions per
-     pair with no memo (`:397`). Linearize once per constraint, carry the decomposition in
-     `RPSeen`, memoize `anyVarBound` per variable.
-   - `flagFold`: `c.vars.eraseDups` (O(E_c²)) recomputed 3-4× per constraint across
-     `singleVarCs`/`btPre`/`btCert` (`FlagFold.lean:25/43/32`); compute once, via HashSet.
+     **Still open.**
+   - ~~`dedup` constraint-side `List.dedup` O(C²·E)~~ **done (entry 104)**: bucketed
+     proven-identical twin (`HashedDedup.hashedDedup`), keccak 6.6 s → noise.
+   - ~~`intervalForce` seed filters / `eraseDups` / per-slot pattern re-maps~~ **done (entry
+     104)**: keccak 20.7 s → 1.1 s. (`walk`'s O(t²) with `maxTerms = 32` cap remains — bounded,
+     low value.)
+   - ~~`rootPairUnify` re-linearization per candidate var~~ **done (entry 104)** — factors
+     linearized once per constraint. `anyVarBound` memoization across pairs still open (only
+     matters if key-matched pairs are common; measure first).
+   - ~~`flagFold` triple `eraseDups` in `btPre`~~ **done (entry 104)**. `singleVarCs`/`btCert`
+     still recompute per-constraint `eraseDups`, but only on gate-passing constraints (proofs
+     unfold them — rework only if they show up in profiles).
 
-**R2. domainBatch setup: stop re-gathering and re-dedup-ing**  ·  *high value on SP1 + keccak,
-proof-free*. Four measured hot spots (`DomainBatch.lean`): (a) the covered-set gather runs
-**three times per target** (`forcedOver:1259-1262`) and `es ⊆ esFull` makes the third gather pure
-duplication — gather once, filter by a redundancy flag; hot-variable buckets (selector/is_real
-vars with O(C) buckets) are re-gathered and mostly Q-rejected per target — cap or skip oversized
-buckets (index incompleteness only costs effectiveness of *this* probe, and only via `seen`-dedup
-order). (b) `c.vars.dedup` = O(occ²) recomputed 3× per item (`:347/1352/901`) — compute each
-item's deduped var set once per invocation. (c) `constraintRedundant` full-box scans (`:899`).
-(d) `interactionBound` re-maps `constValue?` over the whole payload per raw slot (O(P²) per
-interaction, `DomainProp.lean:318`) — cache the constant-pattern per interaction. Also applies to
-`biInformative` (`:887`).
+**R2. domainBatch setup: stop re-gathering and re-dedup-ing**  ·  **done (entry 104)** except:
+(c) `constraintRedundant` full-box scans (`:899`) remain (they pay once to save per-target work);
+hot-variable bucket capping remains open (not byte-identical — the gates read `esFull`). The
+enumeration core itself (SP1 apc_030's 19 s single-cycle spike) is untouched: that lever is
+**cross-cycle memoization of enumeration negatives** (needs pass-state threading — R6's
+substrate), not setup cost.
 
 **R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
 index gate**  ·  *high value at eth/mid-keccak scale*. Both passes have a proven-equal inverted
@@ -187,9 +181,9 @@ untouched); and both passes recompute `c.vars.dedup` twice per constraint in set
      every hit-comparison O(1). Swap the `Hashable Variable` instance
      (`Implementation/Variable.lean:19`, unaudited) to hash `powdrId?` first — O(1) vs O(name
      length) on almost every key. `Spec.lean`'s `Variable` stays untouched.
-   - `identitySubst`: the substitution closure linear-scans the pair list per variable occurrence
-     (`IdentitySubst.lean:154`) — 2.7 s on apc_030. HashMap it; optionally resolve
-     operand→operand chains up front to drop the `iterateToFixpoint` wrapper.
+   - `identitySubst`: ~~HashMap the pair lookup~~ done (entry 104), but apc_030 still shows
+     2.8 s — the cost is elsewhere in its fixpoint (probably the per-iteration `identityPairs`
+     re-decode + `substF` + double `sizeKey`); profile before more work.
    - `normalize`: `linearize` re-runs on the whole subtree at every node along non-affine paths
      (O(E·depth), `Normalize.lean:306`); fuse into one bottom-up pass returning per-node linear
      forms. Also feeds gauss's per-constraint reduce.
