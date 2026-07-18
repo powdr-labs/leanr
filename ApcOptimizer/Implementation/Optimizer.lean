@@ -192,19 +192,134 @@ theorem cleanupCycle_respectsDeg (b : DegreeBound) : RespectsDeg b (cleanupCycle
   simp only [cleanupPasses, List.map_cons, List.map_nil] at hf
   fin_cases hf <;> exact VerifiedPassW.guardDegree_respectsDeg _
 
-/-- The circuit optimizer: fold the prelude, iterate the cleanup cycle to a fixpoint
-    (`iterateToFixpoint`, no budget), then fold the coda. `pipeline` and the profiler both consume
-    `preludePasses` / `cleanupPasses` / `codaPasses`, so they stay in lockstep. -/
+/-! ## Dense cleanup stage (Task 3, Checkpoint 1)
+
+The cleanup stage runs over the dense `VarId` representation: encode once at the start of cleanup,
+iterate the dense cleanup cycle to its fixpoint, decode once after. `denseCleanupPasses` is derived
+from `cleanupPasses` (the single source of truth) by wrapping each entry as a dense pass; entries
+are replaced by true dense implementations one at a time (monsters first). `denseCleanupAdapter` is
+the one verified encode/decode adapter Checkpoint 1 permits around the whole fixpoint — a
+`VerifiedPassW` that slots into `pipeline` between the (still spec-level) prelude and coda. -/
+
+/-- Every scheduled cleanup pass respects the degree bound (each is `guardDegree`-wrapped). -/
+theorem cleanupPasses_respectsDeg (b : DegreeBound) :
+    ∀ f ∈ ((cleanupPasses (p := p) b).map (·.2)), RespectsDeg b f := by
+  intro f hf
+  simp only [cleanupPasses, List.map_cons, List.map_nil] at hf
+  fin_cases hf <;> exact VerifiedPassW.guardDegree_respectsDeg _
+
+/-- The dense implementation of a cleanup pass, selected by label: a **true dense** pass where one
+    exists (degree-guarded), else the generic `ofSpec` adapter (development scaffolding, replaced
+    pass by pass). The label dispatch is temporary scaffolding; the finished checkpoint replaces it
+    with one canonical dense schedule. New cleanup passes (and `xorEqExtract`, whose spec algorithm
+    was rewritten upstream so its former dense commutation port was dropped, pending a native
+    rebuild) flow through `ofSpec` automatically. -/
+def denseImpl (b : DegreeBound) (pw : PrimeWitness p) (name : String) (fallback : VerifiedPassW p) :
+    DenseVerifiedPassW p :=
+  if name == "constFold1" || name == "constFold2" then
+    DenseVerifiedPassW.guardDegree b denseConstantFoldPass
+  else if name == "trivialConstr" then
+    DenseVerifiedPassW.guardDegree b denseTrivialConstraintDropPass
+  else if name == "zeroMultBus" then
+    DenseVerifiedPassW.guardDegree b denseZeroMultBusDropPass
+  else if name == "tautoBus" then
+    DenseVerifiedPassW.guardDegree b denseTautoBusDropPass
+  else if name == "normalize1" || name == "normalize2" then
+    DenseVerifiedPassW.guardDegree b denseNormalizePass
+  else if name == "dedup" then
+    DenseVerifiedPassW.guardDegree b denseDedupPass
+  else if name == "digitFold" then
+    DenseVerifiedPassW.guardDegree b denseDigitFoldPass
+  else if name == "gauss" then
+    DenseVerifiedPassW.guardDegree b denseGaussElimPass
+  else if name == "domainBatch" then
+    DenseVerifiedPassW.guardDegree b (denseDomainBatchPass pw)
+  else if name == "oneHotAnnihilate" then
+    DenseVerifiedPassW.guardDegree b denseOneHotAnnihilatePass
+  else if name == "zeroRegister" then
+    DenseVerifiedPassW.guardDegree b denseZeroRegisterPass
+  else if name == "carryBranch" then
+    DenseVerifiedPassW.guardDegree b (denseCarryBranchPass pw)
+  else if name == "zeroWidthRange" then
+    DenseVerifiedPassW.guardDegree b (denseZeroWidthRangePass pw)
+  else if name == "domainFold" then
+    DenseVerifiedPassW.guardDegree b (denseDomainFoldPass pw)
+  else DenseVerifiedPassW.ofSpec fallback
+
+/-- `DenseRespectsDeg` is preserved by an `if`-`then`-`else` whose branches both respect the bound. -/
+theorem denseRespectsDeg_ite {bnd : DegreeBound} {c : Prop} [Decidable c]
+    {a b : DenseVerifiedPassW p}
+    (ha : DenseRespectsDeg bnd a) (hb : DenseRespectsDeg bnd b) :
+    DenseRespectsDeg bnd (if c then a else b) := by
+  by_cases h : c
+  · rw [if_pos h]; exact ha
+  · rw [if_neg h]; exact hb
+
+set_option maxHeartbeats 800000 in
+theorem denseImpl_respectsDeg (b : DegreeBound) (pw : PrimeWitness p) (name : String)
+    {fallback : VerifiedPassW p} (h : RespectsDeg b fallback) :
+    DenseRespectsDeg b (denseImpl b pw name fallback) := by
+  unfold denseImpl
+  repeat' apply denseRespectsDeg_ite
+  all_goals first
+    | exact DenseVerifiedPassW.guardDegree_respectsDeg _
+    | exact DenseVerifiedPassW.ofSpec_respectsDeg h
+
+/-- The dense cleanup pass list: each `cleanupPasses` entry as a dense pass (single source of truth
+    derived from the spec schedule via `denseImpl`). The primality witness is computed **once** here
+    and threaded to every prime-gated dense pass (mirroring `cleanupPasses`). -/
+def denseCleanupPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
+  let pw := PrimeWitness.of p
+  (cleanupPasses b).map (fun e => (e.1, denseImpl b pw e.1 e.2))
+
+/-- The dense cleanup stage as a spec `VerifiedPassW`: encode the input from an empty registry, run
+    the dense cleanup cycle to its fixpoint, decode the result and its derivations. Correct because
+    the round trip `decode ∘ encode = id` turns the dense fixpoint's `PassCorrect` into one against
+    the original system. -/
+def denseCleanupAdapter (b : DegreeBound) : VerifiedPassW p := fun cs bs facts =>
+  -- Encode the input exactly once (bind the pair; `e.1`/`e.2` project the shared value).
+  let e := VarRegistry.empty.encodeCS cs
+  let r := denseIterateToFixpoint (denseChain ((denseCleanupPasses b).map (·.2)))
+    e.1 e.2 (VarRegistry.empty.encodeCS_covered cs) bs facts
+  ⟨r.reg'.decodeCS r.out, r.reg'.decodeDerivs r.derivs, by
+    have hc := r.correct
+    rw [(VarRegistry.empty.decodeCS_encodeCS cs : e.1.decodeCS e.2 = cs)] at hc
+    exact hc⟩
+
+/-- The dense cleanup cycle respects the degree bound (each entry is a degree-respecting dense
+    pass — `guardDegree` of a true dense pass or `ofSpec` of a degree-respecting spec pass). -/
+theorem denseCleanupChain_respectsDeg (b : DegreeBound) :
+    DenseRespectsDeg b (denseChain ((denseCleanupPasses (p := p) b).map (·.2))) := by
+  apply denseChain_respectsDeg
+  intro f hf
+  simp only [denseCleanupPasses, List.map_map] at hf
+  rw [List.mem_map] at hf
+  obtain ⟨e, he, rfl⟩ := hf
+  exact denseImpl_respectsDeg _ _ e.1 (cleanupPasses_respectsDeg b e.2 (List.mem_map.2 ⟨e, he, rfl⟩))
+
+theorem denseCleanupAdapter_respectsDeg (b : DegreeBound) :
+    RespectsDeg b (denseCleanupAdapter (p := p) b) := by
+  intro cs bs facts hin
+  refine denseIterateToFixpoint_respectsDeg (denseCleanupChain_respectsDeg b)
+    (VarRegistry.empty.encodeCS cs).1 (VarRegistry.empty.encodeCS cs).2
+    (VarRegistry.empty.encodeCS_covered cs) bs facts ?_
+  rw [VarRegistry.empty.decodeCS_encodeCS cs]
+  exact hin
+
+/-- The circuit optimizer: fold the prelude, run the dense cleanup stage to a fixpoint
+    (`denseCleanupAdapter`, which encodes once, iterates the dense cleanup cycle, decodes once),
+    then fold the coda. (The profiler does not yet step `denseCleanupPasses` — see `preludePasses`;
+    that lockstep is a Checkpoint-1 deliverable.) -/
 def pipeline (b : DegreeBound) : VerifiedPassW p :=
   chainPasses ((preludePasses b).map (·.2))
-    |>.andThen (iterateToFixpoint (cleanupCycle b))
+    |>.andThen (denseCleanupAdapter b)
     |>.andThen (chainPasses ((codaPasses b).map (·.2)))
 
 theorem pipeline_respectsDeg (b : DegreeBound) : RespectsDeg b (pipeline (p := p) b) := by
   unfold pipeline
   refine VerifiedPassW.andThen_respectsDeg (VerifiedPassW.andThen_respectsDeg
     (chainPasses_respectsDeg (fun f hf => ?_))
-    (iterateToFixpoint_respectsDeg (cleanupCycle_respectsDeg b)))
+    (denseCleanupAdapter_respectsDeg b))
     (chainPasses_respectsDeg (fun f hf => ?_))
   · simp only [preludePasses, List.map_cons, List.map_nil] at hf
     fin_cases hf
