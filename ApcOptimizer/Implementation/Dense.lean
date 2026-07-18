@@ -25,6 +25,7 @@ import ApcOptimizer.Implementation.Dense.DomainFold
 import ApcOptimizer.Implementation.Dense.DomainFoldNative
 import ApcOptimizer.Implementation.Dense.DomainFoldNativeProof
 import ApcOptimizer.Implementation.Dense.AddrDiseq
+import ApcOptimizer.Implementation.Dense.AddrDiseqProof
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 
