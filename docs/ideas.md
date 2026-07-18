@@ -162,23 +162,28 @@ substrate), not setup cost.
 
 **R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
 index gate**  ·  *high value at eth/mid-keccak scale*. Partially **done (entry 105)**:
-   - ~~reencode's 8192 gate~~ **done**: always-indexed via `CoveredIndex.buildPruned` — items
-     with more than 8 distinct variables can never be covered by a ≤8-variable target, so pruning
-     them keeps the covered sets identical *and* keeps hot-variable buckets small (the reason the
-     gate existed). Proof-free: reencode's covered set was already untrusted (`checkReencode` is
-     the authority).
+   - reencode: the pruned index (`CoveredIndex.buildPruned`, entry 105 — items with more than 8
+     distinct variables can never be covered by a ≤8-variable target, so pruning keeps covered
+     sets identical) stays, but **behind the 8192 gate again** (entry 107): CI measured
+     always-indexed at 1.19× on the dense openvm-eth blocks with no keccak gain — the entry-73a
+     direct-path trade-off is real. Do not retire the gate without a same-runner A/B on eth.
    - ~~domainFold's direct-path double `coveredBy` sweep~~ **done**: one `partition` per target
      feeds both the covered set and the no-op gate (`systemHasFoldableW`).
    - ~~both passes' doubled `c.vars.dedup` setup~~ **done** (`hashedDedup`, computed once).
-   - **Still open — the domainFold indexed path** (keccak cycles 0-2, C ≥ 8192): its covered set
-     is proof-bearing (`coveredCsIdx_eq` demands the exact build tie), so the pruned index and
-     stale-bucket refresh don't directly apply. The right fix: generalize `foldOut_correct` to
-     any `es ⊆` the covered set (soundness only needs survivor *supersets* — fewer constraints →
-     more survivors → `constOnSurvs` more conservative), making the gather fully untrusted; then
-     prune + stale-refresh apply and the per-accept `CoveredIndex.build` rebuild (O(S) × #accepts)
-     disappears. Note `systemHasFoldableIdx` may only *over*-approximate, never under — a pruned
-     gate misses wide items with foldable sub-nodes inside `xs`, so the gate needs the unpruned
-     buckets (or no gate: always `foldOut`, content-identical when nothing folds).
+   - **Still open — domainFold's per-accept rebuild** (instrumented on keccak: 830 doms-bearing
+     targets, **482 accepts**, each paying `foldOut` + a constraint-index rebuild; entry 107
+     already removed the two per-accept const-foldable refilters and made all builds insert per
+     distinct variable). The remaining rebuild exists because `foldOut` *reorders* constraints
+     (rewritten-uncovered ++ covered-verbatim), invalidating bucket positions. Candidate fixes,
+     hardest-but-best first: (a) position-remap refresh — the reorder is a computable stable
+     partition, so buckets can be remapped in O(entries) integer work without re-hashing (needs
+     the completeness proof restated over the remap); (b) generalize `foldOut_correct` to any
+     covered *subset* (soundness only needs survivor supersets), making the gather untrusted —
+     but `systemHasFoldableIdx` must never under-approximate (a false negative skips a real fold
+     and changes output; a false positive triggers a no-op `foldOut` which *also* changes output
+     via the reorder), so the gate needs exact, current buckets either way; (c) make `foldOut`
+     order-preserving — simplest and fixes everything, but changes output order, so it needs a
+     full effectiveness re-validation rather than byte-identity.
    - **Still open — reencode's `checkReencode`** re-runs the covered scan after `buildReencode`
      (`Reencode.lean:852/858`); rarely reached (post-gates), so low value now.
 
