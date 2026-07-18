@@ -3749,3 +3749,25 @@ over entries 97–98: SP1 vars 3.672× → 3.743×, bus 2.488× → 2.539× (var
 976 → 809). **No OpenVM regression:** OpenVM declares no `rangeCheckAt`, so the pass is a no-op there
 (keeps `ZeroWidthRange` on its own bus) — keccak byte-identical. Proof integrity green
 ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
+
+### 99. Width-1 range check → booleanity on SP1's op-6 (`RangeBool.lean`, bus 2.539× → 2.553×)
+
+The width-1 companion to entry 98, the `rangeCheckAt` half of `ZeroWidthRange`'s booleanity arm.
+SP1 carries width-1 checks `[6, x, 1, 0]` (`x < 2`, i.e. `x ∈ {0,1}`) on its byte bus; powdr drops
+them all (0 op-6 w=1 vs apc's ~8 on the k256 blocks). `rangeBoolPass` reads them through
+`BusFacts.rangeCheckAt` (`bound = 2`) and, when the value slot is a bare variable, replaces the bus
+interaction by the degree-2 booleanity `x·(x − 1) = 0` — a two-step `PassCorrect` (add the
+booleanity, entailed by acceptance; drop the now-entailed check via `filterBusEntailed_correct`),
+exactly as `ZeroWidthRange` does on OpenVM's own bus. Prime-gated (`x·(x−1)=0 → x < 2` needs an
+integral domain); the bare-variable restriction keeps every added constraint at degree 2, within the
+identity bound. Reuses `ZeroWidthRange.boolC` / `val_lt_two_iff`.
+
+**Impact (`benchmark.py --vm sp1`):** bus interactions **2.539× → 2.553×** (aggregate bus gap vs
+powdr 809 → 765, −44), variables **3.743× → 3.745×** (var gap 664 → 658, the booleanity feeds the
+finite-domain passes) — the dropped checks become +44 degree-2 constraints (the lowest-priority axis;
+`bus ≻ constraints`, so trading a bus interaction for a constraint is a win, and powdr does the same).
+0 var/bus regressions. Cumulative over entries 97–99: SP1 vars 3.672× → 3.745×, bus 2.488× → 2.553×
+(var gap 880 → 658, bus gap 976 → 765 — each ~25 % closed). **No OpenVM regression:** OpenVM declares
+no `rangeCheckAt` and the pass is prime-gated, so it is a no-op there (keeps `ZeroWidthRange`) —
+keccak byte-identical. Proof integrity green ({propext, Classical.choice, Quot.sound}); no
+`sorry`/`axiom`/`native_decide`. **Worked: yes.**
