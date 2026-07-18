@@ -4016,3 +4016,31 @@ them as parameters. Audited the other `Variable → Option (Expression p)` closu
 `ptFun`, `groupSubst`) — none carries a heavy `let`.
 
 Build warning-free; proof integrity green; byte-identical exports. **Worked: yes.**
+
+### 107. Runtime: cheaper domainFold accepts, deduped index builds, reencode gate restored (output byte-identical)
+
+Instrumented counts on keccak reframed domainFold's cost: its per-step work is tiny (830 doms-
+bearing targets, es ≤ 10, boxes ≤ 243, cycles 1-4 find nothing) but **482 accepted folds** each
+paid `FoldIdx.refresh` — a full constraint-index rebuild plus two more full-system const-foldable
+filters — and `foldOut`. Changes, all verified byte-identical (11-case export set):
+
+- **`FoldIdx.refresh`**: the const-foldable lists are recomputed only when the old ones are
+  nonempty. A fold never *creates* a var-free compound node (`foldRewrite` replaces the maximal
+  constant node wholesale), so fresh ⊆ old; old-empty (the normal, post-constant-fold state)
+  forces fresh-empty and the two O(S) filters per accept are skipped with the gate value
+  bit-for-bit unchanged.
+- **Index builds insert per *distinct* variable** (`dedupVarsOf` via `hashedEraseDups`): the raw
+  `vars` lists carry one entry per occurrence, so buckets were multiplicity-bloated — inserts,
+  bucket scans, and the per-target gather HashSets all paid per occurrence. Same buckets as sets,
+  gathers dedup positions anyway → byte-identical; `coveredCsIdx_eq`'s completeness hypothesis
+  transports through `mem_eraseDups`. Applied to `FoldIdx.mk'`/`refresh` and domainBatch's
+  `ForcedIdx`.
+- **reencode's size gate is back** (CI showed always-indexed at 1.19× on the dense openvm-eth
+  blocks with no keccak gain — the entry-73a trade-off is real); the ≥8192 side keeps the pruned
+  build from entry 105.
+
+CI verdicts for entries 104-105 (same-runner serial A/B): **keccak 130.4 → 105.0 s (0.81×)** —
+busPairCancel 0.32×, intervalForce 0.04×, dedup 0.06×; openvm-eth total 0.95× (batch 1).
+Remaining keccak: domainFold 30.8 s / reencode 29.9 s / domainBatch 21.9 s — the per-accept
+`foldOut` + rebuild and the enumeration core; next levers recorded in ideas (R6 cross-cycle
+negatives, position-remap refresh). **Worked: yes.**

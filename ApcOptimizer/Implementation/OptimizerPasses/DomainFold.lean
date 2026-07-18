@@ -480,13 +480,23 @@ and rebuilt only on an accepted fold (`cs` changes), carrying the proofs tying i
 `cs` via `FoldIdx`. Effectiveness is bit-identical (the covered set is unchanged); only the scan is
 faster. -/
 
+/-- Per-item variable list with duplicates removed: the index build otherwise inserts one bucket
+    entry per *occurrence* (and the per-target gathers then re-deduplicate them). Same membership,
+    so bucket completeness is unchanged (`hashedEraseDups_eq` + `mem_eraseDups`). -/
+def dedupVarsOf (c : Expression p) : List Variable :=
+  HashedDedup.hashedEraseDups (hash ·) c.vars
+
+/-- `dedupVarsOf` for interactions (multiplicity + payload occurrences). -/
+def dedupBiVarsOf (bi : BusInteraction (Expression p)) : List Variable :=
+  HashedDedup.hashedEraseDups (hash ·) bi.vars
+
 /-- The prebuilt covered-constraint index for the current `cs`, with the proofs tying it to `cs` so
     the covered set it yields is provably `coveredCsOf cs xs` (`coveredCsIdx_eq`), plus the
     proof-free data the index-local `systemHasFoldableIdx` gate consumes: the interaction-side
     inverted index and the (normally empty) const-foldable item lists. -/
 structure FoldIdx (cs : ConstraintSystem p) where
   idx : CoveredIndex.CovIndex
-  hidx : idx = CoveredIndex.build Expression.vars cs.algebraicConstraints
+  hidx : idx = CoveredIndex.build dedupVarsOf cs.algebraicConstraints
   arr : Array (Expression p)
   harr : arr = cs.algebraicConstraints.toArray
   bisIdx : CoveredIndex.CovIndex
@@ -496,11 +506,11 @@ structure FoldIdx (cs : ConstraintSystem p) where
 
 /-- Build the index for a system (by construction the equalities hold `rfl`). -/
 def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
-  idx := CoveredIndex.build Expression.vars cs.algebraicConstraints
+  idx := CoveredIndex.build dedupVarsOf cs.algebraicConstraints
   hidx := rfl
   arr := cs.algebraicConstraints.toArray
   harr := rfl
-  bisIdx := CoveredIndex.build BusInteraction.vars cs.busInteractions
+  bisIdx := CoveredIndex.build dedupBiVarsOf cs.busInteractions
   arrBis := cs.busInteractions.toArray
   cfCs := cs.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
   cfBis := cs.busInteractions.filter (fun bi =>
@@ -516,15 +526,24 @@ def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
     rebuild-per-accepted-fold cost on fold-heavy circuits. -/
 def FoldIdx.refresh {cs : ConstraintSystem p} (old : FoldIdx cs) (ro : ConstraintSystem p) :
     FoldIdx ro where
-  idx := CoveredIndex.build Expression.vars ro.algebraicConstraints
+  idx := CoveredIndex.build dedupVarsOf ro.algebraicConstraints
   hidx := rfl
   arr := ro.algebraicConstraints.toArray
   harr := rfl
   bisIdx := old.bisIdx
   arrBis := ro.busInteractions.toArray
-  cfCs := ro.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
-  cfBis := ro.busInteractions.filter (fun bi =>
-    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
+  -- The const-foldable lists were two more full-system filters per accepted fold. A fold never
+  -- *creates* a variable-free compound node (`foldRewrite` replaces the maximal
+  -- constant-on-survivors node by a constant leaf, so a parent that became var-free would itself
+  -- have been the maximal node), so the fresh filter is always a subset of the old list — when
+  -- the old list is **empty** (the normal, post-constant-fold state) the fresh one is provably
+  -- empty too and the filters are skipped outright; otherwise recompute exactly as before, so
+  -- the gate value (and the pass output) is bit-for-bit unchanged.
+  cfCs := if old.cfCs.isEmpty then [] else
+    ro.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
+  cfBis := if old.cfBis.isEmpty then [] else
+    ro.busInteractions.filter (fun bi =>
+      bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
 
 /-- The index-local form of `systemHasFoldable` (see the section comment above): scan only the
     items sharing a variable with `xs` (through the inverted indexes, candidate positions
@@ -584,8 +603,12 @@ theorem coveredBy_shares_var (xs : List Variable) (c : Expression p) (h : covere
 theorem coveredCsIdx_eq (cs : ConstraintSystem p) (xs : List Variable) (fidx : FoldIdx cs) :
     CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs = coveredCsOf cs xs := by
   rw [fidx.hidx, fidx.harr, coveredCsOf]
-  exact CoveredIndex.coveredIdx_eq_filter Expression.vars cs.algebraicConstraints (coveredBy xs) xs
-    (fun i _hi hQ => coveredBy_shares_var xs cs.algebraicConstraints[i] hQ)
+  exact CoveredIndex.coveredIdx_eq_filter dedupVarsOf cs.algebraicConstraints (coveredBy xs) xs
+    (fun i _hi hQ => by
+      obtain ⟨v, hv, hvxs⟩ := coveredBy_shares_var xs cs.algebraicConstraints[i] hQ
+      exact ⟨v, by
+        rw [dedupVarsOf, HashedDedup.hashedEraseDups_eq]
+        exact List.mem_eraseDups.2 hv, hvxs⟩)
 
 /-- One checked fold for a candidate group (identity unless the group has a bounded domain, at least
     one survivor, and some foldable subexpression). The per-target covered scan is served from the

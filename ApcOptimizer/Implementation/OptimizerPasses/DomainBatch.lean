@@ -1394,9 +1394,16 @@ def domainBatchPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =
     let actFlags : Array Bool :=
       (csVs.map (fun cv => !constraintRedundant T cv.1 cv.2)).toArray
     let fidx : ForcedIdx cs :=
-      { csIdx := CoveredIndex.build Expression.vars cs.algebraicConstraints,
+      -- The index builds insert each position once per *distinct* variable (the raw `vars` lists
+      -- carry one entry per occurrence; the gathers deduplicate positions anyway, so buckets and
+      -- covered sets are unchanged — the inserts and bucket scans just stop paying per-occurrence).
+      { csIdx := CoveredIndex.build
+          (fun c => HashedDedup.hashedEraseDups (hash ·) (Expression.vars c))
+          cs.algebraicConstraints,
         arrCs := cs.algebraicConstraints.toArray, harrCs := rfl,
-        bisIdx := CoveredIndex.build BusInteraction.vars cs.busInteractions,
+        bisIdx := CoveredIndex.build
+          (fun bi => HashedDedup.hashedEraseDups (hash ·) (BusInteraction.vars bi))
+          cs.busInteractions,
         arrBis := cs.busInteractions.toArray, harrBis := rfl,
         actFlags := actFlags }
     let σ := collectForced facts T fidx targets ∅ Solved.empty

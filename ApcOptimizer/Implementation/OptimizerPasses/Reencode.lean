@@ -1563,7 +1563,8 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (b : DegreeBound) (useId
            (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsB x hx))
            (fun b hbm => of_decide_eq_true (List.all_eq_true.mp hbn b hbm))
            hchk⟩,
-         (CoveredIndex.buildPruned Expression.vars 8 ro.algebraicConstraints),
+         (if useIdx then CoveredIndex.buildPruned Expression.vars 8 ro.algebraicConstraints
+          else ⟨∅, []⟩),
          ro.algebraicConstraints.toArray,
          ⟨Std.HashSet.ofList ro.vars, fun x hx => by
            rw [Std.HashSet.contains_ofList] at hx
@@ -1620,8 +1621,14 @@ def reencodePass (b : DegreeBound) : VerifiedPass p := fun cs bsem =>
       if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
         some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
-    reencodeLoop bsem b true targets 0 cs
-      (CoveredIndex.buildPruned Expression.vars 8 cs.algebraicConstraints)
+    -- The raw-count gate is back after CI showed the always-indexed form losing ~19% on the
+    -- dense openvm-eth blocks (reencode 1.19x) with no keccak gain: below the threshold the
+    -- direct per-target scan wins. The indexed side keeps the pruned build — identical covered
+    -- sets (a >8-distinct-var item can never be covered by a <=8-var target), smaller buckets.
+    let useIdx := 8192 <= cs.algebraicConstraints.length
+    reencodeLoop bsem b useIdx targets 0 cs
+      (if useIdx then CoveredIndex.buildPruned Expression.vars 8 cs.algebraicConstraints
+       else ⟨∅, []⟩)
       cs.algebraicConstraints.toArray
       ⟨Std.HashSet.ofList cs.vars, fun x hx => by
         rw [Std.HashSet.contains_ofList] at hx
