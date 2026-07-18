@@ -175,25 +175,79 @@ theorem firstWins_mem : ∀ (pairs : List (Variable × Variable))
           exact Or.inl hm
     · exact Or.inr (List.mem_cons_of_mem _ hr)
 
-/-- The identity map: `result ↦ operand` for every recognised OR identity (first per key). Backed
-    by a first-wins hash map built once, so `substF` — which queries it per variable occurrence —
-    pays one hash lookup instead of a pair-list scan per occurrence. -/
-def identityF {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p) :
-    Variable → Option (Expression p) :=
-  let m := firstWins (identityPairs facts cs) ∅
-  fun y => m[y]?.map Expression.var
+/-- Resolve a mapped variable through operand→operand chains, fuel-bounded (a cycle burns fuel
+    and stops harmlessly — the fixpoint wrapper then discards the no-op, exactly as it discarded
+    the old one-link-per-iteration swaps). Compressing the chains lets one `substF` collapse a
+    whole chain, so the fixpoint converges in ~2 iterations instead of one per link. -/
+def resolveGo (m : Std.HashMap Variable Variable) : Nat → Variable → Variable
+  | 0, v => v
+  | fuel + 1, v =>
+    match m[v]? with
+    | some w => resolveGo m fuel w
+    | none => v
 
-theorem identityF_mem {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
-    (y : Variable) (t : Expression p) (h : identityF facts cs y = some t) :
-    ∃ (o1v : Variable) (bi : BusInteraction (Expression p)), t = Expression.var o1v ∧
-      bi ∈ cs.busInteractions ∧ identityPairAt facts bi = some (y, o1v) := by
-  simp only [identityF, Option.map_eq_some_iff] at h
-  obtain ⟨v, hv, rfl⟩ := h
-  rcases firstWins_mem _ _ y v hv with hm | hpair
+theorem resolveGo_sound (m : Std.HashMap Variable Variable) (env : Variable → ZMod p)
+    (hm : ∀ a b, m[a]? = some b → env a = env b) :
+    ∀ (fuel : Nat) (v : Variable), env (resolveGo m fuel v) = env v := by
+  intro fuel
+  induction fuel with
+  | zero => intro v; rfl
+  | succ fuel ih =>
+    intro v
+    rw [resolveGo]
+    cases hv : m[v]? with
+    | some w => rw [ih w, hm v w hv]
+    | none => rfl
+
+theorem resolveGo_prop (m : Std.HashMap Variable Variable) (P : Variable → Prop)
+    (hm : ∀ (a b : Variable), m[a]? = some b → P b) :
+    ∀ (fuel : Nat) (v : Variable), P v → P (resolveGo m fuel v) := by
+  intro fuel
+  induction fuel with
+  | zero => intro v hv; exact hv
+  | succ fuel ih =>
+    intro v hv
+    rw [resolveGo]
+    cases hmv : m[v]? with
+    | some w => exact ih w (hm v w hmv)
+    | none => exact hv
+
+/-- The mapped pairs, with the operand side path-compressed. -/
+def identityMap {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p) :
+    Std.HashMap Variable Variable :=
+  firstWins (identityPairs facts cs) ∅
+
+/-- The identity substitution over a prebuilt map: `result ↦ operand` (first per key), the
+    operand resolved through chains (`resolveGo`). The map is a **parameter**, computed once by
+    the pass body — a def-local `let … ; fun y => …` is re-evaluated per query by arity
+    expansion, which made the old form rebuild the pair list per variable occurrence (measured
+    2.8 s on apc_030 for a 4-pair map). -/
+def identityFm (m : Std.HashMap Variable Variable) (fuel : Nat) :
+    Variable → Option (Expression p) :=
+  fun y => m[y]?.map (fun w => Expression.var (resolveGo m fuel w))
+
+/-- Every stored pair comes from a recognised OR identity of the system. -/
+theorem identityMap_mem {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
+    (y v : Variable) (h : (identityMap facts cs)[y]? = some v) :
+    ∃ (bi : BusInteraction (Expression p)),
+      bi ∈ cs.busInteractions ∧ identityPairAt facts bi = some (y, v) := by
+  rcases firstWins_mem _ _ y v h with hm | hpair
   · rw [Std.HashMap.getElem?_empty] at hm
     exact absurd hm (by simp)
   · obtain ⟨bi, hbi, hpairAt⟩ := List.mem_filterMap.1 hpair
-    exact ⟨v, bi, rfl, hbi, hpairAt⟩
+    exact ⟨bi, hbi, hpairAt⟩
+
+/-- A recognised pair's operand is a variable of the system (it sits in the interaction's
+    payload). -/
+theorem identityMap_operand_mem {bs : BusSemantics p} (facts : BusFacts p bs)
+    (cs : ConstraintSystem p) (y v : Variable) (h : (identityMap facts cs)[y]? = some v) :
+    v ∈ cs.vars := by
+  obtain ⟨bi, hbi, hpair⟩ := identityMap_mem facts cs y v h
+  obtain ⟨spec, oop, o1, o2, hspec, _, _, hdec, hoo⟩ := identityPairAt_spec facts bi y v hpair
+  obtain ⟨ho1m, ho2m, _⟩ := spec.decode_mem _ _ _ _ _ hdec
+  rcases orIdentityOperand_spec o1 o2 v hoo with ⟨ho1, _⟩ | ⟨ho2, _⟩
+  · exact ConstraintSystem.mem_vars_of_payload hbi (ho1 ▸ ho1m) (by simp [Expression.vars])
+  · exact ConstraintSystem.mem_vars_of_payload hbi (ho2 ▸ ho2m) (by simp [Expression.vars])
 
 /-- The pass: batch-substitute every OR-identity result by its operand. When the system has no
     recognised identities — e.g. any OpenVM circuit, whose bitwise bus declares no `orOp` — the `[]`
@@ -204,29 +258,38 @@ def identitySubstStep : VerifiedPassW p := fun cs bs facts =>
   | [] => ⟨cs, [], PassCorrect.refl cs bs⟩
   | _ :: _ =>
     if h1ne : (1 : ZMod p) ≠ 0 then
-      ⟨cs.substF (identityF facts cs), [],
-        cs.substF_correct (identityF facts cs) bs
+      -- Bind the map (and its fuel) here, fully applied — see `identityFm` on why the map must
+      -- not live behind the substitution closure's missing argument.
+      let m := identityMap facts cs
+      ⟨cs.substF (identityFm m m.size), [],
+        cs.substF_correct (identityFm m m.size) bs
           (by
             intro env hsat y t hf
-            obtain ⟨o1v, bi, rfl, hbi, hpair⟩ := identityF_mem facts cs y t hf
-            have hviol : bs.violatesConstraint (bi.eval env) = false := by
-              refine hsat.2 bi hbi ?_
-              obtain ⟨_, _, _, _, _, hmc, _, _, _⟩ := identityPairAt_spec facts bi y o1v hpair
-              show (bi.multiplicity.eval env) ≠ 0
-              rw [hmc]; simpa using h1ne
-            show env y = (Expression.var o1v).eval env
-            exact identityPairAt_sound facts bi y o1v hpair env hviol)
+            -- each stored pair is forced by its interaction's acceptance …
+            have hm : ∀ a b, (identityMap facts cs)[a]? = some b → env a = env b := by
+              intro a b hab
+              obtain ⟨bi, hbi, hpair⟩ := identityMap_mem facts cs a b hab
+              have hviol : bs.violatesConstraint (bi.eval env) = false := by
+                refine hsat.2 bi hbi ?_
+                obtain ⟨_, _, _, _, _, hmc, _, _, _⟩ := identityPairAt_spec facts bi a b hpair
+                show (bi.multiplicity.eval env) ≠ 0
+                rw [hmc]; simpa using h1ne
+              exact identityPairAt_sound facts bi a b hpair env hviol
+            -- … and the resolved target composes those equalities along the chain
+            simp only [identityFm, Option.map_eq_some_iff] at hf
+            obtain ⟨w, hw, rfl⟩ := hf
+            show env y = env (resolveGo (identityMap facts cs) (identityMap facts cs).size w)
+            rw [resolveGo_sound (identityMap facts cs) env hm]
+            exact hm y w hw)
           (by
             intro y t hf z hz
-            obtain ⟨o1v, bi, rfl, hbi, hpair⟩ := identityF_mem facts cs y t hf
+            simp only [identityFm, Option.map_eq_some_iff] at hf
+            obtain ⟨w, hw, rfl⟩ := hf
             simp only [Expression.vars, List.mem_singleton] at hz
             rw [hz]
-            obtain ⟨spec, oop, o1, o2, hspec, _, _, hdec, hoo⟩ :=
-              identityPairAt_spec facts bi y o1v hpair
-            obtain ⟨ho1m, ho2m, _⟩ := spec.decode_mem _ _ _ _ _ hdec
-            rcases orIdentityOperand_spec o1 o2 o1v hoo with ⟨ho1, _⟩ | ⟨ho2, _⟩
-            · exact ConstraintSystem.mem_vars_of_payload hbi (ho1 ▸ ho1m) (by simp [Expression.vars])
-            · exact ConstraintSystem.mem_vars_of_payload hbi (ho2 ▸ ho2m) (by simp [Expression.vars]))⟩
+            exact resolveGo_prop (identityMap facts cs) (· ∈ cs.vars)
+              (fun a b hab => identityMap_operand_mem facts cs a b hab) _ w
+              (identityMap_operand_mem facts cs y w hw))⟩
     else
       ⟨cs, [], PassCorrect.refl cs bs⟩
 

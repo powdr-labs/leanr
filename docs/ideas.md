@@ -189,9 +189,12 @@ index gate**  ·  *high value at eth/mid-keccak scale*. Partially **done (entry 
      every hit-comparison O(1). Swap the `Hashable Variable` instance
      (`Implementation/Variable.lean:19`, unaudited) to hash `powdrId?` first — O(1) vs O(name
      length) on almost every key. `Spec.lean`'s `Variable` stays untouched.
-   - `identitySubst`: ~~HashMap the pair lookup~~ done (entry 104), but apc_030 still shows
-     2.8 s — the cost is elsewhere in its fixpoint (probably the per-iteration `identityPairs`
-     re-decode + `substF` + double `sizeKey`); profile before more work.
+   - ~~`identitySubst`~~ **done (entry 106)**: the 2.8 s was an **arity-expansion bug** — a
+     `def … : X → Y := let heavy := …; fun y => …` re-evaluates `heavy` per call (the map was
+     rebuilt per queried occurrence). 2827 ms → 9 ms on apc_030. **Working rule: bind heavy
+     values in the fully-applied pass body and pass them as parameters** (the `FlagFold`
+     comment's pattern); when a pass's profile makes no sense relative to its work, suspect this
+     first and bisect with a skip-the-body experiment.
    - `normalize`: `linearize` re-runs on the whole subtree at every node along non-affine paths
      (O(E·depth), `Normalize.lean:306`); fuse into one bottom-up pass returning per-node linear
      forms. Also feeds gauss's per-constraint reduce.

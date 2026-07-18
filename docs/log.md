@@ -3987,3 +3987,32 @@ domainFold fusion + setup dedups; batch5: + pruned-index reencode). Build warnin
 integrity green. The remaining structural item is the domainFold *indexed* path (keccak cycles
 0-2): generalize `foldOut_correct` to untrusted covered subsets so the pruned index and
 stale-bucket refresh apply there too — recorded in `docs/ideas.md` R3. **Worked: pending CI.**
+
+### 106. Runtime: parse-time variable interning + the identitySubst arity-expansion bug (2827 ms → 9 ms)
+
+Third runtime batch. Two changes, both output byte-identical (11-case export set):
+
+- **Variable interning (`JsonParser.lean`)**: the parser minted a fresh `String` per variable
+  *occurrence* (~10⁵ heap-distinct copies of a few thousand names). `internSystem` rebuilds the
+  parsed system with one shared `Variable` object per distinct value — the same *value*, so
+  nothing downstream can observe it except time: the Lean runtime's string equality
+  (`lean_string_eq`) starts with a pointer test, so every equal-name comparison across the whole
+  optimizer (hash-map probes, dedups, substitution lookups) now short-circuits.
+- **identitySubst was rebuilding its map per variable occurrence.** Profiling showed the pass at
+  2.8 s on apc_030 with… 4 pairs and 607 interactions, and bisection pinned all of it on the one
+  `substF`. Cause: `identityF`'s shape `def identityF facts cs : Variable → Option _ :=
+  let m := …; fun y => …` — the compiler arity-expands the def, so the `let` (pair extraction +
+  map build over every interaction) re-ran **per queried occurrence**. (The pre-104 pair-list
+  version had the same bug; entry 104's HashMap swap kept the shape, so it didn't help.) The fix
+  is the parameter-passing pattern `FlagFold` already documents: `identityFm` takes the prebuilt
+  map as an argument, bound by a `let` in the fully-applied pass body. apc_030's identitySubst:
+  **2827 ms → 9 ms** (case total 26.8 → 24.6 s). Bonus: `resolveGo` path-compresses
+  operand→operand chains (fuel-bounded, cycles stop harmlessly and the fixpoint wrapper discards
+  the no-op exactly as before), so chains collapse in one `substF`.
+
+**Working rule (added to ideas):** a `def … : X → Y := let heavy := …; fun y => …` re-evaluates
+`heavy` per call by arity expansion — bind heavy values in the fully-applied pass body and pass
+them as parameters. Audited the other `Variable → Option (Expression p)` closures (`Solved.fn`,
+`ptFun`, `groupSubst`) — none carries a heavy `let`.
+
+Build warning-free; proof integrity green; byte-identical exports. **Worked: yes.**
