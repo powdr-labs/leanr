@@ -45,6 +45,13 @@ structure ByteXorSpec (p : ℕ) where
   xorOp : ZMod p
   /-- Op-selector value denoting the pair range-check (`op₁, op₂` bytes, `result = 0`). -/
   pairOp : ZMod p
+  /-- Op-selector value denoting the bitwise-OR relation `result = op₁ | op₂` (`op₁, op₂` bytes), if
+      the bus has such an op. `none` when the VM's bitwise bus has no OR op (e.g. OpenVM's, which is
+      XOR + range only). Soundness lives in `BusFacts.byteBoolSound`. -/
+  orOp : Option (ZMod p) := none
+  /-- Op-selector value denoting the bitwise-AND relation `result = op₁ & op₂` (`op₁, op₂` bytes), if
+      the bus has such an op. `none` when the VM's bitwise bus has no AND op. -/
+  andOp : Option (ZMod p) := none
   /-- Reorder a physical payload into logical `(op, operand₁, operand₂, result)`. -/
   decode : {α : Type} → List α → Option (α × α × α × α)
   /-- Build a physical payload from logical `(op, operand₁, operand₂, result)` — the inverse
@@ -256,6 +263,22 @@ structure BusFacts (p : ℕ) (bs : BusSemantics p) where
         (op = spec.pairOp →
            (bs.violatesConstraint { busId := busId, multiplicity := mult, payload := pl } = false
              ↔ o1.val < spec.bound ∧ o2.val < spec.bound ∧ r = 0))
+  /-- Soundness of the optional `orOp`/`andOp` bitwise relations a `byteXorSpec` may declare —
+      split out from `byteXorSpec_sound` so the XOR/pair soundness tuple its many consumers
+      destructure is unperturbed. For a payload decoding to `(op, o₁, o₂, r)`: when `op = orOp` the
+      message is accepted exactly when `o₁, o₂` are bytes and `r = o₁ | o₂`; when `op = andOp`,
+      exactly when `o₁, o₂` are bytes and `r = o₁ & o₂`. Vacuous where the op is `none` (OpenVM,
+      `trivial`). -/
+  byteBoolSound :
+    ∀ (busId : Nat) (spec : ByteXorSpec p), byteXorSpec busId = some spec →
+      ∀ (pl : List (ZMod p)) (op o1 o2 r mult : ZMod p),
+        spec.decode pl = some (op, o1, o2, r) →
+        (∀ oop, spec.orOp = some oop → op = oop →
+           (bs.violatesConstraint { busId := busId, multiplicity := mult, payload := pl } = false
+             ↔ o1.val < spec.bound ∧ o2.val < spec.bound ∧ r.val = Nat.lor o1.val o2.val)) ∧
+        (∀ aop, spec.andOp = some aop → op = aop →
+           (bs.violatesConstraint { busId := busId, multiplicity := mult, payload := pl } = false
+             ↔ o1.val < spec.bound ∧ o2.val < spec.bound ∧ r.val = Nat.land o1.val o2.val))
   /-- A pure single-value range check at an arbitrary payload position, generalising the fixed
       `[x, b]` layout: `rangeCheckAt busId pattern = some (valSlot, bound)` means every
       multiplicity-`1` message on `busId` matching `pattern` breaks no invariant and is accepted
@@ -298,5 +321,6 @@ def BusFacts.trivial (bs : BusSemantics p) : BusFacts p bs where
   zeroRangeEq_sound := by intro _ h; exact absurd h (by simp)
   byteXorSpec _ := none
   byteXorSpec_sound := by intro _ _ h; exact absurd h (by simp)
+  byteBoolSound := by intro _ _ h; exact absurd h (by simp)
   rangeCheckAt _ _ := none
   rangeCheckAt_sound := by intro _ _ _ _ h; exact absurd h (by simp)

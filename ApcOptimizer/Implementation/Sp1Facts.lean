@@ -601,7 +601,8 @@ def sp1Facts (p : ℕ) [NeZero p]
       match busMap busId with
       | some .byteLookup =>
           if 256 ≤ p then
-            some { bound := 256, xorOp := 2, pairOp := 3, decode := sp1ByteDecode,
+            some { bound := 256, xorOp := 2, pairOp := 3, orOp := some 1, andOp := some 0,
+                   decode := sp1ByteDecode,
                    encode := sp1ByteEncode, decode_map := sp1ByteDecode_map,
                    decode_mem := sp1ByteDecode_mem, decode_encode := sp1ByteDecode_encode,
                    decode_eq_encode := sp1ByteDecode_eq_encode, encode_map := sp1ByteEncode_map,
@@ -644,6 +645,38 @@ def sp1Facts (p : ℕ) [NeZero p]
                 = false ↔ o1.val < 256 ∧ o2.val < 256 ∧ r = 0
             unfold violates; rw [hbus]
             simp [hp3, isByte, ZMod.val_eq_zero, and_assoc]
+      · rw [if_neg hp] at hspec; exact absurd hspec (by simp)
+    -- SP1's byte bus also carries OR (op 1, `a = b | c`) and AND (op 0, `a = b & c`); both
+    -- range-check `b, c` to bytes, exactly like XOR. Declared in the spec as `orOp`/`andOp`.
+    byteBoolSound := by
+      intro busId spec hspec
+      have hbus : busMap busId = some .byteLookup := by
+        revert hspec; cases hb : busMap busId with
+        | none => simp
+        | some t => cases t <;> simp
+      simp only [hbus] at hspec
+      by_cases hp : 256 ≤ p
+      · rw [if_pos hp] at hspec
+        obtain rfl := (Option.some.inj hspec).symm
+        have hcast1 : ((1 : ℕ) : ZMod p) = (1 : ZMod p) := by norm_cast
+        have hp1 : (1 : ZMod p).val = 1 := by rw [← hcast1]; exact ZMod.val_natCast_of_lt (by omega)
+        have hp0 : (0 : ZMod p).val = 0 := ZMod.val_zero
+        intro pl op o1 o2 r mult hdec
+        rw [sp1ByteDecode_some] at hdec
+        subst hdec
+        refine ⟨fun oop hor hopeq => ?_, fun aop hand hopeq => ?_⟩
+        · obtain rfl : oop = 1 := by simpa using hor.symm
+          subst hopeq
+          show violates busMap { busId := busId, multiplicity := mult, payload := [1, r, o1, o2] }
+              = false ↔ o1.val < 256 ∧ o2.val < 256 ∧ r.val = Nat.lor o1.val o2.val
+          unfold violates; rw [hbus]
+          simp [hp1, isByte, and_assoc]
+        · obtain rfl : aop = 0 := by simpa using hand.symm
+          subst hopeq
+          show violates busMap { busId := busId, multiplicity := mult, payload := [0, r, o1, o2] }
+              = false ↔ o1.val < 256 ∧ o2.val < 256 ∧ r.val = Nat.land o1.val o2.val
+          unfold violates; rw [hbus]
+          simp [hp0, isByte, and_assoc]
       · rw [if_neg hp] at hspec; exact absurd hspec (by simp)
     -- SP1's op-6 (`Range`) byte-bus check `[6, a, w, 0]` (w ≤ 16) is a pure range check on `a`
     -- (`a < 2^w`), so a subsumed-check dropper can remove it when `a` is already bounded.
