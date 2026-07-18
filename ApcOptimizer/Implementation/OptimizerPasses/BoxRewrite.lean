@@ -266,12 +266,12 @@ def brBi (singles : List (Expression p)) (db : DegreeBound)
     payload := bi.payload.map (brRw singles db.busInteractions) }
 
 /-- Rewrite every over-bound expression of the system to its certified reduction. -/
-def ConstraintSystem.boxRewrite (cs : ConstraintSystem p) (bs : BusSemantics p) :
+def ConstraintSystem.boxRewrite (cs : ConstraintSystem p) (b : DegreeBound) :
     ConstraintSystem p :=
   let singles := singleVarCs cs.algebraicConstraints
   { algebraicConstraints := cs.algebraicConstraints.map
-      (brRw singles bs.degreeBound.identities),
-    busInteractions := cs.busInteractions.map (brBi singles bs.degreeBound) }
+      (brRw singles b.identities),
+    busInteractions := cs.busInteractions.map (brBi singles b) }
 
 theorem brBi_eval [Fact p.Prime] (singles : List (Expression p)) (db : DegreeBound)
     (bi : BusInteraction (Expression p)) (env : Variable → ZMod p)
@@ -284,11 +284,11 @@ theorem brBi_eval [Fact p.Prime] (singles : List (Expression p)) (db : DegreeBou
   exact List.map_congr_left (fun e _ => brRw_sound singles _ e env hdom)
 
 theorem ConstraintSystem.boxRewrite_correct [Fact p.Prime]
-    (cs : ConstraintSystem p) (bs : BusSemantics p) :
-    PassCorrect cs (cs.boxRewrite bs) [] bs := by
+    (cs : ConstraintSystem p) (bs : BusSemantics p) (b : DegreeBound) :
+    PassCorrect cs (cs.boxRewrite b) [] bs := by
   -- single-variable domain sources survive verbatim
   have hsingle : ∀ c ∈ singleVarCs cs.algebraicConstraints,
-      c ∈ (cs.boxRewrite bs).algebraicConstraints := by
+      c ∈ (cs.boxRewrite b).algebraicConstraints := by
     intro c hc
     have hmem := List.mem_of_mem_filter hc
     have hs : c.vars.eraseDups.length ≤ 1 := by
@@ -296,13 +296,13 @@ theorem ConstraintSystem.boxRewrite_correct [Fact p.Prime]
       have h2 : c.vars.eraseDups.length = 1 := by simpa using h1
       omega
     exact List.mem_map.2 ⟨c, hmem, brRw_singleVar _ _ c hs⟩
-  have hdomOut : ∀ env, (cs.boxRewrite bs).satisfies bs env →
+  have hdomOut : ∀ env, (cs.boxRewrite b).satisfies bs env →
       ∀ c ∈ singleVarCs cs.algebraicConstraints, c.eval env = 0 :=
     fun env hsat c hc => hsat.1 c (hsingle c hc)
   have hdomIn : ∀ env, cs.satisfies bs env →
       ∀ c ∈ singleVarCs cs.algebraicConstraints, c.eval env = 0 :=
     fun env hsat c hc => hsat.1 c (List.mem_of_mem_filter hc)
-  have hiff : ∀ env, (cs.boxRewrite bs).satisfies bs env ↔ cs.satisfies bs env := by
+  have hiff : ∀ env, (cs.boxRewrite b).satisfies bs env ↔ cs.satisfies bs env := by
     intro env
     constructor
     · intro hsat
@@ -325,16 +325,16 @@ theorem ConstraintSystem.boxRewrite_correct [Fact p.Prime]
         rw [brBi_eval _ _ bi env hdom]
         exact hsat.2 bi hbim
   have hside : ∀ env, (∀ c ∈ singleVarCs cs.algebraicConstraints, c.eval env = 0) →
-      (cs.boxRewrite bs).sideEffects bs env = cs.sideEffects bs env := by
+      (cs.boxRewrite b).sideEffects bs env = cs.sideEffects bs env := by
     intro env hdom
     unfold ConstraintSystem.sideEffects
-    show ((cs.busInteractions.map (brBi (singleVarCs cs.algebraicConstraints) bs.degreeBound)).filter
+    show ((cs.busInteractions.map (brBi (singleVarCs cs.algebraicConstraints) b)).filter
       (fun bi => bs.isStateful bi.busId)).map _ = _
     induction cs.busInteractions with
     | nil => rfl
     | cons bi rest ih =>
       simp only [List.map_cons, List.filter_cons]
-      have hb : bs.isStateful (brBi (singleVarCs cs.algebraicConstraints) bs.degreeBound bi).busId
+      have hb : bs.isStateful (brBi (singleVarCs cs.algebraicConstraints) b bi).busId
           = bs.isStateful bi.busId := rfl
       rw [hb]
       by_cases hst : bs.isStateful bi.busId = true
@@ -345,12 +345,12 @@ theorem ConstraintSystem.boxRewrite_correct [Fact p.Prime]
       · simp only [hst]
         exact ih
   have hadmEq : ∀ env, (∀ c ∈ singleVarCs cs.algebraicConstraints, c.eval env = 0) →
-      ((cs.boxRewrite bs).admissible bs env ↔ cs.admissible bs env) := by
+      ((cs.boxRewrite b).admissible bs env ↔ cs.admissible bs env) := by
     intro env hdom
     unfold ConstraintSystem.admissible
-    have hmap : (cs.boxRewrite bs).busInteractions.map (fun bi => bi.eval env)
+    have hmap : (cs.boxRewrite b).busInteractions.map (fun bi => bi.eval env)
         = cs.busInteractions.map (fun bi => bi.eval env) := by
-      show (cs.busInteractions.map (brBi (singleVarCs cs.algebraicConstraints) bs.degreeBound)).map
+      show (cs.busInteractions.map (brBi (singleVarCs cs.algebraicConstraints) b)).map
         (fun bi => bi.eval env) = _
       rw [List.map_map]
       exact List.map_congr_left (fun bi _ => brBi_eval _ _ bi env hdom)
@@ -381,15 +381,15 @@ theorem ConstraintSystem.boxRewrite_correct [Fact p.Prime]
       exact BusState.equiv_refl _
 
 /-- The rewriter as a standalone (unguarded) pass; prime `p` re-checked at runtime. -/
-def boxRewritePass (pw : PrimeWitness p) : VerifiedPass p := fun cs bs =>
+def boxRewritePass (pw : PrimeWitness p) (b : DegreeBound) : VerifiedPass p := fun cs bs =>
   if hpB : pw.isPrime = true then
     haveI : Fact p.Prime := ⟨pw.correct hpB⟩
-    ⟨cs.boxRewrite bs, [], cs.boxRewrite_correct bs⟩
+    ⟨cs.boxRewrite b, [], cs.boxRewrite_correct bs b⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
 
 /-- The completed composite (supersedes the `FlagFold.lean` version): substitute the XOR
     component, rewrite the over-bound survivors multilinearly, then collect the tautologies and
     pointwise duplicates. Wired under a single degree guard. -/
-def flagFoldPass' (pw : PrimeWitness p) : VerifiedPassW p :=
-  (fxSubstPass pw).andThen (boxRewritePass pw).withFacts |>.andThen (boxTautoDropPass pw).withFacts
+def flagFoldPass' (pw : PrimeWitness p) (b : DegreeBound) : VerifiedPassW p :=
+  (fxSubstPass pw).andThen (boxRewritePass pw b).withFacts |>.andThen (boxTautoDropPass pw).withFacts
     |>.andThen (pointwiseDupDropPass pw).withFacts

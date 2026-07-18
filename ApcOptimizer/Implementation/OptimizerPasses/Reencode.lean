@@ -1533,7 +1533,7 @@ def buildReencode (useIdx : Bool) (csIdx : CoveredIndex.CovIndex) (arrCs : Array
     in the system is skipped before `buildReencode` — in the steady state the fresh-name
     counters repeat the previous cycle's accepted names, and `checkReencode`'s freshness
     conjunct would reject exactly these after a full scan. -/
-def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (useIdx : Bool)
+def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (b : DegreeBound) (useIdx : Bool)
     (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p)) (cs : ConstraintSystem p)
     (varSet : { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ cs.vars })
     (xs : List Variable) (freshBase : String) :
@@ -1552,7 +1552,7 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (useIdx : Bool)
     if hbn : bits.all (fun b => decide (b.powdrId? = none)) = true then
     if hchk : checkReencode cs xs bits hm = true then
       let ro := reencodeOut cs xs bits hm
-      if ro.withinDegreeB bsem.degreeBound then
+      if ro.withinDegreeB b then
         -- `cs` changed: rebuild the index and the variable set for `ro` (accepts are rare, so
         -- this is cheap overall).
         ⟨⟨ro,
@@ -1578,15 +1578,15 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (useIdx : Bool)
 /-- Process the candidate groups sequentially (correctness composes; derivations concatenate). The
     inverted index and the proof-carrying variable set (valid for the current `cs`) are threaded
     through and rebuilt by `reencodeStep` whenever it rewrites `cs`. -/
-def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) (useIdx : Bool) :
+def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) (b : DegreeBound) (useIdx : Bool) :
     List (List Variable) → Nat → (cs : ConstraintSystem p) →
     CoveredIndex.CovIndex → Array (Expression p) →
     { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ cs.vars } → PassResult cs bsem
   | [], _, cs, _, _, _ => ⟨cs, [], PassCorrect.refl cs bsem⟩
   | xs :: rest, idx, cs, csIdx, arrCs, varSet =>
-    let r1 := reencodeStep bsem useIdx csIdx arrCs cs varSet xs
+    let r1 := reencodeStep bsem b useIdx csIdx arrCs cs varSet xs
       (s!"rnc{cs.algebraicConstraints.length}_{cs.busInteractions.length}_{idx}")
-    let r2 := reencodeLoop bsem useIdx rest (idx + 1) r1.1.out r1.2.1 r1.2.2.1 r1.2.2.2
+    let r2 := reencodeLoop bsem b useIdx rest (idx + 1) r1.1.out r1.2.1 r1.2.2.1 r1.2.2.2
     ⟨r2.out, r1.1.derivs ++ r2.derivs, r1.1.correct.andThen r2.correct⟩
 
 /-- `List.dedup` computed in linear time via a hash set, with the **identical** result: an element
@@ -1601,7 +1601,7 @@ def dedupHash {α : Type} [BEq α] [Hashable α] (l : List α) : List α :=
 /-- The witness re-encoding pass: for every constraint's (small) all-input-column variable group
     whose covered constraints allow only a few joint values, re-encode the group with `⌈log₂ m⌉`
     fresh booleans and ship each bit's derived-variable method. Prime `p` only; identity otherwise. -/
-def reencodePass : VerifiedPass p := fun cs bsem =>
+def reencodePass (b : DegreeBound) : VerifiedPass p := fun cs bsem =>
   if hpr : p.Prime then
     haveI : Fact p.Prime := ⟨hpr⟩
     -- `dedupHash` replaces the quadratic `List.dedup` over the (up to thousands of) target
@@ -1619,7 +1619,7 @@ def reencodePass : VerifiedPass p := fun cs bsem =>
         some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))
     let useIdx := 8192 ≤ cs.algebraicConstraints.length
-    reencodeLoop bsem useIdx targets 0 cs
+    reencodeLoop bsem b useIdx targets 0 cs
       (if useIdx then CoveredIndex.build Expression.vars cs.algebraicConstraints else ⟨∅, []⟩)
       cs.algebraicConstraints.toArray
       ⟨Std.HashSet.ofList cs.vars, fun x hx => by

@@ -130,12 +130,12 @@ def printEffectiveness (label : String) (before after : Stats) : IO Unit := do
   printRatio (label := "constraints     ") (before := before.constraints) (after := after.constraints)
 
 /-- A VM's runtime for the CLI: its file parser (resolving the bus map to a `busId ↦ type` lookup),
-    its fact-aware optimizer, and its bus semantics (for the degree bound). All three are threaded
+    its fact-aware optimizer, and its degree bound (reported by `run`). All three are threaded
     through the generic `cmd*Impl` bodies so a single implementation serves both OpenVM and SP1. -/
 structure VmBackend (p : ℕ) (τ : Type) where
   parse : String → Except String (ConstraintSystem p × (Nat → Option τ))
   optimize : (Nat → Option τ) → ConstraintSystem p → ConstraintSystem p × Derivations p
-  semantics : (Nat → Option τ) → BusSemantics p
+  degreeBound : DegreeBound
 
 def cmdRunImpl {p : ℕ} {τ : Type} (be : VmBackend p τ) (fileName : String) : IO Unit := do
   let (cs, busMap) ← parseFileWith be.parse fileName
@@ -151,7 +151,7 @@ def cmdRunImpl {p : ℕ} {τ : Type} (be : VmBackend p τ) (fileName : String) :
   printStats (label := "before       ") (stats := before)
   printStats (label := "apc-optimizer") (stats := after)
   printEffectiveness (label := "apc-optimizer") (before := before) (after := after)
-  let bound := (be.semantics busMap).degreeBound
+  let bound := be.degreeBound
   IO.println s!"  degree bound (identities {bound.identities}, bus {bound.busInteractions}): \
     input {if cs.withinDegreeB bound then "ok" else "EXCEEDED"}, \
     output {if optimized.withinDegreeB bound then "ok" else "EXCEEDED"}"
@@ -248,18 +248,18 @@ def cmdReportImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
     ",\"powdr\":" ++ circuitJson csPowdr ++
     ",\"apc-optimizer\":" ++ circuitJson optimized ++ "}")
 
-/-- The OpenVM backend: BabyBear field, OpenVM bus semantics, `openVmOptimizer`. The optimizer and
-    semantics are eta-expanded so their default `busMap` argument stays open. -/
+/-- The OpenVM backend: BabyBear field, `openVmOptimizer`, OpenVM's default degree bound. The
+    optimizer is eta-expanded so its default `busMap` argument stays open. -/
 def openVmBackend : VmBackend babyBear OpenVmBusType where
   parse := parseOpenVm
   optimize := fun bm => openVmOptimizer bm
-  semantics := fun bm => openVmBusSemantics babyBear bm
+  degreeBound := defaultDegreeBound
 
 /-- The SP1 backend: KoalaBear field, SP1 bus semantics, `sp1Optimizer`. -/
 def sp1Backend : VmBackend ApcOptimizer.SP1.koalaBear ApcOptimizer.SP1.Sp1BusType where
   parse := parseSp1
   optimize := fun bm => ApcOptimizer.SP1.sp1Optimizer bm
-  semantics := fun bm => ApcOptimizer.SP1.sp1BusSemantics ApcOptimizer.SP1.koalaBear bm
+  degreeBound := ApcOptimizer.SP1.defaultDegreeBound
 
 /-- Whether a token names the SP1 VM (`sp1`); anything else defaults to OpenVM. -/
 def isSp1 (vm : String) : Bool := vm == "sp1"
@@ -332,12 +332,12 @@ partial def profileLoop {p : ℕ} (passes : List (String × VerifiedPassW p))
     is an IO side-effect, so the profiler steps the passes here instead of calling the pure
     `pipeline`, but it reads those same three lists, so it cannot time a pass the optimizer does not
     run, nor drift out of sync. -/
-def profileRun {p : ℕ} (fileName : String) (cs : ConstraintSystem p)
+def profileRun {p : ℕ} (b : DegreeBound) (fileName : String) (cs : ConstraintSystem p)
     (bs : BusSemantics p) (facts : BusFacts p bs) : IO Unit := do
   let t0 ← IO.monoMsNow
-  let (cs, acc) ← runCycleTimed (preludePasses (p := p)) cs bs facts ∅
-  let (cs, acc, iters) ← profileLoop (cleanupPasses (p := p)) cs bs facts acc 0
-  let (_, acc) ← runCycleTimed (codaPasses (p := p)) cs bs facts acc
+  let (cs, acc) ← runCycleTimed (preludePasses (p := p) b) cs bs facts ∅
+  let (cs, acc, iters) ← profileLoop (cleanupPasses (p := p) b) cs bs facts acc 0
+  let (_, acc) ← runCycleTimed (codaPasses (p := p) b) cs bs facts acc
   let t1 ← IO.monoMsNow
   IO.println s!"profile {fileName}: {iters} cleanup iterations, {t1 - t0} ms total"
   let sorted := acc.toList.toArray.qsort (fun a b => a.2 > b.2)
@@ -348,11 +348,13 @@ def profileRun {p : ℕ} (fileName : String) (cs : ConstraintSystem p)
 def cmdProfile (vm fileName : String) : IO Unit := do
   if isSp1 vm then
     let (cs, busMap) ← parseFileWith parseSp1 fileName
-    profileRun fileName cs (ApcOptimizer.SP1.sp1BusSemantics ApcOptimizer.SP1.koalaBear busMap)
+    profileRun ApcOptimizer.SP1.defaultDegreeBound fileName cs
+      (ApcOptimizer.SP1.sp1BusSemantics ApcOptimizer.SP1.koalaBear busMap)
       (ApcOptimizer.SP1.sp1Facts ApcOptimizer.SP1.koalaBear busMap)
   else
     let (cs, busMap) ← parseFileWith parseOpenVm fileName
-    profileRun fileName cs (openVmBusSemantics babyBear busMap) (openVmFacts babyBear busMap)
+    profileRun defaultDegreeBound fileName cs
+      (openVmBusSemantics babyBear busMap) (openVmFacts babyBear busMap)
 
 def usage : String :=
   "usage: apc-optimizer run [vm] <file.json[.gz]>\n" ++

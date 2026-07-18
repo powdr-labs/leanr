@@ -175,8 +175,10 @@ def openVmBusSemantics (p : ℕ) (busMap : BusMap := defaultBusMap) :
     (∀ (busId : Nat) (shape : MemoryBusShape), memShapeOf busMap busId = some shape →
       admissibleMemoryBus shape (msgs.filter (fun m => m.busId = busId)))
     ∧ x0ReturnsZero busMap msgs
-  -- OpenVM's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND`).
-  degreeBound := { identities := 3, busInteractions := 2 }
+
+/-- OpenVM's proving-backend degree bound (powdr's `DEFAULT_DEGREE_BOUND`), used when the optimizer
+    is run directly rather than with a bound passed in over the FFI. -/
+def defaultDegreeBound : DegreeBound := { identities := 3, busInteractions := 2 }
 
 /-- The BabyBear field modulus, `2^31 - 2^27 + 1` — the field all powdr OpenVM exports use. -/
 def babyBear : Nat := 2013265921
