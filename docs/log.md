@@ -3843,3 +3843,38 @@ regressed**. apc_001/016/017/024/027/029/031/037/040 now at or **below** powdr's
 dominates at 16 s). Proof integrity green ({propext, Classical.choice, Quot.sound}); no
 `sorry`/`axiom`/`native_decide`. Residual: bus gap 625 (memory chains + byte-check layout),
 var gap 55 — see the rewritten `docs/ideas.md`. **Worked: yes.**
+
+### 102. Basis justification: range-checked forms as building blocks (SP1 bus 2.598× → 2.650×)
+
+The largest remaining SP1 *bus* residual was the shift-result register chains (apc_030's register
+16: 30 interactions vs powdr's 2). Their syntactically-identical send/receive pairs would not
+cancel because the dropped send's 16-bit obligation cannot be affine-justified: the data slot is
+`16384·r₂ + 4194304·r₃ + h₀ − 65536·h₁` — 16-bit not because each term is small but because the
+circuit *also* op-6-checks the shifted-out bits `F = r₂ + 256·r₃ − 4·h₁ < 4` and the slot is
+exactly `16384·F + h₀` with `h₀ < 2¹⁴`.
+
+**`basisJustified` (in `BusPairCancel.lean`), a new arm of `byteJustifiedW`.** A fuel-bounded
+reduction subtracts positive integer multiples of *range-checked slot forms* (`formBoundAt`: any
+accepted interaction slot with a `slotBound`, linearized) to cancel one target coefficient per
+step (`μ = c_T/c_F`, exact), accounting `μ·(B_F − 1)` against the budget, then finishes with the
+plain per-variable natural bound. Soundness is one nat-level induction (`basisReduceGo_sound`):
+each step's subtraction is exact `LinExpr` algebra, so the target's value is the plain natural
+number `Σ μᵢ·eᵢ + n_rest`, bounded below `min(bound, p)` — no wraparound case analysis at all.
+The candidate forms come from a per-invocation *untrusted* position index (`buildFormIdx`,
+stateless buses only, ≤4 positions per variable); `dropFormWits` re-checks liveness and the
+dropped pair at use, so the index costs time, never soundness (same discipline as `recvIndexAll`).
+The coda's plain `byteJustified` keeps the arm disabled — feeding the whole region as the form
+lookup made `redundantByteDrop` rescan it per queried variable (measured 63 s on apc_030 for −3
+interactions; not worth it).
+
+**Impact (`benchmark.py --vm sp1`, 100 rsp cases):** bus interactions **2.598× → 2.650×**
+(aggregate bus gap vs powdr **625 → 471**, −154 over 10 cases — apc_030 −32, apc_016/017/029 −22
+each, apc_024/040 −16 each, apc_037 −8, apc_063/079 −6 each, apc_031 −4); variables and
+constraints unchanged (bus-only lever). **0 regressions** (90 cases byte-identical). **OpenVM
+improves too:** keccak 1752 → **1748** bus (vars/constraints identical 2021/186) — the arm fired
+on four OpenVM memory pairs. **Runtime flat-to-better:** apc_030 21.8 s vs 22.6 s pre-change
+(`busPairCancel` itself 1791 → 913 ms — fewer surviving pairs to rescan); `intervalForce` +
+`basisJustified` together < 1.5 % of the heavy-case profile. Proof integrity green
+({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Residual SP1 bus
+gap 471: byte-bus identity-OR checks (apc_024/040 ≈ +43 each) and the mid-chain shields — see
+`docs/ideas.md`. **Worked: yes.**
