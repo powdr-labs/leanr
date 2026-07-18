@@ -36,7 +36,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
-import ApcOptimizer.Implementation.OptimizerPasses.ScaledZero
+import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZero
 import ApcOptimizer.Implementation.OptimizerPasses.RangeBool
 import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubst
@@ -103,7 +103,7 @@ def cleanupPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
     ("normalize2", normalizePass.withFacts.guardDegree b),
     ("constFold2", constantFoldPass.withFacts.guardDegree b),
     ("zeroRegister", zeroRegisterPass.guardDegree b),
-    ("scaledZero", ScaledZero.scaledZeroPass.guardDegree b),
+    ("intervalForce", IntervalForce.intervalForcePass.guardDegree b),
     ("digitFold", DigitFold.digitFoldPass.guardDegree b),
     ("oneHotAnnihilate", OneHotAnnihilate.oneHotAnnihilatePass.guardDegree b),
     ("hintCollapse", (hintCollapsePass pw).guardDegree b),
@@ -132,6 +132,12 @@ def codaPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
     -- byte-checked in several pairs and `redundantByteDrop` becomes operand-granular; the
     -- survivors are re-packed by `bytePackLate` below (a pair with nothing to shed round-trips).
     ("splitBytePair", SplitBytePair.splitBytePairPass.guardDegree b),
+    -- Rename each OR-identity result to its operand *before* the drop/pack stages: the renamed
+    -- interactions become degenerate byte checks (`[or, x, x, 0]`, exactly "x is a byte") that
+    -- `dedupLate` collapses, `redundantByteDrop` drops when justified elsewhere, and
+    -- `bytePackLate` packs pairwise. (In the cleanup cycle the rename instead explodes the
+    -- re-encoding; the coda has no reencode, so here it only exposes the degenerate checks.)
+    ("identitySubst", IdentitySubst.identitySubstPass.guardDegree b),
     ("dedupLate", dedupPass.withFacts.guardDegree b),
     ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree b),
     ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree b),
@@ -143,9 +149,6 @@ def codaPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
     -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
     ("tupleRange", tupleRangePass.guardDegree b),
     ("bytePackLate", VerifiedPassW.guardDegree b (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
-    -- After all packing has run, rename each OR-identity result to its operand: a variable win with
-    -- no re-packing (doing it in the cleanup cycle instead explodes the byte-check packing).
-    ("identitySubst", IdentitySubst.identitySubstPass.guardDegree b),
     ("monicScale", monicScalePass.withFacts.guardDegree b),
     ("constFoldEnd", constantFoldPass.withFacts.guardDegree b),
     -- Collapse recognised `sltu x, 1` (seqz) LessThan gadgets to the two-line is-zero gadget,

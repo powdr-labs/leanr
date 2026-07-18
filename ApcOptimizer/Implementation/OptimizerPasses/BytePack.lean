@@ -124,6 +124,29 @@ theorem byteXorSpec_decode_iff (bs : BusSemantics p) (facts : BusFacts p bs)
   exact hsound (bi.eval env).payload (op.eval env) (o1.eval env) (o2.eval env)
     (r.eval env) (bi.eval env).multiplicity hdecEv
 
+/-- The `byteBoolSound` analog of `byteXorSpec_decode_iff`: acceptance of a symbolic interaction
+    whose op matches the spec's optional OR/AND selector, characterized by the decoded fields'
+    evaluations. -/
+theorem byteBoolSound_decode_iff (bs : BusSemantics p) (facts : BusFacts p bs)
+    (spec : ByteXorSpec p) (bi : BusInteraction (Expression p))
+    (hspec : facts.byteXorSpec bi.busId = some spec)
+    (op o1 o2 r : Expression p) (hdec : spec.decode bi.payload = some (op, o1, o2, r))
+    (env : Variable → ZMod p) :
+    (∀ oop, spec.orOp = some oop → op.eval env = oop →
+        (bs.violatesConstraint (bi.eval env) = false ↔
+          (o1.eval env).val < spec.bound ∧ (o2.eval env).val < spec.bound
+            ∧ (r.eval env).val = Nat.lor (o1.eval env).val (o2.eval env).val)) ∧
+    (∀ aop, spec.andOp = some aop → op.eval env = aop →
+        (bs.violatesConstraint (bi.eval env) = false ↔
+          (o1.eval env).val < spec.bound ∧ (o2.eval env).val < spec.bound
+            ∧ (r.eval env).val = Nat.land (o1.eval env).val (o2.eval env).val)) := by
+  have hdecEv : spec.decode (bi.eval env).payload
+      = some (op.eval env, o1.eval env, o2.eval env, r.eval env) := by
+    show spec.decode (bi.payload.map (fun e => e.eval env)) = _
+    rw [spec.decode_map, hdec]; rfl
+  exact facts.byteBoolSound bi.busId spec hspec (bi.eval env).payload (op.eval env)
+    (o1.eval env) (o2.eval env) (r.eval env) (bi.eval env).multiplicity hdecEv
+
 /-- An emitted byte check introduces no variable beyond its operand's. -/
 theorem mkByteCheck_payload_vars (spec : ByteXorSpec p) (busId : Nat) (e : Expression p)
     {x : Variable} (pe : Expression p) (hpe : pe ∈ (mkByteCheck spec busId e).payload)

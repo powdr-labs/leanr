@@ -3,6 +3,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.BytePack
+import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 import ApcOptimizer.Implementation.MemoryBusDrop
 
 set_option autoImplicit false
@@ -502,6 +503,207 @@ theorem affineJustified_sound (bound : Nat) (bnd : Variable → Option Nat) (e :
       rw [linearize_eval e L hL env]
       exact LinExpr.eval_val_lt L env bnd (fun v _ b hb => hbnd v b hb) M hM bound h.1 h.2
 
+/-! ## Basis justification (range-checked linear forms as building blocks)
+
+`affineJustified` bounds a slot from per-variable bounds alone, which fails on SP1's shift-result
+memory slots `16384·r₂ + 4194304·r₃ + h₀ − 65536·h₁`: the slot is 16-bit not because each term is
+small but because the circuit *also* range-checks the linear form `r₂ + 256·r₃ − 4·h₁ < 4` (the
+shifted-out bits) — the slot is exactly `16384·(that form) + h₀` with `h₀ < 2¹⁴`. `basisJustified`
+reduces the target by integer multiples of *range-checked slot forms* drawn from the remaining
+interactions (the witness lookup `fwits`), then finishes with the plain per-variable bound: each
+step subtracts `μ·F` (with `μ > 0` chosen to cancel one variable's coefficient exactly) and
+accounts `μ·(B_F − 1)` against the budget. Soundness needs only that each step's form is a bounded
+slot of an accepted interaction — the subtraction itself is exact `LinExpr` algebra, so the value
+argument is one nat-level induction (`basisReduceGo_sound`). -/
+
+/-- The linearized (merged) form and bound of payload slot `i` of `bi`, when the multiplicity is a
+    nonzero constant and the slot carries a `slotBound`. -/
+def formBoundAt {bs : BusSemantics p} (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (i : Nat) : Option (LinExpr p × Nat) :=
+  match bi.multiplicity.constValue? with
+  | none => none
+  | some mval =>
+    if mval = 0 then none
+    else
+      match bi.payload[i]?,
+            facts.slotBound bi.busId mval (bi.payload.map Expression.constValue?) i with
+      | some e, some B =>
+        match linearize e with
+        | some L => some (L.norm, B)
+        | none => none
+      | _, _ => none
+
+theorem formBoundAt_sound {bs : BusSemantics p} (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (i : Nat) (Lr : LinExpr p) (Br : Nat)
+    (h : formBoundAt facts bi i = some (Lr, Br)) (env : Variable → ZMod p)
+    (hviol : (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false) :
+    (Lr.eval env).val < Br := by
+  unfold formBoundAt at h
+  cases hmc : bi.multiplicity.constValue? with
+  | none => simp only [hmc] at h; exact absurd h (by simp)
+  | some mval =>
+    simp only [hmc] at h
+    split_ifs at h with hmz
+    cases hpe : bi.payload[i]? with
+    | none => simp only [hpe] at h; exact absurd h (by simp)
+    | some e =>
+      cases hsb : facts.slotBound bi.busId mval (bi.payload.map Expression.constValue?) i with
+      | none => simp only [hpe, hsb] at h; exact absurd h (by simp)
+      | some B =>
+        simp only [hpe, hsb] at h
+        cases hL : linearize e with
+        | none => simp only [hL] at h; exact absurd h (by simp)
+        | some L' =>
+          simp only [hL, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hmeval : (bi.eval env).multiplicity = mval :=
+            bi.multiplicity.constValue?_sound mval hmc env
+          have hv : bs.violatesConstraint (bi.eval env) = false := by
+            apply hviol
+            rw [hmeval]
+            exact hmz
+          have hget : (bi.eval env).payload[i]? = some (e.eval env) := by
+            show (bi.payload.map (fun t => t.eval env))[i]? = some (e.eval env)
+            rw [List.getElem?_map, hpe]
+            rfl
+          have hsb' : facts.slotBound (bi.eval env).busId (bi.eval env).multiplicity
+              (bi.payload.map Expression.constValue?) i = some B := by
+            show facts.slotBound bi.busId (bi.eval env).multiplicity _ i = some B
+            rw [hmeval]
+            exact hsb
+          have hbound : (e.eval env).val < B :=
+            facts.slotBound_sound (bi.eval env) (bi.payload.map Expression.constValue?) i B
+              (e.eval env) hsb' (matches_evalPattern bi.payload env) hv hget
+          rwa [LinExpr.norm_eval, ← linearize_eval e L' hL env]
+
+/-- Reduction fuel: how many checked forms one basis justification may subtract. -/
+def basisFuel : Nat := 3
+
+/-- Fuel-bounded basis reduction: is `L`'s value provably `< bound − used` using per-variable
+    bounds (`bnd`, the finish arm) after subtracting positive integer multiples of range-checked
+    slot forms from `fwits` (each step accounts its form's worst case against `used`)? -/
+def basisReduceGo (bound : Nat) (bnd : Variable → Option Nat) {bs : BusSemantics p}
+    (facts : BusFacts p bs) (fwits : Variable → List (BusInteraction (Expression p))) :
+    Nat → Nat → LinExpr p → Bool
+  | 0, _, _ => false
+  | fuel + 1, used, L =>
+    (match L.natBound bnd with
+     | some M => decide (used + M < bound) && decide (used + M < p)
+     | none => false) ||
+    (L.terms.map Prod.fst).any (fun v =>
+      (fwits v).any (fun bi =>
+        (List.range bi.payload.length).any (fun i =>
+          match formBoundAt facts bi i with
+          | none => false
+          | some (Lf, Bf) =>
+            let cF := IntervalForce.srep (Lf.coeff v)
+            let μi := IntervalForce.srep (L.coeff v) / cF
+            if cF ≠ 0 ∧ 0 < μi ∧ cF * μi = IntervalForce.srep (L.coeff v) then
+              basisReduceGo bound bnd facts fwits fuel (used + μi.toNat * (Bf - 1))
+                ((L.add (Lf.scale (-(μi.toNat : ZMod p)))).norm)
+            else false)))
+
+theorem basisReduceGo_sound (bound : Nat) (bnd : Variable → Option Nat) {bs : BusSemantics p}
+    (facts : BusFacts p bs) (fwits : Variable → List (BusInteraction (Expression p)))
+    (env : Variable → ZMod p)
+    (hbnd : ∀ v b, bnd v = some b → (env v).val < b)
+    (hfw : ∀ v, ∀ bi ∈ fwits v, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false) :
+    ∀ (fuel used : Nat) (L : LinExpr p),
+      basisReduceGo bound bnd facts fwits fuel used L = true →
+      ∃ n : ℕ, L.eval env = (n : ZMod p) ∧ n + used < bound ∧ n + used < p := by
+  intro fuel
+  induction fuel with
+  | zero => intro used L h; exact absurd h (by simp [basisReduceGo])
+  | succ fuel ih =>
+    intro used L h
+    rw [basisReduceGo, Bool.or_eq_true] at h
+    rcases h with hfin | hstep
+    · -- finish arm: the plain per-variable natural bound
+      cases hM : L.natBound bnd with
+      | none => rw [hM] at hfin; simp at hfin
+      | some M =>
+        rw [hM] at hfin
+        rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at hfin
+        obtain ⟨hb, hp'⟩ := hfin
+        haveI : NeZero p := ⟨by omega⟩
+        unfold LinExpr.natBound at hM
+        cases hs : linTermsNatBound bnd L.terms with
+        | none => rw [hs] at hM; simp at hM
+        | some SN =>
+          rw [hs] at hM
+          simp only [Option.map_some, Option.some.injEq] at hM
+          subst hM
+          refine ⟨L.const.val + (L.terms.map (fun t => t.2.val * (env t.1).val)).sum, ?_, ?_, ?_⟩
+          · rw [LinExpr.eval, terms_eval_eq_cast, Nat.cast_add, ZMod.natCast_val, ZMod.cast_id]
+          · have := linTermsNatBound_le bnd env L.terms SN hs
+              (fun v _ b hb' => hbnd v b hb')
+            omega
+          · have := linTermsNatBound_le bnd env L.terms SN hs
+              (fun v _ b hb' => hbnd v b hb')
+            omega
+    · -- reduction arm: subtract μ·F for a range-checked slot form F
+      rw [List.any_eq_true] at hstep
+      obtain ⟨v, _, hstep⟩ := hstep
+      rw [List.any_eq_true] at hstep
+      obtain ⟨bi, hbi, hstep⟩ := hstep
+      rw [List.any_eq_true] at hstep
+      obtain ⟨i, _, hstep⟩ := hstep
+      cases hfb : formBoundAt facts bi i with
+      | none => rw [hfb] at hstep; simp at hstep
+      | some LfBf =>
+        obtain ⟨Lf, Bf⟩ := LfBf
+        rw [hfb] at hstep
+        simp only at hstep
+        split_ifs at hstep with hcond
+        obtain ⟨n', heval', hb', hp'⟩ := ih _ _ hstep
+        haveI : NeZero p := ⟨by omega⟩
+        have hef : (Lf.eval env).val < Bf :=
+          formBoundAt_sound facts bi i Lf Bf hfb env (hfw v bi hbi)
+        set μ := (IntervalForce.srep (L.coeff v) / IntervalForce.srep (Lf.coeff v)).toNat with hμ
+        -- the exact algebraic decomposition L = μ·Lf + L'
+        have hdecomp : L.eval env
+            = (μ : ZMod p) * Lf.eval env + ((L.add (Lf.scale (-(μ : ZMod p)))).norm).eval env := by
+          rw [LinExpr.norm_eval, LinExpr.add_eval, LinExpr.scale_eval]
+          ring
+        refine ⟨μ * (Lf.eval env).val + n', ?_, ?_, ?_⟩
+        · rw [hdecomp, heval']
+          push_cast
+          rw [ZMod.natCast_val, ZMod.cast_id]
+        · have hmul : μ * (Lf.eval env).val ≤ μ * (Bf - 1) :=
+            Nat.mul_le_mul_left _ (by omega)
+          omega
+        · have hmul : μ * (Lf.eval env).val ≤ μ * (Bf - 1) :=
+            Nat.mul_le_mul_left _ (by omega)
+          omega
+
+/-- Basis justification: `e` linearizes to a form the fuel-bounded reduction proves `< bound`. -/
+def basisJustified (bound : Nat) (bnd : Variable → Option Nat) {bs : BusSemantics p}
+    (facts : BusFacts p bs) (fwits : Variable → List (BusInteraction (Expression p)))
+    (e : Expression p) : Bool :=
+  match linearize e with
+  | some L => basisReduceGo bound bnd facts fwits basisFuel 0 L.norm
+  | none => false
+
+theorem basisJustified_sound (bound : Nat) (bnd : Variable → Option Nat) {bs : BusSemantics p}
+    (facts : BusFacts p bs) (fwits : Variable → List (BusInteraction (Expression p)))
+    (e : Expression p) (env : Variable → ZMod p)
+    (hbnd : ∀ v b, bnd v = some b → (env v).val < b)
+    (hfw : ∀ v, ∀ bi ∈ fwits v, (bi.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi.eval env) = false)
+    (h : basisJustified bound bnd facts fwits e = true) : (e.eval env).val < bound := by
+  unfold basisJustified at h
+  cases hL : linearize e with
+  | none => rw [hL] at h; simp at h
+  | some L =>
+    rw [hL] at h
+    obtain ⟨n, heval, hb, hp'⟩ :=
+      basisReduceGo_sound bound bnd facts fwits env hbnd hfw basisFuel 0 L.norm h
+    haveI : NeZero p := ⟨by omega⟩
+    rw [linearize_eval e L hL env, ← LinExpr.norm_eval, heval, ZMod.val_natCast,
+      Nat.mod_eq_of_lt (by omega)]
+    omega
+
 /-- Is `e` provably a byte under every assignment satisfying the remaining system? Either a
     constant `< 256`, a variable with a proven bus-fact bound `≤ 256` derived from the remaining
     interactions (e.g. another receive of the same word, or an explicit byte-check
@@ -509,7 +711,9 @@ theorem affineJustified_sound (bound : Nat) (bnd : Variable → Option Nat) (e :
     on every point of its selector flags' finite domains (`deepBoundOk`), or a single-variable
     expression whose variable's finite domain makes `e` a byte at every point
     (`domainByteJustified`, e.g. the `255·b` sign-extension limbs), or an affine recomposition of
-    bounded limbs (`affineJustified`, e.g. the `256·hi + lo` 16-bit memory slots).
+    bounded limbs (`affineJustified`, e.g. the `256·hi + lo` 16-bit memory slots), or a
+    basis reduction against range-checked slot forms from the second witness lookup `fwits`
+    (`basisJustified`, e.g. the shift-result slots `16384·F + h₀` with `F` op-6-checked).
 
     Parameterized form: the remaining interactions are consulted through the witness lookup
     `wits` (see `deepByteVars`), the single-variable constraints `domCs` and the per-variable
@@ -517,7 +721,7 @@ theorem affineJustified_sound (bound : Nat) (bnd : Variable → Option Nat) (e :
     instead of two full filters of the constraint list per query). -/
 def byteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (wits : Variable → List (BusInteraction (Expression p)))
+    (facts : BusFacts p bs) (wits fwits : Variable → List (BusInteraction (Expression p)))
     (e : Expression p) : Bool :=
   match e.constValue? with
   | some c => decide (c.val < bound)
@@ -530,24 +734,29 @@ def byteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (Expression p))
        (deep && decide (256 ≤ bound) && deepByteJustified domCs (candsOf x) bs facts wits x)
      | _ => false) ||
     (deep && decide (256 ≤ bound) && domainByteJustified domCs e) ||
-    affineJustified bound (fun x => findVarBound bs facts (wits x) x) e
+    affineJustified bound (fun x => findVarBound bs facts (wits x) x) e ||
+    basisJustified bound (fun x => findVarBound bs facts (wits x) x) facts fwits e
 
 /-- The plain full-scan form (used by the coda's `RedundantByteDrop`): witness lookup and
-    precomputed constraint lists instantiated with the naive per-query filters. -/
+    precomputed constraint lists instantiated with the naive per-query filters. The basis arm is
+    disabled (`fwits = []`): feeding the whole region would rescan it per queried variable, and
+    the byte-level drops it serves don't need range-checked forms. -/
 def byteJustified (bound : Nat) (deep : Bool) (all : List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
     (e : Expression p) : Bool :=
   byteJustifiedW bound deep (all.filter Expression.isSingleVar)
-    (fun x => all.filter (Expression.containsVar x)) bs facts (fun _ => rest) e
+    (fun x => all.filter (Expression.containsVar x)) bs facts (fun _ => rest) (fun _ => []) e
 
 theorem byteJustifiedW_sound (bound : Nat) (deep : Bool) (all domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
-    (wits : Variable → List (BusInteraction (Expression p))) (e : Expression p)
+    (wits fwits : Variable → List (BusInteraction (Expression p))) (e : Expression p)
     (hdeep : deep = true → p.Prime)
     (hdomCs : ∀ c ∈ domCs, c ∈ all) (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ all)
     (hwits : ∀ v, ∀ bi ∈ wits v, bi ∈ rest)
-    (h : byteJustifiedW bound deep domCs candsOf bs facts wits e = true) (env : Variable → ZMod p)
+    (hfwits : ∀ v, ∀ bi ∈ fwits v, bi ∈ rest)
+    (h : byteJustifiedW bound deep domCs candsOf bs facts wits fwits e = true)
+    (env : Variable → ZMod p)
     (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
       bs.violatesConstraint (bi.eval env) = false) :
@@ -565,8 +774,8 @@ theorem byteJustifiedW_sound (bound : Nat) (deep : Bool) (all domCs : List (Expr
   | none =>
     rw [hc] at h
     dsimp only at h
-    rw [Bool.or_eq_true, Bool.or_eq_true] at h
-    rcases h with (h | h) | h
+    rw [Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true] at h
+    rcases h with ((h | h) | h) | h
     · -- variable path (bus-fact bound or deep selector-flag justification)
       cases e with
       | var x =>
@@ -599,6 +808,10 @@ theorem byteJustifiedW_sound (bound : Nat) (deep : Bool) (all domCs : List (Expr
     · -- affine recomposition path (`256·hi + lo`, …)
       exact affineJustified_sound bound (fun x => findVarBound bs facts (wits x) x) e env
         (fun v b hb => findVarBound_sound bs facts (wits v) v b hb env (hbusW v)) h
+    · -- basis reduction path (range-checked slot forms)
+      exact basisJustified_sound bound (fun x => findVarBound bs facts (wits x) x) facts fwits
+        e env (fun v b hb => findVarBound_sound bs facts (wits v) v b hb env (hbusW v))
+        (fun v bi hbi => hbus bi (hfwits v bi hbi)) h
 
 theorem byteJustified_sound (bound : Nat) (deep : Bool) (all : List (Expression p))
     (bs : BusSemantics p)
@@ -610,29 +823,31 @@ theorem byteJustified_sound (bound : Nat) (deep : Bool) (all : List (Expression 
       bs.violatesConstraint (bi.eval env) = false) :
     (e.eval env).val < bound :=
   byteJustifiedW_sound bound deep all (all.filter Expression.isSingleVar)
-    (fun x => all.filter (Expression.containsVar x)) bs facts rest (fun _ => rest) e hdeep
+    (fun x => all.filter (Expression.containsVar x)) bs facts rest (fun _ => rest)
+    (fun _ => []) e hdeep
     (fun _ hc => List.mem_of_mem_filter hc) (fun _ _ hc => List.mem_of_mem_filter hc)
-    (fun _ _ hbi => hbi) h env hall hbus
+    (fun _ _ hbi => hbi) (fun _ _ hbi => absurd hbi (by simp)) h env hall hbus
 
 /-- Are all of `R`'s payload entries at the declared byte slots justified (through the witness
     lookup `wits` and precomputed `domCs`/`candsOf`, see `byteJustifiedW`)? -/
 def recvSlotsJustified (bound : Nat) (deep : Bool) (domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (wits : Variable → List (BusInteraction (Expression p)))
+    (facts : BusFacts p bs) (wits fwits : Variable → List (BusInteraction (Expression p)))
     (slots : List Nat) (R : BusInteraction (Expression p)) : Bool :=
   slots.all (fun slot =>
     match R.payload[slot]? with
-    | some e => byteJustifiedW bound deep domCs candsOf bs facts wits e
+    | some e => byteJustifiedW bound deep domCs candsOf bs facts wits fwits e
     | none => true)
 
 theorem recvSlotsJustified_sound (bound : Nat) (deep : Bool) (all domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (rest : List (BusInteraction (Expression p)))
-    (wits : Variable → List (BusInteraction (Expression p))) (slots : List Nat)
+    (wits fwits : Variable → List (BusInteraction (Expression p))) (slots : List Nat)
     (R : BusInteraction (Expression p)) (hdeep : deep = true → p.Prime)
     (hdomCs : ∀ c ∈ domCs, c ∈ all) (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ all)
     (hwits : ∀ v, ∀ bi ∈ wits v, bi ∈ rest)
-    (h : recvSlotsJustified bound deep domCs candsOf bs facts wits slots R = true)
+    (hfwits : ∀ v, ∀ bi ∈ fwits v, bi ∈ rest)
+    (h : recvSlotsJustified bound deep domCs candsOf bs facts wits fwits slots R = true)
     (env : Variable → ZMod p)
     (hall : ∀ c' ∈ all, c'.eval env = 0)
     (hbus : ∀ bi ∈ rest, (bi.eval env).multiplicity ≠ 0 →
@@ -650,8 +865,8 @@ theorem recvSlotsJustified_sound (bound : Nat) (deep : Bool) (all domCs : List (
     rw [he] at hget' hcheck
     simp only [Option.map_some, Option.some.injEq] at hget'
     subst hget'
-    exact byteJustifiedW_sound bound deep all domCs candsOf bs facts rest wits e hdeep
-      hdomCs hcands hwits hcheck env hall hbus
+    exact byteJustifiedW_sound bound deep all domCs candsOf bs facts rest wits fwits e hdeep
+      hdomCs hcands hwits hfwits hcheck env hall hbus
 
 /-! ## Net-multiplicity bookkeeping -/
 
@@ -1804,11 +2019,11 @@ theorem emitOk_sound (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat)
 /-- The declared byte slots of `R` whose payload entries the witnesses do not justify. -/
 def unjustifiedSlots (bound : Nat) (deep : Bool) (domCs : List (Expression p))
     (candsOf : Variable → List (Expression p)) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (wits : Variable → List (BusInteraction (Expression p)))
+    (facts : BusFacts p bs) (wits fwits : Variable → List (BusInteraction (Expression p)))
     (slots : List Nat) (R : BusInteraction (Expression p)) : List Nat :=
   slots.filter (fun slot =>
     match R.payload[slot]? with
-    | some e => !byteJustifiedW bound deep domCs candsOf bs facts wits e
+    | some e => !byteJustifiedW bound deep domCs candsOf bs facts wits fwits e
     | none => false)
 
 /-- The per-candidate certificate: address/multiplicity/payload of the pair, the emitted
@@ -1821,7 +2036,7 @@ def checkCancel (deep : Bool) {all : List (Expression p)} (bs : BusSemantics p)
     (facts : BusFacts p bs)
     (M : Thunk (EqConstraintMap p all))
     (domCs : List (Expression p)) (candsOf : Variable → List (Expression p))
-    (wits : Variable → List (BusInteraction (Expression p)))
+    (wits fwits : Variable → List (BusInteraction (Expression p)))
     (busId : Nat) (shape : MemoryBusShape) (slots : List Nat) (bound : Nat)
     (S R : BusInteraction (Expression p))
     (checks : List (BusInteraction (Expression p))) : Bool :=
@@ -1829,7 +2044,7 @@ def checkCancel (deep : Bool) {all : List (Expression p)} (bs : BusSemantics p)
   decide (multConst S = some shape.setNewMult) && decide (multConst R = some (-shape.setNewMult)) &&
   payloadEntailedEq M S.payload R.payload &&
   checks.all (emitOk bs facts busId shape slots R) &&
-  recvSlotsJustified bound deep domCs candsOf bs facts wits slots R
+  recvSlotsJustified bound deep domCs candsOf bs facts wits fwits slots R
 
 /-- A passing `checkCancel` — together with the split equation, the region hypotheses the scan
     established, and the witness/index membership facts — yields `PassCorrect` via
@@ -1842,7 +2057,7 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (T : Thunk (AddrCerts p cs.algebraicConstraints))
     (M : Thunk (EqConstraintMap p cs.algebraicConstraints))
     (domCs : List (Expression p)) (candsOf : Variable → List (Expression p))
-    (wits : Variable → List (BusInteraction (Expression p)))
+    (wits fwits : Variable → List (BusInteraction (Expression p)))
     (A : List (BusInteraction (Expression p))) (S : BusInteraction (Expression p))
     (B : List (BusInteraction (Expression p))) (R : BusInteraction (Expression p))
     (C : List (BusInteraction (Expression p)))
@@ -1852,9 +2067,11 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (hdomCs : ∀ c ∈ domCs, c ∈ cs.algebraicConstraints)
     (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ cs.algebraicConstraints)
     (hwits : ∀ v, ∀ bi ∈ wits v, bi ∈ A ++ B ++ C ++ checks)
+    (hfwits : ∀ v, ∀ bi ∈ fwits v, bi ∈ A ++ B ++ C ++ checks)
     (hmid : ∀ m0 ∈ B, midRefuted shape T busId S m0 = true)
     (hshield : shieldOk shape T busId S A = true)
-    (h : checkCancel deep bs facts M domCs candsOf wits busId shape slots bound S R checks = true) :
+    (h : checkCancel deep bs facts M domCs candsOf wits fwits busId shape slots bound S R checks
+      = true) :
     PassCorrect cs { cs with busInteractions := A ++ B ++ C ++ checks } [] bs := by
   unfold checkCancel at h
   simp only [Bool.and_eq_true] at h
@@ -1867,7 +2084,8 @@ theorem checkCancel_sound (cs : ConstraintSystem p) (bs : BusSemantics p) (facts
     (fun ck hck => emitOk_sound bs facts busId shape slots R ck
       (List.all_eq_true.mp hemit ck hck) (of_decide_eq_true hRb) hRmEv)
     (fun env hall hbus => recvSlotsJustified_sound bound deep cs.algebraicConstraints domCs candsOf
-      bs facts (A ++ B ++ C ++ checks) wits slots R hdeep hdomCs hcands hwits hjust env hall hbus)
+      bs facts (A ++ B ++ C ++ checks) wits fwits slots R hdeep hdomCs hcands hwits hfwits hjust
+      env hall hbus)
     hsplit
     (of_decide_eq_true hSb) (of_decide_eq_true hRb)
     (of_decide_eq_true hSm) (of_decide_eq_true hRm)
@@ -2009,6 +2227,58 @@ theorem dropWits_mem {bs : BusSemantics p} (facts : BusFacts p bs)
       rw [hfb] at hbi
       exact List.mem_append_right _ hbi
 
+/-- Candidate positions for range-checked forms, per variable: interactions on a *stateless* bus
+    (this pass only ever tombstones stateful memory pairs) carrying a compound payload slot that
+    mentions the variable, at most four per variable. Built once per invocation; **untrusted** —
+    `dropFormWits` re-checks liveness and the dropped pair at every use, so a stale or wrong entry
+    costs time, never soundness. -/
+def buildFormIdx (bs : BusSemantics p) (arr : Array (BusInteraction (Expression p))) :
+    Std.HashMap Variable (List Nat) :=
+  (arr.toList.zipIdx).foldl (fun m bik =>
+    if bs.isStateful bik.1.busId then m
+    else
+      bik.1.payload.foldl (fun m e =>
+        if e.isSingleVar then m
+        else
+          e.vars.dedup.foldl (fun m v =>
+            let cur := m.getD v []
+            if cur.length < 4 then m.insert v (bik.2 :: cur) else m) m) m) ∅
+
+/-- The range-checked-form witness lookup for a candidate drop: the indexed candidate positions
+    for `v`, re-checked live and distinct from the dropped pair — the interactions
+    `basisJustified` mines for bounded linear forms. -/
+def dropFormWits (fidx : Std.HashMap Variable (List Nat))
+    (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (S R : BusInteraction (Expression p)) (v : Variable) :
+    List (BusInteraction (Expression p)) :=
+  (fidx.getD v []).filterMap (fun k =>
+    if h : k < arr.size then
+      if alive[k]?.getD false && !decide (arr[k] = S) && !decide (arr[k] = R) then
+        some arr[k]
+      else none
+    else none)
+
+/-- Every form witness is in the remaining region (the index entry is re-checked at use). -/
+theorem dropFormWits_mem (fidx : Std.HashMap Variable (List Nat))
+    (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
+    (S R : BusInteraction (Expression p))
+    {A B C : List (BusInteraction (Expression p))}
+    (horig : ∀ bi ∈ liveSeg arr alive 0 arr.size, bi ≠ S → bi ≠ R → bi ∈ A ++ B ++ C)
+    (emitted : List (BusInteraction (Expression p))) :
+    ∀ v, ∀ bi ∈ dropFormWits fidx arr alive S R v, bi ∈ A ++ B ++ C ++ emitted := by
+  intro v bi hbi
+  rw [dropFormWits, List.mem_filterMap] at hbi
+  obtain ⟨k, _, heq⟩ := hbi
+  split_ifs at heq with hk hcond
+  · obtain rfl := Option.some.inj heq
+    rw [Bool.and_eq_true, Bool.and_eq_true] at hcond
+    obtain ⟨⟨hal, hnS⟩, hnR⟩ := hcond
+    refine List.mem_append_left _ (horig arr[k]
+      (liveSeg_mem arr alive 0 arr.size k _ (Nat.zero_le _) (by omega) hal
+        (Array.getElem?_eq_getElem hk)) ?_ ?_)
+    · exact fun he => by simp [he] at hnS
+    · exact fun he => by simp [he] at hnR
+
 /-! ### The stable-state cancellation loop
 
 The search returns a `DropResult`: the tombstoned liveness array and grown checks list after the
@@ -2042,6 +2312,7 @@ def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
     (domCs : List (Expression p)) (hdomCs : ∀ c ∈ domCs, c ∈ cs0.algebraicConstraints)
     (candsOf : Variable → List (Expression p))
     (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ cs0.algebraicConstraints)
+    (fidx : Std.HashMap Variable (List Nat))
     (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
     (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
     (iP jP : Nat) (S R : BusInteraction (Expression p)) (slots : List Nat) (bound : Nat)
@@ -2057,7 +2328,8 @@ def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
     (hmid : ∀ m0 ∈ liveSeg arr alive (iP + 1) (jP - iP - 1), midRefuted shape T busId S m0 = true)
     (hshield : shieldOk shape T busId S (liveSeg arr alive 0 iP) = true)
     (hchk : checkCancel deep bs facts M domCs candsOf
-      (dropWits facts arr alive S R checksOld checks) busId shape slots bound S R checks = true) :
+      (dropWits facts arr alive S R checksOld checks) (dropFormWits fidx arr alive S R)
+      busId shape slots bound S R checks = true) :
     DropResult cs0 bs arr alive checksOld := by
   let A := liveSeg arr alive 0 iP
   let B := liveSeg arr alive (iP + 1) (jP - iP - 1)
@@ -2083,8 +2355,10 @@ def mkDropResult (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
         busInteractions := A ++ B ++ (C' ++ checksOld) ++ checks } [] bs :=
     checkCancel_sound (mkCs cs0 arr alive checksOld) bs facts hp1 deep hdeep busId shape hshape slots bound
       T M domCs candsOf (dropWits facts arr alive S R checksOld checks)
+      (dropFormWits fidx arr alive S R)
       A S B R (C' ++ checksOld) hslots checks hsplit hdomCs hcands
-      (dropWits_mem facts arr alive S R checksOld checks horig hchecks) hmid hshield hchk
+      (dropWits_mem facts arr alive S R checksOld checks horig hchecks)
+      (dropFormWits_mem fidx arr alive S R horig checks) hmid hshield hchk
   have hdropL : liveSeg arr aliveNew 0 arr.size = A ++ B ++ C' :=
     liveSeg_drop arr alive iP jP arr.size hij hjsz hisz hjsz' aliveNew rfl
   have heq : { mkCs cs0 arr alive checksOld with
@@ -2124,6 +2398,7 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
     (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
     (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
     (bcBus? : Option (Nat × ByteXorSpec p))
+    (fidx : Std.HashMap Variable (List Nat))
     (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
     (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
     (idx : Std.HashMap UInt64 (List Nat))
@@ -2132,7 +2407,7 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
     let S := arr[i]
     -- (thunked: Lean is strict, and the continuation must not run once a pair is accepted)
     let next := fun (_ : Unit) => findCancelGoIdx cs0 bs facts hp1 deep hdeep aggressive busId shape
-      hshape T M domCsT candsT bcBus? arr alive checksOld hsz idx (i + 1)
+      hshape T M domCsT candsT bcBus? fidx arr alive checksOld hsz idx (i + 1)
     if haliveS : alive[i]?.getD false = true then
     if decide (multConst S = some shape.setNewMult) && decide (S.busId = busId) then
       match hfm : firstMatchAt M arr alive busId S i (idx.getD
@@ -2164,10 +2439,11 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
           | none => next ()
           | some (slots, bound) =>
           if hchk0 : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
-              (dropWits facts arr alive S R checksOld []) busId shape slots bound S R [] = true then
+              (dropWits facts arr alive S R checksOld []) (dropFormWits fidx arr alive S R)
+              busId shape slots bound S R [] = true then
             some (mkDropResult cs0 bs facts hp1 deep hdeep busId shape hshape T M
               domCsT.get.val domCsT.get.property candsT.get.lookup (fun x => candsT.get.lookup_mem x)
-              arr alive checksOld hsz i j S R slots bound [] checksOld (List.append_nil checksOld).symm
+              fidx arr alive checksOld hsz i j S R slots bound [] checksOld (List.append_nil checksOld).symm
               false 0 i hij hjlt hSget hR haliveS hRalive hslots hmid hshield hchk0)
           else
           -- Unjustified byte slots are materialized as one explicit self-check on a `byteXorSpec`
@@ -2177,7 +2453,7 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
           -- check is therefore never a send/receive candidate. It lives only in the threaded
           -- `checks` list (consulted by `dropWits` for byte justification), at the logical tail.
           let unjust := unjustifiedSlots bound deep domCsT.get.val candsT.get.lookup bs facts
-            (dropWits facts arr alive S R checksOld []) slots R
+            (dropWits facts arr alive S R checksOld []) (dropFormWits fidx arr alive S R) slots R
           let checks : List (BusInteraction (Expression p)) :=
             match unjust, bcBus? with
             | [slot], some (bcBus, spec) => (R.payload[slot]?).elim [] (fun e =>
@@ -2185,10 +2461,11 @@ def findCancelGoIdx (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : Bu
             | _, _ => []
           if !checks.isEmpty && (aggressive || decide (S.payload = R.payload)) then
             if hchk : checkCancel deep bs facts M domCsT.get.val candsT.get.lookup
-                (dropWits facts arr alive S R checksOld checks) busId shape slots bound S R checks = true then
+                (dropWits facts arr alive S R checksOld checks) (dropFormWits fidx arr alive S R)
+                busId shape slots bound S R checks = true then
               some (mkDropResult cs0 bs facts hp1 deep hdeep busId shape hshape T M
                 domCsT.get.val domCsT.get.property candsT.get.lookup (fun x => candsT.get.lookup_mem x)
-                arr alive checksOld hsz i j S R slots bound checks (checksOld ++ checks) rfl
+                fidx arr alive checksOld hsz i j S R slots bound checks (checksOld ++ checks) rfl
                 true 0 i hij hjlt hSget hR haliveS hRalive hslots hmid hshield hchk)
             else next ()
           else next ()
@@ -2212,6 +2489,7 @@ def findCancel (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFact
     (M : Thunk (EqConstraintMap p cs0.algebraicConstraints))
     (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
     (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
+    (fidx : Std.HashMap Variable (List Nat))
     (arr : Array (BusInteraction (Expression p))) (alive : Array Bool)
     (checksOld : List (BusInteraction (Expression p))) (hsz : alive.size = arr.size)
     (idx : Std.HashMap UInt64 (List Nat))
@@ -2220,18 +2498,18 @@ def findCancel (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFact
   | _, [] => none
   | curIdx, busId :: rest =>
     if curIdx < resumeIdx then
-      findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT arr alive checksOld hsz
-        idx bcBus? resumeIdx resumePos (curIdx + 1) rest
+      findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT fidx arr alive checksOld
+        hsz idx bcBus? resumeIdx resumePos (curIdx + 1) rest
     else
       let startPos := if curIdx = resumeIdx then resumePos else 0
       match hshape : facts.memShape busId with
       | some shape =>
         match findCancelGoIdx cs0 bs facts hp1 deep hdeep aggressive busId shape hshape
-            T M domCsT candsT bcBus? arr alive checksOld hsz idx startPos with
+            T M domCsT candsT bcBus? fidx arr alive checksOld hsz idx startPos with
         | some dr => some { dr with dropIdx := curIdx }
-        | none => findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT arr alive
-            checksOld hsz idx bcBus? resumeIdx resumePos (curIdx + 1) rest
-      | none => findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT arr alive
+        | none => findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT fidx arr
+            alive checksOld hsz idx bcBus? resumeIdx resumePos (curIdx + 1) rest
+      | none => findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT fidx arr alive
           checksOld hsz idx bcBus? resumeIdx resumePos (curIdx + 1) rest
 
 /-- Cancel every droppable pair in one pass invocation, iterating over a *stable* tombstoned array
@@ -2251,12 +2529,13 @@ def cancelLoop (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFact
     (domCsT : Thunk { l : List (Expression p) // ∀ c ∈ l, c ∈ cs0.algebraicConstraints })
     (candsT : Thunk (VarCsIdx p cs0.algebraicConstraints))
     (bcBus? : Option (Nat × ByteXorSpec p)) (busIds : List Nat)
+    (fidx : Std.HashMap Variable (List Nat))
     (arr : Array (BusInteraction (Expression p)))
     (idx : Std.HashMap UInt64 (List Nat))
     (alive : Array Bool) (checksOld : List (BusInteraction (Expression p)))
     (hsz : alive.size = arr.size) (resumeIdx resumePos : Nat)
     (hcur : PassCorrect cs0 (mkCs cs0 arr alive checksOld) [] bs) : PassResult cs0 bs :=
-  match hfc : findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT arr alive
+  match hfc : findCancel cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT fidx arr alive
       checksOld hsz idx bcBus? resumeIdx resumePos 0 busIds with
   | none =>
     -- Materialize the final compact interaction list once, tail-recursively (`liveArr`), and
@@ -2269,7 +2548,7 @@ def cancelLoop (cs0 : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFact
   | some dr =>
     let nextIdx := if dr.emitted then 0 else dr.dropIdx
     let nextPos := if dr.emitted then 0 else dr.dropPos
-    cancelLoop cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT bcBus? busIds arr idx
+    cancelLoop cs0 bs facts hp1 deep hdeep aggressive T M domCsT candsT bcBus? busIds fidx arr idx
       dr.aliveNew dr.checksNew dr.sizeNew nextIdx nextPos (hcur.andThen dr.step)
   termination_by liveCount arr alive
   decreasing_by exact dr.decreases
@@ -2307,8 +2586,9 @@ def busPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : VerifiedPassW 
       simp only [alive, Array.getElem?_replicate, hk, if_true, Option.getD_some]
     have hcur : PassCorrect cs (mkCs cs arr alive []) [] bs := by
       rw [mkCs_all cs arr rfl alive halltrue]; exact PassCorrect.refl cs bs
+    let fidx := buildFormIdx bs arr
     cancelLoop cs bs facts hp1 deep (fun h => pw.correct h) aggressive T M domCsT candsT
       (busIds.findSome? (fun k => match facts.byteXorSpec k with
         | some spec => if spec.bound = 256 then some (k, spec) else none
-        | none => none)) busIds arr idx alive [] hsz 0 0 hcur
+        | none => none)) busIds fidx arr idx alive [] hsz 0 0 hcur
   else ⟨cs, [], PassCorrect.refl cs bs⟩

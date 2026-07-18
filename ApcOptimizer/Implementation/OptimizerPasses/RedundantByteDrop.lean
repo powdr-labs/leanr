@@ -101,6 +101,11 @@ def byteCheckOperands? (bs : BusSemantics p) (facts : BusFacts p bs)
           else if decide (256 ≤ p) && o2.constValue? == some 255 && isByteCompl o1 r then some [o1]
           else if decide (256 ≤ p) && o1.constValue? == some 255 && isByteCompl o2 r then some [o2]
           else none
+        else if spec.orOp.any (fun oop => op.constValue? == some oop) then
+          -- OR identity (`x | 0 = x`): exactly a byte check on the survivor.
+          if o2.constValue? == some 0 && o1 == r then some [o1]
+          else if o1.constValue? == some 0 && o2 == r then some [o2]
+          else none
         else if op.constValue? == some spec.pairOp && r.constValue? == some 0 then some [o1, o2]
         else none
     else none
@@ -132,7 +137,7 @@ theorem byteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts p bs
       · exact absurd h (by simp)
       · rename_i op o1 o2 r hdec
         have key := byteXorSpec_decode_iff bs facts spec bi hspec op o1 o2 r hdec env
-        split_ifs at h with hxor h1 h2 h3 h4 h5 hpair
+        split_ifs at h with hxor h1 h2 h3 h4 h5 hor hor1 hor2 hpair
         · -- self-check: o₁ = o₂, r = 0
           obtain ⟨heq, hr0⟩ := by rw [Bool.and_eq_true] at h1; exact h1
           obtain rfl : [o1] = ops := by simpa using h
@@ -192,6 +197,38 @@ theorem byteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts p bs
           refine (key.1 hopEv).mpr ⟨hbound ▸ ?_, hbound ▸ hob, ?_⟩
           · rw [ho1, h255v]; omega
           · rw [hr, ho1, h255v, val_255_sub hple _ hob]; exact Nat.xor_comm _ _
+        · -- OR identity: o₂ = 0, o₁ = r
+          obtain ⟨hz, heq⟩ := by rw [Bool.and_eq_true] at hor1; exact hor1
+          obtain rfl : [o1] = ops := by simpa using h
+          obtain rfl : o1 = r := eq_of_beq heq
+          cases hoo : spec.orOp with
+          | none => rw [hoo] at hor; simp [Option.any] at hor
+          | some oop =>
+            rw [hoo] at hor
+            simp only [Option.any] at hor
+            have hopEv : op.eval env = oop := op.constValue?_sound oop (by simpa using hor) env
+            have keyOr := (byteBoolSound_decode_iff bs facts spec bi hspec op o1 o2 o1 hdec env).1
+              oop hoo hopEv
+            have ho2 : o2.eval env = 0 := o2.constValue?_sound 0 (by simpa using hz) env
+            refine keyOr.mpr ⟨hbound ▸ hops o1 (by simp), hbound ▸ ?_, ?_⟩
+            · rw [ho2, ZMod.val_zero]; omega
+            · rw [ho2, ZMod.val_zero]; simp
+        · -- mirror OR identity: o₁ = 0, o₂ = r
+          obtain ⟨hz, heq⟩ := by rw [Bool.and_eq_true] at hor2; exact hor2
+          obtain rfl : [o2] = ops := by simpa using h
+          obtain rfl : o2 = r := eq_of_beq heq
+          cases hoo : spec.orOp with
+          | none => rw [hoo] at hor; simp [Option.any] at hor
+          | some oop =>
+            rw [hoo] at hor
+            simp only [Option.any] at hor
+            have hopEv : op.eval env = oop := op.constValue?_sound oop (by simpa using hor) env
+            have keyOr := (byteBoolSound_decode_iff bs facts spec bi hspec op o1 o2 o2 hdec env).1
+              oop hoo hopEv
+            have ho1 : o1.eval env = 0 := o1.constValue?_sound 0 (by simpa using hz) env
+            refine keyOr.mpr ⟨hbound ▸ ?_, hbound ▸ hops o2 (by simp), ?_⟩
+            · rw [ho1, ZMod.val_zero]; omega
+            · rw [ho1, ZMod.val_zero]; simp
         · -- packed-pair: r = 0
           obtain ⟨hpc, hr0⟩ := by rw [Bool.and_eq_true] at hpair; exact hpair
           obtain rfl : [o1, o2] = ops := by simpa using h

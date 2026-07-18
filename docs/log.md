@@ -3806,3 +3806,103 @@ OpenVM's bitwise bus declares no `orOp` (XOR + range only), so `identityPairAt` 
 everywhere → empty substitution map → genuine no-op; keccak byte-identical (2021 vars / 186
 constraints / 1752 bus interactions). Proof integrity green ({propext, Classical.choice, Quot.sound});
 no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
+
+### 101. Interval forcing: integer-window analysis of bounded affine slots (SP1 vars 3.784× → 3.922×, bus 2.553× → 2.598×; replaces ScaledZero)
+
+Fresh per-case export diffing against powdr showed the largest remaining SP1 *variable* clusters
+(apc_030 +60, apc_016/017 +33, apc_029 +32, apc_024/040 +27, …) were all one shape: bounded byte-bus
+slots that are *affine in bounded variables* and force equalities only visible over ℤ. The op-6
+checks `r₀ + 256·r₁ − 256·h < 2⁸` force `h = r₁` (the `higher_limb` clusters powdr substitutes
+away); the byte slots `r₂ + 256·r₃ + 8323072·(c − h) − 256·h′` force `c = h`; the 16-bit memory
+data slots `256·r₂ + 65536·r₃ + h − 65536·h′` force `h′ = r₃` — after which the memory payloads
+become plain affine byte recompositions that `busPairCancel` justifies and telescopes.
+
+**New pass `intervalForce` (`IntervalForce.lean`), replacing `ScaledZero`.** For every accepted
+interaction slot with a `slotBound B` (and every algebraic constraint, consumed as a bound-1 slot),
+linearize the slot, give every coefficient its signed minimal-magnitude integer representative, and
+bound every variable through a once-per-invocation proof-carrying `BoundIdx` (variable → bound,
+each entry witnessed by a member interaction, the `VarCsIdx` pattern). If the integer window
+`[lo, hi]` spanned by the bounds survives reduction mod `p` only at the residues `[0, B)`
+(`hi ≤ p − 1`, `lo ≥ B − p`), the slot value is an **integer** in `[0, B)`, and two arms extract
+facts: a `+g/−g` coefficient pair whose companion window `R` satisfies `B ≤ g + Rlo` and `Rhi < g`
+forces `v = w`; a single term forces `v = 0` (`0 < g` with `B ≤ g + Rlo`, or `g < 0` with
+`Rhi + g < 0`). Seeds go in as algebraic constraints (`addConstraints_correct`); Gauss consumes
+them the same cycle. ScaledZero's single-scaled-variable and two-term arms are exactly the one- and
+two-term instances of the window argument, so the pass file is deleted, not kept alongside. Purely
+arithmetic on proven bounds — no primality, no VM specifics beyond `slotBound`; window/extraction
+soundness is one integer lemma (`int_window`) plus a permutation-invariant walk over the term list.
+
+**Impact (`benchmark.py --vm sp1`, 100 rsp cases):** variables **3.784× → 3.922×** agg (geo
+3.323× → 3.372×; aggregate var gap vs powdr **442 → 55**), bus **2.553× → 2.598×** (bus gap
+765 → 625), constraints unchanged. Per-case W/L/T by variables 1/51/48 → **15/42/43**; per-case
+diff vs the #162 baseline: **21 cases improved (−387 vars, −140 bus), 79 byte-identical, 0
+regressed**. apc_001/016/017/024/027/029/031/037/040 now at or **below** powdr's variable count
+(apc_016 268 v vs powdr 277). **No OpenVM regression:** keccak byte-identical (2021 v / 186 c /
+1752 bus). **Runtime flat**: 1323/10425/19420/22608 ms on apc_001/016/024/030 vs
+1334/11083/18559/23332 baseline; the pass itself is 271 ms of apc_030's 22.6 s (domainBatch
+dominates at 16 s). Proof integrity green ({propext, Classical.choice, Quot.sound}); no
+`sorry`/`axiom`/`native_decide`. Residual: bus gap 625 (memory chains + byte-check layout),
+var gap 55 — see the rewritten `docs/ideas.md`. **Worked: yes.**
+
+### 102. Basis justification: range-checked forms as building blocks (SP1 bus 2.598× → 2.650×)
+
+The largest remaining SP1 *bus* residual was the shift-result register chains (apc_030's register
+16: 30 interactions vs powdr's 2). Their syntactically-identical send/receive pairs would not
+cancel because the dropped send's 16-bit obligation cannot be affine-justified: the data slot is
+`16384·r₂ + 4194304·r₃ + h₀ − 65536·h₁` — 16-bit not because each term is small but because the
+circuit *also* op-6-checks the shifted-out bits `F = r₂ + 256·r₃ − 4·h₁ < 4` and the slot is
+exactly `16384·F + h₀` with `h₀ < 2¹⁴`.
+
+**`basisJustified` (in `BusPairCancel.lean`), a new arm of `byteJustifiedW`.** A fuel-bounded
+reduction subtracts positive integer multiples of *range-checked slot forms* (`formBoundAt`: any
+accepted interaction slot with a `slotBound`, linearized) to cancel one target coefficient per
+step (`μ = c_T/c_F`, exact), accounting `μ·(B_F − 1)` against the budget, then finishes with the
+plain per-variable natural bound. Soundness is one nat-level induction (`basisReduceGo_sound`):
+each step's subtraction is exact `LinExpr` algebra, so the target's value is the plain natural
+number `Σ μᵢ·eᵢ + n_rest`, bounded below `min(bound, p)` — no wraparound case analysis at all.
+The candidate forms come from a per-invocation *untrusted* position index (`buildFormIdx`,
+stateless buses only, ≤4 positions per variable); `dropFormWits` re-checks liveness and the
+dropped pair at use, so the index costs time, never soundness (same discipline as `recvIndexAll`).
+The coda's plain `byteJustified` keeps the arm disabled — feeding the whole region as the form
+lookup made `redundantByteDrop` rescan it per queried variable (measured 63 s on apc_030 for −3
+interactions; not worth it).
+
+**Impact (`benchmark.py --vm sp1`, 100 rsp cases):** bus interactions **2.598× → 2.650×**
+(aggregate bus gap vs powdr **625 → 471**, −154 over 10 cases — apc_030 −32, apc_016/017/029 −22
+each, apc_024/040 −16 each, apc_037 −8, apc_063/079 −6 each, apc_031 −4); variables and
+constraints unchanged (bus-only lever). **0 regressions** (90 cases byte-identical). **OpenVM
+improves too:** keccak 1752 → **1748** bus (vars/constraints identical 2021/186) — the arm fired
+on four OpenVM memory pairs. **Runtime flat-to-better:** apc_030 21.8 s vs 22.6 s pre-change
+(`busPairCancel` itself 1791 → 913 ms — fewer surviving pairs to rescan); `intervalForce` +
+`basisJustified` together < 1.5 % of the heavy-case profile. Proof integrity green
+({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Residual SP1 bus
+gap 471: byte-bus identity-OR checks (apc_024/040 ≈ +43 each) and the mid-chain shields — see
+`docs/ideas.md`. **Worked: yes.**
+
+### 103. OR-identity byte checks: recognize, dedup, drop, pack (SP1 bus 2.650× → 2.703×)
+
+After entry 100's late rename, SP1's k256 blocks carry piles of degenerate OR interactions
+`[or, x, x, 0]` / `[or, x, 0, x]` (`x = x | 0`) whose only content is "x is a byte" — apc_024 held
+48 of them (powdr: none; it re-packs the obligations as op-3 pairs). The byte-check machinery
+already knew how to dedup, drop and pack single-value checks in five XOR encodings; the OR
+identities are a sixth.
+
+**Two arms + a coda reorder, no new pass.** `svCheck?` (`ByteCheckPack`) and `byteCheckOperands?`
+(`RedundantByteDrop`) gain the two OR-identity arms, sound through the existing
+`BusFacts.byteBoolSound` (lifted to symbolic payloads by the new `byteBoolSound_decode_iff` in
+`BytePack.lean`, the `orOp`/`andOp` analog of `byteXorSpec_decode_iff`). `identitySubst` moves up
+the coda — from after `bytePackLate` to right after `splitBytePair` — so the renamed interactions
+become recognizable *before* `dedupLate` (same-operand duplicates collapse), `redundantByteDrop`
+(justified ones drop), and `bytePackLate` (survivors pack pairwise into op-3). Entry 100's
+regression concern was the cleanup-cycle re-encode explosion; the coda has no reencode, so the
+early rename only exposes the degenerate checks.
+
+**Impact (`benchmark.py --vm sp1`, 100 rsp cases):** bus interactions **2.650× → 2.703×**
+(aggregate bus gap vs powdr **471 → 319**, −152 over 13 cases — apc_024/040 −42 each, apc_060
+−21, apc_079 −10, apc_080 −8, apc_083 −7, …); variables and constraints unchanged. **0
+regressions** (87 cases byte-identical). apc_024 now 458 v / 340 bus vs powdr 490 v / 335 bus —
+variables well ahead, bus within 5. **No OpenVM change:** keccak byte-identical (2021/186/1748),
+eth spot checks identical (OpenVM declares no `orOp`, so both arms are structural no-ops there;
+the reorder is output-neutral on the checked cases). Cumulative today (entries 101–103): SP1
+vars 3.784× → 3.922×, bus 2.553× → 2.703× (var gap 442 → 55, bus gap 765 → 319). Proof integrity
+green; no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
