@@ -3806,3 +3806,40 @@ OpenVM's bitwise bus declares no `orOp` (XOR + range only), so `identityPairAt` 
 everywhere → empty substitution map → genuine no-op; keccak byte-identical (2021 vars / 186
 constraints / 1752 bus interactions). Proof integrity green ({propext, Classical.choice, Quot.sound});
 no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
+
+### 101. Interval forcing: integer-window analysis of bounded affine slots (SP1 vars 3.784× → 3.922×, bus 2.553× → 2.598×; replaces ScaledZero)
+
+Fresh per-case export diffing against powdr showed the largest remaining SP1 *variable* clusters
+(apc_030 +60, apc_016/017 +33, apc_029 +32, apc_024/040 +27, …) were all one shape: bounded byte-bus
+slots that are *affine in bounded variables* and force equalities only visible over ℤ. The op-6
+checks `r₀ + 256·r₁ − 256·h < 2⁸` force `h = r₁` (the `higher_limb` clusters powdr substitutes
+away); the byte slots `r₂ + 256·r₃ + 8323072·(c − h) − 256·h′` force `c = h`; the 16-bit memory
+data slots `256·r₂ + 65536·r₃ + h − 65536·h′` force `h′ = r₃` — after which the memory payloads
+become plain affine byte recompositions that `busPairCancel` justifies and telescopes.
+
+**New pass `intervalForce` (`IntervalForce.lean`), replacing `ScaledZero`.** For every accepted
+interaction slot with a `slotBound B` (and every algebraic constraint, consumed as a bound-1 slot),
+linearize the slot, give every coefficient its signed minimal-magnitude integer representative, and
+bound every variable through a once-per-invocation proof-carrying `BoundIdx` (variable → bound,
+each entry witnessed by a member interaction, the `VarCsIdx` pattern). If the integer window
+`[lo, hi]` spanned by the bounds survives reduction mod `p` only at the residues `[0, B)`
+(`hi ≤ p − 1`, `lo ≥ B − p`), the slot value is an **integer** in `[0, B)`, and two arms extract
+facts: a `+g/−g` coefficient pair whose companion window `R` satisfies `B ≤ g + Rlo` and `Rhi < g`
+forces `v = w`; a single term forces `v = 0` (`0 < g` with `B ≤ g + Rlo`, or `g < 0` with
+`Rhi + g < 0`). Seeds go in as algebraic constraints (`addConstraints_correct`); Gauss consumes
+them the same cycle. ScaledZero's single-scaled-variable and two-term arms are exactly the one- and
+two-term instances of the window argument, so the pass file is deleted, not kept alongside. Purely
+arithmetic on proven bounds — no primality, no VM specifics beyond `slotBound`; window/extraction
+soundness is one integer lemma (`int_window`) plus a permutation-invariant walk over the term list.
+
+**Impact (`benchmark.py --vm sp1`, 100 rsp cases):** variables **3.784× → 3.922×** agg (geo
+3.323× → 3.372×; aggregate var gap vs powdr **442 → 55**), bus **2.553× → 2.598×** (bus gap
+765 → 625), constraints unchanged. Per-case W/L/T by variables 1/51/48 → **15/42/43**; per-case
+diff vs the #162 baseline: **21 cases improved (−387 vars, −140 bus), 79 byte-identical, 0
+regressed**. apc_001/016/017/024/027/029/031/037/040 now at or **below** powdr's variable count
+(apc_016 268 v vs powdr 277). **No OpenVM regression:** keccak byte-identical (2021 v / 186 c /
+1752 bus). **Runtime flat**: 1323/10425/19420/22608 ms on apc_001/016/024/030 vs
+1334/11083/18559/23332 baseline; the pass itself is 271 ms of apc_030's 22.6 s (domainBatch
+dominates at 16 s). Proof integrity green ({propext, Classical.choice, Quot.sound}); no
+`sorry`/`axiom`/`native_decide`. Residual: bus gap 625 (memory chains + byte-check layout),
+var gap 55 — see the rewritten `docs/ideas.md`. **Worked: yes.**

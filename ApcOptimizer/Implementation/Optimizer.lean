@@ -36,7 +36,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
-import ApcOptimizer.Implementation.OptimizerPasses.ScaledZero
+import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZero
 import ApcOptimizer.Implementation.OptimizerPasses.RangeBool
 import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubst
@@ -103,7 +103,7 @@ def cleanupPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
     ("normalize2", normalizePass.withFacts.guardDegree b),
     ("constFold2", constantFoldPass.withFacts.guardDegree b),
     ("zeroRegister", zeroRegisterPass.guardDegree b),
-    ("scaledZero", ScaledZero.scaledZeroPass.guardDegree b),
+    ("intervalForce", IntervalForce.intervalForcePass.guardDegree b),
     ("digitFold", DigitFold.digitFoldPass.guardDegree b),
     ("oneHotAnnihilate", OneHotAnnihilate.oneHotAnnihilatePass.guardDegree b),
     ("hintCollapse", (hintCollapsePass pw).guardDegree b),
