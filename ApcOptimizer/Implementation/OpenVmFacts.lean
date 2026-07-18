@@ -745,6 +745,18 @@ def openVmFacts (p : ℕ) [NeZero p]
           ↔ o1.val < 256 ∧ o2.val < 256 ∧ r = 0
         unfold violates; rw [hbus]
         simp [isByte, ZMod.val_eq_zero, and_assoc]
+  -- OpenVM's bitwise-lookup bus has no OR/AND op (XOR + range only), so `orOp`/`andOp` default to
+  -- `none` and the boolean-op soundness is vacuous.
+  byteBoolSound := by
+    intro busId spec hspec
+    have hbus : busMap busId = some .bitwiseLookup := by
+      revert hspec; cases hb : busMap busId with
+      | none => simp
+      | some t => cases t <;> simp
+    simp only [hbus] at hspec
+    obtain rfl := (Option.some.inj hspec).symm
+    intro pl op o1 o2 r mult hdec
+    exact ⟨fun oop hor _ => absurd hor (by simp), fun aop hand _ => absurd hand (by simp)⟩
   -- OpenVM keeps `SubsumedRange` (its dedicated variable-range-checker bus); the layout-agnostic
   -- `rangeCheckAt` is only needed for SP1's op-6 byte-bus range check.
   rangeCheckAt _ _ := none

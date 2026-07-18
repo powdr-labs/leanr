@@ -77,7 +77,14 @@ LANDED are done — the remainder still adds up to the current gaps):
 
 ---
 
-## 0b. SP1 (rsp): after entries 93–96, the residual is the carry / negative-coefficient memory slots
+## 0b. SP1 (rsp): after entries 93–97, the residual is the carry / negative-coefficient memory slots
+
+**Entry 97 landed the dead-byte OR/AND clusters** (`xorEqExtract` generalized XOR→OR/AND with a
+constant-only target; `scaledZero` gained the two-term slot `k·v − k·w` forcing `v = w`). SP1 rsp
+**variables 3.686× → 3.735×, bus 2.518× → 2.523×** (aggregate var gap vs powdr 837 → 687, bus gap
+876 → 860; 33 cases improved, 0 regressed). OpenVM keccak byte-identical throughout. The k256 blocks
+(apc_024/030/040) still trail (apc_024 556 v vs powdr 490): the residual is the memory slots below.
+
 
 Entries 93–96 landed four general, proven, `Implementation/`-only mechanisms — the reciprocal
 nonzero-witness address-disequality certificate (`addrNonzeroNeq`), affine bound propagation in
@@ -96,13 +103,21 @@ existing fold/`slotFun`/disconnected passes cascade it. No spec change was ever 
 
 What remains, biggest first:
 
-- **Carry / negative-coefficient memory slots (bus).** The last register chains that don't fully
-  telescope (apc_024 addr 7/15) carry data like `add_value − 2¹⁶·higher_limb` (a low-limb/borrow
-  expression, coefficient `p − 65536`) or `2¹³·lower` needing a tighter-than-byte limb bound.
-  `affineJustified`'s natural-number bound can't certify a large/negative coefficient (its `M < p`
-  no-wrap check fails). A borrow-aware justification (recognize `x − 2ᵏ·y` as the low limb of a
-  decomposition with its own range check, or read a direct range-check on the slot *expression*)
-  would drain these; medium effort, bus-only.
+- **Carry / negative-coefficient memory slots (bus + vars, the big residual on the k256 blocks).**
+  The register/RAM pairs that still don't telescope (apc_024/030/040) carry data limbs like
+  `65536·(higher_limb_26 − higher_limb_27) + 8192·lower_limb_26 + higher_limb_0_27` — coefficient
+  `p − 65536` — that are 16-bit **only when `higher_limb_26 = higher_limb_27`** (a same-address
+  telescoping relation). `affineJustified`'s natural bound fails on the negative coefficient, and the
+  sign-split (entry 97's `two_term_zero` machinery, which *does* handle mixed signs) still can't
+  justify it because the slot is genuinely wide unless the relation holds — powdr's global sort-based
+  memory argument establishes it; apc's *local* pair-cancellation checks the 16-bit obligation
+  per-pair, before the relation is known, so it's circular. Two angles, both non-trivial: (a) a
+  **relation-aware justification** — when a memory pair at address A is being cancelled, the
+  send/receive data equality `d_send = d_recv` it would establish is exactly what makes the
+  negative-coefficient slot 16-bit, so justify-then-cancel could be interleaved; (b) unify the
+  interleaved same-address limb variables (`higher_limb_26`/`_27`) *before* the range check via a
+  memory-value equality pass. Simpler slices that DID land are gone (the `8192·lower_limb` slots,
+  `lower_limb < 8` from an op-6 `[6, _, 3, 0]`, are already justified by `affineJustified`).
 - **Certificate generalizations** (cheap follow-ups to entry 93): match a nonzero witness up to a
   nonzero *scalar* (`g = λ·Σ(mᵢ − Sᵢ)`), not just `±1`; recognize reciprocal constraints in more
   additive shapes if a census finds `addrNonzeroNeq` missing live pairs.

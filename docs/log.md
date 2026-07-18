@@ -3698,3 +3698,34 @@ regression:** keccak byte-identical (2021 v / 186 c / 1752 bus), runtime ~218 s 
 integrity green ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`.
 Residual bus gap: the carry / negative-coefficient memory slots (`x − 2¹⁶·y`) — see `docs/ideas.md`.
 **Worked: yes.**
+
+### 97. Generalize constant-operand bitwise extraction to OR/AND + two-term scaled-zero (SP1 vars 3.672× → 3.735×, bus 2.488× → 2.523×)
+
+Drains the SP1 `lbu; xor; sb` dead-byte clusters that entry 96 (`scaledZero`, single scaled variable)
+could not: their OR operands are `8323072·(b_low − higher)` — a *two-term* scaled form, not a single
+`k·v`. Two general, proven, `Implementation/`-only mechanisms, synergistic:
+
+- **`xorEqExtract` generalized from XOR to OR/AND.** The pass already extracts the affine equality a
+  constant-operand XOR entails (`z = y` for `x ⊕ 0`); OR and AND have the same zero-operand affine
+  laws (`x | 0 = x`, `x & 0 = 0`). `ByteXorSpec` gains optional `orOp`/`andOp` op-selector values
+  (SP1 `1`/`0`; OpenVM `none`) and a new `BusFacts.byteBoolSound` fact (soundness split out so the
+  xor/pair tuple its 8 consumers destructure is unperturbed). The OR arm fires **only when the
+  surviving operand is a constant** — pinning `result` to a wider expression (even a bare variable)
+  displaces the intermediate byte apc's memory cancellation keys on and blocks telescoping (measured
+  +56 var / +132 bus regression on apc_024). AND's target is always the constant `0`.
+- **`scaledZero` gains the two-term slot (`ScaledZero.lean`, `two_term_zero` + `pair2Seeds`).** A
+  byte slot `k·v − k·w` (both bytes, `k ≥ B2`, no wrap `k·(B−1) ≤ p − B2`) forces `v = w`: the
+  `k`-scaled difference of two bytes is either `0` or has field value `≥ B2` (multiple of `k` on one
+  side, `≥ p − k·(B−1)` on the other). Seeds the unit-coefficient `v − w = 0`, which Gauss uses to
+  merge the two limbs. The emptied OR operand then reaches the constant `0`, and the OR arm folds
+  `result = 0` — dropping the dead byte, its op-6 range check, and the operand limb.
+
+**Impact (`benchmark.py --vm sp1`, 100 rsp cases):** variables **3.672× → 3.735×** agg (aggregate var
+gap vs powdr 880 → 687, −193), bus **2.488× → 2.523×** (bus gap 976 → 860, −116), constraints
+9.359× → 9.457×. Per-case: **33 improved, 0 regressed.** apc_024 579 v / 458 bus → 556 v / 431 bus;
+apc_030/040 similar (the k256-heavy blocks). **No OpenVM regression:** OpenVM declares no `orOp`/`andOp`
+and has no huge-scale byte slots, so both mechanisms are no-ops there — keccak byte-identical (2021 v /
+186 c / 1752 bus). Proof integrity green ({propext, Classical.choice, Quot.sound}); no
+`sorry`/`axiom`/`native_decide`. Residual SP1 gap: the carry / negative-coefficient memory slots
+(`65536·(h₂₆ − h₂₇) + …`), only 16-bit modulo a telescoping relation apc's local pair-cancellation
+can't establish — see `docs/ideas.md`. **Worked: yes.**

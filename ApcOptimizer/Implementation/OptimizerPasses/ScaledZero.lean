@@ -176,6 +176,47 @@ theorem zero_of_bounds {p : ℕ} (v c : ZMod p) (B1 B2 : Nat)
   have : c.val ≤ c.val * v.val := Nat.le_mul_of_pos_right _ (by omega)
   omega
 
+/-- The two-term generalization of `zero_of_bounds`: a byte-slot value `k·v − k·w` (both `v`, `w`
+    bounded by `B`) that is `< B2` with `k ≥ B2` (genuinely scaled) and no wraparound
+    (`k·(B−1) ≤ p − B2`) forces `v = w`. The `k`-scaled difference of two bytes is either `0` (when
+    `v = w`) or has field value `≥ B2` (a multiple of `k` on one side, `≥ p − k·(B−1) ≥ B2` on the
+    other), so `< B2` pins it to `0`. This is exactly the SP1 `lbu; xor; sb` dead-byte OR operand
+    `8323072·(b_low − higher)`: a byte, forcing `b_low = higher`. -/
+theorem two_term_zero {p : ℕ} [NeZero p] (v w k : ZMod p) (B B2 : Nat)
+    (hv : v.val < B) (hw : w.val < B) (hB2 : 1 ≤ B2)
+    (hk : B2 ≤ k.val) (hnw : k.val * (B - 1) ≤ p - B2)
+    (hs : (k * v - k * w).val < B2) : v = w := by
+  have hp : 0 < p := Nat.pos_of_ne_zero (NeZero.ne p)
+  have hnwlt : k.val * (B - 1) < p := lt_of_le_of_lt hnw (by omega)
+  have hmul : k * v - k * w = k * (v - w) := by ring
+  rw [hmul] at hs
+  rcases Nat.lt_or_ge v.val w.val with hlt | hle
+  · -- v.val < w.val: `k·(v−w) = −(k·(w−v))` has value `≥ B2`, contradicting `hs`.
+    exfalso
+    have hd'val : (w - v).val = w.val - v.val := ZMod.val_sub (le_of_lt hlt)
+    have hd'pos : 1 ≤ (w - v).val := by rw [hd'val]; omega
+    have hkwv_val : (k * (w - v)).val = k.val * (w - v).val := by
+      rw [ZMod.val_mul, Nat.mod_eq_of_lt (lt_of_le_of_lt
+        (Nat.mul_le_mul_left _ (by rw [hd'val]; omega)) hnwlt)]
+    have hkwv_ne : k * (w - v) ≠ 0 := by
+      intro h0
+      rw [h0, ZMod.val_zero] at hkwv_val
+      have : k.val ≤ k.val * (w - v).val := Nat.le_mul_of_pos_right _ (by omega)
+      omega
+    haveI : NeZero (k * (w - v)) := ⟨hkwv_ne⟩
+    have hneg : k * (v - w) = -(k * (w - v)) := by ring
+    rw [hneg, ZMod.val_neg_of_ne_zero, hkwv_val] at hs
+    have hle2 : k.val * (w - v).val ≤ p - B2 :=
+      le_trans (Nat.mul_le_mul_left _ (by rw [hd'val]; omega)) hnw
+    have hB2p : B2 ≤ p := le_of_lt (lt_of_le_of_lt hk (ZMod.val_lt k))
+    -- `p − X < B2` (hs) but `X ≤ p − B2` (hle2) ⇒ `p − X ≥ B2`: contradiction (`X` opaque to omega).
+    generalize hX : k.val * (w - v).val = X at hs hle2
+    omega
+  · -- v.val ≥ w.val: `d = v − w` is a nonneg byte, so `zero_of_bounds` applies.
+    have hdval : (v - w).val = v.val - w.val := ZMod.val_sub hle
+    have hdB : (v - w).val < B := by rw [hdval]; omega
+    exact sub_eq_zero.mp (zero_of_bounds (v - w) k B B2 hdB hs hk hnwlt)
+
 /-- `v` is provably `0`: bare-bounded by `B1` and scaled-bounded by `(c, B2)` over `cs`'s
     interactions, with `c ≥ B2` and the no-wrap `c·(B1−1) < p`. -/
 def scaledZeroOk {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
@@ -232,15 +273,202 @@ theorem scaledZeroSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs)
   show env v = 0
   exact scaledZeroOk_sound facts cs v hok env hsat
 
-/-- The pass: add the entailed `v = 0` for every candidate the joint byte bounds pin to zero. -/
+/-! ## Two-term scaled slots (`k·v − k·w`)
+
+The SP1 `lbu; xor; sb` dead-byte OR operands are byte slots holding `8323072·(b_low − higher)` — a
+`k·v − k·w` form, not a single scaled variable. Its byte bound forces `v = w` (`two_term_zero`),
+which `Gauss` uses to merge the two limbs; the emptied operand then reaches the constant `0` and the
+result byte is dropped by `xorEqExtract`'s OR arm. -/
+
+/-- `v − w` as an expression (`v + (−1)·w`). -/
+def pairDiff (v w : Variable) : Expression p :=
+  Expression.add (Expression.var v) (Expression.mul (Expression.const (-1)) (Expression.var w))
+
+theorem pairDiff_eval (v w : Variable) (env : Variable → ZMod p) :
+    (pairDiff v w).eval env = env v - env w := by
+  simp only [pairDiff, Expression.eval]; ring
+
+/-- If `L` is a two-term form `ca·a + cb·b` with `ca + cb = 0`, extract `(v, w, k)` with the
+    smaller-`val` coefficient as `k`, oriented so `L = k·v − k·w`. -/
+def twoTermParts (L : LinExpr p) : Option (Variable × Variable × ZMod p) :=
+  if L.const = 0 then
+    match L.terms with
+    | [(a, ca), (b, cb)] =>
+      if ca + cb = 0 then
+        if ca.val ≤ cb.val then some (a, b, ca) else some (b, a, cb)
+      else none
+    | _ => none
+  else none
+
+theorem twoTermParts_eval (L : LinExpr p) (v w : Variable) (k : ZMod p)
+    (h : twoTermParts L = some (v, w, k)) (env : Variable → ZMod p) :
+    L.eval env = k * env v - k * env w := by
+  obtain ⟨cst, terms⟩ := L
+  unfold twoTermParts at h
+  by_cases hconst : cst = 0
+  · rw [if_pos hconst] at h
+    rcases terms with _ | ⟨⟨a, ca⟩, _ | ⟨⟨b, cb⟩, _ | rest⟩⟩
+    · simp at h
+    · simp at h
+    · -- terms = [(a, ca), (b, cb)]
+      dsimp only at h
+      by_cases hsum : ca + cb = 0
+      · rw [if_pos hsum] at h
+        by_cases hle : ca.val ≤ cb.val
+        · rw [if_pos hle] at h
+          simp only [Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl, rfl⟩ := h
+          simp only [LinExpr.eval, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, add_zero]
+          linear_combination hconst + (env b) * hsum
+        · rw [if_neg hle] at h
+          simp only [Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl, rfl⟩ := h
+          simp only [LinExpr.eval, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, add_zero]
+          linear_combination hconst + (env a) * hsum
+      · rw [if_neg hsum] at h; simp at h
+    · simp at h
+  · rw [if_neg hconst] at h; simp at h
+
+/-- A single slot's two-term seed: the emptied difference `v − w` when payload slot `i` linearizes to
+    `k·v − k·w`, has a byte bound `B2`, and both variables are bounded so `two_term_zero` applies. -/
+def pair2SeedAt {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
+    (bi : BusInteraction (Expression p)) (mval : ZMod p) (i : Nat) : Option (Expression p) :=
+  if 0 < p then
+    match bi.payload[i]?, facts.slotBound bi.busId mval (bi.payload.map Expression.constValue?) i with
+    | some e, some B2 =>
+      match linearize e with
+      | some L =>
+        match twoTermParts L with
+        | some (v, w, k) =>
+          match findVarBound bs facts cs.busInteractions v,
+                findVarBound bs facts cs.busInteractions w with
+          | some Bv, some Bw =>
+            if 1 ≤ B2 ∧ B2 ≤ k.val ∧ k.val * (max Bv Bw - 1) ≤ p - B2 then
+              some (pairDiff v w)
+            else none
+          | _, _ => none
+        | none => none
+      | none => none
+    | _, _ => none
+  else none
+
+theorem pair2SeedAt_sound {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
+    (bi : BusInteraction (Expression p)) (mval : ZMod p) (i : Nat) (e : Expression p)
+    (hmc : bi.multiplicity.constValue? = some mval) (hmz : mval ≠ 0)
+    (h : pair2SeedAt facts cs bi mval i = some e) (env : Variable → ZMod p)
+    (hsat : cs.satisfies bs env) (hbi : bi ∈ cs.busInteractions) : e.eval env = 0 := by
+  have hbus : ∀ bi' ∈ cs.busInteractions, (bi'.eval env).multiplicity ≠ 0 →
+      bs.violatesConstraint (bi'.eval env) = false := fun bi' hbi' => hsat.2 bi' hbi'
+  unfold pair2SeedAt at h
+  have hp0 : 0 < p := by
+    rcases Nat.eq_zero_or_pos p with hp | hp
+    · subst hp; simp at h
+    · exact hp
+  rw [if_pos hp0] at h
+  haveI : NeZero p := ⟨by omega⟩
+  cases hpe : bi.payload[i]? with
+  | none => rw [hpe] at h; simp at h
+  | some ei =>
+    cases hsb : facts.slotBound bi.busId mval (bi.payload.map Expression.constValue?) i with
+    | none => rw [hpe, hsb] at h; simp at h
+    | some B2 =>
+      rw [hpe, hsb] at h
+      cases hL : linearize ei with
+      | none => simp only [hL] at h; simp at h
+      | some L =>
+        cases htt : twoTermParts L with
+        | none => simp only [hL, htt] at h; simp at h
+        | some vwk =>
+          obtain ⟨v, w, k⟩ := vwk
+          cases hbv : findVarBound bs facts cs.busInteractions v with
+          | none => simp only [hL, htt, hbv] at h; simp at h
+          | some Bv =>
+            cases hbw : findVarBound bs facts cs.busInteractions w with
+            | none => simp only [hL, htt, hbv, hbw] at h; simp at h
+            | some Bw =>
+              simp only [hL, htt, hbv, hbw] at h
+              split at h
+              · rename_i hcond
+                obtain ⟨hB2, hkB2, hnw⟩ := hcond
+                simp only [Option.some.injEq] at h
+                subst h
+                -- the interaction is active, hence accepted
+                have hmeval : (bi.eval env).multiplicity = mval :=
+                  bi.multiplicity.constValue?_sound mval hmc env
+                have hviol : bs.violatesConstraint (bi.eval env) = false := by
+                  apply hbus bi hbi; rw [hmeval]; exact hmz
+                -- the slot value `ei.eval env` is bounded by `B2`
+                have hget : (bi.eval env).payload[i]? = some (ei.eval env) := by
+                  show (bi.payload.map (fun t => t.eval env))[i]? = some (ei.eval env)
+                  rw [List.getElem?_map, hpe]; rfl
+                have hsb' : facts.slotBound (bi.eval env).busId (bi.eval env).multiplicity
+                    (bi.payload.map Expression.constValue?) i = some B2 := by
+                  show facts.slotBound bi.busId (bi.eval env).multiplicity _ i = some B2
+                  rw [hmeval]; exact hsb
+                have hbound : (ei.eval env).val < B2 :=
+                  facts.slotBound_sound (bi.eval env) (bi.payload.map Expression.constValue?) i B2
+                    (ei.eval env) hsb' (matches_evalPattern bi.payload env) hviol hget
+                -- `ei.eval env = k·v − k·w`
+                have heq : ei.eval env = k * env v - k * env w := by
+                  rw [linearize_eval ei L hL env, twoTermParts_eval L v w k htt env]
+                rw [heq] at hbound
+                -- bounds on v, w
+                have hvb : (env v).val < Bv :=
+                  findVarBound_sound bs facts cs.busInteractions v Bv hbv env hbus
+                have hwb : (env w).val < Bw :=
+                  findVarBound_sound bs facts cs.busInteractions w Bw hbw env hbus
+                have hvB : (env v).val < max Bv Bw := lt_of_lt_of_le hvb (le_max_left _ _)
+                have hwB : (env w).val < max Bv Bw := lt_of_lt_of_le hwb (le_max_right _ _)
+                have := two_term_zero (env v) (env w) k (max Bv Bw) B2 hvB hwB hB2 hkB2 hnw hbound
+                rw [pairDiff_eval]; rw [this]; ring
+              · exact absurd h (by simp)
+
+/-- Every two-term seed over the whole system (one per forceable byte slot). -/
+def pair2Seeds {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p) :
+    List (Expression p) :=
+  cs.busInteractions.flatMap (fun bi =>
+    match bi.multiplicity.constValue? with
+    | some mval => if mval = 0 then [] else
+        (List.range bi.payload.length).filterMap (pair2SeedAt facts cs bi mval)
+    | none => [])
+
+theorem pair2Seeds_sound {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
+    (env : Variable → ZMod p) (hsat : cs.satisfies bs env) :
+    ∀ e ∈ pair2Seeds facts cs, e.eval env = 0 := by
+  intro e he
+  unfold pair2Seeds at he
+  rw [List.mem_flatMap] at he
+  obtain ⟨bi, hbi, he2⟩ := he
+  cases hmc : bi.multiplicity.constValue? with
+  | none => simp only [hmc] at he2; simp at he2
+  | some mval =>
+    simp only [hmc] at he2
+    by_cases hmz : mval = 0
+    · rw [if_pos hmz] at he2; simp at he2
+    · rw [if_neg hmz] at he2
+      rw [List.mem_filterMap] at he2
+      obtain ⟨i, _, hseed⟩ := he2
+      exact pair2SeedAt_sound facts cs bi mval i e hmc hmz hseed env hsat hbi
+
+/-- Combined soundness of the single-variable and two-term seeds. -/
+theorem allSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs) (cs : ConstraintSystem p)
+    (env : Variable → ZMod p) (hsat : cs.satisfies bs env) :
+    ∀ e ∈ scaledZeroSeeds facts cs ++ pair2Seeds facts cs, e.eval env = 0 := by
+  intro e he
+  rcases List.mem_append.1 he with h | h
+  · exact scaledZeroSeeds_sound facts cs env hsat e h
+  · exact pair2Seeds_sound facts cs env hsat e h
+
+/-- The pass: add the entailed `v = 0` (single scaled variable) and `v − w = 0` (two-term scaled
+    slot) for every candidate the byte bounds pin. -/
 def scaledZeroPass : VerifiedPassW p := fun cs bs facts =>
-  let seeds := scaledZeroSeeds facts cs
+  let seeds := scaledZeroSeeds facts cs ++ pair2Seeds facts cs
   let new := seeds.filter (fun e => e.vars.all (fun z => cs.vars.contains z))
   if new.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
   else
     ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new }, [],
      cs.addConstraints_correct bs new
-       (fun env _ hsat e he => scaledZeroSeeds_sound facts cs env hsat e (List.mem_of_mem_filter he))
+       (fun env _ hsat e he => allSeeds_sound facts cs env hsat e (List.mem_of_mem_filter he))
        (fun e he z hz => by
          have hp := (List.mem_filter.1 he).2
          simp only [List.all_eq_true] at hp
