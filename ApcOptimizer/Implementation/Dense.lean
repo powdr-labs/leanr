@@ -15,6 +15,7 @@ import ApcOptimizer.Implementation.Dense.Dedup
 import ApcOptimizer.Implementation.Dense.DigitFold
 import ApcOptimizer.Implementation.Dense.Gauss
 import ApcOptimizer.Implementation.Dense.DomainBatch
+import ApcOptimizer.Implementation.Dense.DomainBatchNative
 import ApcOptimizer.Implementation.Dense.OneHotAnnihilate
 import ApcOptimizer.Implementation.Dense.ZeroRegister
 import ApcOptimizer.Implementation.Dense.CarryBranch
