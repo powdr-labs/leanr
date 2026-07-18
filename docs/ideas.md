@@ -77,13 +77,33 @@ LANDED are done — the remainder still adds up to the current gaps):
 
 ---
 
-## 0b. SP1 (rsp): after entries 93–97, the residual is the carry / negative-coefficient memory slots
+## 0b. SP1 (rsp): after entries 93–99, the residual is the identity-result packing sensitivity + memory telescoping
 
-**Entry 97 landed the dead-byte OR/AND clusters** (`xorEqExtract` generalized XOR→OR/AND with a
-constant-only target; `scaledZero` gained the two-term slot `k·v − k·w` forcing `v = w`). SP1 rsp
-**variables 3.686× → 3.735×, bus 2.518× → 2.523×** (aggregate var gap vs powdr 837 → 687, bus gap
-876 → 860; 33 cases improved, 0 regressed). OpenVM keccak byte-identical throughout. The k256 blocks
-(apc_024/030/040) still trail (apc_024 556 v vs powdr 490): the residual is the memory slots below.
+**Entries 97–99 landed the dead-byte clusters and the degenerate range checks.** SP1 rsp
+**variables 3.686× → 3.745×, bus 2.518× → 2.553×** (aggregate var gap vs powdr 837 → 658, bus gap
+876 → 765; 0 regressions; OpenVM keccak byte-identical throughout):
+- **Entry 97**: `xorEqExtract` generalized XOR→OR/AND (constant-only target — a wider target
+  regresses; see below); `scaledZero` gained the two-term slot `k·v − k·w` forcing `v = w`.
+- **Entry 98** (`RangeForceZero.lean`): SP1 op-6 width-0 check `[6, L, 0, 0]` → the equality `L = 0`
+  (via `rangeCheckAt` bound 1), Gauss-consumable. −23 var gap, −51 bus gap.
+- **Entry 99** (`RangeBool.lean`): SP1 op-6 width-1 check `[6, x, 1, 0]` → booleanity `x·(x−1)=0` +
+  drop (the `rangeCheckAt` half of `ZeroWidthRange`'s width-1 arm). −44 bus gap (+44 constraints).
+
+The k256 blocks (apc_024/030/040) still trail (apc_024 550 v vs powdr 490). Two residual levers,
+both **investigated and found to need architectural work, not an incremental pass**:
+
+### The identity-result packing sensitivity (biggest var lever, ~60 vars/k256-case) · BLOCKED
+
+The `[1, result, byte_var, 0]` OR interactions (`result = OR(byte_var, 0) = byte_var`) leave `result`
+as a redundant copy powdr substitutes away (`result := byte_var`). Enabling that in `xorEqExtract`
+(a bare-variable target, not just a constant) is **correct** — but measured a **regression** on
+apc_024 (556→612 v, 431→561 bus). Diagnosis (single-var vs const-only export diff): **memory is
+untouched (32/32 both)**; the blow-up is a **range-check re-packing/re-encode explosion** — op-3
+byte-pairs +44, op-6 +88, and `reencode` materialises +56 fresh byte variables when the substitution
+changes the byte-check expressions. So the win requires making the packing/`reencode` passes
+*representation-robust* (idempotent under a `result := byte_var` rename), not the extraction itself.
+The extraction infrastructure (`ByteXorSpec.orOp/andOp`, `byteBoolSound`, `boolEq?`) is landed and
+proven — only the constant-target guard holds it back.
 
 
 Entries 93–96 landed four general, proven, `Implementation/`-only mechanisms — the reciprocal
