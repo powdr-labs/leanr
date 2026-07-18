@@ -233,7 +233,7 @@ def denseImpl (b : DegreeBound) (pw : PrimeWitness p) (name : String) (fallback 
   else if name == "gauss" then
     DenseVerifiedPassW.guardDegree b denseGaussElimPass
   else if name == "domainBatch" then
-    DenseVerifiedPassW.guardDegree b (denseDomainBatchPass pw)
+    DenseVerifiedPassW.guardDegree b (denseDomainBatchPassV pw)
   else if name == "oneHotAnnihilate" then
     DenseVerifiedPassW.guardDegree b denseOneHotAnnihilatePass
   else if name == "zeroRegister" then

@@ -58,7 +58,7 @@ bundled here):
 
 No pipeline wiring and no correctness theorems here (the prover's job, per the Task 3 native-proof
 architecture): every definition below is runtime-only, so there is nothing to discharge and no
-`sorry`. -/
+proof obligations are left open. -/
 
 namespace ApcOptimizer.Dense
 
