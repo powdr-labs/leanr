@@ -3669,3 +3669,32 @@ powdr 1646 → 1080, −566); variables essentially unchanged (3.535× → 3.538
 `sorry`/`axiom`/`native_decide`. Cumulative over entries 93–95: SP1 variables 2.938× → 3.538×, bus
 1.957× → 2.457× (var gap 3715 → 1310, bus gap 3209 → 1080). Residual: dead upper bitwise bytes
 (the variable gap) and the tail of the long register chains — see `docs/ideas.md`. **Worked: yes.**
+
+### 96. Scaled-byte-forces-zero drops the dead upper bitwise bytes (SP1 vars 3.538× → 3.686×)
+
+Closes the largest remaining SP1 *variable* gap — the dead upper bytes of a `lbu; xor; sb` chain.
+`lbu` zero-extends a byte, so the XOR operands are bytes and the upper result bytes are `0`; powdr
+prunes the whole upper cluster (`result₂..₇` + the free operand bytes `b/c_low_bytes_1..3`). This
+looked like it needed an audited zero-extension assumption, but the fact is **already in the
+circuit**: SP1's byte-lookup range-check trick checks each operand byte `v` both bare (`v < 256`) and
+*scaled* (`8323072·v < 256`, its shifted copy on the byte bus). A byte whose `8323072·`-scaled copy is
+*also* a byte must be `0` — `8323072·v ≥ 8323072 > 256` for any `v ∈ [1, 256)`, with no wraparound
+(`8323072·255 < p`). apc had both `slotBound` obligations but never intersected them.
+
+**New pass `scaledZeroPass` (`ScaledZero.lean`, `Implementation/` only, no audit surface).** For a
+variable bare-bounded by `B₁` (`findVarBound`) whose genuinely-scaled copy `c·v` is bounded by `B₂`
+with `c ≥ B₂` and `c·(B₁−1) < p`, it seeds the entailed `v = 0` (`addConstraints_correct`); Gauss and
+the `slotFun`/fold/disconnected passes cascade that to `result = xor(0,0) = 0` and drop the cluster.
+Purely arithmetic on two proven bounds — no primality, no VM specifics beyond `slotBound`; the no-wrap
+side condition is decided against the concrete field at runtime. Candidates are restricted to the few
+genuinely-scaled slot variables so the pass does not rescan every byte-bus column each cycle.
+
+**Impact (`benchmark.py --vm sp1`):** variables **3.538× → 3.686×** agg (aggregate var gap vs powdr
+1310 → 837; per-case-by-variables W/L/T 1/54/45 → 1/52/47), bus **2.457× → 2.518×** (gap 1080 → 876);
+apc_001 now at powdr's exact 113 variables. Cumulative over entries 93–96: SP1 variables 2.938× →
+3.686×, bus 1.957× → 2.518× (var gap 3715 → 837, bus gap 3209 → 876 — both ~75 % closed). **No OpenVM
+regression:** keccak byte-identical (2021 v / 186 c / 1752 bus), runtime ~218 s vs main's ~200 s
+(within container variance); the pass fires only where the scaled-byte pattern exists. Proof
+integrity green ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`.
+Residual bus gap: the carry / negative-coefficient memory slots (`x − 2¹⁶·y`) — see `docs/ideas.md`.
+**Worked: yes.**

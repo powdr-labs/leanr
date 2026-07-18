@@ -36,6 +36,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.ScaledZero
 
 set_option autoImplicit false
 
@@ -97,6 +98,7 @@ def cleanupPasses : List (String × VerifiedPassW p) :=
     ("normalize2", normalizePass.withFacts.guardDegree),
     ("constFold2", constantFoldPass.withFacts.guardDegree),
     ("zeroRegister", zeroRegisterPass.guardDegree),
+    ("scaledZero", ScaledZero.scaledZeroPass.guardDegree),
     ("digitFold", DigitFold.digitFoldPass.guardDegree),
     ("oneHotAnnihilate", OneHotAnnihilate.oneHotAnnihilatePass.guardDegree),
     ("hintCollapse", (hintCollapsePass pw).guardDegree),

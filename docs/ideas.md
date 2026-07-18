@@ -77,30 +77,25 @@ LANDED are done — the remainder still adds up to the current gaps):
 
 ---
 
-## 0b. SP1 (rsp): after entries 93–95, the residual is the dead-upper-byte ISA floor + carry slots
+## 0b. SP1 (rsp): after entries 93–96, the residual is the carry / negative-coefficient memory slots
 
-Entries 93–95 landed three general, proven mechanisms — the reciprocal nonzero-witness
-address-disequality certificate (`addrNonzeroNeq`), affine bound propagation in `byteJustifiedW`, and
-the SP1 byte-op result-slot bound — taking SP1 from **variables 2.938× → 3.538×, bus 1.957× → 2.457×**
-(aggregate var gap vs powdr 3715 → 1310, bus gap 3209 → 1080; per-case-by-variables W/L/T 0/69/31 →
-1/54/45). OpenVM is untouched (keccak byte-identical; the result-slot bound is SP1-only). The
-register-access chains now telescope almost fully (apc_024 memory 186 → 70; most registers at powdr's
-2). What remains, biggest first:
+Entries 93–96 landed four general, proven, `Implementation/`-only mechanisms — the reciprocal
+nonzero-witness address-disequality certificate (`addrNonzeroNeq`), affine bound propagation in
+`byteJustifiedW`, the SP1 byte-op result-slot bound, and **scaled-byte-forces-zero (`ScaledZero.lean`,
+entry 96)** — taking SP1 from **variables 2.938× → 3.686×, bus 1.957× → 2.518×** (aggregate var gap vs
+powdr 3715 → 837, bus gap 3209 → 876, both ~75 % closed; per-case-by-variables W/L/T 0/69/31 →
+1/52/47). OpenVM is untouched throughout (keccak byte-identical). The register-access chains telescope
+almost fully and the dead upper bitwise bytes are gone.
 
-- **Dead upper bitwise-result bytes — the variable gap; likely an apc *floor*, not a missing pass.**
-  SP1's bitwise chip decomposes a 32-bit AND/OR/XOR into 4 byte-op lookups producing `result₀..₇`
-  (2 per byte via the shift-check trick), and the operand bytes `b/c_low_bytes_2,3` are **free
-  witnesses** occurring *only* in the upper byte-op lookups and the destination register's upper
-  data limbs. When the source operands are 16-bit the true upper result is `0`, and powdr pins it —
-  but that uses the **ISA zero-extension fact** (the op zero-extends, so the register's upper 16 bits
-  are `0`). apc has no such fact: the upper limbs are genuinely unconstrained in the input, and
-  zeroing them changes a *stateful* memory side-effect, so it is **not a sound local refinement**.
-  Dominates apc_024/040 (bitwise_operation 304 v vs powdr 152) and the other k256-heavy blocks
-  (apc_016/017/029/060/030/080…). Only routes: (a) an audited SP1 semantics addition asserting the
-  zero-extension invariant (changes the audited surface — out of scope for the AI-only loop), or
-  (b) a genuine liveness proof that the register's upper bits are overwritten-before-read within the
-  block (needs the memory continuity argument extended to sub-limb liveness). Neither is a cheap pass.
-  **Census the exact residue before attempting; treat as a floor for now.**
+**Dead upper bitwise bytes — SOLVED impl-only (entry 96), was mis-diagnosed as an ISA floor.** The
+earlier note here claimed powdr's upper-byte pruning needed an audited zero-extension assumption. That
+was wrong: the fact is already in the circuit. SP1's byte-lookup range-check trick checks each operand
+byte both bare (`v < 256`) and scaled (`8323072·v < 256`); a byte whose large-scaled copy is also a
+byte must be `0`. `scaledZeroPass` intersects the two `slotBound` obligations and seeds `v = 0`; the
+existing fold/`slotFun`/disconnected passes cascade it. No spec change was ever needed.
+
+What remains, biggest first:
+
 - **Carry / negative-coefficient memory slots (bus).** The last register chains that don't fully
   telescope (apc_024 addr 7/15) carry data like `add_value − 2¹⁶·higher_limb` (a low-limb/borrow
   expression, coefficient `p − 65536`) or `2¹³·lower` needing a tighter-than-byte limb bound.
