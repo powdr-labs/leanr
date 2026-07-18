@@ -66,8 +66,8 @@ follows automatically from the pass's own `PassCorrect`. -/
     command (`Main.lean`) times the same lists — so the optimizer and the profiler cannot drift
     apart. The prelude is a single constant-fold that canonicalizes the freshly-parsed system. The
     `String` labels name each pass in the profiler's timing report (irrelevant to behaviour). -/
-def preludePasses : List (String × VerifiedPassW p) :=
-  [ ("constFold0", constantFoldPass.withFacts.guardDegree) ]
+def preludePasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
+  [ ("constFold0", constantFoldPass.withFacts.guardDegree b) ]
 
 /-- The cleanup-cycle passes as a **labelled list** (one of the three stages; see `preludePasses`).
 
@@ -84,66 +84,66 @@ def preludePasses : List (String × VerifiedPassW p) :=
     `(name, pass.….guardDegree)` entry to this list. That is the only edit needed here; the
     correctness proof follows automatically from the pass's own `PassCorrect`, and the profiler
     picks up the new label for free (it consumes this same list). -/
-def cleanupPasses : List (String × VerifiedPassW p) :=
+def cleanupPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
   -- One primality decision per optimizer run, threaded to every prime-gated pass below (they read
   -- the `Bool` in O(1) instead of re-running `decide (Nat.Prime p)` per invocation per iteration).
   let pw := PrimeWitness.of p
-  [ ("zeroWidthRange", (ZeroWidthRange.zeroWidthRangePass pw).guardDegree),
-    ("xorEqExtract", XorEqExtract.xorEqExtractPass.guardDegree),
-    ("carryBranch", (carryBranchPass pw).guardDegree),
-    ("gauss", gaussElimPass.withFacts.guardDegree),
-    ("normalize1", normalizePass.withFacts.guardDegree),
-    ("constFold1", constantFoldPass.withFacts.guardDegree),
-    ("domainBatch", (domainBatchPass pw).guardDegree),
-    ("normalize2", normalizePass.withFacts.guardDegree),
-    ("constFold2", constantFoldPass.withFacts.guardDegree),
-    ("zeroRegister", zeroRegisterPass.guardDegree),
-    ("scaledZero", ScaledZero.scaledZeroPass.guardDegree),
-    ("digitFold", DigitFold.digitFoldPass.guardDegree),
-    ("oneHotAnnihilate", OneHotAnnihilate.oneHotAnnihilatePass.guardDegree),
-    ("hintCollapse", (hintCollapsePass pw).guardDegree),
-    ("rootPairUnify", (rootPairUnifyPass pw).guardDegree),
-    ("flagUnify", (flagUnifyPass pw).guardDegree),
-    ("flagFold", (flagFoldPass' pw).guardDegree),
-    ("dedup", dedupPass.withFacts.guardDegree),
-    ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree),
-    ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree),
-    ("tautoBus", tautoBusDropPass.withFacts.guardDegree),
-    ("domainFold", (domainFoldPass pw).withFacts.guardDegree),
-    ("busUnify", busUnifyPass.guardDegree),
-    ("busPairCancel", VerifiedPassW.guardDegree (busPairCancelPass pw false)),
-    ("bytePack", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
-    ("disconnected", disconnectedComponentPass.withFacts.guardDegree),
-    ("reencode", reencodePass.withFacts.guardDegree) ]
+  [ ("zeroWidthRange", (ZeroWidthRange.zeroWidthRangePass pw).guardDegree b),
+    ("xorEqExtract", XorEqExtract.xorEqExtractPass.guardDegree b),
+    ("carryBranch", (carryBranchPass pw).guardDegree b),
+    ("gauss", gaussElimPass.withFacts.guardDegree b),
+    ("normalize1", normalizePass.withFacts.guardDegree b),
+    ("constFold1", constantFoldPass.withFacts.guardDegree b),
+    ("domainBatch", (domainBatchPass pw).guardDegree b),
+    ("normalize2", normalizePass.withFacts.guardDegree b),
+    ("constFold2", constantFoldPass.withFacts.guardDegree b),
+    ("zeroRegister", zeroRegisterPass.guardDegree b),
+    ("scaledZero", ScaledZero.scaledZeroPass.guardDegree b),
+    ("digitFold", DigitFold.digitFoldPass.guardDegree b),
+    ("oneHotAnnihilate", OneHotAnnihilate.oneHotAnnihilatePass.guardDegree b),
+    ("hintCollapse", (hintCollapsePass pw).guardDegree b),
+    ("rootPairUnify", (rootPairUnifyPass pw).guardDegree b),
+    ("flagUnify", (flagUnifyPass pw).guardDegree b),
+    ("flagFold", (flagFoldPass' pw b).guardDegree b),
+    ("dedup", dedupPass.withFacts.guardDegree b),
+    ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree b),
+    ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree b),
+    ("tautoBus", tautoBusDropPass.withFacts.guardDegree b),
+    ("domainFold", (domainFoldPass pw).withFacts.guardDegree b),
+    ("busUnify", busUnifyPass.guardDegree b),
+    ("busPairCancel", VerifiedPassW.guardDegree b (busPairCancelPass pw false)),
+    ("bytePack", VerifiedPassW.guardDegree b (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
+    ("disconnected", disconnectedComponentPass.withFacts.guardDegree b),
+    ("reencode", (reencodePass b).withFacts.guardDegree b) ]
 
 /-- The coda passes (one of the three stages; see `preludePasses`): run once after the cleanup loop
     reaches its fixpoint — drop bytes made redundant by the cleaned-up system, rescale carries to
     monic form, and one final constant-fold. -/
-def codaPasses : List (String × VerifiedPassW p) :=
+def codaPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
   -- One primality decision per optimizer run (see `cleanupPasses`), for the prime-gated coda passes.
   let pw := PrimeWitness.of p
-  [ ("busPairCancelLate", VerifiedPassW.guardDegree (busPairCancelPass pw true)),
+  [ ("busPairCancelLate", VerifiedPassW.guardDegree b (busPairCancelPass pw true)),
     -- Explode packed pair byte checks into singles so `dedupLate` collapses the same value
     -- byte-checked in several pairs and `redundantByteDrop` becomes operand-granular; the
     -- survivors are re-packed by `bytePackLate` below (a pair with nothing to shed round-trips).
-    ("splitBytePair", SplitBytePair.splitBytePairPass.guardDegree),
-    ("dedupLate", dedupPass.withFacts.guardDegree),
-    ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree),
-    ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree),
-    ("subsumedCheck", SubsumedCheck.subsumedCheckDropPass.guardDegree),
+    ("splitBytePair", SplitBytePair.splitBytePairPass.guardDegree b),
+    ("dedupLate", dedupPass.withFacts.guardDegree b),
+    ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree b),
+    ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree b),
+    ("subsumedCheck", SubsumedCheck.subsumedCheckDropPass.guardDegree b),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
     -- runs global range packing once at the end), so it runs once here, out of the cleanup
     -- fixpoint, after `redundantByteDrop` has dropped droppable byte checks operand-granularly
     -- (packing a byte check early would hide it from the drop, leaving more bus interactions).
     -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
-    ("tupleRange", tupleRangePass.guardDegree),
-    ("bytePackLate", VerifiedPassW.guardDegree (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
-    ("monicScale", monicScalePass.withFacts.guardDegree),
-    ("constFoldEnd", constantFoldPass.withFacts.guardDegree),
+    ("tupleRange", tupleRangePass.guardDegree b),
+    ("bytePackLate", VerifiedPassW.guardDegree b (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
+    ("monicScale", monicScalePass.withFacts.guardDegree b),
+    ("constFoldEnd", constantFoldPass.withFacts.guardDegree b),
     -- Collapse recognised `sltu x, 1` (seqz) LessThan gadgets to the two-line is-zero gadget,
     -- dropping the four `diff_marker`s + `diff_val`. Runs after `monicScale`, where the cluster
     -- has reached the recognised form.
-    ("seqzCollapse", VerifiedPassW.guardDegree (iterateToFixpoint SeqzCollapse.seqzCollapsePass)) ]
+    ("seqzCollapse", VerifiedPassW.guardDegree b (iterateToFixpoint SeqzCollapse.seqzCollapsePass)) ]
 
 /-- Fold a list of passes into one sequential pass (`andThen` left to right; identity on `[]`). -/
 def chainPasses (l : List (VerifiedPassW p)) : VerifiedPassW p :=
@@ -151,14 +151,14 @@ def chainPasses (l : List (VerifiedPassW p)) : VerifiedPassW p :=
 
 /-- The optimizer's cleanup cycle: the `cleanupPasses` folded together in order. See `cleanupPasses`
     for what each pass does and how to extend the cycle. -/
-def cleanupCycle : VerifiedPassW p :=
-  chainPasses (cleanupPasses.map (·.2))
+def cleanupCycle (b : DegreeBound) : VerifiedPassW p :=
+  chainPasses ((cleanupPasses b).map (·.2))
 
 /-- Folding degree-respecting passes with `andThen` yields a degree-respecting pass. -/
-theorem foldl_andThen_respectsDeg :
+theorem foldl_andThen_respectsDeg {b : DegreeBound} :
     ∀ (l : List (VerifiedPassW p)) (init : VerifiedPassW p),
-      RespectsDeg init → (∀ f ∈ l, RespectsDeg f) →
-      RespectsDeg (l.foldl VerifiedPassW.andThen init)
+      RespectsDeg b init → (∀ f ∈ l, RespectsDeg b f) →
+      RespectsDeg b (l.foldl VerifiedPassW.andThen init)
   | [], _, hinit, _ => by simpa using hinit
   | g :: rest, init, hinit, hall => by
       rw [List.foldl_cons]
@@ -167,12 +167,12 @@ theorem foldl_andThen_respectsDeg :
         (fun f hf => hall f (List.mem_cons_of_mem _ hf))
 
 /-- Any list of degree-respecting passes folds (`chainPasses`) to a degree-respecting pass. -/
-theorem chainPasses_respectsDeg {l : List (VerifiedPassW p)} (h : ∀ f ∈ l, RespectsDeg f) :
-    RespectsDeg (chainPasses l) := by
+theorem chainPasses_respectsDeg {b : DegreeBound} {l : List (VerifiedPassW p)}
+    (h : ∀ f ∈ l, RespectsDeg b f) : RespectsDeg b (chainPasses l) := by
   unfold chainPasses
   exact foldl_andThen_respectsDeg _ _ (fun _ _ _ h => h) h
 
-theorem cleanupCycle_respectsDeg : RespectsDeg (cleanupCycle (p := p)) := by
+theorem cleanupCycle_respectsDeg (b : DegreeBound) : RespectsDeg b (cleanupCycle (p := p) b) := by
   unfold cleanupCycle
   refine chainPasses_respectsDeg (fun f hf => ?_)
   simp only [cleanupPasses, List.map_cons, List.map_nil] at hf
@@ -181,16 +181,16 @@ theorem cleanupCycle_respectsDeg : RespectsDeg (cleanupCycle (p := p)) := by
 /-- The circuit optimizer: fold the prelude, iterate the cleanup cycle to a fixpoint
     (`iterateToFixpoint`, no budget), then fold the coda. `pipeline` and the profiler both consume
     `preludePasses` / `cleanupPasses` / `codaPasses`, so they stay in lockstep. -/
-def pipeline : VerifiedPassW p :=
-  chainPasses (preludePasses.map (·.2))
-    |>.andThen (iterateToFixpoint cleanupCycle)
-    |>.andThen (chainPasses (codaPasses.map (·.2)))
+def pipeline (b : DegreeBound) : VerifiedPassW p :=
+  chainPasses ((preludePasses b).map (·.2))
+    |>.andThen (iterateToFixpoint (cleanupCycle b))
+    |>.andThen (chainPasses ((codaPasses b).map (·.2)))
 
-theorem pipeline_respectsDeg : RespectsDeg (pipeline (p := p)) := by
+theorem pipeline_respectsDeg (b : DegreeBound) : RespectsDeg b (pipeline (p := p) b) := by
   unfold pipeline
   refine VerifiedPassW.andThen_respectsDeg (VerifiedPassW.andThen_respectsDeg
     (chainPasses_respectsDeg (fun f hf => ?_))
-    (iterateToFixpoint_respectsDeg cleanupCycle_respectsDeg))
+    (iterateToFixpoint_respectsDeg (cleanupCycle_respectsDeg b)))
     (chainPasses_respectsDeg (fun f hf => ?_))
   · simp only [preludePasses, List.map_cons, List.map_nil] at hf
     fin_cases hf
@@ -204,9 +204,9 @@ theorem pipeline_respectsDeg : RespectsDeg (pipeline (p := p)) := by
     iteration count: it runs the cleanup cycle until it stops strictly shrinking the lexicographic
     size key `(vars, bus, constraints)`, provably terminating on that well-founded measure — no
     budget to set, and no cap a large basic block could exceed. -/
-def optimizerWithBusFacts {bs : BusSemantics p} (facts : BusFacts p bs)
+def optimizerWithBusFacts {bs : BusSemantics p} (b : DegreeBound) (facts : BusFacts p bs)
     (cs : ConstraintSystem p) : ConstraintSystem p × Derivations p :=
-  let r := pipeline cs bs facts
+  let r := pipeline b cs bs facts
   -- Drop derivations for variables absent from the output: they are dead (`witgen` never reads them)
   -- and the spec requires every recorded derivation to name an output variable.
   (r.out, r.derivs.filter (fun d => decide (d.1 ∈ r.out.vars)))
@@ -284,21 +284,21 @@ theorem Derivations.methodFor_filter {out : List Variable} {v : Variable} (hv : 
     executions — running `witgen` on any admissible input trace reproduces a valid witness. These
     are the clauses `Optimizer.isCorrect` demands, stated per instance because nontrivial facts are
     tied to one semantics. -/
-theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p bs)
+theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (b : DegreeBound) (facts : BusFacts p bs)
     (cs : ConstraintSystem p) :
-    (optimizerWithBusFacts facts cs).1.isSoundReplacementOf cs bs ∧
-      (optimizerWithBusFacts facts cs).1.isCompleteReplacementOf cs bs (optimizerWithBusFacts facts cs).2 := by
-  refine ⟨(pipeline cs bs facts).correct.toSound, ?_⟩
+    (optimizerWithBusFacts b facts cs).1.isSoundReplacementOf cs bs ∧
+      (optimizerWithBusFacts b facts cs).1.isCompleteReplacementOf cs bs (optimizerWithBusFacts b facts cs).2 := by
+  refine ⟨(pipeline b cs bs facts).correct.toSound, ?_⟩
   intro hpow env hadm hsat
-  obtain ⟨_himpl, _hinv, hS, hcomp⟩ := (pipeline cs bs facts).correct
+  obtain ⟨_himpl, _hinv, hS, hcomp⟩ := (pipeline b cs bs facts).correct
   obtain ⟨env', hsat', hadm', hse, hA, hR⟩ := hcomp env hadm hsat
-  have hrec : (pipeline cs bs facts).out.reconstructs cs.vars
-      (pipeline cs bs facts).derivs env' := by
+  have hrec : (pipeline b cs bs facts).out.reconstructs cs.vars
+      (pipeline b cs bs facts).derivs env' := by
     have hrec0 : cs.reconstructs cs.vars [] env :=
       fun u hu hunone => absurd (hpow u hu) (by simp [hunone])
     simpa using hR cs.vars (fun v hv _ => hv) [] hrec0
-  have hagree : ∀ v ∈ (pipeline cs bs facts).out.vars,
-      Derivations.witgen (pipeline cs bs facts).derivs env v = env' v := by
+  have hagree : ∀ v ∈ (pipeline b cs bs facts).out.vars,
+      Derivations.witgen (pipeline b cs bs facts).derivs env v = env' v := by
     intro v hv
     cases hpw : v.powdrId? with
     | some w =>
@@ -311,13 +311,13 @@ theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p 
         exact ComputationMethod.eval_congr cm env env' (fun x hx => (hA x (hxpow x hx)).symm)
   -- The returned derivations are `pipeline …`'s pruned to output variables; on output variables the
   -- pruning leaves `witgen` unchanged (`methodFor_filter`), so `hagree` transports to the pruned list.
-  have hagree' : ∀ v ∈ (pipeline cs bs facts).out.vars,
-      Derivations.witgen ((pipeline cs bs facts).derivs.filter
-        (fun d => decide (d.1 ∈ (pipeline cs bs facts).out.vars))) env v = env' v := by
+  have hagree' : ∀ v ∈ (pipeline b cs bs facts).out.vars,
+      Derivations.witgen ((pipeline b cs bs facts).derivs.filter
+        (fun d => decide (d.1 ∈ (pipeline b cs bs facts).out.vars))) env v = env' v := by
     intro v hv
-    rw [show Derivations.witgen ((pipeline cs bs facts).derivs.filter
-          (fun d => decide (d.1 ∈ (pipeline cs bs facts).out.vars))) env v
-        = Derivations.witgen (pipeline cs bs facts).derivs env v by
+    rw [show Derivations.witgen ((pipeline b cs bs facts).derivs.filter
+          (fun d => decide (d.1 ∈ (pipeline b cs bs facts).out.vars))) env v
+        = Derivations.witgen (pipeline b cs bs facts).derivs env v by
       simp only [Derivations.witgen, Derivations.methodFor_filter hv]]
     exact hagree v hv
   refine ⟨?_, ?_, (ConstraintSystem.satisfies_congr hagree').mpr hsat',
@@ -334,16 +334,16 @@ theorem optimizerWithBusFacts_correct {bs : BusSemantics p} (facts : BusFacts p 
     intro d hd
     simpa using (List.mem_filter.mp hd).2
   · show cs.sideEffects bs env
-        ≈ (pipeline cs bs facts).out.sideEffects bs (Derivations.witgen
-            ((pipeline cs bs facts).derivs.filter
-              (fun d => decide (d.1 ∈ (pipeline cs bs facts).out.vars))) env)
+        ≈ (pipeline b cs bs facts).out.sideEffects bs (Derivations.witgen
+            ((pipeline b cs bs facts).derivs.filter
+              (fun d => decide (d.1 ∈ (pipeline b cs bs facts).out.vars))) env)
     rw [ConstraintSystem.sideEffects_congr hagree']
     exact hse
 
 /-- The fact-aware optimizer never pushes a within-bound circuit past the zkVM's degree
     bound (every pass is degree-guarded). -/
-theorem optimizerWithBusFacts_respectsDegree {bs : BusSemantics p} (facts : BusFacts p bs)
-    (cs : ConstraintSystem p)
-    (h : cs.withinDegree bs.degreeBound) :
-    (optimizerWithBusFacts facts cs).1.withinDegree bs.degreeBound :=
-  pipeline_respectsDeg cs bs facts h
+theorem optimizerWithBusFacts_respectsDegree {bs : BusSemantics p} (b : DegreeBound)
+    (facts : BusFacts p bs) (cs : ConstraintSystem p)
+    (h : cs.withinDegree b) :
+    (optimizerWithBusFacts b facts cs).1.withinDegree b :=
+  pipeline_respectsDeg b cs bs facts h

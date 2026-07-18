@@ -86,37 +86,37 @@ def iterateToFixpoint (f : VerifiedPassW p) (cs : ConstraintSystem p) (bs : BusS
 
 `optimizerRespectsDegreeBound` is enforced compositionally with **zero** per-pass proof burden:
 every pass is wrapped in a checked guard that falls back to its (unchanged) input if the
-output would exceed the semantics' degree bound. `RespectsDeg` then propagates through
+output would exceed the degree bound. `RespectsDeg` then propagates through
 composition and iteration. -/
 
-/-- A pass never pushes a within-bound system past the semantics' degree bound. -/
-def RespectsDeg (f : VerifiedPassW p) : Prop :=
+/-- A pass never pushes a within-bound system past the degree bound `b`. -/
+def RespectsDeg (b : DegreeBound) (f : VerifiedPassW p) : Prop :=
   ∀ (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs),
-    cs.withinDegree bs.degreeBound → (f cs bs facts).out.withinDegree bs.degreeBound
+    cs.withinDegree b → (f cs bs facts).out.withinDegree b
 
-/-- Wrap a pass with a degree guard: if the output would exceed the bound, keep the input. -/
-def VerifiedPassW.guardDegree (f : VerifiedPassW p) : VerifiedPassW p :=
+/-- Wrap a pass with a degree guard: if the output would exceed the bound `b`, keep the input. -/
+def VerifiedPassW.guardDegree (b : DegreeBound) (f : VerifiedPassW p) : VerifiedPassW p :=
   fun cs bs facts =>
     let r := f cs bs facts
-    if r.out.withinDegreeB bs.degreeBound then r
+    if r.out.withinDegreeB b then r
     else ⟨cs, [], PassCorrect.refl cs bs⟩
 
-theorem VerifiedPassW.guardDegree_respectsDeg (f : VerifiedPassW p) :
-    RespectsDeg f.guardDegree := by
+theorem VerifiedPassW.guardDegree_respectsDeg {b : DegreeBound} (f : VerifiedPassW p) :
+    RespectsDeg b (VerifiedPassW.guardDegree b f) := by
   intro cs bs facts h
-  by_cases hok : (f cs bs facts).out.withinDegreeB bs.degreeBound = true
+  by_cases hok : (f cs bs facts).out.withinDegreeB b = true
   · simp only [VerifiedPassW.guardDegree, hok, if_true]
     exact (ConstraintSystem.withinDegreeB_iff _ _).1 hok
   · simp only [VerifiedPassW.guardDegree, hok]
     exact h
 
-theorem VerifiedPassW.andThen_respectsDeg {f g : VerifiedPassW p}
-    (hf : RespectsDeg f) (hg : RespectsDeg g) : RespectsDeg (f.andThen g) := by
+theorem VerifiedPassW.andThen_respectsDeg {b : DegreeBound} {f g : VerifiedPassW p}
+    (hf : RespectsDeg b f) (hg : RespectsDeg b g) : RespectsDeg b (f.andThen g) := by
   intro cs bs facts h
   exact hg _ bs facts (hf cs bs facts h)
 
-theorem VerifiedPassW.iterate_respectsDeg {f : VerifiedPassW p} (hf : RespectsDeg f) :
-    ∀ n, RespectsDeg (f.iterate n)
+theorem VerifiedPassW.iterate_respectsDeg {b : DegreeBound} {f : VerifiedPassW p}
+    (hf : RespectsDeg b f) : ∀ n, RespectsDeg b (f.iterate n)
   | 0 => fun _ _ _ h => h
   | n + 1 => VerifiedPassW.andThen_respectsDeg (iterate_respectsDeg hf n) hf
 
@@ -129,8 +129,8 @@ theorem sizeKey_wf : WellFounded (fun a b : ConstraintSystem p => a.sizeKey < b.
 /-- `iterateToFixpoint` preserves the degree bound: every kept step is `f` (which respects the
     bound) and the stopping case returns the unchanged input. Proved by strong induction on the
     `sizeKey` measure the loop recurses on. -/
-theorem iterateToFixpoint_respectsDeg {f : VerifiedPassW p} (hf : RespectsDeg f) :
-    RespectsDeg (iterateToFixpoint f) := by
+theorem iterateToFixpoint_respectsDeg {b : DegreeBound} {f : VerifiedPassW p}
+    (hf : RespectsDeg b f) : RespectsDeg b (iterateToFixpoint f) := by
   intro cs
   induction cs using sizeKey_wf.induction with
   | _ cs ih =>

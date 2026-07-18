@@ -168,8 +168,10 @@ def sp1BusSemantics (p : ℕ) (busMap : BusMap := defaultBusMap) :
     (∀ (busId : Nat) (shape : MemoryBusShape), memShapeOf busMap busId = some shape →
       admissibleMemoryBus shape (msgs.filter (fun m => m.busId = busId)))
     ∧ x0ReturnsZero busMap msgs
-  -- SP1's proving backend bound (powdr's `DEFAULT_DEGREE_BOUND` for SP1).
-  degreeBound := { identities := 3, busInteractions := 1 }
+
+/-- SP1's proving-backend degree bound (powdr's `DEFAULT_DEGREE_BOUND` for SP1), used when the
+    optimizer is run directly rather than with a bound passed in over the FFI. -/
+def defaultDegreeBound : DegreeBound := { identities := 3, busInteractions := 1 }
 
 /-- The KoalaBear field modulus, `2^31 - 2^24 + 1` — the field all powdr SP1 exports use. -/
 def koalaBear : Nat := 2130706433

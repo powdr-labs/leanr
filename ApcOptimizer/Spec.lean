@@ -97,7 +97,6 @@ structure DegreeBound where
   busInteractions : Nat
 
 /-- The bus semantics of the zkVM. -/
--- TODO: Rename to VmSemantics
 structure BusSemantics (p : ℕ) where
   /-- Whether the bus of the given ID changes the state of the VM.
       Stateless bus interactions are typically lookups. -/
@@ -115,8 +114,6 @@ structure BusSemantics (p : ℕ) where
       One useful way to use this is to describe the semantics of memory buses, see
       ``ApcOptimizer/MemoryBus.lean``. -/
   admissible (statefulBusMessages: List (BusInteraction (ZMod p))): Prop
-  /-- The zkVM's degree bound. -/
-  degreeBound : DegreeBound
 
 /-- A concrete bus interaction message: which bus, and the tuple sent. -/
 abbrev BusMessage (p : ℕ) := Nat × List (ZMod p)
@@ -247,23 +244,24 @@ def ConstraintSystem.withinDegree (s : ConstraintSystem p) (b : DegreeBound) : P
   (∀ bi ∈ s.busInteractions, bi.multiplicity.degree ≤ b.busInteractions ∧
     ∀ e ∈ bi.payload, e.degree ≤ b.busInteractions)
 
-/-- Whether an optimizer for the fixed `busSemantics` respects the zkVM's degree bound: a
-    within-bound input always yields a within-bound output. -/
-def optimizerRespectsDegreeBound (busSemantics : BusSemantics p)
+/-- Whether an optimizer respects a degree bound: a within-bound input always yields a
+    within-bound output. -/
+def optimizerRespectsDegreeBound (b : DegreeBound)
     (optimizer : ConstraintSystem p → ConstraintSystem p × Derivations p) : Prop :=
   ∀ constraintSystem : ConstraintSystem p,
-    constraintSystem.withinDegree busSemantics.degreeBound →
-    (optimizer constraintSystem).1.withinDegree busSemantics.degreeBound
+    constraintSystem.withinDegree b →
+    (optimizer constraintSystem).1.withinDegree b
 
 --------- Optimizer correctness ---------
 
 abbrev Optimizer (p : ℕ) := ConstraintSystem p → ConstraintSystem p × Derivations p
 
 /-- An optimizer is correct if, for every input constraint system, replacing it with the optimized
-    system is both sound and complete, and the optimizer respects the degree bound. -/
-def Optimizer.isCorrect (optimizer : Optimizer p) (busSemantics : BusSemantics p) : Prop :=
+    system is both sound and complete, and the optimizer respects the degree bound `b`. -/
+def Optimizer.isCorrect (optimizer : Optimizer p) (busSemantics : BusSemantics p)
+    (b : DegreeBound) : Prop :=
   (∀ originalCS : ConstraintSystem p,
     let (optimizedCS, derivations) := optimizer originalCS
     (optimizedCS.isSoundReplacementOf originalCS busSemantics) ∧
     (optimizedCS.isCompleteReplacementOf originalCS busSemantics derivations))
-  ∧ optimizerRespectsDegreeBound busSemantics optimizer
+  ∧ optimizerRespectsDegreeBound b optimizer
