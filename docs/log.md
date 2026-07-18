@@ -3878,3 +3878,31 @@ on four OpenVM memory pairs. **Runtime flat-to-better:** apc_030 21.8 s vs 22.6 
 ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Residual SP1 bus
 gap 471: byte-bus identity-OR checks (apc_024/040 ≈ +43 each) and the mid-chain shields — see
 `docs/ideas.md`. **Worked: yes.**
+
+### 103. OR-identity byte checks: recognize, dedup, drop, pack (SP1 bus 2.650× → 2.703×)
+
+After entry 100's late rename, SP1's k256 blocks carry piles of degenerate OR interactions
+`[or, x, x, 0]` / `[or, x, 0, x]` (`x = x | 0`) whose only content is "x is a byte" — apc_024 held
+48 of them (powdr: none; it re-packs the obligations as op-3 pairs). The byte-check machinery
+already knew how to dedup, drop and pack single-value checks in five XOR encodings; the OR
+identities are a sixth.
+
+**Two arms + a coda reorder, no new pass.** `svCheck?` (`ByteCheckPack`) and `byteCheckOperands?`
+(`RedundantByteDrop`) gain the two OR-identity arms, sound through the existing
+`BusFacts.byteBoolSound` (lifted to symbolic payloads by the new `byteBoolSound_decode_iff` in
+`BytePack.lean`, the `orOp`/`andOp` analog of `byteXorSpec_decode_iff`). `identitySubst` moves up
+the coda — from after `bytePackLate` to right after `splitBytePair` — so the renamed interactions
+become recognizable *before* `dedupLate` (same-operand duplicates collapse), `redundantByteDrop`
+(justified ones drop), and `bytePackLate` (survivors pack pairwise into op-3). Entry 100's
+regression concern was the cleanup-cycle re-encode explosion; the coda has no reencode, so the
+early rename only exposes the degenerate checks.
+
+**Impact (`benchmark.py --vm sp1`, 100 rsp cases):** bus interactions **2.650× → 2.703×**
+(aggregate bus gap vs powdr **471 → 319**, −152 over 13 cases — apc_024/040 −42 each, apc_060
+−21, apc_079 −10, apc_080 −8, apc_083 −7, …); variables and constraints unchanged. **0
+regressions** (87 cases byte-identical). apc_024 now 458 v / 340 bus vs powdr 490 v / 335 bus —
+variables well ahead, bus within 5. **No OpenVM change:** keccak byte-identical (2021/186/1748),
+eth spot checks identical (OpenVM declares no `orOp`, so both arms are structural no-ops there;
+the reorder is output-neutral on the checked cases). Cumulative today (entries 101–103): SP1
+vars 3.784× → 3.922×, bus 2.553× → 2.703× (var gap 442 → 55, bus gap 765 → 319). Proof integrity
+green; no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
