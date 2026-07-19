@@ -140,6 +140,171 @@ def denseCandidateSplits (shape : MemoryBusShape) (T : DenseTwoRootMap p) (nw : 
         | none => []
        else []) ++ denseCandidateSplits shape T nw (S :: revPre) rest
 
+/-! ## The consumer sweep (#165 delta, chunk C1)
+
+Dense, `VarId`-native mirror of the single-sweep consumer-finding infra that replaced the per-send
+`findConsumer` scan (`OptimizerPasses/BusUnify.lean:230-436`, doc comment there for the full
+rationale). `denseFindConsumer`/`denseCandidateSplits` above are the OLD per-send algorithm and stay
+untouched (nothing downstream consumes the sweep yet); this section only ADDS the new sweep's
+runtime twin, transliterated line-parallel from the new spec section so it can be diffed directly.
+
+Every spec proof witness that exists only to state the split equation the enumerator recovers
+(`OpenRec.hi`/`hsplit`, `SplitCand`'s `Subtype` proof, `sweepGo`'s `hsplit`/`hj`, `emitCand`'s
+`hj`/`hnow`) is dropped, matching the plain-data `DenseSplitCand`/dropped-`Subtype` pattern already
+used above for `denseFindConsumer`/`denseCandidateSplits`: the runtime control flow and position
+arithmetic are otherwise identical. -/
+
+/-- One message tested against one open window. Mirrors `StepRes`. -/
+inductive DenseStepRes
+  | consumer
+  | excluded
+  | blocker
+
+/-- The two-root / nonzero-witness certificate tables are passed as `Thunk`s so an invocation that
+    never reaches the expensive arms (every pair decided by the constant or affine certificate — the
+    common case) never builds them. Mirrors `stepTest`, using the same certificate calls (and call
+    order) as `denseFindConsumer` above. -/
+def denseStepTest (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p))
+    (S m : BusInteraction (DenseExpr p)) : DenseStepRes :=
+  if decide (denseMultConst m = some (-shape.setNewMult)) && denseAddrConstsEq shape S m then .consumer
+  else if denseAddrConstsNeq shape S m || denseAddrAffineNeq shape S m
+      || denseAddrTwoRootNeq shape T.get S m || denseAddrNonzeroNeq shape nw.get S m
+      || decide (denseMultConst m = some 0) then .excluded
+  else .blocker
+
+/-- A canonical address key. Mirrors `AddrKey`. -/
+structure DenseAddrKey (p : ℕ) where
+  exprs : List (DenseExpr p)
+deriving DecidableEq
+
+instance : Hashable (DenseAddrKey p) :=
+  ⟨fun k => k.exprs.foldl (fun h e => mixHash h e.bHash) 7⟩
+
+/-- The canonical key of an interaction's address slots, `none` if a slot is missing (such a message
+    never `denseAddrConstsEq`-matches anything, so it can neither open a window nor consume one).
+    Mirrors `addrKey?`. -/
+def denseAddrKey? (shape : MemoryBusShape) (bi : BusInteraction (DenseExpr p)) :
+    Option (DenseAddrKey p) :=
+  (shape.addressFields.foldr (fun slot acc =>
+    match acc, bi.payload[slot]? with
+    | some ks, some e =>
+      match e.constValue? with
+      | some c => some (.const c :: ks)
+      | none => some (e :: ks)
+    | _, _ => none) (some [])).map DenseAddrKey.mk
+
+/-- Whether every component of a canonical key is a literal constant. Mirrors `AddrKey.allConst`. -/
+def DenseAddrKey.allConst (k : DenseAddrKey p) : Bool :=
+  k.exprs.all fun e => match e with
+    | .const _ => true
+    | _ => false
+
+/-- An open send window: the send, its split context, and its position `i` (data only — mirrors
+    `OpenRec`, dropping its `hi`/`hsplit` proof fields and its list-index parameter `L`; the prover
+    reconstructs the split-equation invariant externally, as with `DenseSplitCand` above). -/
+structure DenseOpenRec (p : ℕ) where
+  revPre : List (BusInteraction (DenseExpr p))
+  S : BusInteraction (DenseExpr p)
+  restAfter : List (BusInteraction (DenseExpr p))
+  i : Nat
+
+/-- Assemble the split candidate for a consumed window, tagged with its send position. `mid` is
+    recovered positionally from the send's stored suffix (`take (j−i−1)`), the identical position
+    arithmetic `emitCand`/`split_of_positions` compute — only the recomposition-proof witness is
+    dropped, guarded by the same `w.i < j` test as a plain `if` (not the spec's proof-extracting
+    `dif`). Mirrors `emitCand`. -/
+def denseEmitCand (w : DenseOpenRec p) (j : Nat) (R : BusInteraction (DenseExpr p))
+    (post : List (BusInteraction (DenseExpr p))) : Option (Nat × DenseSplitCand p) :=
+  if w.i < j then
+    some (w.i, (w.revPre.reverse, w.S, w.restAfter.take (j - w.i - 1), R, post))
+  else none
+
+/-- The sweep: one pass over the bus's interaction list, windows keyed as described above. `acc`
+    collects `(sendPosition, candidate)` pairs (order restored by the caller's sort). Mirrors
+    `sweepGo`, dropping its `L`/`hsplit`/`hj` proof-only parameters; the `j` position counter and
+    `acc` are kept as plain data, and every phase's control flow, binder shape, and evaluation order
+    matches the spec verbatim. -/
+def denseSweepGo (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p)) :
+    (revSeen rest : List (BusInteraction (DenseExpr p))) → (j : Nat) →
+    (constOpen : Std.HashMap (DenseAddrKey p) (DenseOpenRec p)) →
+    (symOpen : List (DenseOpenRec p)) →
+    (acc : List (Nat × DenseSplitCand p)) →
+    List (Nat × DenseSplitCand p)
+  | _, [], _, _, _, acc => acc
+  | revSeen, m :: rest', j, constOpen, symOpen, acc =>
+    let mKey? := denseAddrKey? shape m
+    let mAllConst := match mKey? with
+      | some k => k.allConst
+      | none => false
+    -- (1) constant-keyed windows: an all-constant message only meets the window at its own key
+    --     (it is `denseAddrConstsNeq`-excluded at every other constant key); a symbolic-address
+    --     message meets every one.
+    let (constOpen, acc) :=
+      if mAllConst then
+        match mKey? with
+        | some k =>
+          match constOpen[k]? with
+          | some w =>
+            match denseStepTest shape T nw w.S m with
+            | .consumer =>
+              (constOpen.erase k,
+               match denseEmitCand w j m rest' with
+               | some c => c :: acc
+               | none => acc)
+            | .excluded => (constOpen, acc)
+            | .blocker => (constOpen.erase k, acc)
+          | none => (constOpen, acc)
+        | none => (constOpen, acc)
+      else
+        let (drops, acc) := constOpen.toList.foldl (init := (([] : List (DenseAddrKey p)), acc))
+          fun (ds, a) kw =>
+            match denseStepTest shape T nw kw.2.S m with
+            | .consumer =>
+              (kw.1 :: ds,
+               match denseEmitCand kw.2 j m rest' with
+               | some c => c :: a
+               | none => a)
+            | .excluded => (ds, a)
+            | .blocker => (kw.1 :: ds, a)
+        (drops.foldl (·.erase ·) constOpen, acc)
+    -- (2) symbolic-keyed windows are tested literally against every message.
+    let (symOpen, acc) :=
+      if symOpen.isEmpty then (symOpen, acc) else
+      symOpen.foldr (init := (([] : List (DenseOpenRec p)), acc)) fun w (so, a) =>
+        match denseStepTest shape T nw w.S m with
+        | .consumer =>
+          (so,
+           match denseEmitCand w j m rest' with
+           | some c => c :: a
+           | none => a)
+        | .excluded => (w :: so, a)
+        | .blocker => (so, a)
+    -- (3) a send opens its window. A same-key window that survived (1) as *excluded* moves to
+    --     the literally-tested side list, so no window the per-send scans had is lost.
+    let (constOpen, symOpen) :=
+      if decide (denseMultConst m = some shape.setNewMult) then
+        match mKey? with
+        | some k =>
+          let w : DenseOpenRec p := ⟨revSeen, m, rest', j⟩
+          if k.allConst then
+            match constOpen[k]? with
+            | some old => (constOpen.insert k w, old :: symOpen)
+            | none => (constOpen.insert k w, symOpen)
+          else (constOpen, w :: symOpen)
+        | none => (constOpen, symOpen)
+      else (constOpen, symOpen)
+    denseSweepGo shape T nw (m :: revSeen) rest' (j + 1) constOpen symOpen acc
+
+/-- All consumer candidates of one bus, in send-position order — the same list the per-send
+    `denseFindConsumer`/`denseCandidateSplits` scans produce, computed by a single sweep. Mirrors
+    the new spec `candidateSplits`. Not yet consumed by `denseCollectForBus`/`denseCollectAllBuses`/
+    `denseBusUnifyF` below (unwired; a later chunk swaps the enumerator). -/
+def denseCandidateSplitsSweep (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p))
+    (nw : Thunk (DenseNonzeroWits p)) (L : List (BusInteraction (DenseExpr p))) :
+    List (DenseSplitCand p) :=
+  ((denseSweepGo shape T nw [] L 0 ∅ [] []).mergeSort
+    (fun a b => decide (a.1 ≤ b.1))).map (·.2)
+
 /-- Collect the entailed equalities for one bus. Mirrors `collectForBus`, dropping its
     `cs`/`bs`/`facts`/`hp1`/`hshape` parameters: none of them are read by the computed value (only
     by the subtype proof `collectForBus` carried), so `shape`/`T`/`nw`/the candidate list are all
