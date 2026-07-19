@@ -315,70 +315,6 @@ def denseFoldRewriteGo (xs : List VarId) (survs : List (List (VarId × ZMod p)))
         | none => .mul (denseFoldRewriteGo xs survs a) (denseFoldRewriteGo xs survs b)
       else .mul (denseFoldRewriteGo xs survs a) (denseFoldRewriteGo xs survs b)
 
-theorem denseFoldRewriteGo_decode (reg : VarRegistry) (xs : List VarId) (hxv : ∀ x ∈ xs, reg.Valid x)
-    (survs : List (List (VarId × ZMod p))) (hsv : ∀ s ∈ survs, ∀ kv ∈ s, reg.Valid kv.1)
-    (e : DenseExpr p) (hc : e.CoveredBy reg) :
-    reg.decodeExpr (denseFoldRewriteGo xs survs e)
-      = foldRewriteGo (xs.map reg.resolve)
-          (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2)))) (reg.decodeExpr e) := by
-  induction e with
-  | const c => rfl
-  | var y => rfl
-  | add a b iha ihb =>
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_add.mp hc
-      have hcond : ((reg.decodeExpr a).add (reg.decodeExpr b)).varsIn (xs.map reg.resolve)
-          = (DenseExpr.add a b).varsInF xs := by
-        rw [← Expression.varsInF_eq]
-        exact denseExpr_varsInF_decode reg xs hxv (a.add b) hc
-      have hconst : constOnSurvs (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-            ((reg.decodeExpr a).add (reg.decodeExpr b))
-          = denseConstOnSurvs survs (a.add b) :=
-        denseConstOnSurvs_decode reg survs hsv (a.add b) hc
-      show reg.decodeExpr (denseFoldRewriteGo xs survs (a.add b))
-        = foldRewriteGo (xs.map reg.resolve)
-            (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-            ((reg.decodeExpr a).add (reg.decodeExpr b))
-      rw [foldRewriteGo, denseFoldRewriteGo, hcond]
-      by_cases hin : (DenseExpr.add a b).varsInF xs = true
-      · rw [if_pos hin, if_pos hin, hconst]
-        cases denseConstOnSurvs survs (a.add b) with
-        | some c => rfl
-        | none =>
-            show reg.decodeExpr ((denseFoldRewriteGo xs survs a).add (denseFoldRewriteGo xs survs b))
-              = Expression.add _ _
-            rw [VarRegistry.decodeExpr, iha ha, ihb hb]
-      · rw [if_neg (by simpa using hin), if_neg (by simpa using hin)]
-        show reg.decodeExpr ((denseFoldRewriteGo xs survs a).add (denseFoldRewriteGo xs survs b))
-          = Expression.add _ _
-        rw [VarRegistry.decodeExpr, iha ha, ihb hb]
-  | mul a b iha ihb =>
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_mul.mp hc
-      have hcond : ((reg.decodeExpr a).mul (reg.decodeExpr b)).varsIn (xs.map reg.resolve)
-          = (DenseExpr.mul a b).varsInF xs := by
-        rw [← Expression.varsInF_eq]
-        exact denseExpr_varsInF_decode reg xs hxv (a.mul b) hc
-      have hconst : constOnSurvs (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-            ((reg.decodeExpr a).mul (reg.decodeExpr b))
-          = denseConstOnSurvs survs (a.mul b) :=
-        denseConstOnSurvs_decode reg survs hsv (a.mul b) hc
-      show reg.decodeExpr (denseFoldRewriteGo xs survs (a.mul b))
-        = foldRewriteGo (xs.map reg.resolve)
-            (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-            ((reg.decodeExpr a).mul (reg.decodeExpr b))
-      rw [foldRewriteGo, denseFoldRewriteGo, hcond]
-      by_cases hin : (DenseExpr.mul a b).varsInF xs = true
-      · rw [if_pos hin, if_pos hin, hconst]
-        cases denseConstOnSurvs survs (a.mul b) with
-        | some c => rfl
-        | none =>
-            show reg.decodeExpr ((denseFoldRewriteGo xs survs a).mul (denseFoldRewriteGo xs survs b))
-              = Expression.mul _ _
-            rw [VarRegistry.decodeExpr, iha ha, ihb hb]
-      · rw [if_neg (by simpa using hin), if_neg (by simpa using hin)]
-        show reg.decodeExpr ((denseFoldRewriteGo xs survs a).mul (denseFoldRewriteGo xs survs b))
-          = Expression.mul _ _
-        rw [VarRegistry.decodeExpr, iha ha, ihb hb]
-
 /-- Folding never introduces a `VarId` (mirrors `foldRewriteGo_vars`). -/
 theorem denseFoldRewriteGo_vars (xs : List VarId) (survs : List (List (VarId × ZMod p)))
     (e : DenseExpr p) : ∀ i ∈ (denseFoldRewriteGo xs survs e).vars, i ∈ e.vars := by
@@ -427,19 +363,6 @@ def denseFoldRewrite (xs : List VarId) (survs : List (List (VarId × ZMod p)))
     (e : DenseExpr p) : DenseExpr p :=
   if e.anyVarIn xs || e.hasConstFoldableNode then denseFoldRewriteGo xs survs e else e
 
-theorem denseFoldRewrite_decode (reg : VarRegistry) (xs : List VarId) (hxv : ∀ x ∈ xs, reg.Valid x)
-    (survs : List (List (VarId × ZMod p))) (hsv : ∀ s ∈ survs, ∀ kv ∈ s, reg.Valid kv.1)
-    (e : DenseExpr p) (hc : e.CoveredBy reg) :
-    reg.decodeExpr (denseFoldRewrite xs survs e)
-      = foldRewrite (xs.map reg.resolve)
-          (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2)))) (reg.decodeExpr e) := by
-  unfold denseFoldRewrite foldRewrite
-  rw [denseExpr_anyVarIn_decode reg xs hxv e hc, reg.decodeExpr_hasConstFoldableNode e]
-  by_cases hg : (e.anyVarIn xs || e.hasConstFoldableNode) = true
-  · rw [if_pos hg, if_pos hg]
-    exact denseFoldRewriteGo_decode reg xs hxv survs hsv e hc
-  · rw [if_neg (by simpa using hg), if_neg (by simpa using hg)]
-
 theorem denseFoldRewrite_vars (xs : List VarId) (survs : List (List (VarId × ZMod p)))
     (e : DenseExpr p) : ∀ i ∈ (denseFoldRewrite xs survs e).vars, i ∈ e.vars := by
   intro i hi
@@ -465,39 +388,6 @@ def denseFoldOut (d : DenseConstraintSystem p) (xs : List VarId)
       (fun bi => { bi with
         multiplicity := denseFoldRewrite xs survs bi.multiplicity,
         payload := bi.payload.map (denseFoldRewrite xs survs) }) }
-
-theorem denseFoldOut_decode (reg : VarRegistry) (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg)
-    (xs : List VarId) (hxv : ∀ x ∈ xs, reg.Valid x) (survs : List (List (VarId × ZMod p)))
-    (hsv : ∀ s ∈ survs, ∀ kv ∈ s, reg.Valid kv.1) :
-    reg.decodeCS (denseFoldOut d xs survs)
-      = foldOut (reg.decodeCS d) (xs.map reg.resolve)
-          (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2)))) := by
-  have hFR : ∀ e, e.CoveredBy reg → reg.decodeExpr (denseFoldRewrite xs survs e)
-      = foldRewrite (xs.map reg.resolve) (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-          (reg.decodeExpr e) :=
-    fun e he => denseFoldRewrite_decode reg xs hxv survs hsv e he
-  have halg : ((d.algebraicConstraints.filter (fun c => !denseCoveredBy xs c)).map (denseFoldRewrite xs survs)
-        ++ denseCoveredCsOf d xs).map reg.decodeExpr
-      = ((d.algebraicConstraints.map reg.decodeExpr).filter (fun c => !coveredBy (xs.map reg.resolve) c)).map
-          (foldRewrite (xs.map reg.resolve) (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2)))))
-        ++ coveredCsOf (reg.decodeCS d) (xs.map reg.resolve) := by
-    rw [List.map_append]
-    congr 1
-    · rw [← filter_map_comm reg.decodeExpr (fun c => !denseCoveredBy xs c)
-          (fun c => !coveredBy (xs.map reg.resolve) c) d.algebraicConstraints
-          (fun c hc => by simp only [denseCoveredBy_decode reg xs hxv c (hcov.1 c hc)]),
-        List.map_map, List.map_map]
-      exact List.map_congr_left (fun c hc => hFR c (hcov.1 c (List.mem_of_mem_filter hc)))
-    · exact (denseCoveredCsOf_decode reg d hcov xs hxv).symm
-  have hbis : (d.busInteractions.map
-        (fun bi => { bi with
-          multiplicity := denseFoldRewrite xs survs bi.multiplicity,
-          payload := bi.payload.map (denseFoldRewrite xs survs) })).map reg.decodeBI
-      = (d.busInteractions.map reg.decodeBI).map (·.mapExpr
-          (foldRewrite (xs.map reg.resolve) (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2)))))) := by
-    rw [List.map_map, List.map_map]
-    exact List.map_congr_left (fun bi hbi => reg.decodeBI_mapExpr_covered hFR bi (hcov.2 bi hbi))
-  exact congr (congrArg ConstraintSystem.mk halg) hbis
 
 theorem denseFoldOut_covered (reg : VarRegistry) (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg)
     (xs : List VarId) (survs : List (List (VarId × ZMod p))) :
@@ -535,73 +425,12 @@ def DenseExpr.hasFoldable (xs : List VarId) (survs : List (List (VarId × ZMod p
       ((DenseExpr.mul a b).varsInF xs && (denseConstOnSurvs survs (.mul a b)).isSome) ||
         a.hasFoldable xs survs || b.hasFoldable xs survs
 
-theorem denseExpr_hasFoldable_decode (reg : VarRegistry) (xs : List VarId) (hxv : ∀ x ∈ xs, reg.Valid x)
-    (survs : List (List (VarId × ZMod p))) (hsv : ∀ s ∈ survs, ∀ kv ∈ s, reg.Valid kv.1)
-    (e : DenseExpr p) (hc : e.CoveredBy reg) :
-    (reg.decodeExpr e).hasFoldable (xs.map reg.resolve)
-        (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-      = e.hasFoldable xs survs := by
-  induction e with
-  | const n => rfl
-  | var i => rfl
-  | add a b iha ihb =>
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_add.mp hc
-      have hvars : ((reg.decodeExpr a).add (reg.decodeExpr b)).varsIn (xs.map reg.resolve)
-          = (DenseExpr.add a b).varsInF xs := by
-        rw [← Expression.varsInF_eq]
-        exact denseExpr_varsInF_decode reg xs hxv (a.add b) hc
-      have hconst : (constOnSurvs (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-            ((reg.decodeExpr a).add (reg.decodeExpr b))).isSome
-          = (denseConstOnSurvs survs (a.add b)).isSome :=
-        congrArg Option.isSome (denseConstOnSurvs_decode reg survs hsv (a.add b) hc)
-      simp only [VarRegistry.decodeExpr, Expression.hasFoldable, DenseExpr.hasFoldable,
-        hvars, hconst, iha ha, ihb hb]
-  | mul a b iha ihb =>
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_mul.mp hc
-      have hvars : ((reg.decodeExpr a).mul (reg.decodeExpr b)).varsIn (xs.map reg.resolve)
-          = (DenseExpr.mul a b).varsInF xs := by
-        rw [← Expression.varsInF_eq]
-        exact denseExpr_varsInF_decode reg xs hxv (a.mul b) hc
-      have hconst : (constOnSurvs (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-            ((reg.decodeExpr a).mul (reg.decodeExpr b))).isSome
-          = (denseConstOnSurvs survs (a.mul b)).isSome :=
-        congrArg Option.isSome (denseConstOnSurvs_decode reg survs hsv (a.mul b) hc)
-      simp only [VarRegistry.decodeExpr, Expression.hasFoldable, DenseExpr.hasFoldable,
-        hvars, hconst, iha ha, ihb hb]
-
 /-- Dense `systemHasFoldable` (mirrors `systemHasFoldable`). -/
 def denseSystemHasFoldable (d : DenseConstraintSystem p) (xs : List VarId)
     (survs : List (List (VarId × ZMod p))) : Bool :=
   d.algebraicConstraints.any (fun c => !denseCoveredBy xs c && c.hasFoldable xs survs) ||
     d.busInteractions.any (fun bi =>
       bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
-
-theorem denseSystemHasFoldable_decode (reg : VarRegistry) (d : DenseConstraintSystem p)
-    (hcov : d.CoveredBy reg) (xs : List VarId) (hxv : ∀ x ∈ xs, reg.Valid x)
-    (survs : List (List (VarId × ZMod p))) (hsv : ∀ s ∈ survs, ∀ kv ∈ s, reg.Valid kv.1) :
-    systemHasFoldable (reg.decodeCS d) (xs.map reg.resolve)
-        (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-      = denseSystemHasFoldable d xs survs := by
-  simp only [systemHasFoldable, denseSystemHasFoldable, VarRegistry.decodeCS]
-  congr 1
-  · rw [List.any_map]
-    refine list_any_congr (fun c hc => ?_)
-    have hcc : c.CoveredBy reg := hcov.1 c hc
-    simp only [Function.comp_apply, denseCoveredBy_decode reg xs hxv c hcc,
-      denseExpr_hasFoldable_decode reg xs hxv survs hsv c hcc]
-  · rw [List.any_map]
-    refine list_any_congr (fun bi hbi => ?_)
-    have hbc : denseBICovered reg bi := hcov.2 bi hbi
-    obtain ⟨hm, hp⟩ := hbc
-    simp only [Function.comp_apply]
-    congr 1
-    · exact denseExpr_hasFoldable_decode reg xs hxv survs hsv bi.multiplicity hm
-    · show (bi.payload.map reg.decodeExpr).any (fun e => e.hasFoldable (xs.map reg.resolve)
-            (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2)))))
-        = bi.payload.any (fun e => e.hasFoldable xs survs)
-      rw [List.any_map]
-      exact list_any_congr (fun e he =>
-        denseExpr_hasFoldable_decode reg xs hxv survs hsv e (hp e he))
 
 /-! ## `denseGroupDoms` key structure -/
 
@@ -943,6 +772,9 @@ theorem foldStep_out [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem
   · rename_i doms hdoms
     conv_rhs => rw [hdoms]
     simp only [apply_ite (fun r : Σ' (r : PassResult cs bs), FoldIdx r.out => r.1.out)]
+    -- #165 made spec `foldStep` emit the index-preserving `foldOutIdx`; bridge to `foldOut`
+    -- (this theorem's characterization is unchanged) via the new `foldOutIdx_eq` lemma.
+    rw [foldOutIdx_eq]
 
 /-- The dense indexed fold step (mirrors `foldStep`; returns the output system and refreshed index). -/
 def denseFoldStep (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId) :

@@ -355,7 +355,13 @@ def denseNormalizePass : DenseVerifiedPassW p :=
       DenseConstraintSystem.mapExpr_covered
         (fun e i hi => DenseExpr.normalize_vars e i hi) hc)
     (fun reg _ _ d hc =>
-      reg.decodeCS_mapExpr_covered (fun e he => reg.decodeExpr_normalize e he) d hc)
+      -- #165 changed `normalizePass`'s output from `mapExpr Expression.normalize` to
+      -- `mapExpr (fun e => (normalizeFused e).1)`; the two functions are provably equal via the
+      -- new `normalizeFused_fst` lemma, so we bridge the commutation target through it. The dense
+      -- runtime transform stays `DenseExpr.normalize` (old algorithm, unchanged).
+      reg.decodeCS_mapExpr_covered (g' := fun e => (normalizeFused e).1)
+        (fun e he => (reg.decodeExpr_normalize e he).trans
+          (normalizeFused_fst (reg.decodeExpr e)).symm) d hc)
     (fun _ _ _ => rfl)
 
 end ApcOptimizer.Dense
