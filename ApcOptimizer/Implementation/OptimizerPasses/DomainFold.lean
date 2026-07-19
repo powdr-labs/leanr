@@ -444,6 +444,17 @@ def systemHasFoldable (cs : ConstraintSystem p) (xs : List Variable)
     cs.busInteractions.any (fun bi =>
       bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
 
+/-- `systemHasFoldable` with the non-covered constraints (`rest = coveredBy`'s complement)
+    precomputed by the caller — the direct path partitions the constraint list once per target,
+    so the gate does not re-evaluate `coveredBy` per constraint. Same Bool (`any` over the
+    complement filter ⟺ `any` with the conjunction). Purely an efficiency gate, like
+    `systemHasFoldable` itself. -/
+def systemHasFoldableW (cs : ConstraintSystem p) (xs : List Variable)
+    (survs : List (List (Variable × ZMod p))) (rest : List (Expression p)) : Bool :=
+  rest.any (fun c => c.hasFoldable xs survs) ||
+    cs.busInteractions.any (fun bi =>
+      bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
+
 /-! ### The index-local gate
 
 `systemHasFoldable` is a full-system scan run once per target — the dominant cost of this pass.
@@ -469,13 +480,23 @@ and rebuilt only on an accepted fold (`cs` changes), carrying the proofs tying i
 `cs` via `FoldIdx`. Effectiveness is bit-identical (the covered set is unchanged); only the scan is
 faster. -/
 
+/-- Per-item variable list with duplicates removed: the index build otherwise inserts one bucket
+    entry per *occurrence* (and the per-target gathers then re-deduplicate them). Same membership,
+    so bucket completeness is unchanged (`hashedEraseDups_eq` + `mem_eraseDups`). -/
+def dedupVarsOf (c : Expression p) : List Variable :=
+  HashedDedup.hashedEraseDups (hash ·) c.vars
+
+/-- `dedupVarsOf` for interactions (multiplicity + payload occurrences). -/
+def dedupBiVarsOf (bi : BusInteraction (Expression p)) : List Variable :=
+  HashedDedup.hashedEraseDups (hash ·) bi.vars
+
 /-- The prebuilt covered-constraint index for the current `cs`, with the proofs tying it to `cs` so
     the covered set it yields is provably `coveredCsOf cs xs` (`coveredCsIdx_eq`), plus the
     proof-free data the index-local `systemHasFoldableIdx` gate consumes: the interaction-side
     inverted index and the (normally empty) const-foldable item lists. -/
 structure FoldIdx (cs : ConstraintSystem p) where
   idx : CoveredIndex.CovIndex
-  hidx : idx = CoveredIndex.build Expression.vars cs.algebraicConstraints
+  hidx : idx = CoveredIndex.build dedupVarsOf cs.algebraicConstraints
   arr : Array (Expression p)
   harr : arr = cs.algebraicConstraints.toArray
   bisIdx : CoveredIndex.CovIndex
@@ -485,11 +506,11 @@ structure FoldIdx (cs : ConstraintSystem p) where
 
 /-- Build the index for a system (by construction the equalities hold `rfl`). -/
 def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
-  idx := CoveredIndex.build Expression.vars cs.algebraicConstraints
+  idx := CoveredIndex.build dedupVarsOf cs.algebraicConstraints
   hidx := rfl
   arr := cs.algebraicConstraints.toArray
   harr := rfl
-  bisIdx := CoveredIndex.build BusInteraction.vars cs.busInteractions
+  bisIdx := CoveredIndex.build dedupBiVarsOf cs.busInteractions
   arrBis := cs.busInteractions.toArray
   cfCs := cs.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
   cfBis := cs.busInteractions.filter (fun bi =>
@@ -505,15 +526,24 @@ def FoldIdx.mk' (cs : ConstraintSystem p) : FoldIdx cs where
     rebuild-per-accepted-fold cost on fold-heavy circuits. -/
 def FoldIdx.refresh {cs : ConstraintSystem p} (old : FoldIdx cs) (ro : ConstraintSystem p) :
     FoldIdx ro where
-  idx := CoveredIndex.build Expression.vars ro.algebraicConstraints
+  idx := CoveredIndex.build dedupVarsOf ro.algebraicConstraints
   hidx := rfl
   arr := ro.algebraicConstraints.toArray
   harr := rfl
   bisIdx := old.bisIdx
   arrBis := ro.busInteractions.toArray
-  cfCs := ro.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
-  cfBis := ro.busInteractions.filter (fun bi =>
-    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
+  -- The const-foldable lists were two more full-system filters per accepted fold. A fold never
+  -- *creates* a variable-free compound node (`foldRewrite` replaces the maximal
+  -- constant-on-survivors node by a constant leaf, so a parent that became var-free would itself
+  -- have been the maximal node), so the fresh filter is always a subset of the old list — when
+  -- the old list is **empty** (the normal, post-constant-fold state) the fresh one is provably
+  -- empty too and the filters are skipped outright; otherwise recompute exactly as before, so
+  -- the gate value (and the pass output) is bit-for-bit unchanged.
+  cfCs := if old.cfCs.isEmpty then [] else
+    ro.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
+  cfBis := if old.cfBis.isEmpty then [] else
+    ro.busInteractions.filter (fun bi =>
+      bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
 
 /-- The index-local form of `systemHasFoldable` (see the section comment above): scan only the
     items sharing a variable with `xs` (through the inverted indexes, candidate positions
@@ -573,8 +603,12 @@ theorem coveredBy_shares_var (xs : List Variable) (c : Expression p) (h : covere
 theorem coveredCsIdx_eq (cs : ConstraintSystem p) (xs : List Variable) (fidx : FoldIdx cs) :
     CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs = coveredCsOf cs xs := by
   rw [fidx.hidx, fidx.harr, coveredCsOf]
-  exact CoveredIndex.coveredIdx_eq_filter Expression.vars cs.algebraicConstraints (coveredBy xs) xs
-    (fun i _hi hQ => coveredBy_shares_var xs cs.algebraicConstraints[i] hQ)
+  exact CoveredIndex.coveredIdx_eq_filter dedupVarsOf cs.algebraicConstraints (coveredBy xs) xs
+    (fun i _hi hQ => by
+      obtain ⟨v, hv, hvxs⟩ := coveredBy_shares_var xs cs.algebraicConstraints[i] hQ
+      exact ⟨v, by
+        rw [dedupVarsOf, HashedDedup.hashedEraseDups_eq]
+        exact List.mem_eraseDups.2 hv, hvxs⟩)
 
 /-- One checked fold for a candidate group (identity unless the group has a bounded domain, at least
     one survivor, and some foldable subexpression). The per-target covered scan is served from the
@@ -627,15 +661,18 @@ covered set is computed **once** per target and reused for the survivor filter
 (`groupSurvivorsE es`, provably `groupSurvivors cs xs doms` — the old code paid the full filter
 a second time inside `groupSurvivors`). -/
 
-/-- One checked fold for a candidate group, given the covered set `es = coveredCsOf cs xs`. -/
+/-- One checked fold for a candidate group, given the covered set `es = coveredCsOf cs xs` and
+    its complement `csRest` (the non-covered constraints, feeding the no-op gate without a second
+    `coveredBy` sweep). -/
 def foldStepWith [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) (xs : List Variable)
-    (es : List (Expression p)) (hes : es = coveredCsOf cs xs) : PassResult cs bs :=
+    (es : List (Expression p)) (csRest : List (Expression p))
+    (hes : es = coveredCsOf cs xs) : PassResult cs bs :=
   match hdoms : groupDoms es xs with
   | none => ⟨cs, [], PassCorrect.refl cs bs⟩
   | some doms =>
     if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
       let survs := groupSurvivorsE es doms
-      if 1 ≤ survs.length && systemHasFoldable cs xs survs then
+      if 1 ≤ survs.length && systemHasFoldableW cs xs survs csRest then
         have hsurv : groupSurvivors cs xs doms = survs := by
           show groupSurvivors cs xs doms = groupSurvivorsE es doms
           rw [hes]; rfl
@@ -643,14 +680,20 @@ def foldStepWith [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) 
       else ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs, [], PassCorrect.refl cs bs⟩
 
-/-- Direct-path fold loop: recompute `coveredCsOf cs xs` per target (no index). -/
+/-- Direct-path fold loop: one `partition` per target computes the covered set and its complement
+    together (no index, and no second `coveredBy` sweep for the gate). -/
 def foldLoopDirect [Fact p.Prime] (bs : BusSemantics p) :
     List (List Variable) → (cs : ConstraintSystem p) → PassResult cs bs
   | [], cs => ⟨cs, [], PassCorrect.refl cs bs⟩
   | xs :: rest, cs =>
-    let r1 := foldStepWith bs cs xs (coveredCsOf cs xs) rfl
-    let r2 := foldLoopDirect bs rest r1.out
-    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
+    match hpr : cs.algebraicConstraints.partition (coveredBy xs) with
+    | (es, csRest) =>
+      let r1 := foldStepWith bs cs xs es csRest (by
+        rw [List.partition_eq_filter_filter] at hpr
+        injection hpr with h1 _
+        exact h1.symm)
+      let r2 := foldLoopDirect bs rest r1.out
+      ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
 
 /-- Systems with at least this many algebraic constraints use the inverted index; smaller ones use
     the direct per-target `coveredCsOf` scan (see the section comment). Purely a runtime gate —
@@ -670,12 +713,14 @@ def domainFoldPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bsem =>
     -- with a variable that has *no* single-variable constraint anywhere can never pass
     -- `groupDoms`. Skipping those targets up front (one hash lookup per variable) avoids the
     -- per-target covered-set scan for the ubiquitous byte-limb groups, exactly.
-    let svSet : Std.HashSet Variable := cs.algebraicConstraints.foldl (init := ∅) fun s c =>
-      match c.vars.dedup with
+    -- Each constraint's deduped variable list is computed once (`hashedDedup_eq` keeps it the
+    -- exact `List.dedup` value) and shared between the single-variable set and the target list.
+    let csVs := cs.algebraicConstraints.map (fun c => HashedDedup.hashedDedup (hash ·) c.vars)
+    let svSet : Std.HashSet Variable := csVs.foldl (init := ∅) fun s vs =>
+      match vs with
       | [x] => s.insert x
       | _ => s
-    let targets := dedupHash (cs.algebraicConstraints.filterMap (fun c =>
-      let vs := c.vars.dedup
+    let targets := dedupHash (csVs.filterMap (fun vs =>
       if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
         some (vs.mergeSort (fun a b => compare a b != .gt))
       else none))

@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
+import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
@@ -186,6 +187,20 @@ theorem dedupStatelessFast_eq_nil (bs : BusSemantics p)
     dedupStatelessFast bs ∅ bis = dedupStateless bs [] bis :=
   dedupStatelessFast_eq bs bis [] ∅ (by intro bi; simp [Std.HashMap.getD_empty])
 
+/-! ## Hash-bucketed constraint dedup
+
+`List.dedup` on the constraint list is O(C²·E) structural comparisons (28k constraints on
+keccak's first cycle); `HashedDedup.hashedDedup` is its proven-identical bucketed twin. -/
+
+/-- The bucketed constraint dedup: identical output to `List.dedup`, one-bucket membership
+    tests instead of whole-tail scans. -/
+def dedupConstraintsFast (l : List (Expression p)) : List (Expression p) :=
+  HashedDedup.hashedDedup Expression.bHash l
+
+theorem dedupConstraintsFast_eq (l : List (Expression p)) :
+    dedupConstraintsFast l = l.dedup :=
+  HashedDedup.hashedDedup_eq Expression.bHash l
+
 /-! ## The pass -/
 
 /-- The deduplicated system. -/
@@ -238,12 +253,13 @@ theorem ConstraintSystem.dedup_correct (cs : ConstraintSystem p) (bs : BusSemant
     `ConstraintSystem.dedup` (`dedupFast_eq`), so it inherits `dedup_correct`. -/
 def ConstraintSystem.dedupFast (cs : ConstraintSystem p) (bs : BusSemantics p) :
     ConstraintSystem p :=
-  { algebraicConstraints := cs.algebraicConstraints.dedup,
+  { algebraicConstraints := dedupConstraintsFast cs.algebraicConstraints,
     busInteractions := dedupStatelessFast bs ∅ cs.busInteractions }
 
 theorem ConstraintSystem.dedupFast_eq (cs : ConstraintSystem p) (bs : BusSemantics p) :
     cs.dedupFast bs = cs.dedup bs := by
-  simp only [ConstraintSystem.dedupFast, ConstraintSystem.dedup, dedupStatelessFast_eq_nil]
+  simp only [ConstraintSystem.dedupFast, ConstraintSystem.dedup, dedupStatelessFast_eq_nil,
+    dedupConstraintsFast_eq]
 
 /-- The duplicate-removal pass (runs the hash-bucketed dedup; correctness via `dedupFast_eq`). -/
 def dedupPass : VerifiedPass p := fun cs bs =>

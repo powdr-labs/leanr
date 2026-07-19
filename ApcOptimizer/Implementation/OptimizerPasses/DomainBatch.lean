@@ -1,6 +1,8 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.CoveredIndex
+import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
+import ApcOptimizer.Implementation.OptimizerPasses.Dedup
 
 set_option autoImplicit false
 
@@ -327,14 +329,18 @@ theorem allBox_eq (pred : List (Variable × ZMod p) → Bool)
 /-! ## Building the table -/
 
 /-- Constraint-sourced domains: for each constraint that is a product of affine factors in a
-    single variable (up to 3 distinct variables tried), record the root domains. -/
+    single variable (up to 3 distinct variables tried), record the root domains. Each pending
+    entry carries its precomputed deduped variable list (= `c.vars.dedup`, computed once per
+    constraint by the pass body and shared with the target list and the redundancy filter). -/
 def addConstraintDoms [Fact p.Prime] {cs : ConstraintSystem p} {bs : BusSemantics p} :
-    (pending : List (Expression p)) → (∀ c ∈ pending, c ∈ cs.algebraicConstraints) →
+    (pending : List (Expression p × List Variable)) →
+    (∀ cv ∈ pending, cv.1 ∈ cs.algebraicConstraints) →
     DomainTable p cs bs → DomainTable p cs bs
   | [], _, T => T
-  | c :: rest, hmem, T =>
-    let hc := hmem c (List.mem_cons_self ..)
-    let hrest := fun c' h => hmem c' (List.mem_cons_of_mem _ h)
+  | cv :: rest, hmem, T =>
+    let c := cv.1
+    let hc : c ∈ cs.algebraicConstraints := hmem cv (List.mem_cons_self ..)
+    let hrest := fun cv' h => hmem cv' (List.mem_cons_of_mem _ h)
     let rec addVars (xs : List Variable) (T : DomainTable p cs bs) : DomainTable p cs bs :=
       match xs with
       | [] => T
@@ -344,8 +350,7 @@ def addConstraintDoms [Fact p.Prime] {cs : ConstraintSystem p} {bs : BusSemantic
             addVars xs (T.insertEntry x (.explicit d)
               (fun env hsat => rootsIn_sound x c d hr env (hsat.1 c hc)))
         | none => addVars xs T
-    let vs := c.vars.dedup
-    addConstraintDoms rest hrest (if vs.length ≤ 3 then addVars vs T else T)
+    addConstraintDoms rest hrest (if cv.2.length ≤ 3 then addVars cv.2 T else T)
 
 /-- The raw-variable payload entries of an interaction. -/
 def payloadRawVars (bi : BusInteraction (Expression p)) : List Variable :=
@@ -365,6 +370,21 @@ def interactionDomainF (bs : BusSemantics p) (facts : BusFacts p bs)
   match interactionBound bs facts bi x with
   | none => none
   | some bound => if bound ≤ maxDomainBound then some (.range bound) else none
+
+/-- `interactionDomainF` with the per-interaction multiplicity constant and constant-payload
+    pattern hoisted (see `interactionBoundPat`): definitionally the same function at the
+    canonical arguments. -/
+def interactionDomainFPat (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (mval? : Option (ZMod p))
+    (pat : List (Option (ZMod p))) (x : Variable) : Option (FiniteDomain p) :=
+  match interactionBoundPat bs facts bi mval? pat x with
+  | none => none
+  | some bound => if bound ≤ maxDomainBound then some (.range bound) else none
+
+theorem interactionDomainFPat_eq (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (Expression p)) (x : Variable) :
+    interactionDomainFPat bs facts bi bi.multiplicity.constValue?
+      (bi.payload.map Expression.constValue?) x = interactionDomainF bs facts bi x := rfl
 
 theorem interactionDomainF_sound [NeZero p] (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) (x : Variable) (d : FiniteDomain p)
@@ -393,17 +413,22 @@ def addBusDoms [NeZero p] {cs : ConstraintSystem p} {bs : BusSemantics p}
   | bi :: rest, hmem, T =>
     let hbi := hmem bi (List.mem_cons_self ..)
     let hrest := fun bi' h => hmem bi' (List.mem_cons_of_mem _ h)
+    -- Per-interaction values hoisted out of the per-variable lookup (`interactionDomainFPat_eq`
+    -- transports each hit back to the canonical `interactionDomainF` for the soundness proof).
+    let mval? := bi.multiplicity.constValue?
+    let pat := bi.payload.map Expression.constValue?
     let rec addVars (xs : List Variable) (T : DomainTable p cs bs) : DomainTable p cs bs :=
       match xs with
       | [] => T
       | x :: xs =>
-        match hr : interactionDomainF bs facts bi x with
+        match hr : interactionDomainFPat bs facts bi mval? pat x with
         | some d =>
             addVars xs (T.insertEntry x d
-              (fun env hsat => interactionDomainF_sound bs facts bi x d hr env
+              (fun env hsat => interactionDomainF_sound bs facts bi x d
+                (interactionDomainFPat_eq bs facts bi x ▸ hr) env
                 (hsat.2 bi hbi)))
         | none => addVars xs T
-    addBusDoms facts rest hrest (addVars (payloadRawVars bi).dedup T)
+    addBusDoms facts rest hrest (addVars (HashedDedup.hashedDedup (hash ·) (payloadRawVars bi)) T)
 
 /-! ## Joint enumeration against the table
 
@@ -885,9 +910,11 @@ def maxEnumWork : Nat := 524288
 def biInformative (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (Expression p)) : Bool :=
   bi.payload.any (fun e => !(e.isVar || e.constValue?.isSome)) ||
-  bi.payload.any (fun e => match e with
-    | .var x => (interactionBound bs facts bi x).isNone
-    | _ => false)
+  (let mval? := bi.multiplicity.constValue?
+   let pat := bi.payload.map Expression.constValue?
+   bi.payload.any (fun e => match e with
+     | .var x => (interactionBoundPat bs facts bi mval? pat x).isNone
+     | _ => false))
 
 /-- Is this constraint *redundant* for enumeration — identically zero on the box of its own
     variables' domains (from `T`)? Such a constraint is then zero on every larger box that contains
@@ -897,8 +924,8 @@ def biInformative (bs : BusSemantics p) (facts : BusFacts p bs)
     practice they are the overwhelming majority of the covered constraints. `false` (keep it) when
     the sub-box is unbounded or too large to check cheaply. -/
 def constraintRedundant {cs : ConstraintSystem p} {bs : BusSemantics p} (T : DomainTable p cs bs)
-    (c : Expression p) : Bool :=
-  match T.doms c.vars.dedup with
+    (c : Expression p) (vs : List Variable) : Bool :=
+  match T.doms vs with
   | none => false
   | some d =>
     (d.map (fun yd => yd.2.size)).prod ≤ maxEnumSize &&
@@ -1212,16 +1239,18 @@ theorem scanNone_unsat {cs : ConstraintSystem p} {bs : BusSemantics p}
     scans get O(1) positional access while `forcedOver` still recovers list membership for its
     soundness witnesses. Replaces the per-target full-system `filter`s (`coveredCs` / `coveredBis` /
     `activeCs.filter`) — the dominant runtime cost on large circuits — with an O(local) lookup. -/
-structure ForcedIdx (cs : ConstraintSystem p) (activeCs : List (Expression p)) where
+structure ForcedIdx (cs : ConstraintSystem p) where
   csIdx : CoveredIndex.CovIndex
   arrCs : Array (Expression p)
   harrCs : arrCs = cs.algebraicConstraints.toArray
   bisIdx : CoveredIndex.CovIndex
   arrBis : Array (BusInteraction (Expression p))
   harrBis : arrBis = cs.busInteractions.toArray
-  activeIdx : CoveredIndex.CovIndex
-  arrActive : Array (Expression p)
-  harrActive : arrActive = activeCs.toArray
+  /-- Per-position non-redundancy flags, parallel to `arrCs`: the per-target *active* covered set
+      is the covered set restricted to flagged positions (`gatherBoth`), so no third bucket gather
+      — and no third index — is needed. Untrusted: the flags only select which covered constraints
+      feed the survivor test, and dropping constraints only weakens it. -/
+  actFlags : Array Bool
 
 /-- All checked forced constants over the variable set `xs` (the vars of one target
     constraint or interaction): scan the domain box once against everything the set
@@ -1238,8 +1267,7 @@ structure ForcedIdx (cs : ConstraintSystem p) (activeCs : List (Expression p)) w
     covered items, which `scanForced_sound` accepts (`hactive`/membership). -/
 def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
     (T : DomainTable p cs bs)
-    (activeCs : List (Expression p)) (hactiveCs : ∀ c ∈ activeCs, c ∈ cs.algebraicConstraints)
-    (fidx : ForcedIdx cs activeCs)
+    (fidx : ForcedIdx cs)
     (xs : List Variable) : List ((x : Variable) × { c : ZMod p //
       ∀ env, cs.satisfies bs env → env x = c }) :=
   match hdoms : T.doms xs with
@@ -1256,18 +1284,22 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts
       -- analogous drop for *obligations* is not worthwhile: an interaction's sub-box is large and
       -- its payload evaluation costly, and it is covered by few targets, so verifying its
       -- redundancy costs about what it would save.)
-      let esFull := CoveredIndex.coveredIdxUnord fidx.csIdx fidx.arrCs (fun c => c.varsInF xs) xs
+      -- one gather serves both the full covered set (informativeness gate + work cap) and its
+      -- non-redundant subset (the survivor filter) — flagged by position, no per-item hashing
+      let esBoth := CoveredIndex.coveredIdxBoth fidx.csIdx fidx.arrCs (fun c => c.varsInF xs)
+        fidx.actFlags xs
+      let esFull := esBoth.1
+      let es := esBoth.2
       let bis := CoveredIndex.coveredIdxUnord fidx.bisIdx fidx.arrBis
         (fun bi => bi.varsInF xs && !bs.isStateful bi.busId) xs
-      let es := CoveredIndex.coveredIdxUnord fidx.activeIdx fidx.arrActive
-        (fun c => c.varsInF xs) xs
       let informative := !esFull.isEmpty || bis.any (biInformative bs facts)
       if informative && boxSize * (esFull.length + bis.length) ≤ maxEnumWork then
         have hes : ∀ e ∈ es, e ∈ cs.algebraicConstraints ∧ e.varsIn xs = true := by
           intro e he
-          obtain ⟨hMem, hQ⟩ := CoveredIndex.coveredIdxUnord_mem_of_eq fidx.activeIdx activeCs
-            fidx.arrActive fidx.harrActive (fun c => c.varsInF xs) xs he
-          refine ⟨hactiveCs e hMem, ?_⟩
+          obtain ⟨hMem, hQ⟩ := CoveredIndex.coveredIdxBoth_snd_mem_of_eq fidx.csIdx
+            cs.algebraicConstraints fidx.arrCs fidx.harrCs (fun c => c.varsInF xs)
+            fidx.actFlags xs he
+          refine ⟨hMem, ?_⟩
           rw [← Expression.varsInF_eq]; exact hQ
         have hbis : ∀ bi ∈ bis, bi ∈ cs.busInteractions ∧ bi.varsIn xs = true := by
           intro bi hbi
@@ -1316,16 +1348,15 @@ def varSetKey (xs : List Variable) : String :=
     skipping variable sets already enumerated. `activeCs` (the non-redundant constraints) and its
     membership witness are threaded to `forcedOver`. -/
 def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
-    (T : DomainTable p cs bs) (activeCs : List (Expression p))
-    (hactiveCs : ∀ c ∈ activeCs, c ∈ cs.algebraicConstraints) (fidx : ForcedIdx cs activeCs) :
+    (T : DomainTable p cs bs) (fidx : ForcedIdx cs) :
     List (List Variable) → Std.HashSet String → Solved p cs bs → Solved p cs bs
   | [], _, σ => σ
   | xs :: rest, seen, σ =>
     let key := varSetKey xs
-    if seen.contains key then collectForced facts T activeCs hactiveCs fidx rest seen σ
+    if seen.contains key then collectForced facts T fidx rest seen σ
     else
-      let found := forcedOver facts T activeCs hactiveCs fidx xs
-      collectForced facts T activeCs hactiveCs fidx rest (seen.insert key)
+      let found := forcedOver facts T fidx xs
+      collectForced facts T fidx rest (seen.insert key)
         (σ.insertAll (found.map (fun f => (f.1, .const f.2.val)))
           (by
             intro env hsat yt hyt
@@ -1346,21 +1377,36 @@ def domainBatchPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =
     have hp : p.Prime := pw.correct hpB
     haveI : Fact p.Prime := ⟨hp⟩
     haveI : NeZero p := ⟨hp.ne_zero⟩
+    -- Each item's deduped variable list is computed once (`hashedDedup_eq` keeps it the exact
+    -- `List.dedup` value) and shared between the domain-table build, the redundancy filter, and
+    -- the target list — previously three independent `.dedup` scans per item.
+    let csVs := cs.algebraicConstraints.map (fun c =>
+      (c, HashedDedup.hashedDedup (hash ·) c.vars))
     let T : DomainTable p cs bs :=
       addBusDoms facts cs.busInteractions (fun _ h => h)
-        (addConstraintDoms cs.algebraicConstraints (fun _ h => h) DomainTable.empty)
-    let targets := cs.algebraicConstraints.map (fun e => e.vars.dedup) ++
-      cs.busInteractions.map (fun bi => bi.vars.dedup)
-    let activeCs := cs.algebraicConstraints.filter (fun c => !constraintRedundant T c)
-    let fidx : ForcedIdx cs activeCs :=
-      { csIdx := CoveredIndex.build Expression.vars cs.algebraicConstraints,
+        (addConstraintDoms csVs
+          (fun cv hcv => by
+            obtain ⟨c, hc, rfl⟩ := List.mem_map.1 hcv
+            exact hc)
+          DomainTable.empty)
+    let targets := csVs.map (·.2) ++
+      cs.busInteractions.map (fun bi => HashedDedup.hashedDedup (hash ·) bi.vars)
+    let actFlags : Array Bool :=
+      (csVs.map (fun cv => !constraintRedundant T cv.1 cv.2)).toArray
+    let fidx : ForcedIdx cs :=
+      -- The index builds insert each position once per *distinct* variable (the raw `vars` lists
+      -- carry one entry per occurrence; the gathers deduplicate positions anyway, so buckets and
+      -- covered sets are unchanged — the inserts and bucket scans just stop paying per-occurrence).
+      { csIdx := CoveredIndex.build
+          (fun c => HashedDedup.hashedEraseDups (hash ·) (Expression.vars c))
+          cs.algebraicConstraints,
         arrCs := cs.algebraicConstraints.toArray, harrCs := rfl,
-        bisIdx := CoveredIndex.build BusInteraction.vars cs.busInteractions,
+        bisIdx := CoveredIndex.build
+          (fun bi => HashedDedup.hashedEraseDups (hash ·) (BusInteraction.vars bi))
+          cs.busInteractions,
         arrBis := cs.busInteractions.toArray, harrBis := rfl,
-        activeIdx := CoveredIndex.build Expression.vars activeCs,
-        arrActive := activeCs.toArray, harrActive := rfl }
-    let σ := collectForced facts T activeCs (fun _ h => (List.mem_filter.1 h).1) fidx targets ∅
-      Solved.empty
+        actFlags := actFlags }
+    let σ := collectForced facts T fidx targets ∅ Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs.substF σ.fn, [],
       cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)

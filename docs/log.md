@@ -3906,3 +3906,158 @@ eth spot checks identical (OpenVM declares no `orOp`, so both arms are structura
 the reorder is output-neutral on the checked cases). Cumulative today (entries 101–103): SP1
 vars 3.784× → 3.922×, bus 2.553× → 2.703× (var gap 442 → 55, bus gap 765 → 319). Proof integrity
 green; no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
+
+### 104. Runtime: de-quadratify per-pass hot loops — bucketed dedups, hoisted patterns, single covered gather (output byte-identical)
+
+Pure **runtime** work following a fresh profiling session (measurements and the full prioritized
+plan are in the rewritten `docs/ideas.md` Runtime section): end-to-end scaling is quadratic
+(openvm-eth size sweep exponent ≈ 1.95), keccak (28.6k constraints / 13.3k interactions) takes
+252 s, and openvm SHA is ~8× keccak — the quadratic loops are what matters. This entry lands the
+proof-cheap slice of R1/R2/R4; every change is output-preserving and verified byte-identical.
+
+**New shared module `HashedDedup.lean`**: hash-bucketed twins of `List.eraseDups` (keep-first)
+and `List.dedup` (keep-last), each **proven to return the identical list**
+(`hashedEraseDups_eq` / `hashedDedup_eq`, generic over `LawfulBEq`/`DecidableEq` with any
+`α → UInt64` hash) — so callers rewrite along the equality and keep their proofs and their exact
+output. The O(n²) whole-tail membership tests become one-bucket scans.
+
+- **dedup**: the constraint side was still plain `List.dedup` = O(C²·E) deep comparisons —
+  the single clearest quadratic at SHA scale (230k constraints). Now `hashedDedup
+  Expression.bHash`. keccak: 6.6 s → below the profiler's noise floor.
+- **intervalForce** (keccak **20.7 s → 1.1 s**, apc_030 231 → 99 ms): `allSeeds`'s O(seeds²·E)
+  `eraseDups` → `hashedEraseDups`; the per-seed `cs.vars.contains` scan over the ~10⁵-entry
+  occurrence list → one `Std.HashSet` (`contains_ofList` transports the load-bearing "no new
+  variable" check); the per-seed `algebraicConstraints.contains` deep scan → one `bHash`-bucket
+  map; the per-slot recomputation of the constant-payload pattern → hoisted per interaction
+  (`interactionSeedsGo`).
+- **domainBatch**: each item's deduped variable list is computed **once** and shared between the
+  domain-table build, the redundancy filter, and the target list (was 3 × O(occ²) per item);
+  `forcedOver`'s three per-target covered gathers become **one** (`CoveredIndex.gatherBoth`
+  returns the covered set and its non-redundant subset off per-position flags — the third index
+  build is gone too); `interactionBound`'s per-variable payload re-fold is hoisted per
+  interaction (`interactionBoundPat`/`interactionDomainFPat`, definitional `rfl` equalities, also
+  applied to `biInformative`).
+- **identitySubst**: the substitution closure linear-scanned the pair list per variable
+  occurrence; now a first-wins `Std.HashMap` (`firstWins_mem` keeps the membership proof).
+- **flagFold** (`btPre`): the distinct-variable list is computed once per constraint (was 3
+  `eraseDups` scans); `btPre` is a proof-opaque prefilter, so nothing else moves.
+- **rootPairUnify** (`rpCandidates`): the two factors are linearized **once per constraint**
+  instead of once per candidate variable (`twoRootOf?` re-walked both trees per variable).
+
+**Verification**: output **byte-identical** on an 11-case set (openvm keccak, 4 eth, 2 wasm-eth,
+3 sp1-rsp incl. the k256-heavy apc_024/030, sp1 keccak) via `opt-export` diff. `lake build`
+warning-free; proof integrity green ({propext, Classical.choice, Quot.sound}).
+
+**Measured** (this container, ±15 % run-to-run): keccak `profile` 254 → 258 s *total* — the two
+clean wins above (−26 s) are offset by same-code swings in domainFold/reencode/domainBatch
+(+18 % on unchanged code between two same-binary runs), so the serial Runtime Bench CI A/B is
+the authoritative number. apc_030 26.9 s: the remaining cost is the cycle-5 domainBatch
+enumeration itself (19 s, productive — cross-cycle memoization is the lever, ideas R6) and
+identitySubst's fixpoint (2.8 s, cause not yet attributed). **Worked: yes (asymptotics), CI
+pending (wall time).**
+
+### 105. Runtime: busPairCancel witness index, domainFold scan fusion, reencode always-indexed via pruning (output byte-identical)
+
+Second runtime batch (plan R1/R3 in `docs/ideas.md`; entry 104 was the first). CI's serial
+Runtime Bench for entry 104 landed at **0.95× total on openvm-eth** (intervalForce 0.26×, dedup
+0.32×, rootPairUnify 0.80×) with the effectiveness matrix at **+0.000× and per-case sizes
+identical on all five benchmark sets** — the byte-identity discipline holds at corpus scale.
+This batch, same discipline:
+
+- **busPairCancel `dropWits`**: the byte-justification witness lookup scanned the whole stable
+  array from position 0 per queried variable (O(B) per query, O(B²·P) across a drop chain). New
+  per-variable position index `buildBoundIdx` (built once per invocation, multiplicity/pattern
+  hoisted via `interactionBoundPat`); `dropWitsIdxGo` walks the variable's ascending candidate
+  positions re-checking liveness, the dropped pair, and the bound at use — the exact interaction
+  the full scan found first, at bucket cost, untrusted-index discipline (`dropWitsIdxGo_mem`
+  mirrors the old membership lemma).
+- **domainFold direct path**: one `List.partition` per target now feeds both the covered set and
+  the no-op gate (`systemHasFoldableW` takes the precomputed complement), where `coveredBy` was
+  evaluated twice per (target × constraint); setup computes each constraint's deduped variable
+  list once (`hashedDedup`) for the single-variable set and the target list.
+- **reencode**: the 8192-constraint index gate is retired — the pass is **always indexed**
+  through the new `CoveredIndex.buildPruned`: items with more than 8 distinct variables are left
+  out of the buckets, which keeps the covered sets *identical* (a ≤8-variable target can never
+  cover them) while shrinking exactly the hot-variable buckets that made the index lose on dense
+  small systems (the gate's raison d'être). Proof-free: reencode's covered set was already
+  untrusted (`checkReencode` re-derives everything). Setup dedup shared as in domainFold.
+
+**Verification**: output byte-identical on the 11-case export set (batch4: dropWits index +
+domainFold fusion + setup dedups; batch5: + pruned-index reencode). Build warning-free; proof
+integrity green. The remaining structural item is the domainFold *indexed* path (keccak cycles
+0-2): generalize `foldOut_correct` to untrusted covered subsets so the pruned index and
+stale-bucket refresh apply there too — recorded in `docs/ideas.md` R3. **Worked: pending CI.**
+
+### 106. Runtime: parse-time variable interning + the identitySubst arity-expansion bug (2827 ms → 9 ms)
+
+Third runtime batch. Two changes, both output byte-identical (11-case export set):
+
+- **Variable interning (`JsonParser.lean`)**: the parser minted a fresh `String` per variable
+  *occurrence* (~10⁵ heap-distinct copies of a few thousand names). `internSystem` rebuilds the
+  parsed system with one shared `Variable` object per distinct value — the same *value*, so
+  nothing downstream can observe it except time: the Lean runtime's string equality
+  (`lean_string_eq`) starts with a pointer test, so every equal-name comparison across the whole
+  optimizer (hash-map probes, dedups, substitution lookups) now short-circuits.
+- **identitySubst was rebuilding its map per variable occurrence.** Profiling showed the pass at
+  2.8 s on apc_030 with… 4 pairs and 607 interactions, and bisection pinned all of it on the one
+  `substF`. Cause: `identityF`'s shape `def identityF facts cs : Variable → Option _ :=
+  let m := …; fun y => …` — the compiler arity-expands the def, so the `let` (pair extraction +
+  map build over every interaction) re-ran **per queried occurrence**. (The pre-104 pair-list
+  version had the same bug; entry 104's HashMap swap kept the shape, so it didn't help.) The fix
+  is the parameter-passing pattern `FlagFold` already documents: `identityFm` takes the prebuilt
+  map as an argument, bound by a `let` in the fully-applied pass body. apc_030's identitySubst:
+  **2827 ms → 9 ms** (case total 26.8 → 24.6 s). Bonus: `resolveGo` path-compresses
+  operand→operand chains (fuel-bounded, cycles stop harmlessly and the fixpoint wrapper discards
+  the no-op exactly as before), so chains collapse in one `substF`.
+
+**Working rule (added to ideas):** a `def … : X → Y := let heavy := …; fun y => …` re-evaluates
+`heavy` per call by arity expansion — bind heavy values in the fully-applied pass body and pass
+them as parameters. Audited the other `Variable → Option (Expression p)` closures (`Solved.fn`,
+`ptFun`, `groupSubst`) — none carries a heavy `let`.
+
+Build warning-free; proof integrity green; byte-identical exports. **Worked: yes.**
+
+### 107. Runtime: cheaper domainFold accepts, deduped index builds, reencode gate restored (output byte-identical)
+
+Instrumented counts on keccak reframed domainFold's cost: its per-step work is tiny (830 doms-
+bearing targets, es ≤ 10, boxes ≤ 243, cycles 1-4 find nothing) but **482 accepted folds** each
+paid `FoldIdx.refresh` — a full constraint-index rebuild plus two more full-system const-foldable
+filters — and `foldOut`. Changes, all verified byte-identical (11-case export set):
+
+- **`FoldIdx.refresh`**: the const-foldable lists are recomputed only when the old ones are
+  nonempty. A fold never *creates* a var-free compound node (`foldRewrite` replaces the maximal
+  constant node wholesale), so fresh ⊆ old; old-empty (the normal, post-constant-fold state)
+  forces fresh-empty and the two O(S) filters per accept are skipped with the gate value
+  bit-for-bit unchanged.
+- **Index builds insert per *distinct* variable** (`dedupVarsOf` via `hashedEraseDups`): the raw
+  `vars` lists carry one entry per occurrence, so buckets were multiplicity-bloated — inserts,
+  bucket scans, and the per-target gather HashSets all paid per occurrence. Same buckets as sets,
+  gathers dedup positions anyway → byte-identical; `coveredCsIdx_eq`'s completeness hypothesis
+  transports through `mem_eraseDups`. Applied to `FoldIdx.mk'`/`refresh` and domainBatch's
+  `ForcedIdx`.
+- **reencode's size gate is back** (CI showed always-indexed at 1.19× on the dense openvm-eth
+  blocks with no keccak gain — the entry-73a trade-off is real); the ≥8192 side keeps the pruned
+  build from entry 105.
+
+CI verdicts for entries 104-105 (same-runner serial A/B): **keccak 130.4 → 105.0 s (0.81×)** —
+busPairCancel 0.32×, intervalForce 0.04×, dedup 0.06×; openvm-eth total 0.95× (batch 1).
+Remaining keccak: domainFold 30.8 s / reencode 29.9 s / domainBatch 21.9 s — the per-accept
+`foldOut` + rebuild and the enumeration core; next levers recorded in ideas (R6 cross-cycle
+negatives, position-remap refresh). **Worked: yes.**
+
+### 108. Runtime: cross-cycle negative-memo for domainBatch measured — dead end (no code change)
+
+Before building the R6 pass-state substrate (thread a scratch state through the cleanup fixpoint,
+memoize per-target enumeration fingerprints so a target that forced nothing is skipped next
+cycle), the hit rate was measured directly: per-enumeration signatures (target-variable hash +
+box size + covered constraint/interaction content hashes) traced across all invocations.
+**keccak: 16,748 enumerations, 62 repeats with unchanged inputs (0.4 %). apc_030: 1,641 / 257
+(16 %), with the dominant cycle-5 enumeration all first-time.** Gauss's per-cycle batch
+substitution rewrites the covered items, so the fingerprints churn every cycle — whole-target
+cross-cycle memoization has nothing to reuse, on exactly the cases that matter. Recorded as a
+measured dead end in `docs/ideas.md` R6 (any cross-cycle scheme must be finer-grained than
+target skipping, and per-pass payoff must be measured first — the invocation-level "61 % no-op"
+figure does not translate to target-level reuse). domainBatch's remaining cost is productive
+first-time enumeration; its levers are effectiveness-side (quadratic-root algebra replacing
+enumeration classes). Instrumentation reverted; no behavioral change. **Worked: n/a
+(measurement; saved the refactor).**

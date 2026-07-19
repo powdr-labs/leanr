@@ -92,21 +92,170 @@ global rebuild — collect every surviving range obligation, drop solver-implied
 exact-cover — is bus-only and variable-neutral. Caution: 2–7-bit checks must not be packed as
 bytes (weakens them).
 
-## Runtime notes
+## Runtime
 
-- CI's effectiveness-matrix runtime row is parallel-contended and rough (±10% swings between
-  identical-code runs are common in the history); the serial `Runtime Bench` workflow is the real
-  measure. Entry 101–103 local serial A/B on the four heaviest rsp cases was flat-to-better
-  (apc_030 22.6 → 21.9 s; busPairCancel itself got faster — fewer surviving pairs to rescan).
-- `domainBatch` dominates heavy SP1 cases (16 of apc_030's 22 s). The still-open leftovers from
-  the entry-90 audit that matter at SP1 scale: cross-cycle memoization of enumeration negatives
-  (needs a `Basic.lean` glue change — weigh against the audit-surface rule), gauss's O(V²)
-  resolved-map maintenance, busUnify/busPairCancel positional O(B²) scans. Variable interning in
-  the parser (names are fresh strings per occurrence; ~10–15 % of big-case time) remains the best
-  cross-cutting constant-factor lever, `Implementation/`-only.
-- Never feed a whole-region lookup into a per-query justification arm (the entry-102 lesson:
-  63 s/case). Untrusted, re-checked position indexes (`buildFormIdx`, `recvIndexAll`) are the
-  pattern — they cost time on a bad entry, never soundness.
+Rewritten 2026-07-18 from a fresh profiling session (per-pass `profile`, per-cycle timing, gdb
+stack sampling, and a size-scaling sweep — all on this container, serial). **Runtime is
+end-to-end quadratic in circuit size** (openvm-eth sweep: input 2.3k → 8.8k items costs
+1.8 s → 24.6 s, exponent ≈ 1.95), and the largest inputs are exactly where it hurts: openvm
+keccak (28.6k constraints / 13.3k interactions / 27.5k vars) takes **252 s**; openvm SHA is ~8×
+keccak, so anything superlinear is fatal there.
+
+### Where the time goes (measured)
+
+- keccak per-pass (254 s profile): domainFold 48 s, domainBatch 48 s, reencode 42 s,
+  busPairCancel 26 s, intervalForce 21 s, flagFold 16 s, busUnify 12.5 s, rootPairUnify 9.4 s,
+  dedup 6.6 s, bytePack 5.5 s, gauss 4.5 s — no single villain; the cost is systemic.
+- keccak per-cycle (10 cycles): **cycles 0–2 are ~80 % of the total** (system still 28k→9.7k
+  constraints there); the tail cycles 6–9 are ~1 % each. Fixing the big-system per-pass
+  quadratics matters more than fixing the fixpoint tail.
+- eth apc_100 (5.7k constraints, 24.6 s, 8 cycles): reencode 6.2 s is the top pass (unindexed —
+  see idea R3); the last three cycles cost 20 % to remove 24 vars + 5 bus; the final (no-change)
+  cycle burns 1.7 s.
+- SP1 apc_030 (26.8 s): domainBatch 19 s, **all in one cycle** (the enumeration unlocks late);
+  identitySubst 2.7 s.
+- gdb samples (keccak, mid-run): `findConsumer` (busUnify), `reencodeLoop`, `foldLoopDirect`
+  (domainFold's unindexed path), `collectForBus` — matching the analysis below.
+
+### Open runtime ideas, priority order
+
+Priority = impact at SHA scale (8× keccak) ÷ effort. The pattern for all index work stays the
+entry-90 discipline: *untrusted, re-checked-at-use* candidate indexes (`buildFormIdx`,
+`recvIndexAll`, `CoveredIndex`) — a wrong index entry costs time, never soundness, so most of
+these need no new proof.
+
+**R1. Kill the true O(N²) loops that dominate the big early cycles**  ·  *high value, mostly
+proof-free*. Confirmed quadratics, in rough per-case cost order:
+   - `busUnify.findConsumer` scans forward through the whole tail per send, and `checkPair`
+     re-scans the mid region `findConsumer` just stepped over (`BusUnify.lean:217/146`); each
+     step can hit `addrNonzeroNeq` = O(2^A·C) (`AddrDiseq.lean:519`). Fix: `(busId, addrHash)`
+     position buckets (port `recvIndexAll`), and thunk the eager `TwoRootMap`/`NonzeroWits`
+     builds (`BusUnify.lean:309-311`) so no-op invocations skip them. **Still open.** Note the
+     scan semantics are load-bearing: every stepped-over message must be *excluded*, so an
+     address-bucketed jump cannot skip the blocker checks — the win is bounding the scan via
+     per-position precomputed address forms, or a per-address-key incremental fold (complex; the
+     left-fold reformulation `ok' = (pr m ∨ ok) ∧ ref m` is exact but pairwise in `S`).
+   - `busPairCancel`: `shieldOk` re-scans (and `liveArr` **materializes**) the whole before-region
+     per candidate send (`BusPairCancel.lean:1861/2428`) — O(B²) time *and* allocation on the long
+     same-address chains the pass exists for; in coda mode the `addrHash` bucket is O(B) per hot
+     address (`:1255`) — add a position cursor. **Still open.** ~~`dropWits` from-0 array scan per
+     queried variable~~ **done (entry 105)**: per-variable position index (`buildBoundIdx`),
+     re-checked at use.
+   - ~~`dedup` constraint-side `List.dedup` O(C²·E)~~ **done (entry 104)**: bucketed
+     proven-identical twin (`HashedDedup.hashedDedup`), keccak 6.6 s → noise.
+   - ~~`intervalForce` seed filters / `eraseDups` / per-slot pattern re-maps~~ **done (entry
+     104)**: keccak 20.7 s → 1.1 s. (`walk`'s O(t²) with `maxTerms = 32` cap remains — bounded,
+     low value.)
+   - ~~`rootPairUnify` re-linearization per candidate var~~ **done (entry 104)** — factors
+     linearized once per constraint. `anyVarBound` memoization across pairs still open (only
+     matters if key-matched pairs are common; measure first).
+   - ~~`flagFold` triple `eraseDups` in `btPre`~~ **done (entry 104)**. `singleVarCs`/`btCert`
+     still recompute per-constraint `eraseDups`, but only on gate-passing constraints (proofs
+     unfold them — rework only if they show up in profiles).
+
+**R2. domainBatch setup: stop re-gathering and re-dedup-ing**  ·  **done (entry 104)** except:
+(c) `constraintRedundant` full-box scans (`:899`) remain (they pay once to save per-target work);
+hot-variable bucket capping remains open (not byte-identical — the gates read `esFull`). The
+enumeration core itself (SP1 apc_030's 19 s single-cycle spike) is untouched: that lever is
+**cross-cycle memoization of enumeration negatives** (needs pass-state threading — R6's
+substrate), not setup cost.
+
+**R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
+index gate**  ·  *high value at eth/mid-keccak scale*. Partially **done (entry 105)**:
+   - reencode: the pruned index (`CoveredIndex.buildPruned`, entry 105 — items with more than 8
+     distinct variables can never be covered by a ≤8-variable target, so pruning keeps covered
+     sets identical) stays, but **behind the 8192 gate again** (entry 107): CI measured
+     always-indexed at 1.19× on the dense openvm-eth blocks with no keccak gain — the entry-73a
+     direct-path trade-off is real. Do not retire the gate without a same-runner A/B on eth.
+   - ~~domainFold's direct-path double `coveredBy` sweep~~ **done**: one `partition` per target
+     feeds both the covered set and the no-op gate (`systemHasFoldableW`).
+   - ~~both passes' doubled `c.vars.dedup` setup~~ **done** (`hashedDedup`, computed once).
+   - **Still open — domainFold's per-accept rebuild** (instrumented on keccak: 830 doms-bearing
+     targets, **482 accepts**, each paying `foldOut` + a constraint-index rebuild; entry 107
+     already removed the two per-accept const-foldable refilters and made all builds insert per
+     distinct variable). The remaining rebuild exists because `foldOut` *reorders* constraints
+     (rewritten-uncovered ++ covered-verbatim), invalidating bucket positions. Candidate fixes,
+     hardest-but-best first: (a) position-remap refresh — the reorder is a computable stable
+     partition, so buckets can be remapped in O(entries) integer work without re-hashing (needs
+     the completeness proof restated over the remap); (b) generalize `foldOut_correct` to any
+     covered *subset* (soundness only needs survivor supersets), making the gather untrusted —
+     but `systemHasFoldableIdx` must never under-approximate (a false negative skips a real fold
+     and changes output; a false positive triggers a no-op `foldOut` which *also* changes output
+     via the reorder), so the gate needs exact, current buckets either way; (c) make `foldOut`
+     order-preserving — simplest and fixes everything, but changes output order, so it needs a
+     full effectiveness re-validation rather than byte-identity.
+   - **Still open — reencode's `checkReencode`** re-runs the covered scan after `buildReencode`
+     (`Reencode.lean:852/858`); rarely reached (post-gates), so low value now.
+
+**R4. Constant-factor levers that touch every pass**  ·  *medium value, cheap*:
+   - **Variable interning-lite, `Implementation/`-only**: the parser mints a fresh `String` per
+     occurrence (`Variable.ofPowdrName`, `JsonParser.lean:101`); intern one shared object per
+     distinct name so the runtime's pointer fast-path (`lean_string_eq`: `s1 == s2 || …`) makes
+     every hit-comparison O(1). Swap the `Hashable Variable` instance
+     (`Implementation/Variable.lean:19`, unaudited) to hash `powdrId?` first — O(1) vs O(name
+     length) on almost every key. `Spec.lean`'s `Variable` stays untouched.
+   - ~~`identitySubst`~~ **done (entry 106)**: the 2.8 s was an **arity-expansion bug** — a
+     `def … : X → Y := let heavy := …; fun y => …` re-evaluates `heavy` per call (the map was
+     rebuilt per queried occurrence). 2827 ms → 9 ms on apc_030. **Working rule: bind heavy
+     values in the fully-applied pass body and pass them as parameters** (the `FlagFold`
+     comment's pattern); when a pass's profile makes no sense relative to its work, suspect this
+     first and bisect with a skip-the-body experiment.
+   - `normalize`: `linearize` re-runs on the whole subtree at every node along non-affine paths
+     (O(E·depth), `Normalize.lean:306`); fuse into one bottom-up pass returning per-node linear
+     forms. Also feeds gauss's per-constraint reduce.
+   - `gauss`: skip `c.substF σ.fn |> normalize` for constraints mentioning no solved key, and skip
+     sweep 2 when sweep 1 adopted nothing (`Gauss.lean:592`). (PR #156 has a proven dirty-sweep
+     variant of this — check its status before redoing.)
+
+**R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
+*medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs
+`withinDegreeB` — a full AST walk — on every pass output, ~30×/cycle, ~245×/run
+(`FactPass.lean:98`), even though most invocations return `cs` itself (the #146 measurement: ~61 %
+of invocations are no-op full scans). Add an `unchanged : Option (out = cs ∧ derivs = [])` field
+(default `none`) to `PassResult`; no-op branches supply `some ⟨rfl, rfl⟩`; `guardDegree` returns
+`r` directly when set (out = cs is within-degree by the pipeline invariant — provable, not
+pointer magic); `andThen` propagates; `iterateToFixpoint` skips both `sizeKey` recomputations
+when the whole cycle is unchanged, and carries the previous cycle's `sizeKey` forward instead of
+recomputing `cs.sizeKey` (`FactPass.lean:77`, one redundant O(E) HashSet build per cycle today).
+
+**R6. Cross-cycle dirtiness (the real fix for no-op rescans)**  ·  *large refactor; the cheap
+slice is now a measured dead end*. **Do not build a cross-cycle negative-memo for domainBatch**:
+per-target fingerprints (target vars + domain descriptors + covered es/bis content hashes) were
+measured across invocations — keccak repeats only **62 of 16,748** enumerations with unchanged
+inputs (0.4 %), apc_030 257 of 1,641 (16 %, and its expensive cycle-5 enumeration is first-time)
+— gauss's per-cycle substitutions rewrite the covered sets, so the fingerprints churn. Any
+cross-cycle scheme must therefore be *finer* than whole-target skipping (powdr-style dirty
+worklists where a substitution dirties only the items mentioning substituted variables — the full
+#146 architecture), and its payoff must be re-estimated per pass first: at target granularity the
+~61 % invocation-level no-op measurement does **not** translate into reusable work. domainBatch's
+remaining cost is *productive first-time enumeration*; the levers there are effectiveness-side
+(replace enumeration classes with algebra, cf. the quadratic-roots effectiveness idea 1) or
+intra-enumeration (survivor-scan compilation is already tuned).
+
+**R7. Intra-pass parallelism**  ·  *wall-clock lever, orthogonal*. The per-target enumeration in
+domainBatch/reencode/domainFold is embarrassingly parallel and pure; `Task.spawn`/`Task.get` with
+ordered joins keeps the output deterministic. CI runners have 32 cores; the serial Runtime Bench
+would show the win directly. Worth it only after the algorithmic waste is gone (parallelizing a
+triple-redundant gather is throwing cores at garbage).
+
+### Runtime dead ends (measured; do not re-propose without new evidence)
+
+- **Whole-system content-hash gating of passes across cycles**: catches ~0 % — the fixpoint only
+  retains cycles that changed something, so some pass always dirties the hash (#146 measurement).
+  Only fine-grained dirtiness (R6) reaches the ~61 % no-op invocations.
+- **Unsafe pointer-identity freshness checks** (`@[implemented_by]` ptr-eq): rejected — breaks the
+  fully-machine-checked, three-axioms-only guarantee (#145 discussion). The safe variant is the
+  `unchanged` *proof* field of R5.
+- **Eager per-sweep variable→bound witness maps in busPairCancel**: ~30× the work of the
+  early-exit query-time scan on eth (entry 90). Query-time scans + per-variable *position*
+  indexes are the pattern.
+- **Feeding whole regions into per-query justification arms**: 63 s/case for −3 interactions
+  (entry 102). Use a position index or nothing.
+- CI notes: the effectiveness-matrix runtime row is parallel-contended (±10 % noise); the serial
+  `Runtime Bench` workflow (dispatch-only, openvm sets only) is the real A/B. This container has
+  ±15 % run-to-run variance; keccak numbers above were taken serially, and the per-cycle keccak
+  run was inflated ~30 % by a concurrent gdb sampler — compare shapes, not absolutes, and let CI
+  arbitrate.
 
 ## Measured dead ends (do not re-propose without new evidence)
 

@@ -151,6 +151,41 @@ private def parseBusInteraction (j : Lean.Json) :
     payload := payload
   }
 
+/-! ### Variable interning
+
+The JSON parser mints a fresh `String` (and `Variable`) per *occurrence* — ~10⁵ heap-distinct
+copies of a few thousand names on a large export. Interning rebuilds the parsed system with one
+shared `Variable` object per distinct value: the runtime's `String` equality has a pointer
+fast-path (`lean_string_eq`: `s1 == s2 || …`), so every later equality test on equal names — the
+bulk of `Variable` comparisons in hash maps, dedups and substitution lookups across the whole
+optimizer — short-circuits without touching the bytes. The interned system is **the same value**
+(`Variable`s compare equal), so nothing downstream can observe the difference except time. -/
+
+/-- Collect one canonical `Variable` object per distinct value. -/
+private def collectVars (m : Std.HashMap Variable Variable) : Expression p →
+    Std.HashMap Variable Variable
+  | .const _ => m
+  | .var v => if m.contains v then m else m.insert v v
+  | .add a b => collectVars (collectVars m a) b
+  | .mul a b => collectVars (collectVars m a) b
+
+/-- Rebuild an expression with every variable replaced by its canonical (equal, shared) object. -/
+private def internExpr (m : Std.HashMap Variable Variable) : Expression p → Expression p
+  | .const c => .const c
+  | .var v => .var (m.getD v v)
+  | .add a b => .add (internExpr m a) (internExpr m b)
+  | .mul a b => .mul (internExpr m a) (internExpr m b)
+
+/-- Intern all variables of a freshly-parsed system (see the section comment). -/
+private def internSystem (cs : ConstraintSystem p) : ConstraintSystem p :=
+  let m := cs.busInteractions.foldl
+    (fun m bi => bi.payload.foldl collectVars (collectVars m bi.multiplicity))
+    (cs.algebraicConstraints.foldl collectVars ∅)
+  { algebraicConstraints := cs.algebraicConstraints.map (internExpr m),
+    busInteractions := cs.busInteractions.map (fun bi =>
+      { bi with multiplicity := internExpr m bi.multiplicity,
+                payload := bi.payload.map (internExpr m) }) }
+
 /-- Parse the field-generic, bus-map-agnostic part of a powdr export: the top-level JSON (so callers
     can pull the `bus_map` out with the right per-VM parser), the constraint system under the
     `machine` key, and the `next_free_id` cursor if present (`none` for a raw CLI export; the FFI
@@ -179,7 +214,7 @@ private def parseMachinePart (jsonStr : String) :
   -- powdr's `ColumnAllocator` cursor; absent or non-numeric parses as `none`.
   let nextFreeId? := (json.getObjVal? "next_free_id").toOption.bind (·.getNat?.toOption)
 
-  let system : ConstraintSystem p := {
+  let system : ConstraintSystem p := internSystem {
     algebraicConstraints := constraints,
     busInteractions := busInteractions
   }
