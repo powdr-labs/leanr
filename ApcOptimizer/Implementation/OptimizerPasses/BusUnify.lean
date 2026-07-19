@@ -210,56 +210,219 @@ def SplitCand (p : ℕ) (L : List (BusInteraction (Expression p))) :=
       × List (BusInteraction (Expression p)) //
     L = c.1 ++ c.2.1 :: c.2.2.1 ++ c.2.2.2.1 :: c.2.2.2.2 }
 
-/-- Scan forward from a send `S` for its consumer: the first same-address receive, with every
-    message before it excludable (different address, or inactive). Returns `(mid, R, post)` on
-    success — together with the recomposition proof `revMid.reverse ++ rest = mid ++ R :: post`
-    — or `none` if a possibly-same-address active non-receive blocks the window. -/
-def findConsumer (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : TwoRootMap p constraints) (nw : NonzeroWits p constraints)
-    (S : BusInteraction (Expression p)) :
-    (revMid rest : List (BusInteraction (Expression p))) →
-    Option ({ mrp : List (BusInteraction (Expression p)) × BusInteraction (Expression p)
-      × List (BusInteraction (Expression p)) //
-      revMid.reverse ++ rest = mrp.1 ++ mrp.2.1 :: mrp.2.2 })
-  | _, [] => none
-  | revMid, r :: rest =>
-      if decide (multConst r = some (-shape.setNewMult)) && addrConstsEq shape S r then
-        some ⟨(revMid.reverse, r, rest), rfl⟩
-      else if addrConstsNeq shape S r || addrAffineNeq shape S r || addrTwoRootNeq shape T S r
-          || addrNonzeroNeq shape nw S r || decide (multConst r = some 0) then
-        (findConsumer shape T nw S (r :: revMid) rest).map (fun ⟨mrp, hmrp⟩ =>
-          ⟨mrp, by
-            rw [← hmrp, List.reverse_cons, List.append_assoc]
-            rfl⟩)
-      else none
+/-! ### The consumer sweep
 
-/-- One candidate per active send `S`, pairing it with its consumer receive (`findConsumer`),
-    each carrying its split equation by construction. Linear in the number of sends × scan
-    length, so no O(n²) blow-up on large buses. `checkPair` re-verifies the pair conditions. -/
-def candidateSplits (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (T : TwoRootMap p constraints) (nw : NonzeroWits p constraints)
+The historical `findConsumer` scanned forward through the tail once **per send**; with every
+stepped-over message re-tested per scan the pass was O(B²) per bus (each position is crossed by
+every open window spanning it) — the dominant busUnify cost on large circuits. The sweep below
+walks each bus's interaction list **once**, keeping the open send windows in a map keyed by a
+canonical address key:
+
+* Two interactions satisfy `addrConstsEq` **iff** their canonical keys (`addrKey?`: each present
+  address slot, constant-valued slots normalized to their literal constant) are equal — so the
+  consumer test for an incoming message is one map probe.
+* A message whose address slots are **all constant** is provably invisible to every open window
+  at a *different* all-constant key: some slot carries two different constants, so
+  `addrConstsNeq` excludes it there (and `addrConstsEq` rejects it as a consumer). Only the one
+  window at the message's own key runs the full branch test (`stepTest` — `findConsumer`'s arms
+  in `findConsumer`'s order). Windows with a *symbolic* key component (`symOpen`, rare) are
+  tested literally against every message, as is every window when the message itself has a
+  symbolic address slot — exactly the pairs the per-send scans also paid for.
+* A window closes on its consumer (emitting the candidate) or on a blocker, exactly where
+  `findConsumer` stopped; a send opens a window (an *excluded-but-surviving* same-key window is
+  moved to the literally-tested side list, so even that degenerate case keeps every window the
+  per-send scans had).
+
+The sweep is *untrusted* for everything except the split equations — `checkPair` re-verifies all
+pair conditions on every emitted candidate — and the split equation is recovered positionally:
+`mid` is a `take` of the send's stored suffix, justified by drop arithmetic (`emitCand`).
+Candidates are sorted back into send-position order, so the emitted list is the one the per-send
+scans produced. -/
+
+/-- One message tested against one open window — `findConsumer`'s branch order, verbatim. -/
+inductive StepRes
+  | consumer
+  | excluded
+  | blocker
+
+/-- The two-root / nonzero-witness certificate tables are passed as `Thunk`s so an invocation
+    that never reaches the expensive arms (every pair decided by the constant or affine
+    certificate — the common case) never builds them. -/
+def stepTest (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (nw : Thunk (NonzeroWits p constraints))
+    (S m : BusInteraction (Expression p)) : StepRes :=
+  if decide (multConst m = some (-shape.setNewMult)) && addrConstsEq shape S m then .consumer
+  else if addrConstsNeq shape S m || addrAffineNeq shape S m || addrTwoRootNeq shape T.get S m
+      || addrNonzeroNeq shape nw.get S m || decide (multConst m = some 0) then .excluded
+  else .blocker
+
+/-- A canonical address key. Equality of keys is exactly `addrConstsEq`: per slot, either both
+    expressions are constant-valued with the same value (both canonicalize to the same literal)
+    or they are syntactically equal (and then their `constValue?`s agree, so canonicalization
+    preserves the equality; a constant-valued and a non-constant slot can never be syntactically
+    equal, so the two canonical forms never collide). -/
+structure AddrKey (p : ℕ) where
+  exprs : List (Expression p)
+deriving DecidableEq
+
+instance : Hashable (AddrKey p) :=
+  ⟨fun k => k.exprs.foldl (fun h e => mixHash h e.structHash) 7⟩
+
+/-- The canonical key of an interaction's address slots, `none` if a slot is missing (such a
+    message never `addrConstsEq`-matches anything, so it can neither open a window nor consume
+    one). -/
+def addrKey? (shape : MemoryBusShape) (bi : BusInteraction (Expression p)) :
+    Option (AddrKey p) :=
+  (shape.addressFields.foldr (fun slot acc =>
+    match acc, bi.payload[slot]? with
+    | some ks, some e =>
+      match e.constValue? with
+      | some c => some (.const c :: ks)
+      | none => some (e :: ks)
+    | _, _ => none) (some [])).map AddrKey.mk
+
+/-- Whether every component of a canonical key is a literal constant. -/
+def AddrKey.allConst (k : AddrKey p) : Bool :=
+  k.exprs.all fun e => match e with
+    | .const _ => true
+    | _ => false
+
+/-- An open send window: the send, its split context (`L = revPre.reverse ++ S :: restAfter`),
+    and its position `i = revPre.length`. -/
+structure OpenRec (p : ℕ) (L : List (BusInteraction (Expression p))) where
+  revPre : List (BusInteraction (Expression p))
+  S : BusInteraction (Expression p)
+  restAfter : List (BusInteraction (Expression p))
+  i : Nat
+  hi : revPre.length = i
+  hsplit : L = revPre.reverse ++ S :: restAfter
+
+/-- The split equation of an emitted candidate, by drop arithmetic from the send-time and
+    consume-time split equations — no per-step bookkeeping while a window is open. -/
+theorem split_of_positions {L revPre restAfter revSeen post : List (BusInteraction (Expression p))}
+    {S R : BusInteraction (Expression p)} {i j : Nat}
+    (hi : revPre.length = i) (hsplit : L = revPre.reverse ++ S :: restAfter)
+    (hj : revSeen.length = j) (hnow : L = revSeen.reverse ++ R :: post) (hlt : i < j) :
+    L = revPre.reverse ++ S :: restAfter.take (j - i - 1) ++ R :: post := by
+  have hRA : restAfter = L.drop (i + 1) := by
+    have h1 : L = (revPre.reverse ++ [S]) ++ restAfter := by
+      rw [hsplit]; simp
+    rw [h1, List.drop_left' (by simp [hi])]
+  have hRp : R :: post = L.drop j := by
+    rw [hnow, List.drop_left' (by simp [hj])]
+  have hdrop : restAfter.drop (j - i - 1) = R :: post := by
+    rw [hRA, List.drop_drop, hRp]
+    congr 1
+    omega
+  have hn : L = revPre.reverse ++ S :: (restAfter.take (j - i - 1) ++ R :: post) := by
+    rw [← hdrop, List.take_append_drop]
+    exact hsplit
+  simpa [List.append_assoc] using hn
+
+/-- Assemble the split candidate for a consumed window, tagged with its send position. `mid` is
+    recovered positionally from the send's stored suffix (`take (j−i−1)`), and the split equation
+    is `split_of_positions`. (The `i < j` check always holds — the window was opened strictly
+    earlier — but deciding it is O(1) and discharges the arithmetic side conditions.) -/
+def emitCand {L : List (BusInteraction (Expression p))} (w : OpenRec p L)
+    {revSeen : List (BusInteraction (Expression p))} (j : Nat) (hj : revSeen.length = j)
+    (R : BusInteraction (Expression p)) (post : List (BusInteraction (Expression p)))
+    (hnow : L = revSeen.reverse ++ R :: post) : Option (Nat × SplitCand p L) :=
+  if hlt : w.i < j then
+    some (w.i, ⟨(w.revPre.reverse, w.S, w.restAfter.take (j - w.i - 1), R, post),
+      split_of_positions w.hi w.hsplit hj hnow hlt⟩)
+  else none
+
+/-- The sweep: one pass over the bus's interaction list, windows keyed as described above.
+    `acc` collects `(sendPosition, candidate)` pairs (order restored by the caller's sort). -/
+def sweepGo (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (nw : Thunk (NonzeroWits p constraints))
     (L : List (BusInteraction (Expression p))) :
-    (revPre rest : List (BusInteraction (Expression p))) →
-    (hinv : L = revPre.reverse ++ rest) →
-    List (SplitCand p L)
-  | _, [], _ => []
-  | revPre, S :: rest, hinv =>
-      (if decide (multConst S = some shape.setNewMult) then
-        match findConsumer shape T nw S [] rest with
-        | some ⟨(mid, R, post), hmrp⟩ =>
-          [⟨(revPre.reverse, S, mid, R, post), by
-            rw [hinv]
-            have h : rest = mid ++ R :: post := hmrp
-            rw [h]
-            simp⟩]
-        | none => []
-       else []) ++ candidateSplits shape T nw L (S :: revPre) rest
-        (by rw [hinv, List.reverse_cons, List.append_assoc]; rfl)
+    (revSeen rest : List (BusInteraction (Expression p))) →
+    (hsplit : L = revSeen.reverse ++ rest) → (j : Nat) → (hj : revSeen.length = j) →
+    (constOpen : Std.HashMap (AddrKey p) (OpenRec p L)) →
+    (symOpen : List (OpenRec p L)) →
+    (acc : List (Nat × SplitCand p L)) →
+    List (Nat × SplitCand p L)
+  | _, [], _, _, _, _, _, acc => acc
+  | revSeen, m :: rest', hsplit, j, hj, constOpen, symOpen, acc =>
+    let mKey? := addrKey? shape m
+    let mAllConst := match mKey? with
+      | some k => k.allConst
+      | none => false
+    -- (1) constant-keyed windows: an all-constant message only meets the window at its own key
+    --     (it is `addrConstsNeq`-excluded at every other constant key); a symbolic-address
+    --     message meets every one.
+    let (constOpen, acc) :=
+      if mAllConst then
+        match mKey? with
+        | some k =>
+          match constOpen[k]? with
+          | some w =>
+            match stepTest shape T nw w.S m with
+            | .consumer =>
+              (constOpen.erase k,
+               match emitCand w j hj m rest' hsplit with
+               | some c => c :: acc
+               | none => acc)
+            | .excluded => (constOpen, acc)
+            | .blocker => (constOpen.erase k, acc)
+          | none => (constOpen, acc)
+        | none => (constOpen, acc)
+      else
+        let (drops, acc) := constOpen.toList.foldl (init := (([] : List (AddrKey p)), acc))
+          fun (ds, a) kw =>
+            match stepTest shape T nw kw.2.S m with
+            | .consumer =>
+              (kw.1 :: ds,
+               match emitCand kw.2 j hj m rest' hsplit with
+               | some c => c :: a
+               | none => a)
+            | .excluded => (ds, a)
+            | .blocker => (kw.1 :: ds, a)
+        (drops.foldl (·.erase ·) constOpen, acc)
+    -- (2) symbolic-keyed windows are tested literally against every message.
+    let (symOpen, acc) :=
+      if symOpen.isEmpty then (symOpen, acc) else
+      symOpen.foldr (init := (([] : List (OpenRec p L)), acc)) fun w (so, a) =>
+        match stepTest shape T nw w.S m with
+        | .consumer =>
+          (so,
+           match emitCand w j hj m rest' hsplit with
+           | some c => c :: a
+           | none => a)
+        | .excluded => (w :: so, a)
+        | .blocker => (so, a)
+    -- (3) a send opens its window. A same-key window that survived (1) as *excluded* moves to
+    --     the literally-tested side list, so no window the per-send scans had is lost.
+    let (constOpen, symOpen) :=
+      if decide (multConst m = some shape.setNewMult) then
+        match mKey? with
+        | some k =>
+          let w : OpenRec p L := ⟨revSeen, m, rest', j, hj, hsplit⟩
+          if k.allConst then
+            match constOpen[k]? with
+            | some old => (constOpen.insert k w, old :: symOpen)
+            | none => (constOpen.insert k w, symOpen)
+          else (constOpen, w :: symOpen)
+        | none => (constOpen, symOpen)
+      else (constOpen, symOpen)
+    sweepGo shape T nw L (m :: revSeen) rest'
+      (by rw [hsplit, List.reverse_cons, List.append_assoc]; rfl) (j + 1)
+      (by simp [hj]) constOpen symOpen acc
 
-/-- Collect the entailed equalities for one bus, with proof. -/
+/-- All consumer candidates of one bus, in send-position order — the same list the per-send
+    `findConsumer` scans produced, computed by a single sweep. -/
+def candidateSplits (shape : MemoryBusShape) {constraints : List (Expression p)}
+    (T : Thunk (TwoRootMap p constraints)) (nw : Thunk (NonzeroWits p constraints))
+    (L : List (BusInteraction (Expression p))) : List (SplitCand p L) :=
+  ((sweepGo shape T nw L [] L rfl 0 rfl ∅ [] []).mergeSort
+    (fun a b => decide (a.1 ≤ b.1))).map (·.2)
+
+/-- Collect the entailed equalities for one bus, with proof. The certificate tables are
+    `Thunk`s, forced only when a candidate reaches `checkPair`'s expensive arms. -/
 def collectForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (hp1 : (1 : ZMod p) ≠ 0) (T : TwoRootMap p cs.algebraicConstraints)
-    (nw : NonzeroWits p cs.algebraicConstraints)
+    (hp1 : (1 : ZMod p) ≠ 0) (T : Thunk (TwoRootMap p cs.algebraicConstraints))
+    (nw : Thunk (NonzeroWits p cs.algebraicConstraints))
     (busId : Nat) (shape : MemoryBusShape)
     (hshape : facts.memShape busId = some shape) :
     List (SplitCand p (cs.busInteractions.filter (fun bi => bi.busId = busId))) →
@@ -268,19 +431,19 @@ def collectForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
   | [] => ⟨[], fun _ _ _ _ h => absurd h (by simp)⟩
   | ⟨(pre, S, mid, R, post), hsplit⟩ :: rest =>
     let ⟨acc, hacc⟩ := collectForBus cs bs facts hp1 T nw busId shape hshape rest
-    if hchk : checkPair shape T nw S mid R = true then
+    if hchk : checkPair shape T.get nw.get S mid R = true then
       ⟨memEqConstraints shape S R ++ acc, by
         intro env hadm hsat c hc
         rcases List.mem_append.1 hc with h | h
-        · exact checkPair_sound cs bs facts hp1 busId shape hshape pre S mid R post T nw hsplit
-            hchk env hadm hsat c h
+        · exact checkPair_sound cs bs facts hp1 busId shape hshape pre S mid R post T.get nw.get
+            hsplit hchk env hadm hsat c h
         · exact hacc env hadm hsat c h⟩
     else ⟨acc, hacc⟩
 
 /-- Collect over every declared bus, with proof. -/
 def collectAllBuses (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (hp1 : (1 : ZMod p) ≠ 0) (T : TwoRootMap p cs.algebraicConstraints)
-    (nw : NonzeroWits p cs.algebraicConstraints) :
+    (hp1 : (1 : ZMod p) ≠ 0) (T : Thunk (TwoRootMap p cs.algebraicConstraints))
+    (nw : Thunk (NonzeroWits p cs.algebraicConstraints)) :
     List Nat →
     { out : List (Expression p) //
         ∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0 }
@@ -290,8 +453,8 @@ def collectAllBuses (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
     match hshape : facts.memShape busId with
     | some shape =>
       let ⟨eqs, heqs⟩ := collectForBus cs bs facts hp1 T nw busId shape hshape
-        (candidateSplits shape T nw _ []
-          (cs.busInteractions.filter (fun bi => bi.busId = busId)) rfl)
+        (candidateSplits shape T nw
+          (cs.busInteractions.filter (fun bi => bi.busId = busId)))
       ⟨eqs ++ acc, by
         intro env hadm hsat c hc
         rcases List.mem_append.1 hc with h | h
@@ -304,11 +467,15 @@ def collectAllBuses (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
     trivially zero). Replaces `memoryUnifyBatchPass`, `execChainPass`, and `chainUnifyPass`. -/
 def busUnifyPass : VerifiedPassW p := fun cs bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then
-    -- precompute the per-variable two-root data once (memoized `twoRootOf?`), so the
-    -- address-disequality certificate is a constant-time hash lookup per candidate pair
-    let T := TwoRootMap.build cs.algebraicConstraints
-    -- reciprocal (nonzero-witness) forms, for the register-vs-RAM address-disequality certificate
-    let nw := NonzeroWits.build cs.algebraicConstraints
+    -- The per-variable two-root data (memoized `twoRootOf?`) and the reciprocal nonzero-witness
+    -- forms back the two expensive address-disequality certificates. Both are `Thunk`ed: they are
+    -- built (once, memoized) only if some window test reaches those arms — an invocation whose
+    -- pairs are all decided by the constant/affine certificates never pays the O(#constraints)
+    -- builds.
+    let T : Thunk (TwoRootMap p cs.algebraicConstraints) :=
+      Thunk.mk fun _ => TwoRootMap.build cs.algebraicConstraints
+    let nw : Thunk (NonzeroWits p cs.algebraicConstraints) :=
+      Thunk.mk fun _ => NonzeroWits.build cs.algebraicConstraints
     let ⟨eqs, heqs⟩ := collectAllBuses cs bs facts hp1 T nw
       ((cs.busInteractions.map (fun bi => bi.busId)).dedup)
     -- keep only equalities over existing columns, so the pass introduces no new variable

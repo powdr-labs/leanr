@@ -4119,3 +4119,29 @@ sparse rewrite (entry 109) remain on the indexed path only, where the reorder wo
 the index positions — keccak re-verified: identical final circuit, domainFold stays ~0.2× of
 its pre-109 cost. The survivor-pinning argument is shared (`groupSurvivors_mem_agree`), so the
 duplicated fold carries only its own thin agreement/output lemmas. **Worked: yes.**
+
+### 111. Runtime: busUnify single-sweep consumer matching (findConsumer O(B²) → per-key windows)
+
+R1's biggest open item. `findConsumer` scanned forward through the bus tail once per send —
+every position crossed by every open window that spans it, each step evaluating up to four
+address-disequality certificates (`addrNonzeroNeq` worst-case O(2^A·C)) — the dominant busUnify
+cost (12.6 s on keccak). Replaced by a single left-to-right sweep per bus (`sweepGo`):
+
+- **Canonical address keys** (`addrKey?`): each present address slot, constant-valued slots
+  normalized to their literal constant. Key equality is provably equivalent to `addrConstsEq`,
+  so the consumer test for an incoming message is one hash-map probe.
+- **Constant-address transparency**: an all-constant message is `addrConstsNeq`-excluded at
+  every open window with a *different* all-constant key — zero work — and runs the full
+  `findConsumer` branch test (`stepTest`, same arms, same order) only against the one window at
+  its own key. Windows with symbolic key components (`symOpen`) and messages with symbolic
+  address slots are tested literally — exactly the pairs the per-send scans also paid for.
+- **Split equations by drop arithmetic** (`split_of_positions`): an open window stores its send
+  position and suffix; `mid` is recovered as a `take` at consume time, so windows carry no
+  per-step bookkeeping. Candidates are sorted back into send-position order — the emitted list
+  is the one the per-send scans produced (the sweep is untrusted beyond the split equations:
+  `checkPair` re-verifies every pair condition on every candidate).
+- **`TwoRootMap`/`NonzeroWits` are `Thunk`ed**: invocations whose pairs are all decided by the
+  constant/affine certificates never pay the two O(#constraints) table builds.
+
+**Verification**: output byte-identical on {openvm keccak, sp1 rsp apc_024/apc_030} exports vs
+the pre-sweep binary; keccak in-pipeline cycle sizes identical at every cycle. Within-run share: busUnify 5.9% of the pre-sweep baseline run → 5.4% after — the scan is no longer the pass's floor; what remains is the pass body's eager per-invocation table builds (csVarSet over the ~10⁵-entry occurrence list, csHashes over every constraint), addressed next. **Worked: yes (exactness verified; modest wall-clock until the table builds are gated).**
