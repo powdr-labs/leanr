@@ -340,6 +340,77 @@ def denseTargetsV (d : DenseConstraintSystem p) : List (List VarId) :=
       some (vs.mergeSort (fun a b => compare a.index b.index != .gt))
     else none))
 
+/-! ## The index-preserving indexed-path rewrite (mirrors #165's `foldRewrite`/`foldOut`/`touchedSet`/
+`foldOutIdx`, `OptimizerPasses/DomainFold.lean:121,374-378,887,899`)
+
+Upstream #165 split what used to be one gate into two: the **direct** path keeps the historical
+`anyVarIn xs || hasConstFoldableNode` gate under a new name, `foldRewriteC` — that is exactly
+`denseFoldRewriteV` above, untouched, still wired as the direct-path/C twin. The **indexed** path
+now gets its own `anyVarIn`-only gate, `foldRewrite`, feeding an *order- and length-preserving*
+in-place `foldOut` (an `if`-`then`-`else` `.map`, not the old filter-then-append reshuffle
+`denseFoldOutV` above still performs) — which is what lets `FoldIdx.refresh` keep both inverted
+indexes **without any rebuild** across an accepted fold (positions never move). `foldOutIdx` then
+computes that same in-place fold *sparsely*, touching only the bucketed candidate positions.
+
+The four defs below are the dense twins of that new indexed-path shape. They are pure additions:
+nothing here is called by `denseFoldStepV`/`denseFoldLoopV`/`denseDomainFoldFV` yet (those still run
+the pre-#165 shape via `denseFoldOutV`/`denseFoldRewriteV`) — the wiring swap is a later chunk. -/
+
+/-- The indexed-path fold rewrite, gated by `anyVarIn` alone (mirrors NEW spec `foldRewrite`,
+    `DomainFold.lean:121`): an expression sharing no variable with the group is returned untouched
+    (the same object) — what lets `denseFoldOutIdxV` below skip such expressions without even
+    reaching them (mirrors `foldRewrite_eq_self`). Wraps the same `denseFoldRewriteGoV` recursion
+    `denseFoldRewriteV` above uses, only with the `hasConstFoldableNode` half of the gate dropped
+    (that half is now direct-path-only, per the section note above). -/
+def denseFoldRewriteIdxV (xs : List VarId) (survsV : List (List (ZMod p)))
+    (e : DenseExpr p) : DenseExpr p :=
+  if e.anyVarIn xs then denseFoldRewriteGoV xs survsV e else e
+
+/-- The in-place fold, order- and length-preserving (mirrors NEW spec `foldOut`,
+    `DomainFold.lean:374-378`): fold every non-covered constraint and every bus interaction *in
+    place*; keep the covered (domain-pinning) constraints verbatim, also in place. Positions never
+    move and rewrites only ever shrink an expression's variable set — unlike `denseFoldOutV` above
+    (which filters the non-covered constraints out, folds them, then appends the covered ones back,
+    the pre-#165 shape), this is what lets an accepted fold refresh the inverted index without any
+    rebuild. Bus interaction expressions are rewritten field-by-field (no dense `BusInteraction.mapExpr`
+    exists, same inline shape `denseFoldOutV` already uses above). -/
+def denseFoldOutInPlaceV (d : DenseConstraintSystem p) (xs : List VarId)
+    (survsV : List (List (ZMod p))) : DenseConstraintSystem p :=
+  { algebraicConstraints := d.algebraicConstraints.map
+      (fun c => if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c),
+    busInteractions := d.busInteractions.map (fun bi => { bi with
+      multiplicity := denseFoldRewriteIdxV xs survsV bi.multiplicity,
+      payload := bi.payload.map (denseFoldRewriteIdxV xs survsV) }) }
+
+/-- The deduplicating position set of every bucket entry for a variable of `xs` (mirrors
+    `touchedSet`, `DomainFold.lean:887`) — the positions an accepted fold can possibly touch. Same
+    shape already inlined once per side inside `denseSystemHasFoldableIdxV` above; this is the
+    reusable standalone form `foldOutIdx`'s dense twin below needs. -/
+def denseTouchedSet (idx : DenseCovIndex) (xs : List VarId) : Std.HashSet Nat :=
+  (xs.flatMap (fun v => idx.buckets.getD v [])).foldl (·.insert ·) ∅
+
+/-- `denseFoldOutInPlaceV`, computed sparsely through the index (mirrors `foldOutIdx`,
+    `DomainFold.lean:899`): only candidate positions (bucketed under a variable of `xs`) are
+    rewritten; all others are passed through by position, unchanged. `touchedCs`/`touchedBis` are
+    each bound **once**, outside both `.map` closures (mirrors the spec's own `let touchedCs := …`/
+    `let touchedBis := …` at `DomainFold.lean:901-902` — inlining either call into its closure would
+    rebuild the whole `HashSet` per element, the same arity-expansion trap the module header's three
+    restored `let`s above guard against). -/
+def denseFoldOutIdxV (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
+    (survsV : List (List (ZMod p))) : DenseConstraintSystem p :=
+  let touchedCs : Std.HashSet Nat := denseTouchedSet fidx.idx xs
+  let touchedBis : Std.HashSet Nat := denseTouchedSet fidx.bisIdx xs
+  { algebraicConstraints := d.algebraicConstraints.zipIdx.map (fun ci =>
+      if touchedCs.contains ci.2 then
+        (if denseCoveredBy xs ci.1 then ci.1 else denseFoldRewriteIdxV xs survsV ci.1)
+      else ci.1),
+    busInteractions := d.busInteractions.zipIdx.map (fun bii =>
+      if touchedBis.contains bii.2 then
+        { bii.1 with
+          multiplicity := denseFoldRewriteIdxV xs survsV bii.1.multiplicity,
+          payload := bii.1.payload.map (denseFoldRewriteIdxV xs survsV) }
+      else bii.1) }
+
 /-! ## The pass -/
 
 /-- The dense domain-constant folding transform (mirrors `domainFoldPass`/`denseDomainFoldF`), no
