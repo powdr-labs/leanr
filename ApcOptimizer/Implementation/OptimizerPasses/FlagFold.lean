@@ -22,9 +22,12 @@ variable {p : ℕ}
 
 /-! ## Part B: box-tautology replacement -/
 
-/-- The single-variable constraints of a list (the only `findDomainAlg` sources). -/
+/-- The single-variable constraints of a list (the only `findDomainAlg` sources). The
+    distinct-variable count uses the bucketed dedup (`hashedEraseDups_eq` — the identical list,
+    so the filter and everything downstream is value-unchanged); occurrence-heavy constraints
+    made the plain quadratic `eraseDups` measurable here. -/
 def singleVarCs (all : List (Expression p)) : List (Expression p) :=
-  all.filter (fun c => c.vars.eraseDups.length == 1)
+  all.filter (fun c => (HashedDedup.hashedEraseDups (hash ·) c.vars).length == 1)
 
 /-- Certificate: `c` mentions ≥ 2 distinct variables, every one carries a proven finite domain
     (from the single-variable constraints), the joint box is small, and `c` vanishes on all of
@@ -112,8 +115,9 @@ theorem ConstraintSystem.boxTautoReplace_correct [Fact p.Prime]
       intro c' hc'
       simp only [singleVarCs] at hc'
       have hmem := List.mem_of_mem_filter hc'
-      have hsingle : (c'.vars.eraseDups.length == 1) = true :=
-        (List.mem_filter.1 hc').2
+      have hsingle : (c'.vars.eraseDups.length == 1) = true := by
+        have h := (List.mem_filter.1 hc').2
+        rwa [HashedDedup.hashedEraseDups_eq] at h
       exact hsat.1 c' (singleVar_mem_boxTautoReplace cs domOf c' hmem hsingle)
     have hmemdoms : ∀ vd ∈ c.vars.eraseDups.filterMap (fun v =>
         (findDomainAlg (singleVarCs cs.algebraicConstraints) v).map (fun d => (v, d))),
@@ -179,6 +183,16 @@ def boxTautoDropPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bs =>
   if hpB : pw.isPrime = true then
     haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let singles := singleVarCs cs.algebraicConstraints
+    -- Bucket the single-variable constraints by their variable once: `findDomainAlg singles v`
+    -- skips every constraint not mentioning `v`, and a single-variable constraint mentions
+    -- exactly its one variable — so scanning `v`'s own bucket (original order preserved) yields
+    -- the identical domain without the O(#singles) `mentions` walk per distinct variable (the
+    -- pass's dominant cost on large circuits).
+    let singlesBy : Std.HashMap Variable (List (Expression p)) :=
+      singles.reverse.foldl (fun m c =>
+        match HashedDedup.hashedEraseDups (hash ·) c.vars with
+        | [v] => m.insert v (c :: m.getD v [])
+        | _ => m) ∅
     -- Build the per-variable domain cache in one linear pass over all occurrences, skipping
     -- variables already seen (a `contains` guard) rather than pre-deduplicating with the quadratic
     -- `List.eraseDups` over the whole ~10⁵-entry occurrence list. `findDomainAlg` is deterministic,
@@ -186,7 +200,8 @@ def boxTautoDropPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bs =>
     -- theorem takes the oracle as an arbitrary function, so this rebuild is proof-transparent.
     let cache : Std.HashMap Variable (Option (List (ZMod p))) :=
       (cs.algebraicConstraints.flatMap Expression.vars).foldl
-        (fun m v => if m.contains v then m else m.insert v (findDomainAlg singles v)) ∅
+        (fun m v => if m.contains v then m
+         else m.insert v (findDomainAlg (singlesBy.getD v []) v)) ∅
     ⟨cs.boxTautoReplaceWith singles (fun v => cache.getD v none), [],
      cs.boxTautoReplace_correct bs (fun v => cache.getD v none)⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
@@ -557,23 +572,20 @@ def pdFastKeep (drops : Std.HashMap UInt64 (List (BusInteraction (Expression p))
     on the few genuine drops. -/
 theorem ConstraintSystem.pointwiseDupDrop_correct [Fact p.Prime]
     (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (fast : BusInteraction (Expression p) → Bool) :
-    PassCorrect cs
-      (cs.filterBus
-        (fun bi => fast bi || pdKeep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions bi))
-      [] bs :=
+    (keep : BusInteraction (Expression p) → Bool)
+    (hkeep : ∀ bi ∈ cs.busInteractions, keep bi = false →
+      pdKeep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions bi = false) :
+    PassCorrect cs (cs.filterBus keep) [] bs :=
   cs.filterBusEntailed_correct bs _
        (by
-         intro bi _ hkf
-         rw [Bool.or_eq_false_iff] at hkf
-         have hkf' := hkf.2
+         intro bi hbimem hkf
+         have hkf' := hkeep bi hbimem hkf
          unfold pdKeep at hkf'
          rw [Bool.or_eq_false_iff] at hkf'
          simpa using hkf'.1)
        (by
          intro bi hbimem hkf env hsat hm
-         rw [Bool.or_eq_false_iff] at hkf
-         have hkf' := hkf.2
+         have hkf' := hkeep bi hbimem hkf
          unfold pdKeep at hkf'
          rw [Bool.or_eq_false_iff] at hkf'
          obtain ⟨_hst, hmatch⟩ := hkf'
@@ -589,10 +601,13 @@ theorem ConstraintSystem.pointwiseDupDrop_correct [Fact p.Prime]
            have hbkeep : pdKeep bs (singleVarCs cs.algebraicConstraints)
                cs.busInteractions b = true :=
              pdFirst_keep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions b hfirst
-           have hbout : b ∈ (cs.filterBus
-               (fun bi => fast bi || pdKeep bs (singleVarCs cs.algebraicConstraints)
-                 cs.busInteractions bi)).busInteractions :=
-             List.mem_filter.2 ⟨hbcs, by simp [hbkeep]⟩
+           have hbkept : keep b = true := by
+             by_contra hkb
+             have := hkeep b hbcs (by simpa using hkb)
+             rw [this] at hbkeep
+             exact absurd hbkeep (by simp)
+           have hbout : b ∈ (cs.filterBus keep).busInteractions :=
+             List.mem_filter.2 ⟨hbcs, hbkept⟩
            have hdom : ∀ c ∈ singleVarCs cs.algebraicConstraints, c.eval env = 0 := by
              intro c hc
              exact hsat.1 c (List.mem_of_mem_filter hc)
@@ -602,15 +617,47 @@ theorem ConstraintSystem.pointwiseDupDrop_correct [Fact p.Prime]
            rw [heq] at hob
            exact hob hm)
 
+/-- The verdict-map keep test: drop `bi` iff its value bucket holds a *certified* dropped twin
+    (an entry provably `pdKeep = false`, structurally equal to `bi`). -/
+def pdVerdictKeep {p : ℕ} {P : BusInteraction (Expression p) → Prop}
+    (verdicts : Std.HashMap UInt64 (List { b : BusInteraction (Expression p) // P b }))
+    (bi : BusInteraction (Expression p)) : Bool :=
+  match verdicts[pdValHash bi]? with
+  | some l => !(l.any (fun b => decide (b.val = bi)))
+  | none => true
+
+/-- A `pdVerdictKeep` drop carries its certificate: the bucket entry is structurally equal to
+    `bi`, so its stored property transports. -/
+theorem pdVerdictKeep_false {p : ℕ} {P : BusInteraction (Expression p) → Prop}
+    (verdicts : Std.HashMap UInt64 (List { b : BusInteraction (Expression p) // P b }))
+    (bi : BusInteraction (Expression p)) (h : pdVerdictKeep verdicts bi = false) : P bi := by
+  unfold pdVerdictKeep at h
+  cases hv : verdicts[pdValHash bi]? with
+  | none => rw [hv] at h; simp at h
+  | some l =>
+    rw [hv] at h
+    simp only [Bool.not_eq_false'] at h
+    obtain ⟨b, _hb, hbe⟩ := List.any_eq_true.1 h
+    exact of_decide_eq_true hbe ▸ b.property
+
 def pointwiseDupDropPass (pw : PrimeWitness p) : VerifiedPass p := fun cs bs =>
   if hpB : pw.isPrime = true then
     haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     let singles := singleVarCs cs.algebraicConstraints
-    -- The fast sweep flags exactly `pdKeep`'s drop set; the certified `pdKeep` re-verifies each
-    -- flagged drop (short-circuited away for the unflagged rest by the `||`).
+    -- The fast sweep flags exactly `pdKeep`'s drop set; the certified `pdKeep` then re-verifies
+    -- each flagged drop **once per distinct value** — `pdKeep` is value-determined (its
+    -- `findIdx?` locates the value's first occurrence), so equal interactions share one run
+    -- instead of paying the deep-equality scan and prefix certificates per occurrence.
     let drops := pdDropSet bs singles cs.busInteractions
-    ⟨cs.filterBus (fun bi => pdFastKeep drops bi || pdKeep bs singles cs.busInteractions bi), [],
-     cs.pointwiseDupDrop_correct bs (pdFastKeep drops)⟩
+    let verdicts : Std.HashMap UInt64 (List { b : BusInteraction (Expression p) //
+        pdKeep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions b = false }) :=
+      drops.fold (init := ∅) fun m h l =>
+        m.insert h (l.eraseDups.filterMap (fun b =>
+          if hpd : pdKeep bs (singleVarCs cs.algebraicConstraints) cs.busInteractions b = false
+          then some ⟨b, hpd⟩ else none))
+    ⟨cs.filterBus (pdVerdictKeep verdicts), [],
+     cs.pointwiseDupDrop_correct bs (pdVerdictKeep verdicts)
+       (fun bi _ hkf => pdVerdictKeep_false verdicts bi hkf)⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩
 
 /-! ## Part A: the entailed nonlinear substitution -/

@@ -4191,3 +4191,32 @@ violating item, typically within a few candidates).
 profile total **215 s (session baseline) → 147.4 s**; reencode **49.4 → 5.1 s (0.10×)**.
 Remaining: domainBatch 55.0 s, flagFold 20.8 s, domainFold 14.0 s, busUnify 10.5 s,
 rootPairUnify 8.0 s, busPairCancel 7.4 s. **Worked: yes.**
+
+### 114. Runtime: parallel domainBatch enumeration (R7) + flagFold verdict memoization and domain-cache bucketing (keccak 147 s → 111 s)
+
+- **domainBatch enumerations are now `Task`-parallel** (the R7 lever, now that the algorithmic
+  waste elsewhere is gone and domainBatch was the dominant pass at 55 s): every per-target
+  `forcedOver` is independent — the same `cs`, domain table, and index — so `collectForced`
+  spawns one task per deduplicated target and joins the results **in target order**; `σ`
+  receives exactly the sequential fold's insertions, so the pass output is byte-identical and
+  only wall-clock changes. The target dedup is split out (`dedupTargets`, same `seen`
+  threading). keccak domainBatch **55.0 → 18.2 s on 4 cores**; CI's 32-core runners have more
+  headroom.
+- **flagFold, part C**: `pointwiseDupDropPass` re-verified every flagged drop through `pdKeep` —
+  a `findIdx?` deep-equality scan plus prefix certificates **per occurrence**. `pdKeep` is
+  value-determined (its `findIdx?` locates the value's *first* occurrence), so the certified
+  verdicts are now computed once per distinct flagged value (`pdVerdictKeep`, entries carrying
+  their `pdKeep = false` proofs; `pointwiseDupDrop_correct` generalized to any keep-predicate
+  that implies `pdKeep = false` — the twin-keep argument recovers via the contrapositive).
+- **flagFold, part B**: `boxTautoDropPass` built its per-variable domain cache with
+  `findDomainAlg singles v` per distinct variable — an O(#singles) `mentions` walk each. A
+  single-variable constraint mentions exactly its one variable, so the singles are bucketed by
+  variable once and each lookup scans only its own bucket (original order preserved — identical
+  domains). `singleVarCs`'s per-constraint `eraseDups` swapped for the bucketed twin
+  (`hashedEraseDups_eq`, value-identical).
+
+**Verification**: keccak and sp1 apc_030 exports byte-identical; keccak per-cycle sizes
+identical. **Measured** (this container, serial, 4 cores): keccak profile **147.4 → 111.0 s** —
+domainBatch 55.0 → 18.2 s, flagFold 20.8 → 17.1 s. Session total so far: **215 → 111 s
+(0.52×)**. CI matrix for `73d732c` (through entry 113): identical per-case sizes on all five
+sets; contended runtime rows keccak −37 %, wasm-eth −17 %. **Worked: yes.**
