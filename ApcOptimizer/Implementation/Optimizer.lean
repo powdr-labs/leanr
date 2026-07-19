@@ -246,6 +246,8 @@ def denseImpl (b : DegreeBound) (pw : PrimeWitness p) (name : String) (fallback 
     DenseVerifiedPassW.guardDegree b (denseDomainFoldPassV pw)
   else if name == "busUnify" then
     DenseVerifiedPassW.guardDegree b denseBusUnifyPass
+  else if name == "rootPairUnify" then
+    DenseVerifiedPassW.guardDegree b (denseRootPairUnifyPass pw)
   else DenseVerifiedPassW.ofSpec fallback
 
 /-- `DenseRespectsDeg` is preserved by an `if`-`then`-`else` whose branches both respect the bound. -/
