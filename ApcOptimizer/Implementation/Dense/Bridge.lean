@@ -486,6 +486,153 @@ private theorem specMethodFor_append (a b : Derivations p) (v : Variable) :
       simp only [List.cons_append, Derivations.methodFor, ih]
       cases Derivations.methodFor b v <;> rfl
 
+/-! ## Native dense composition: `refl` and `andThen`
+
+The dense analogues of `PassCorrect.refl`/`PassCorrect.andThen` (`OptimizerPasses/Basic.lean`),
+proved natively over `VarId → ZMod p` environments — no `decode`, no reference pass. These let a
+`VarId`-native pass with an internal fixpoint (e.g. `busPairCancel`'s `cancelLoop`, which threads a
+single-step `PassCorrect` across intermediate `mkCs` systems via `PassCorrect.andThen` with a
+`PassCorrect.refl` base) mirror that composition entirely in the dense layer, before the one lift to
+the audited spec. `andThen` is the **general** derivation-concatenating form (`dd1 ++ dd2`);
+specialising both sides to `[]` recovers the shape the `busPairCancel` port needs (`[] ++ [] = []`),
+and it subsumes the ad-hoc `DensePassCorrect_refl`/`DensePassCorrect.trans` shortcuts the domain
+passes carry. -/
+
+/-- `DenseDerivations.methodFor` over an append: the second list wins, falling back to the first
+    (last-entry-wins, mirroring `specMethodFor_append`). -/
+theorem DenseDerivations.methodFor_append (a b : DenseDerivations p) (v : VarId) :
+    DenseDerivations.methodFor (a ++ b) v
+      = (DenseDerivations.methodFor b v).orElse (fun _ => DenseDerivations.methodFor a v) := by
+  induction a with
+  | nil => simp only [List.nil_append]; cases DenseDerivations.methodFor b v <;> rfl
+  | cons hd rest ih =>
+      obtain ⟨u, cm⟩ := hd
+      simp only [List.cons_append, DenseDerivations.methodFor, ih]
+      cases DenseDerivations.methodFor b v <;> rfl
+
+/-- **Reflexivity.** The identity transform (same system, no new derivations) is natively correct.
+    Mirrors `PassCorrect.refl`; the base case of a native drop-loop. -/
+theorem DensePassCorrect.refl (isInput : VarId → Bool) (d : DenseConstraintSystem p)
+    (bs : BusSemantics p) : DensePassCorrect isInput d d [] bs := by
+  refine ⟨fun denv hsat => ⟨denv, hsat, BusState.equiv_refl _⟩, _root_.id, fun i hi _ => hi, ?_⟩
+  intro denv hadm hsat
+  refine ⟨denv, hsat, hadm, BusState.equiv_refl _, fun _ _ => rfl, ?_⟩
+  intro inputVarIds _ i hi _
+  exact ⟨hi, rfl⟩
+
+/-- **Sequential composition.** Given native correctness `d → mid` (local derivations `dd1`) and
+    `mid → out` (local derivations `dd2`), conclude native correctness `d → out` with derivations
+    `dd1 ++ dd2`. Mirrors `PassCorrect.andThen` clause by clause: transitive `implies`, invariant
+    preservation, occurrence-shrink chaining, side-effect chaining, and the reconstruction clause
+    across the middle dense system.
+
+    The reconstruction composition (the hard `∃ denv'` direction): `methodFor (dd1 ++ dd2) i` prefers
+    `dd2`, falling back to `dd1` (`methodFor_append`). If `dd2` locally derives `i`, `hrec23` gives
+    the answer directly (evaluated at the final env `e2`). Otherwise `hrec23`'s `none` branch pins
+    `i ∈ mid.occ` with `e2 i = e1 i`, so `hrec12` on the *middle* env decides `i`: if `dd1` derives it,
+    its method reads only input columns, on which `e2` and `e1` agree (`hii23` + `specDCM_eval_congr`),
+    so the value carries from `e1` to `e2`; if neither derives it, both `none` branches chain the
+    value preservation `e2 i = e1 i = denv i`. -/
+theorem DensePassCorrect.andThen {isInput : VarId → Bool} {d mid out : DenseConstraintSystem p}
+    {dd1 dd2 : DenseDerivations p} {bs : BusSemantics p}
+    (hf : DensePassCorrect isInput d mid dd1 bs) (hg : DensePassCorrect isInput mid out dd2 bs) :
+    DensePassCorrect isInput d out (dd1 ++ dd2) bs := by
+  obtain ⟨hs12, hi12, hv12, hc12⟩ := hf
+  obtain ⟨hs23, hi23, hv23, hc23⟩ := hg
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · -- Soundness: `out.implies d`.
+    intro denv hsat3
+    obtain ⟨e1, hsat2, hse23⟩ := hs23 denv hsat3
+    obtain ⟨e0, hsat1, hse12⟩ := hs12 e1 hsat2
+    exact ⟨e0, hsat1, BusState.equiv_trans hse23 hse12⟩
+  · -- Invariant preservation.
+    intro h; exact hi23 (hi12 h)
+  · -- No new powdr-ID column.
+    intro i hi3 hii; exact hv12 i (hv23 i hi3 hii) hii
+  · -- Completeness with derivations.
+    intro denv hadm1 hsat1
+    obtain ⟨e1, hsat2, hadm2, hse12, hii12, hrec12⟩ := hc12 denv hadm1 hsat1
+    obtain ⟨e2, hsat3, hadm3, hse23, hii23, hrec23⟩ := hc23 e1 hadm2 hsat2
+    refine ⟨e2, hsat3, hadm3, BusState.equiv_trans hse12 hse23, ?_, ?_⟩
+    · intro i hii; rw [hii23 i hii, hii12 i hii]
+    · -- Reconstruction over `dd1 ++ dd2`.
+      intro inputVarIds hcov1
+      have hmidIn : ∀ i ∈ mid.occ, isInput i = true → i ∈ inputVarIds :=
+        fun i hi hii => hcov1 i (hv12 i hi hii) hii
+      have R23 := hrec23 inputVarIds hmidIn
+      have R12 := hrec12 inputVarIds hcov1
+      intro i hiout hisF
+      have B23 := R23 i hiout hisF
+      -- Case on the composite method (reduces the goal match); relate to `dd2`/`dd1` via append.
+      cases hmapp : DenseDerivations.methodFor (dd1 ++ dd2) i with
+      | some dcm =>
+          cases hm2 : DenseDerivations.methodFor dd2 i with
+          | some dcm2 =>
+              have happ : DenseDerivations.methodFor (dd1 ++ dd2) i = some dcm2 := by
+                rw [DenseDerivations.methodFor_append, hm2, Option.orElse_some]
+              rw [hmapp, Option.some.injEq] at happ
+              rw [hm2] at B23
+              rw [happ]; exact B23
+          | none =>
+              have happ : DenseDerivations.methodFor (dd1 ++ dd2) i
+                  = DenseDerivations.methodFor dd1 i := by
+                rw [DenseDerivations.methodFor_append, hm2, Option.orElse_none]
+              rw [hmapp] at happ
+              rw [hm2] at B23
+              obtain ⟨himid, he2e1⟩ := B23
+              have B12 := R12 i himid hisF
+              rw [← happ] at B12
+              obtain ⟨hjIn, hjInIds, hEval1⟩ := B12
+              refine ⟨hjIn, hjInIds, ?_⟩
+              rw [specDCM_eval_congr dcm e2 e1 (fun j hj => hii23 j (hjIn j hj)), hEval1, he2e1]
+      | none =>
+          cases hm2 : DenseDerivations.methodFor dd2 i with
+          | some dcm2 =>
+              have happ : DenseDerivations.methodFor (dd1 ++ dd2) i = some dcm2 := by
+                rw [DenseDerivations.methodFor_append, hm2, Option.orElse_some]
+              rw [hmapp] at happ
+              exact absurd happ (by simp)
+          | none =>
+              have happ : DenseDerivations.methodFor (dd1 ++ dd2) i
+                  = DenseDerivations.methodFor dd1 i := by
+                rw [DenseDerivations.methodFor_append, hm2, Option.orElse_none]
+              rw [hmapp] at happ
+              rw [hm2] at B23
+              obtain ⟨himid, he2e1⟩ := B23
+              have B12 := R12 i himid hisF
+              rw [← happ] at B12
+              obtain ⟨hiD, he1denv⟩ := B12
+              exact ⟨hiD, by rw [he2e1, he1denv]⟩
+
+/-! ### Sanity check: the new lemmas compose
+
+A drop-shaped step (a trivial bus filter that keeps everything) chained after `refl` through
+`andThen`, plus the fully general `andThen` over hypothetical native steps with non-empty
+derivations. Both are erased `example`s — they only witness that the API type-checks and composes. -/
+
+private def keepAllBus (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
+  { d with busInteractions := d.busInteractions.filter (fun _ => true) }
+
+private theorem keepAllBus_eq (d : DenseConstraintSystem p) : keepAllBus d = d := by
+  obtain ⟨ac, bi⟩ := d
+  simp only [keepAllBus, List.filter_true]
+
+private theorem keepAllBus_correct (isInput : VarId → Bool) (d : DenseConstraintSystem p)
+    (bs : BusSemantics p) : DensePassCorrect isInput d (keepAllBus d) [] bs := by
+  rw [keepAllBus_eq]; exact DensePassCorrect.refl isInput d bs
+
+/-- `refl` chained with a drop-shaped filter step through `andThen`. -/
+private example (isInput : VarId → Bool) (d : DenseConstraintSystem p) (bs : BusSemantics p) :
+    DensePassCorrect isInput d (keepAllBus d) [] bs :=
+  (DensePassCorrect.refl isInput d bs).andThen (keepAllBus_correct isInput d bs)
+
+/-- The general `andThen` composes any two native steps, concatenating their derivations. -/
+private example (isInput : VarId → Bool) (d mid out : DenseConstraintSystem p)
+    (dd1 dd2 : DenseDerivations p) (bs : BusSemantics p)
+    (h1 : DensePassCorrect isInput d mid dd1 bs) (h2 : DensePassCorrect isInput mid out dd2 bs) :
+    DensePassCorrect isInput d out (dd1 ++ dd2) bs :=
+  h1.andThen h2
+
 /-! ## The lift theorem -/
 
 /-- **Lift.** Under the registry coverage invariants, a native `DensePassCorrect` (with `isInput`
