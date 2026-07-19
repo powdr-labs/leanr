@@ -85,7 +85,7 @@ def denseAddrConstsNeq (shape : MemoryBusShape) (S bi : BusInteraction (DenseExp
 
 /-- A checked consecutive send→receive pair on bus `busId`: `S` a constant send, `R` a constant
     receive, same constant address, and every `mid` message provably inactive or of a different
-    address. Mirrors `checkPair`; the split equation the enumerator (`denseCandidateSplits`)
+    address. Mirrors `checkPair`; the split equation the enumerator (`denseCandidateSplitsSweep`)
     produces by construction is no longer carried (no proof to re-verify it against). -/
 def denseCheckPair (shape : MemoryBusShape) (T : DenseTwoRootMap p) (nw : DenseNonzeroWits p)
     (S : BusInteraction (DenseExpr p))
@@ -107,52 +107,17 @@ abbrev DenseSplitCand (p : ℕ) :=
     × List (BusInteraction (DenseExpr p)) × BusInteraction (DenseExpr p)
     × List (BusInteraction (DenseExpr p))
 
-/-- Scan forward from a send `S` for its consumer: the first same-address receive, with every
-    message before it excludable (different address, or inactive). Returns `(mid, R, post)` on
-    success, `none` if a possibly-same-address active non-receive blocks the window. Mirrors
-    `findConsumer`, dropping the recomposition-proof `Subtype` it returned. -/
-def denseFindConsumer (shape : MemoryBusShape) (T : DenseTwoRootMap p) (nw : DenseNonzeroWits p)
-    (S : BusInteraction (DenseExpr p)) :
-    (revMid rest : List (BusInteraction (DenseExpr p))) →
-    Option (List (BusInteraction (DenseExpr p)) × BusInteraction (DenseExpr p)
-      × List (BusInteraction (DenseExpr p)))
-  | _, [] => none
-  | revMid, r :: rest =>
-      if decide (denseMultConst r = some (-shape.setNewMult)) && denseAddrConstsEq shape S r then
-        some (revMid.reverse, r, rest)
-      else if denseAddrConstsNeq shape S r || denseAddrAffineNeq shape S r
-          || denseAddrTwoRootNeq shape T S r || denseAddrNonzeroNeq shape nw S r
-          || decide (denseMultConst r = some 0) then
-        denseFindConsumer shape T nw S (r :: revMid) rest
-      else none
-
-/-- One candidate per active send `S`, pairing it with its consumer receive (`denseFindConsumer`).
-    Linear in the number of sends × scan length, so no O(n²) blow-up on large buses. Mirrors
-    `candidateSplits`, dropping the whole-list `L`/`hinv` parameters (proof-only: they existed only
-    to state the split equation `SplitCand` carried). -/
-def denseCandidateSplits (shape : MemoryBusShape) (T : DenseTwoRootMap p) (nw : DenseNonzeroWits p) :
-    (revPre rest : List (BusInteraction (DenseExpr p))) → List (DenseSplitCand p)
-  | _, [] => []
-  | revPre, S :: rest =>
-      (if decide (denseMultConst S = some shape.setNewMult) then
-        match denseFindConsumer shape T nw S [] rest with
-        | some (mid, R, post) => [(revPre.reverse, S, mid, R, post)]
-        | none => []
-       else []) ++ denseCandidateSplits shape T nw (S :: revPre) rest
-
 /-! ## The consumer sweep (#165 delta, chunk C1)
 
 Dense, `VarId`-native mirror of the single-sweep consumer-finding infra that replaced the per-send
 `findConsumer` scan (`OptimizerPasses/BusUnify.lean:230-436`, doc comment there for the full
-rationale). `denseFindConsumer`/`denseCandidateSplits` above are the OLD per-send algorithm and stay
-untouched (nothing downstream consumes the sweep yet); this section only ADDS the new sweep's
-runtime twin, transliterated line-parallel from the new spec section so it can be diffed directly.
+rationale). This is the enumerator `denseCollectAllBuses` now consumes (the old per-send
+`findConsumer`/`candidateSplits` transliterations were deleted with the #165 flip).
 
 Every spec proof witness that exists only to state the split equation the enumerator recovers
 (`OpenRec.hi`/`hsplit`, `SplitCand`'s `Subtype` proof, `sweepGo`'s `hsplit`/`hj`, `emitCand`'s
-`hj`/`hnow`) is dropped, matching the plain-data `DenseSplitCand`/dropped-`Subtype` pattern already
-used above for `denseFindConsumer`/`denseCandidateSplits`: the runtime control flow and position
-arithmetic are otherwise identical. -/
+`hj`/`hnow`) is dropped, matching the plain-data `DenseSplitCand`/dropped-`Subtype` pattern: the
+runtime control flow and position arithmetic are otherwise identical. -/
 
 /-- One message tested against one open window. Mirrors `StepRes`. -/
 inductive DenseStepRes
@@ -162,8 +127,8 @@ inductive DenseStepRes
 
 /-- The two-root / nonzero-witness certificate tables are passed as `Thunk`s so an invocation that
     never reaches the expensive arms (every pair decided by the constant or affine certificate — the
-    common case) never builds them. Mirrors `stepTest`, using the same certificate calls (and call
-    order) as `denseFindConsumer` above. -/
+    common case) never builds them. Mirrors `stepTest`, using the same certificate calls and call
+    order (`denseCheckPair`'s `mid` arms) that `denseCheckPair` re-verifies. -/
 def denseStepTest (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p))
     (S m : BusInteraction (DenseExpr p)) : DenseStepRes :=
   if decide (denseMultConst m = some (-shape.setNewMult)) && denseAddrConstsEq shape S m then .consumer
@@ -295,10 +260,9 @@ def denseSweepGo (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : 
       else (constOpen, symOpen)
     denseSweepGo shape T nw (m :: revSeen) rest' (j + 1) constOpen symOpen acc
 
-/-- All consumer candidates of one bus, in send-position order — the same list the per-send
-    `denseFindConsumer`/`denseCandidateSplits` scans produce, computed by a single sweep. Mirrors
-    the new spec `candidateSplits`. Not yet consumed by `denseCollectForBus`/`denseCollectAllBuses`/
-    `denseBusUnifyF` below (unwired; a later chunk swaps the enumerator). -/
+/-- All consumer candidates of one bus, in send-position order — the same list a per-send
+    forward scan would produce, computed by a single sweep. Mirrors the new spec `candidateSplits`.
+    Consumed by `denseCollectAllBuses` below. -/
 def denseCandidateSplitsSweep (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p))
     (nw : Thunk (DenseNonzeroWits p)) (L : List (BusInteraction (DenseExpr p))) :
     List (DenseSplitCand p) :=
@@ -309,21 +273,24 @@ def denseCandidateSplitsSweep (shape : MemoryBusShape) (T : Thunk (DenseTwoRootM
     `cs`/`bs`/`facts`/`hp1`/`hshape` parameters: none of them are read by the computed value (only
     by the subtype proof `collectForBus` carried), so `shape`/`T`/`nw`/the candidate list are all
     that remain. `pre`/`post` are similarly proof-only in the spec (only used inside its `by`
-    block, via `checkPair_sound`), so they are discarded here too. -/
-def denseCollectForBus (shape : MemoryBusShape) (T : DenseTwoRootMap p) (nw : DenseNonzeroWits p) :
+    block, via `checkPair_sound`), so they are discarded here too. The certificate tables are
+    `Thunk`s (as in the spec), forced only at the `denseCheckPair … T.get nw.get` call. -/
+def denseCollectForBus (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p))
+    (nw : Thunk (DenseNonzeroWits p)) :
     List (DenseSplitCand p) → List (DenseExpr p)
   | [] => []
   | (_pre, S, mid, R, _post) :: rest =>
     let acc := denseCollectForBus shape T nw rest
-    if denseCheckPair shape T nw S mid R = true then
+    if denseCheckPair shape T.get nw.get S mid R = true then
       denseMemEqConstraints shape S R ++ acc
     else acc
 
 /-- Collect over every declared bus. Mirrors `collectAllBuses`, dropping the proof-only `hp1`; it
     keeps `facts` (unlike `denseCollectForBus`), since `facts.memShape busId` is a real runtime call
-    here that decides whether — and with what `shape` — a bus's candidates get enumerated at all. -/
+    here that decides whether — and with what `shape` — a bus's candidates get enumerated at all.
+    Candidates come from the single-sweep `denseCandidateSplitsSweep` (the #165 flip). -/
 def denseCollectAllBuses (d : DenseConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (T : DenseTwoRootMap p) (nw : DenseNonzeroWits p) :
+    (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p)) :
     List Nat → List (DenseExpr p)
   | [] => []
   | busId :: rest =>
@@ -331,7 +298,7 @@ def denseCollectAllBuses (d : DenseConstraintSystem p) (bs : BusSemantics p) (fa
     match facts.memShape busId with
     | some shape =>
       let eqs := denseCollectForBus shape T nw
-        (denseCandidateSplits shape T nw [] (d.busInteractions.filter (fun bi => bi.busId = busId)))
+        (denseCandidateSplitsSweep shape T nw (d.busInteractions.filter (fun bi => bi.busId = busId)))
       eqs ++ acc
     | none => acc
 
@@ -344,28 +311,35 @@ def denseCollectAllBuses (d : DenseConstraintSystem p) (bs : BusSemantics p) (fa
 def denseBusUnifyF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     DenseConstraintSystem p :=
   if (1 : ZMod p) ≠ 0 then
-    -- precompute the per-variable two-root data once (memoized `denseTwoRootOf?`), so the
-    -- address-disequality certificate is a constant-time hash lookup per candidate pair
-    let T := DenseTwoRootMap.build d.algebraicConstraints
-    -- reciprocal (nonzero-witness) forms, for the register-vs-RAM address-disequality certificate
-    let nw := DenseNonzeroWits.build d.algebraicConstraints
+    -- the per-variable two-root data and the reciprocal nonzero-witness forms back the two
+    -- expensive address-disequality certificates. Both are `Thunk`ed (as in the spec): they are
+    -- built only if some window test reaches those arms — an invocation whose pairs are all decided
+    -- by the constant/affine certificates never pays the builds.
+    let T : Thunk (DenseTwoRootMap p) :=
+      Thunk.mk fun _ => DenseTwoRootMap.build d.algebraicConstraints
+    let nw : Thunk (DenseNonzeroWits p) :=
+      Thunk.mk fun _ => DenseNonzeroWits.build d.algebraicConstraints
     let eqs := denseCollectAllBuses d bs facts T nw
       ((d.busInteractions.map (fun bi => bi.busId)).dedup)
-    -- keep only equalities over existing columns, so the pass introduces no new variable
-    let dVarSet := Std.HashSet.ofList d.occ
-    -- the already-present test is a per-equality deep structural scan; bucket the constraints by
-    -- structural hash once (reusing `DenseExpr.bHash`) and compare within the bucket
-    let dHashes : Std.HashMap UInt64 (List (DenseExpr p)) :=
-      d.algebraicConstraints.foldl (fun m c =>
-        let h := c.bHash
-        m.insert h (c :: m.getD h [])) ∅
-    let containsC : DenseExpr p → Bool := fun c =>
-      (dHashes.getD c.bHash []).any (fun c' => c' == c)
-    let new := eqs.filter
-      (fun c => !c.normalize.fold.isConstZero && !containsC c
-        && c.vars.all (fun z => dVarSet.contains z))
-    if new.isEmpty then d
-    else { d with algebraicConstraints := d.algebraicConstraints ++ new }
+    -- Nothing collected (the common late-cycle case): skip the filter-table build outright.
+    if eqs.isEmpty then d
+    else
+      -- The "no new variable" side condition holds **by construction** — every equality's variables
+      -- come from payload slots of `d`'s own interactions (`denseMemEqConstraints_vars`, carried
+      -- through `denseCollectAllBuses_vars`) — so the old per-variable membership scan over the
+      -- whole occurrence list is gone, with the filter provably unchanged.
+      -- The already-present test is a per-equality deep structural scan; bucket the constraints by
+      -- structural hash once (reusing `DenseExpr.bHash`) and compare within the bucket.
+      let dHashes : Std.HashMap UInt64 (List (DenseExpr p)) :=
+        d.algebraicConstraints.foldl (fun m c =>
+          let h := c.bHash
+          m.insert h (c :: m.getD h [])) ∅
+      let containsC : DenseExpr p → Bool := fun c =>
+        (dHashes.getD c.bHash []).any (fun c' => c' == c)
+      let new := eqs.filter
+        (fun c => !c.normalize.fold.isConstZero && !containsC c)
+      if new.isEmpty then d
+      else { d with algebraicConstraints := d.algebraicConstraints ++ new }
   else d
 
 end ApcOptimizer.Dense

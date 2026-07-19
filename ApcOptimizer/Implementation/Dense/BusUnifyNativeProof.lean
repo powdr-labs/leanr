@@ -28,10 +28,10 @@ dense environments `VarId → ZMod p` by re-deriving the spec's entailment chain
   certificates (which rule out every `mid` message as a same-address active blocker) with
   `denseConsecutivePayloadEq`, concluding every slot equality (`denseMemEqConstraints`) evaluates to
   zero.
-* `denseFindConsumer_split`/`denseCandidateSplits_split` recover the split equation
-  `filter busId = pre ++ S :: mid ++ R :: post` that the dense enumerator dropped (the spec carried
-  it in a `Subtype`); `denseCollectForBus_sound`/`denseCollectAllBuses_sound` fold the entailment
-  over the candidate list and every declared bus.
+* `denseCandidateSplitsSweep_split` (via `denseSweepGo_split`) recovers the split equation
+  `filter busId = pre ++ S :: mid ++ R :: post` that the dense sweep enumerator dropped (the spec
+  carried it in a `Subtype`); `denseCollectForBus_sound`/`denseCollectAllBuses_sound` fold the
+  entailment over the candidate list and every declared bus.
 
 **Fact-consumption template** (for later chunks): (1) apply `BusFacts` soundness fields at the
 *value* level over `denseBIEval` from dense satisfaction — no `BusFacts`-map correspondence, no
@@ -230,59 +230,6 @@ theorem denseCheckPair_sound (d : DenseConstraintSystem p) (bs : BusSemantics p)
   rw [denseEqExpr_eval]
   have hPQ : R.payload.map (fun e => e.eval denv) = S.payload.map (fun e => e.eval denv) := hpay.symm
   rw [densePayloadSlot_eval_eq R.payload S.payload denv hPQ i, sub_self]
-
-/-! ## The candidate enumeration recovers the split equation -/
-
-/-- The split equation the dense enumerator dropped: `denseFindConsumer` returns a `(mid, R, post)`
-    whose recomposition is `revMid.reverse ++ rest`. Mirrors `findConsumer`'s `Subtype` proof. -/
-theorem denseFindConsumer_split {shape : MemoryBusShape} {T : DenseTwoRootMap p}
-    {nw : DenseNonzeroWits p} {S : BusInteraction (DenseExpr p)} :
-    ∀ (rest revMid : List (BusInteraction (DenseExpr p)))
-      (mid : List (BusInteraction (DenseExpr p))) (R : BusInteraction (DenseExpr p))
-      (post : List (BusInteraction (DenseExpr p))),
-    denseFindConsumer shape T nw S revMid rest = some (mid, R, post) →
-    revMid.reverse ++ rest = mid ++ R :: post := by
-  intro rest
-  induction rest with
-  | nil => intro revMid mid R post h; simp [denseFindConsumer] at h
-  | cons r rest' ih =>
-    intro revMid mid R post h
-    rw [denseFindConsumer] at h
-    split_ifs at h with h1 h2
-    · simp only [Option.some.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl, rfl⟩ := h; rfl
-    · have hnext := ih (r :: revMid) mid R post h
-      rw [← hnext]; simp [List.reverse_cons, List.append_assoc]
-
-/-- Every candidate `denseCandidateSplits` returns recomposes to `revPre.reverse ++ rest`. Mirrors
-    the `SplitCand` invariant the spec carried in its `Subtype`. -/
-theorem denseCandidateSplits_split {shape : MemoryBusShape} {T : DenseTwoRootMap p}
-    {nw : DenseNonzeroWits p} :
-    ∀ (rest revPre : List (BusInteraction (DenseExpr p))) (cand : DenseSplitCand p),
-    cand ∈ denseCandidateSplits shape T nw revPre rest →
-    revPre.reverse ++ rest = cand.1 ++ cand.2.1 :: cand.2.2.1 ++ cand.2.2.2.1 :: cand.2.2.2.2 := by
-  intro rest
-  induction rest with
-  | nil => intro revPre cand h; simp [denseCandidateSplits] at h
-  | cons S rest' ih =>
-    intro revPre cand h
-    rw [denseCandidateSplits, List.mem_append] at h
-    rcases h with h | h
-    · split_ifs at h with hmc
-      · cases hfc : denseFindConsumer shape T nw S [] rest' with
-        | none => rw [hfc] at h; simp at h
-        | some mrp =>
-          obtain ⟨mid, R, post⟩ := mrp
-          rw [hfc] at h
-          simp only [List.mem_singleton] at h
-          subst h
-          have hsp := denseFindConsumer_split rest' [] mid R post hfc
-          simp only [List.reverse_nil, List.nil_append] at hsp
-          show revPre.reverse ++ (S :: rest') = revPre.reverse ++ S :: mid ++ R :: post
-          rw [hsp]; simp only [List.append_assoc, List.cons_append]
-      · simp at h
-    · have hrec := ih (S :: revPre) cand h
-      rw [← hrec]; simp [List.reverse_cons, List.append_assoc]
 
 /-! ## The consumer sweep recovers the split equation (#165 delta, chunk C2)
 
@@ -532,7 +479,8 @@ theorem DenseConstraintSystem.mem_occ_of_payload {d : DenseConstraintSystem p}
     split equation gives `S, R ∈ d.busInteractions`, and `denseMemEqConstraints_vars` traces each var
     back to a payload slot. Native mirror of `collectForBus`'s "no new variable" conjunct. -/
 theorem denseCollectForBus_vars (d : DenseConstraintSystem p)
-    (T : DenseTwoRootMap p) (nw : DenseNonzeroWits p) (shape : MemoryBusShape) (busId : Nat) :
+    (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p)) (shape : MemoryBusShape)
+    (busId : Nat) :
     ∀ (cands : List (DenseSplitCand p)),
     (∀ cand ∈ cands, d.busInteractions.filter (fun bi => bi.busId = busId)
         = cand.1 ++ cand.2.1 :: cand.2.2.1 ++ cand.2.2.2.1 :: cand.2.2.2.2) →
@@ -571,7 +519,7 @@ theorem denseCollectForBus_vars (d : DenseConstraintSystem p)
 /-- Every var of an equality collected across all declared buses is an occurrence of `d`. Native
     mirror of `collectAllBuses`'s "no new variable" conjunct. -/
 theorem denseCollectAllBuses_vars (d : DenseConstraintSystem p) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (T : DenseTwoRootMap p) (nw : DenseNonzeroWits p) :
+    (facts : BusFacts p bs) (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p)) :
     ∀ (busIds : List Nat),
     ∀ c ∈ denseCollectAllBuses d bs facts T nw busIds, ∀ z ∈ c.vars, z ∈ d.occ := by
   intro busIds
@@ -587,9 +535,8 @@ theorem denseCollectAllBuses_vars (d : DenseConstraintSystem p) (bs : BusSemanti
       rcases hc with hc | hc
       · refine denseCollectForBus_vars d T nw shape busId _ ?_ c hc z hz
         intro cand hcand
-        have hh := denseCandidateSplits_split
-          (d.busInteractions.filter (fun bi => bi.busId = busId)) [] cand hcand
-        simpa using hh
+        exact denseCandidateSplitsSweep_split
+          (d.busInteractions.filter (fun bi => bi.busId = busId)) cand hcand
       · exact ih c hc z hz
 
 /-! ## The per-bus / all-bus entailment -/
@@ -605,7 +552,8 @@ theorem denseCollectForBus_sound (d : DenseConstraintSystem p) (bs : BusSemantic
     ∀ (cands : List (DenseSplitCand p)),
     (∀ cand ∈ cands, d.busInteractions.filter (fun bi => bi.busId = busId)
         = cand.1 ++ cand.2.1 :: cand.2.2.1 ++ cand.2.2.2.1 :: cand.2.2.2.2) →
-    ∀ c ∈ denseCollectForBus shape T (DenseNonzeroWits.build d.algebraicConstraints) cands,
+    ∀ c ∈ denseCollectForBus shape (Thunk.pure T)
+        (Thunk.pure (DenseNonzeroWits.build d.algebraicConstraints)) cands,
       c.eval denv = 0 := by
   intro cands
   induction cands with
@@ -633,8 +581,9 @@ theorem denseCollectAllBuses_sound (d : DenseConstraintSystem p) (bs : BusSemant
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (reg : VarRegistry) (hcov : d.CoveredBy reg)
     (denv : VarId → ZMod p) (hadm : d.admissible bs denv) (hsat : d.satisfies bs denv) :
     ∀ (busIds : List Nat),
-    ∀ c ∈ denseCollectAllBuses d bs facts (DenseTwoRootMap.build d.algebraicConstraints)
-        (DenseNonzeroWits.build d.algebraicConstraints) busIds,
+    ∀ c ∈ denseCollectAllBuses d bs facts
+        (Thunk.mk fun _ => DenseTwoRootMap.build d.algebraicConstraints)
+        (Thunk.mk fun _ => DenseNonzeroWits.build d.algebraicConstraints) busIds,
       c.eval denv = 0 := by
   intro busIds
   induction busIds with
@@ -652,9 +601,8 @@ theorem denseCollectAllBuses_sound (d : DenseConstraintSystem p) (bs : BusSemant
           (DenseTwoRootMap.build_sound d.algebraicConstraints) busId shape hms denv hadm hsat _ ?_ c
           hc
         intro cand hcand
-        have hh := denseCandidateSplits_split
-          (d.busInteractions.filter (fun bi => bi.busId = busId)) [] cand hcand
-        simpa using hh
+        exact denseCandidateSplitsSweep_split
+          (d.busInteractions.filter (fun bi => bi.busId = busId)) cand hcand
       · exact ih c hc
 
 /-! ## The reusable native "add entailed constraints" correctness -/
@@ -723,14 +671,18 @@ private theorem dpcRefl (isInput : VarId → Bool) (d : DenseConstraintSystem p)
 /-! ## The pass transform: correctness and coverage -/
 
 /-- The list of entailed equalities `denseBusUnifyF` appends (mirrors its internal `new`, factored
-    out so the guard cases get named hypotheses). -/
+    out so the guard cases get named hypotheses). The `eqs.isEmpty` early-out of `denseBusUnifyF`
+    only skips the filter-table build when nothing was collected; the appended list is this filter
+    either way (`denseBusUnifyF_eq` collapses the two guards). The `Thunk`s here match
+    `denseBusUnifyF`'s exactly, so their `.get`s reduce to the same builds. -/
 def denseBusUnifyNew (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     List (DenseExpr p) :=
-  let T := DenseTwoRootMap.build d.algebraicConstraints
-  let nw := DenseNonzeroWits.build d.algebraicConstraints
+  let T : Thunk (DenseTwoRootMap p) :=
+    Thunk.mk fun _ => DenseTwoRootMap.build d.algebraicConstraints
+  let nw : Thunk (DenseNonzeroWits p) :=
+    Thunk.mk fun _ => DenseNonzeroWits.build d.algebraicConstraints
   let eqs := denseCollectAllBuses d bs facts T nw
     ((d.busInteractions.map (fun bi => bi.busId)).dedup)
-  let dVarSet := Std.HashSet.ofList d.occ
   let dHashes : Std.HashMap UInt64 (List (DenseExpr p)) :=
     d.algebraicConstraints.foldl (fun m c =>
       let h := c.bHash
@@ -738,8 +690,18 @@ def denseBusUnifyNew (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseCon
   let containsC : DenseExpr p → Bool := fun c =>
     (dHashes.getD c.bHash []).any (fun c' => c' == c)
   eqs.filter
-    (fun c => !c.normalize.fold.isConstZero && !containsC c
-      && c.vars.all (fun z => dVarSet.contains z))
+    (fun c => !c.normalize.fold.isConstZero && !containsC c)
+
+/-- Collapsing the two-level `isEmpty` guards: the runtime's outer `eqs.isEmpty` early-out returns
+    the same result as the inner `(eqs.filter f).isEmpty` guard, since an empty `eqs` filters to the
+    empty list. -/
+private theorem outer_isEmpty_collapse {β : Type} (l : List (DenseExpr p)) (f : DenseExpr p → Bool)
+    (dd xx : β) :
+    (if l.isEmpty then dd else (if (l.filter f).isEmpty then dd else xx))
+      = (if (l.filter f).isEmpty then dd else xx) := by
+  cases l with
+  | nil => simp
+  | cons a t => simp
 
 theorem denseBusUnifyF_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
@@ -747,18 +709,21 @@ theorem denseBusUnifyF_eq (bs : BusSemantics p) (facts : BusFacts p bs)
       (if (1 : ZMod p) ≠ 0 then
         (if (denseBusUnifyNew bs facts d).isEmpty then d
          else { d with algebraicConstraints := d.algebraicConstraints ++ denseBusUnifyNew bs facts d })
-       else d) := rfl
+       else d) := by
+  show (if (1 : ZMod p) ≠ 0 then _ else d) = (if (1 : ZMod p) ≠ 0 then _ else d)
+  by_cases hp1 : (1 : ZMod p) ≠ 0
+  · rw [if_pos hp1, if_pos hp1]
+    exact outer_isEmpty_collapse _ _ d _
+  · rw [if_neg hp1, if_neg hp1]
 
-/-- Every variable of an appended equality is an occurrence of `d`. -/
+/-- Every variable of an appended equality is an occurrence of `d` — now purely by construction
+    (`denseCollectAllBuses_vars`), the `dVarSet` filter clause having been dropped with the #165
+    flip. -/
 theorem denseBusUnifyNew_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     ∀ c ∈ denseBusUnifyNew bs facts d, ∀ z ∈ c.vars, z ∈ d.occ := by
   intro c hc z hz
-  have hp := (List.mem_filter.1 hc).2
-  simp only [Bool.and_eq_true, List.all_eq_true] at hp
-  have hz' := hp.2 z hz
-  rw [Std.HashSet.contains_ofList] at hz'
-  exact List.contains_iff_mem.mp hz'
+  exact denseCollectAllBuses_vars d bs facts _ _ _ c (List.mem_of_mem_filter hc) z hz
 
 /-- Every appended equality evaluates to zero on admissible satisfying assignments (the substance,
     via `denseCollectAllBuses_sound`). -/
@@ -767,8 +732,9 @@ theorem denseBusUnifyNew_sound (bs : BusSemantics p) (facts : BusFacts p bs) (re
     (denv : VarId → ZMod p) (hadm : d.admissible bs denv) (hsat : d.satisfies bs denv) :
     ∀ c ∈ denseBusUnifyNew bs facts d, c.eval denv = 0 := by
   intro c hc
-  have hmem : c ∈ denseCollectAllBuses d bs facts (DenseTwoRootMap.build d.algebraicConstraints)
-      (DenseNonzeroWits.build d.algebraicConstraints)
+  have hmem : c ∈ denseCollectAllBuses d bs facts
+      (Thunk.mk fun _ => DenseTwoRootMap.build d.algebraicConstraints)
+      (Thunk.mk fun _ => DenseNonzeroWits.build d.algebraicConstraints)
       ((d.busInteractions.map (fun bi => bi.busId)).dedup) := List.mem_of_mem_filter hc
   exact denseCollectAllBuses_sound d bs facts hp1 reg hcov denv hadm hsat _ c hmem
 
