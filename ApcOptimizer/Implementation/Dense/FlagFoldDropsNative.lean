@@ -289,24 +289,51 @@ def densePdDropSet (bs : BusSemantics p) (singles : List (DenseExpr p))
     pos := pos + 1
   return drops
 
-/-- Was `bi` flagged by the sweep? (`false` = flagged as a drop candidate.) Mirrors `pdFastKeep`. -/
-def densePdFastKeep (drops : Std.HashMap UInt64 (List (BusInteraction (DenseExpr p))))
+/-- The verdict-map keep test: drop `bi` iff its value bucket holds a *certified* dropped twin
+    (an entry provably `densePdKeep = false`, structurally equal to `bi`). Mirrors `pdVerdictKeep`;
+    the `{b // densePdKeep … = false}` subtype is load-bearing (each stored entry carries its own
+    `densePdKeep = false` proof) — kept exactly as spec. -/
+def densePdVerdictKeep {p : ℕ} {P : BusInteraction (DenseExpr p) → Prop}
+    (verdicts : Std.HashMap UInt64 (List { b : BusInteraction (DenseExpr p) // P b }))
     (bi : BusInteraction (DenseExpr p)) : Bool :=
-  match drops[densePdValHash bi]? with
-  | some l => !(l.any (fun b => decide (b = bi)))
+  match verdicts[densePdValHash bi]? with
+  | some l => !(l.any (fun b => decide (b.val = bi)))
   | none => true
 
+/-- A `densePdVerdictKeep` drop carries its certificate: the bucket entry is structurally equal to
+    `bi`, so its stored property transports. Mirrors `pdVerdictKeep_false`. -/
+theorem densePdVerdictKeep_false {p : ℕ} {P : BusInteraction (DenseExpr p) → Prop}
+    (verdicts : Std.HashMap UInt64 (List { b : BusInteraction (DenseExpr p) // P b }))
+    (bi : BusInteraction (DenseExpr p)) (h : densePdVerdictKeep verdicts bi = false) : P bi := by
+  unfold densePdVerdictKeep at h
+  cases hv : verdicts[densePdValHash bi]? with
+  | none => rw [hv] at h; simp at h
+  | some l =>
+    rw [hv] at h
+    simp only [Bool.not_eq_false'] at h
+    obtain ⟨b, _hb, hbe⟩ := List.any_eq_true.1 h
+    exact of_decide_eq_true hbe ▸ b.property
+
 /-- Part C's runtime transform: prime `p` only; identity otherwise. The fast sweep flags exactly
-    `densePdKeep`'s drop set; the certified `densePdKeep` re-verifies each flagged drop
-    (short-circuited away for the unflagged rest by the `||`), exactly as `pointwiseDupDropPass`
-    does. Mirrors `pointwiseDupDropPass`'s computed output (dropping its `PassCorrect` term); no
-    `facts` parameter (see the module header) — shaped as `(pw) → (bs) → (d) → out`. -/
+    `densePdKeep`'s drop set; the certified `densePdKeep` then re-verifies each flagged drop **once
+    per distinct value** — `densePdKeep` is value-determined (its `findIdx?` locates the value's
+    first occurrence), so equal interactions share one run instead of paying the deep-equality scan
+    and prefix certificates per occurrence. Mirrors `pointwiseDupDropPass`'s computed output
+    (dropping its `PassCorrect` term); no `facts` parameter (see the module header) — shaped as
+    `(pw) → (bs) → (d) → out`. -/
 def densePointwiseDupDropF (pw : PrimeWitness p) (bs : BusSemantics p)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then
     let singles := denseSingleVarCs d.algebraicConstraints
     let drops := densePdDropSet bs singles d.busInteractions
-    d.filterBus (fun bi => densePdFastKeep drops bi || densePdKeep bs singles d.busInteractions bi)
+    let verdicts : Std.HashMap UInt64 (List { b : BusInteraction (DenseExpr p) //
+        densePdKeep bs (denseSingleVarCs d.algebraicConstraints) d.busInteractions b = false }) :=
+      drops.fold (init := ∅) fun m h l =>
+        m.insert h (l.eraseDups.filterMap (fun b =>
+          if hpd : densePdKeep bs (denseSingleVarCs d.algebraicConstraints)
+              d.busInteractions b = false
+          then some ⟨b, hpd⟩ else none))
+    d.filterBus (densePdVerdictKeep verdicts)
   else d
 
 end ApcOptimizer.Dense

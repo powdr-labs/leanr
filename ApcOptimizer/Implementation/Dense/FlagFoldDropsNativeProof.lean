@@ -34,11 +34,12 @@ the depth-1 `densePdFirst_keep` rule, fed to a native `DensePassCorrect.denseFil
 (the native mirror of `ConstraintSystem.filterBusEntailed_correct`). The certificate soundness
 chain `denseBoxAgree_sound → denseSlotEqCert_sound → denseMsgEqCert_sound` is a native
 re-derivation of the spec `boxAgree_sound/slotEqCert_sound/msgEqCert_sound`. The pass is stated
-over an arbitrary prefilter `fast` (instantiated at runtime with `densePdFastKeep` over
-`densePdDropSet`), so the mutable sweep carries no proof — dropping more is always sound — and the
-`densePdFastKeep`/`densePdDropSet` loop is NOT reasoned about, exactly as the spec never reasons
-about `pdDropSet` beyond `pdFastKeep = pdKeep`-equivalence (here: never needed, the certified
-`densePdKeep` disjunct re-verifies every flagged drop).
+over an **arbitrary keep-predicate** `keep` that only ever drops certified-droppable interactions
+(`hkeep`: dropped ⟹ `densePdKeep … = false`), instantiated at runtime with the verdict map
+(`densePdVerdictKeep` over `densePdDropSet`) whose entries carry their `densePdKeep = false`
+proofs, so the mutable sweep carries no proof — dropping more is always sound — and the
+`densePdDropSet` loop is NOT reasoned about, exactly as the spec never reasons about `pdDropSet`
+beyond the verdict entries' carried certificates.
 
 ## Fact-free `ofNative` wrapping
 
@@ -465,26 +466,26 @@ theorem DensePassCorrect.denseFilterBusEntailed (d : DenseConstraintSystem p) (b
   · intro denv hadmd hsat
     exact ⟨(hiff denv).2 hsat, (hadm denv).2 hadmd, by rw [hside denv]; exact BusState.equiv_refl _⟩
 
-/-- **Native pointwise-duplicate drop correctness.** Stated over an arbitrary prefilter `fast`: a
-    drop requires `densePdKeep … = false` (the certified condition), and keeping more is always
-    sound. The certified twin justifying a drop is provably kept (`densePdFirst_keep`) and evaluates
-    equally (`denseMsgEqCert_sound`). Native mirror of `ConstraintSystem.pointwiseDupDrop_correct`. -/
+/-- **Native pointwise-duplicate drop correctness.** Stated over an **arbitrary keep-predicate**
+    that only ever drops certified-droppable interactions (`hkeep`: dropped ⟹ `densePdKeep … =
+    false`) — keeping more is always sound, and a dropped interaction's first-of-class twin is kept
+    because `densePdKeep` would keep it (the contrapositive of `hkeep`). `densePointwiseDupDropF`
+    instantiates `keep` with the verdict map (`densePdVerdictKeep`), whose entries carry their
+    `densePdKeep = false` proofs. Native mirror of `ConstraintSystem.pointwiseDupDrop_correct`. -/
 theorem DensePassCorrect.densePointwiseDupDrop [Fact p.Prime]
     (d : DenseConstraintSystem p) (bs : BusSemantics p) (isInput : VarId → Bool)
-    (fast : BusInteraction (DenseExpr p) → Bool) :
-    DensePassCorrect isInput d
-      (d.filterBus (fun bi => fast bi
-        || densePdKeep bs (denseSingleVarCs d.algebraicConstraints) d.busInteractions bi)) [] bs := by
-  refine DensePassCorrect.denseFilterBusEntailed d bs isInput _ ?_ ?_
-  · intro bi _ hkf
-    rw [Bool.or_eq_false_iff] at hkf
-    have hkf' := hkf.2
+    (keep : BusInteraction (DenseExpr p) → Bool)
+    (hkeep : ∀ bi ∈ d.busInteractions, keep bi = false →
+      densePdKeep bs (denseSingleVarCs d.algebraicConstraints) d.busInteractions bi = false) :
+    DensePassCorrect isInput d (d.filterBus keep) [] bs := by
+  refine DensePassCorrect.denseFilterBusEntailed d bs isInput keep ?_ ?_
+  · intro bi hbimem hkf
+    have hkf' := hkeep bi hbimem hkf
     unfold densePdKeep at hkf'
     rw [Bool.or_eq_false_iff] at hkf'
     simpa using hkf'.1
   · intro bi hbimem hkf denv hsat hm
-    rw [Bool.or_eq_false_iff] at hkf
-    have hkf' := hkf.2
+    have hkf' := hkeep bi hbimem hkf
     unfold densePdKeep at hkf'
     rw [Bool.or_eq_false_iff] at hkf'
     obtain ⟨_hst, hmatch⟩ := hkf'
@@ -500,10 +501,13 @@ theorem DensePassCorrect.densePointwiseDupDrop [Fact p.Prime]
         have hbkeep : densePdKeep bs (denseSingleVarCs d.algebraicConstraints)
             d.busInteractions b = true :=
           densePdFirst_keep bs (denseSingleVarCs d.algebraicConstraints) d.busInteractions b hfirst
-        have hbout : b ∈ (d.filterBus (fun bi => fast bi
-            || densePdKeep bs (denseSingleVarCs d.algebraicConstraints)
-              d.busInteractions bi)).busInteractions :=
-          List.mem_filter.2 ⟨hbcs, by simp [hbkeep]⟩
+        have hbkept : keep b = true := by
+          by_contra hkb
+          have := hkeep b hbcs (by simpa using hkb)
+          rw [this] at hbkeep
+          exact absurd hbkeep (by simp)
+        have hbout : b ∈ (d.filterBus keep).busInteractions :=
+          List.mem_filter.2 ⟨hbcs, hbkept⟩
         have hdom : ∀ c ∈ denseSingleVarCs d.algebraicConstraints, c.eval denv = 0 := by
           intro c hc
           exact hsat.1 c (List.mem_of_mem_filter hc)
@@ -529,9 +533,9 @@ theorem densePointwiseDupDropF_correct (pw : PrimeWitness p) (reg : VarRegistry)
   unfold densePointwiseDupDropF
   split_ifs with hp
   · haveI : Fact p.Prime := ⟨pw.correct hp⟩
-    exact DensePassCorrect.densePointwiseDupDrop d bs reg.isInput
-      (densePdFastKeep (densePdDropSet bs (denseSingleVarCs d.algebraicConstraints)
-        d.busInteractions))
+    refine DensePassCorrect.densePointwiseDupDrop d bs reg.isInput _ ?_
+    intro bi _ hkf
+    exact densePdVerdictKeep_false _ bi hkf
   · exact dpcRefl reg.isInput d bs
 
 /-- **The native dense pointwise-duplicate drop pass** (part C of the flagFold composite). Fact-free
