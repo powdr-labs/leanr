@@ -557,12 +557,11 @@ def pdDropSet (bs : BusSemantics p) (singles : List (Expression p))
     pos := pos + 1
   return drops
 
-/-- Part C as a standalone (unguarded) pass: drop stateless interactions pointwise-equal to an
-    earlier first-of-class one. Stated over an arbitrary *prefilter* `fast`: the kept set is
-    `fast bi || pdKeep … bi`, so a drop requires `pdKeep … = false` (the certified condition)
-    and keeping more is always sound. `pointwiseDupDropPass` instantiates `fast` with the sweep
-    above, which flags exactly `pdKeep`'s drop set — the expensive certified scan then runs only
-    on the few genuine drops. -/
+/-- Part C's correctness, stated over an **arbitrary keep-predicate** that only ever drops
+    certified-droppable interactions (`hkeep`: dropped ⟹ `pdKeep … = false`) — keeping more is
+    always sound, and a dropped interaction's first-of-class twin is kept because `pdKeep` would
+    keep it (the contrapositive of `hkeep`). `pointwiseDupDropPass` instantiates `keep` with the
+    verdict map (`pdVerdictKeep`), whose entries carry their `pdKeep = false` proofs. -/
 theorem ConstraintSystem.pointwiseDupDrop_correct [Fact p.Prime]
     (cs : ConstraintSystem p) (bs : BusSemantics p)
     (keep : BusInteraction (Expression p) → Bool)
