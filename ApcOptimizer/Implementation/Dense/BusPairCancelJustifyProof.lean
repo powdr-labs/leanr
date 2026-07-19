@@ -529,4 +529,159 @@ theorem denseBasisJustified_sound (bound : Nat) (bnd : VarId → Option Nat) {bs
       Nat.mod_eq_of_lt (by omega)]
     omega
 
+/-! # Native soundness of the byte-justification dispatcher (Task 3, chunk C1c — prover)
+
+Native, `VarId`-native `_sound` lemmas for the dispatcher defined in
+`Dense/BusPairCancelJustify.lean` (`denseByteJustifiedW`/`denseByteJustified`/
+`denseRecvSlotsJustified`). These mirror, without any decode dependency, the spec soundness chain
+(`byteJustifiedW_sound`/`byteJustified_sound`/`recvSlotsJustified_sound` in
+`OptimizerPasses/BusPairCancel.lean`), composing the C1a/C1b leaf certificates
+(`denseFindVarBound_sound`, `DenseExpr.constValue?_sound`, `denseDeepByteJustified_sound`,
+`denseDomainByteJustified_sound`, `denseAffineJustified_sound`, `denseBasisJustified_sound`) exactly
+as the spec versions compose theirs (`findVarBound_sound`/`constValue?_sound`/
+`deepByteJustified_sound`/`domainByteJustified_sound`/`affineJustified_sound`/`basisJustified_sound`).
+
+The statement shapes match the spec versions (`Variable → VarId`, `Expression → DenseExpr`,
+`bi.eval env → denseBIEval bi denv`, `env : Variable → ZMod p → denv : VarId → ZMod p`). In
+particular `denseRecvSlotsJustified_sound`'s conclusion,
+`∀ slot ∈ slots, ∀ x, (denseBIEval R denv).payload[slot]? = some x → x.val < bound`, is exactly the
+byte-boundedness fact the dense `dropPair_correct` (chunk C2) will require as its `hbyte` obligation
+and that the dense `checkCancel_sound` (chunk C5) will discharge — with `all := d.algebraicConstraints`
+and `rest := A ++ B ++ C ++ checks` — mirroring how spec's `checkCancel_sound` feeds `dropPair_correct`
+via `recvSlotsJustified_sound`. No spec `_sound` lemma is reused (no decode). -/
+
+/-! ## `denseByteJustifiedW` soundness (native mirror of `byteJustifiedW_sound`) -/
+
+/-- **`denseByteJustifiedW` is sound.** If the dispatcher accepts, every constraint in the superset
+    `all` (which includes `domCs`/`candsOf`) holds under `denv`, and every witnessed remaining
+    interaction (`wits`/`fwits ⊆ rest`) never violates when active, then `e` is a byte/limb (`< bound`)
+    under `denv`. Native mirror of `byteJustifiedW_sound`. -/
+theorem denseByteJustifiedW_sound (bound : Nat) (deep : Bool) (all domCs : List (DenseExpr p))
+    (candsOf : VarId → List (DenseExpr p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (rest : List (BusInteraction (DenseExpr p)))
+    (wits fwits : VarId → List (BusInteraction (DenseExpr p))) (e : DenseExpr p)
+    (hdeep : deep = true → p.Prime)
+    (hdomCs : ∀ c ∈ domCs, c ∈ all) (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ all)
+    (hwits : ∀ v, ∀ bi ∈ wits v, bi ∈ rest)
+    (hfwits : ∀ v, ∀ bi ∈ fwits v, bi ∈ rest)
+    (h : denseByteJustifiedW bound deep domCs candsOf bs facts wits fwits e = true)
+    (denv : VarId → ZMod p)
+    (hall : ∀ c' ∈ all, c'.eval denv = 0)
+    (hbus : ∀ bi ∈ rest, (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false) :
+    (e.eval denv).val < bound := by
+  have hbusW : ∀ v, ∀ bi ∈ wits v, (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false :=
+    fun v bi hbi => hbus bi (hwits v bi hbi)
+  unfold denseByteJustifiedW at h
+  cases hc : e.constValue? with
+  | some c =>
+    rw [hc] at h
+    dsimp only at h
+    rw [e.constValue?_sound c hc denv]
+    exact of_decide_eq_true h
+  | none =>
+    rw [hc] at h
+    dsimp only at h
+    rw [Bool.or_eq_true, Bool.or_eq_true, Bool.or_eq_true] at h
+    rcases h with ((h | h) | h) | h
+    · -- variable path (bus-fact bound or deep selector-flag justification)
+      cases e with
+      | var x =>
+        dsimp only at h
+        show (denv x).val < bound
+        rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
+        · cases hb : denseFindVarBound bs facts (wits x) x with
+          | some b =>
+            rw [hb] at h'
+            dsimp only at h'
+            exact lt_of_lt_of_le
+              (denseFindVarBound_sound bs facts (wits x) x b hb denv (hbusW x))
+              (of_decide_eq_true h')
+          | none => rw [hb] at h'; simp at h'
+        · rw [Bool.and_eq_true, Bool.and_eq_true] at h'
+          haveI : Fact p.Prime := ⟨hdeep h'.1.1⟩
+          haveI : NeZero p := ⟨(hdeep h'.1.1).ne_zero⟩
+          exact lt_of_lt_of_le
+            (denseDeepByteJustified_sound all domCs (candsOf x) bs facts wits x hdomCs (hcands x)
+              h'.2 denv hall hbusW)
+            (of_decide_eq_true h'.1.2)
+      | const n => simp at h
+      | add a b => simp at h
+      | mul a b => simp at h
+    · -- single-variable finite-domain expression path
+      rw [Bool.and_eq_true, Bool.and_eq_true] at h
+      haveI : Fact p.Prime := ⟨hdeep h.1.1⟩
+      exact lt_of_lt_of_le
+        (denseDomainByteJustified_sound domCs e h.2 denv (fun c' hc' => hall c' (hdomCs c' hc')))
+        (of_decide_eq_true h.1.2)
+    · -- affine recomposition path (`256·hi + lo`, …)
+      exact denseAffineJustified_sound bound (fun x => denseFindVarBound bs facts (wits x) x) e denv
+        (fun v b hb => denseFindVarBound_sound bs facts (wits v) v b hb denv (hbusW v)) h
+    · -- basis reduction path (range-checked slot forms)
+      exact denseBasisJustified_sound bound (fun x => denseFindVarBound bs facts (wits x) x) facts
+        fwits e denv (fun v b hb => denseFindVarBound_sound bs facts (wits v) v b hb denv (hbusW v))
+        (fun v bi hbi => hbus bi (hfwits v bi hbi)) h
+
+/-! ## `denseByteJustified` soundness (native mirror of `byteJustified_sound`) -/
+
+/-- **`denseByteJustified` is sound** (the plain full-scan form). Native mirror of
+    `byteJustified_sound`: instantiate `denseByteJustifiedW_sound` at the naive per-query filters
+    (`domCs = all.filter isSingleVar`, `candsOf x = all.filter (mentions x)`, `wits _ = rest`,
+    `fwits _ = []`). -/
+theorem denseByteJustified_sound (bound : Nat) (deep : Bool) (all : List (DenseExpr p))
+    (bs : BusSemantics p)
+    (facts : BusFacts p bs) (rest : List (BusInteraction (DenseExpr p))) (e : DenseExpr p)
+    (hdeep : deep = true → p.Prime)
+    (h : denseByteJustified bound deep all bs facts rest e = true) (denv : VarId → ZMod p)
+    (hall : ∀ c' ∈ all, c'.eval denv = 0)
+    (hbus : ∀ bi ∈ rest, (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false) :
+    (e.eval denv).val < bound :=
+  denseByteJustifiedW_sound bound deep all (all.filter DenseExpr.isSingleVar)
+    (fun x => all.filter (DenseExpr.mentions x)) bs facts rest (fun _ => rest)
+    (fun _ => []) e hdeep
+    (fun _ hc => List.mem_of_mem_filter hc) (fun _ _ hc => List.mem_of_mem_filter hc)
+    (fun _ _ hbi => hbi) (fun _ _ hbi => absurd hbi (by simp)) h denv hall hbus
+
+/-! ## `denseRecvSlotsJustified` soundness (native mirror of `recvSlotsJustified_sound`)
+
+This is the byte-justification tower **top** consumed by the dense `dropPair_correct` (C2) /
+`checkCancel_sound` (C5): its conclusion is the per-slot byte bound on the *evaluated* dropped
+receive `denseBIEval R denv`. -/
+
+/-- **`denseRecvSlotsJustified` is sound.** If every declared byte slot of `R` is justified, then at
+    every such slot the evaluated payload entry of `R` (under any `denv` zeroing `all` and never
+    violating the remaining witnessed interactions) is a byte/limb (`< bound`). Native mirror of
+    `recvSlotsJustified_sound`; the conclusion is stated over `denseBIEval R denv` to feed the dense
+    `dropPair_correct`'s `hbyte` obligation directly. -/
+theorem denseRecvSlotsJustified_sound (bound : Nat) (deep : Bool) (all domCs : List (DenseExpr p))
+    (candsOf : VarId → List (DenseExpr p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (rest : List (BusInteraction (DenseExpr p)))
+    (wits fwits : VarId → List (BusInteraction (DenseExpr p))) (slots : List Nat)
+    (R : BusInteraction (DenseExpr p)) (hdeep : deep = true → p.Prime)
+    (hdomCs : ∀ c ∈ domCs, c ∈ all) (hcands : ∀ x, ∀ c ∈ candsOf x, c ∈ all)
+    (hwits : ∀ v, ∀ bi ∈ wits v, bi ∈ rest)
+    (hfwits : ∀ v, ∀ bi ∈ fwits v, bi ∈ rest)
+    (h : denseRecvSlotsJustified bound deep domCs candsOf bs facts wits fwits slots R = true)
+    (denv : VarId → ZMod p)
+    (hall : ∀ c' ∈ all, c'.eval denv = 0)
+    (hbus : ∀ bi ∈ rest, (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false) :
+    ∀ slot ∈ slots, ∀ x : ZMod p, (denseBIEval R denv).payload[slot]? = some x → x.val < bound := by
+  intro slot hslot x hget
+  have hcheck := List.all_eq_true.mp h slot hslot
+  -- the evaluated payload entry is the evaluation of the syntactic entry
+  have hget' : (R.payload[slot]?).map (fun e => e.eval denv) = some x := by
+    rw [← List.getElem?_map]
+    exact hget
+  cases he : R.payload[slot]? with
+  | none => rw [he] at hget'; exact absurd hget' (by simp)
+  | some e =>
+    rw [he] at hget' hcheck
+    simp only [Option.map_some, Option.some.injEq] at hget'
+    subst hget'
+    exact denseByteJustifiedW_sound bound deep all domCs candsOf bs facts rest wits fwits e hdeep
+      hdomCs hcands hwits hfwits hcheck denv hall hbus
+
 end ApcOptimizer.Dense
