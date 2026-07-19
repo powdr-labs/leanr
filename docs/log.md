@@ -4168,3 +4168,26 @@ Follow-ups from the gdb-sampled attribution (200 whole-run stack samples, functi
 **215 s → 192.7 s** — domainFold **47.0 → 14.2 s (0.30×)**, busUnify 12.7 → 10.5 s. Remaining:
 domainBatch 55.1 s, reencode 49.4 s (per-accept `groupRewrite` full-system walks — next),
 flagFold 21.9 s, rootPairUnify 7.6 s, busPairCancel 7.4 s. **Worked: yes.**
+
+### 113. Runtime: reencode degree pre-gate — 100 % of keccak's accepted re-encodings were degree-rejected (reencode 49.4 s → 5.1 s)
+
+Instrumenting the reencode funnel on keccak: **1276 groups per run pass `checkReencode` and
+every single one is then rejected by the output degree check** (`reencodeOut … |>.withinDegreeB`)
+— the interpolations of the 7–8-variable flag groups are degree-3 polynomials in the bits, and
+any multiplicative use overshoots the openvm bound. Each rejection paid three whole-system
+walks — the certificate's freshness scan (`bits × system` `mentionsF`), the full `reencodeOut`
+rewrite, and the `withinDegreeB` walk — and the same groups were re-tried every cycle (nothing
+memoizes the rejection). That was essentially all of reencode's 49 s.
+
+Fix: `degPreReject`, a **necessary-condition pre-gate** right after `buildReencode` — one
+early-exit `any` over the system that rewrites *only* items sharing a variable with the group
+(`sharesVarIn`) and fires when a rewritten non-covered constraint (or any rewritten interaction
+expression) already exceeds the bound. Firing is exact: such an item appears verbatim in
+`reencodeOut`, so the full check would reject the same candidate — the pass output is unchanged,
+only the three whole-system walks are skipped (and on kill-cases the `any` exits at the first
+violating item, typically within a few candidates).
+
+**Verification**: keccak export byte-identical. **Measured** (this container, serial): keccak
+profile total **215 s (session baseline) → 147.4 s**; reencode **49.4 → 5.1 s (0.10×)**.
+Remaining: domainBatch 55.0 s, flagFold 20.8 s, domainFold 14.0 s, busUnify 10.5 s,
+rootPairUnify 8.0 s, busPairCancel 7.4 s. **Worked: yes.**

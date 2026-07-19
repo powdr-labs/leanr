@@ -106,6 +106,13 @@ keccak, so anything superlinear is fatal there.
 - keccak per-pass (254 s profile): domainFold 48 s, domainBatch 48 s, reencode 42 s,
   busPairCancel 26 s, intervalForce 21 s, flagFold 16 s, busUnify 12.5 s, rootPairUnify 9.4 s,
   dedup 6.6 s, bytePack 5.5 s, gauss 4.5 s — no single villain; the cost is systemic.
+- **Post entries 109–113** (same container, serial): keccak 215 s → ~150 s expected — domainFold
+  47 → 14.2 s, busUnify 12.7 → 10.5 s, reencode's ~49 s was **1276-of-1276 degree-rejected
+  re-encodings per run** (each paying the freshness scan + full `reencodeOut` + degree walk,
+  retried every cycle) — killed by the `degPreReject` necessary-condition pre-gate. Remaining
+  big rocks: domainBatch ~50 s (productive enumeration + per-target gathers), flagFold ~20 s
+  (samples: `pdKeep` re-verification `findIdx?` deep-eq scans + boxTauto `mentions`/
+  `findDomainAlg`), rootPairUnify ~7.6 s, busPairCancel ~7.4 s.
 - keccak per-cycle (10 cycles): **cycles 0–2 are ~80 % of the total** (system still 28k→9.7k
   constraints there); the tail cycles 6–9 are ~1 % each. Fixing the big-system per-pass
   quadratics matters more than fixing the fixpoint tail.
@@ -124,21 +131,22 @@ entry-90 discipline: *untrusted, re-checked-at-use* candidate indexes (`buildFor
 `recvIndexAll`, `CoveredIndex`) — a wrong index entry costs time, never soundness, so most of
 these need no new proof.
 
-**R1. Kill the true O(N²) loops that dominate the big early cycles**  ·  *high value, mostly
-proof-free*. Confirmed quadratics, in rough per-case cost order:
-   - `busUnify.findConsumer` scans forward through the whole tail per send, and `checkPair`
-     re-scans the mid region `findConsumer` just stepped over (`BusUnify.lean:217/146`); each
-     step can hit `addrNonzeroNeq` = O(2^A·C) (`AddrDiseq.lean:519`). Fix: `(busId, addrHash)`
-     position buckets (port `recvIndexAll`), and thunk the eager `TwoRootMap`/`NonzeroWits`
-     builds (`BusUnify.lean:309-311`) so no-op invocations skip them. **Still open.** Note the
-     scan semantics are load-bearing: every stepped-over message must be *excluded*, so an
-     address-bucketed jump cannot skip the blocker checks — the win is bounding the scan via
-     per-position precomputed address forms, or a per-address-key incremental fold (complex; the
-     left-fold reformulation `ok' = (pr m ∨ ok) ∧ ref m` is exact but pairwise in `S`).
+**R1. Kill the true O(N²) loops that dominate the big early cycles**  ·  mostly **done**:
+   - ~~`busUnify.findConsumer` per-send forward scans~~ **done (entries 111–112)**: single
+     left-to-right sweep per bus with canonical-address-keyed open windows (`sweepGo` —
+     all-constant messages are provably invisible to other constant keys, so they cost one map
+     probe; `checkPair` re-verifies every emitted candidate, so the sweep is untrusted beyond
+     the split equations, which are recovered by drop arithmetic). `TwoRootMap`/`NonzeroWits`
+     thunked; the pass body's per-invocation `HashSet.ofList cs.vars` replaced by the
+     by-construction variable guarantee (`memEqConstraints_vars`) and the hash-bucket build
+     gated on nonempty candidates. Output byte-identical.
    - `busPairCancel`: `shieldOk` re-scans (and `liveArr` **materializes**) the whole before-region
-     per candidate send (`BusPairCancel.lean:1861/2428`) — O(B²) time *and* allocation on the long
-     same-address chains the pass exists for; in coda mode the `addrHash` bucket is O(B) per hot
-     address (`:1255`) — add a position cursor. **Still open.** ~~`dropWits` from-0 array scan per
+     per candidate send (`BusPairCancel.lean` `shieldOk`/`findCancelGoIdx`) — O(B²) time *and*
+     allocation on the long same-address chains the pass exists for; in coda mode the `addrHash`
+     bucket is O(B) per hot address — add a position cursor. **Still open**, but whole-run
+     samples put busPairCancel at only ~4 % on keccak post-111; the same per-key sweep pattern
+     as busUnify applies (`shieldOk` left-folds to a single per-key `pending` bit), complicated
+     by the tombstone-drop restarts. ~~`dropWits` from-0 array scan per
      queried variable~~ **done (entry 105)**: per-variable position index (`buildBoundIdx`),
      re-checked at use.
    - ~~`dedup` constraint-side `List.dedup` O(C²·E)~~ **done (entry 104)**: bucketed
