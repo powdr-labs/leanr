@@ -1188,24 +1188,52 @@ theorem EntailedMap_foldl_insert (d : DenseConstraintSystem p) (bs : BusSemantic
         exact hm i t hit
     · exact fun pr' hpr' => hpairs pr' (List.mem_cons_of_mem _ hpr')
 
-/-- The value-only `collectForced` fold preserves the entailment invariant. -/
+/-- `(Task.spawn f).get` reduces to `f ()`: `Task` is a one-field structure and `Task.spawn` fills
+    it with `fn ()`, so this holds definitionally in this toolchain. Kept local to this module (not
+    exported under the `Task` namespace) to avoid clashing with any future core lemma. -/
+theorem get_spawn {α : Type} (f : Unit → α) : (Task.spawn f).get = f () := rfl
+
+/-- The parallel and serial branches of `denseCollectForcedV` compute the same solution map. The
+    per-target `Task.spawn`/`.get` round-trip is definitional (`get_spawn`), and `tasks.foldl` over
+    the spawned list is `List.foldl_map` of exactly the order-preserving fold the serial branch runs
+    directly — so both branches equal the serial fold over `denseDedupTargetsV`. This collapses the
+    novel parallel structure once, up front, so the entailment invariant is proved over the single
+    serial fold. -/
+theorem denseCollectForcedV_eq_serial (bs : BusSemantics p) (facts : BusFacts p bs)
+    (reg : VarRegistry) (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (parallel : Bool)
+    (targets : List (List VarId)) (seen : Std.HashSet String) (dσ0 : DenseSolved p) :
+    denseCollectForcedV bs facts reg T fidx parallel targets seen dσ0
+      = (denseDedupTargetsV reg targets seen).foldl
+          (fun dσ xs => dσ.insertAll
+            ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))) dσ0 := by
+  simp only [denseCollectForcedV]
+  split_ifs with hp
+  · simp only [List.foldl_map, get_spawn]
+  · rfl
+
+/-- The value-only `collectForced` fold preserves the entailment invariant. Both branches reduce to
+    the same order-preserving fold over the deduped targets (`denseCollectForcedV_eq_serial`); dedup
+    no longer complicates the invariant, since the forced-pair hypothesis `hforced` is stated for
+    **every** variable set. -/
 theorem denseCollectForcedV_entailed (bs : BusSemantics p) (facts : BusFacts p bs)
     (reg : VarRegistry) (T : DenseDomainTable p) (fidx : DenseForcedIdx p)
     (d : DenseConstraintSystem p)
     (hforced : ∀ xs, ∀ f ∈ denseForcedOverV bs facts T fidx xs, ∀ denv,
       d.satisfies bs denv → denv f.1 = f.2) :
-    ∀ (targets : List (List VarId)) (seen : Std.HashSet String) (dσ : DenseSolved p),
+    ∀ (parallel : Bool) (targets : List (List VarId)) (seen : Std.HashSet String)
+      (dσ : DenseSolved p),
       EntailedMap d bs dσ.map →
-      EntailedMap d bs (denseCollectForcedV bs facts reg T fidx targets seen dσ).map := by
-  intro targets
-  induction targets with
-  | nil => intro seen dσ h; exact h
-  | cons xs rest ih =>
-    intro seen dσ h
-    simp only [denseCollectForcedV]
-    split_ifs with hseen
-    · exact ih _ _ h
-    · apply ih
+      EntailedMap d bs (denseCollectForcedV bs facts reg T fidx parallel targets seen dσ).map := by
+  have hfold : ∀ (uniq : List (List VarId)) (dσ : DenseSolved p), EntailedMap d bs dσ.map →
+      EntailedMap d bs (uniq.foldl (fun dσ xs => dσ.insertAll
+        ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))) dσ).map := by
+    intro uniq
+    induction uniq with
+    | nil => intro dσ h; exact h
+    | cons xs rest ih =>
+      intro dσ h
+      rw [List.foldl_cons]
+      apply ih
       rw [DenseSolved.insertAll_map]
       apply EntailedMap_foldl_insert d bs _ dσ.map h
       intro pr hpr
@@ -1214,6 +1242,9 @@ theorem denseCollectForcedV_entailed (bs : BusSemantics p) (facts : BusFacts p b
       show denv f.1 = (DenseExpr.const f.2).eval denv
       rw [DenseExpr.eval]
       exact hforced xs f hf denv hsat
+  intro parallel targets seen dσ h
+  rw [denseCollectForcedV_eq_serial]
+  exact hfold (denseDedupTargetsV reg targets seen) dσ h
 
 /-! ## Reflexive (identity) native correctness -/
 
@@ -1262,15 +1293,15 @@ def dbFidx (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSys
 theorem denseDomainBatchσV_eq (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     denseDomainBatchσV reg bs facts d
-      = denseCollectForcedV bs facts reg (dbT bs facts d) (dbFidx bs facts d) (dbTargets d) ∅
-          DenseSolved.empty := rfl
+      = denseCollectForcedV bs facts reg (dbT bs facts d) (dbFidx bs facts d)
+          (8192 ≤ d.algebraicConstraints.length) (dbTargets d) ∅ DenseSolved.empty := rfl
 
 theorem denseDomainBatchσV_entailed [Fact p.Prime] [NeZero p] (reg : VarRegistry)
     (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     EntailedMap d bs (denseDomainBatchσV reg bs facts d).map := by
   rw [denseDomainBatchσV_eq]
   refine denseCollectForcedV_entailed bs facts reg (dbT bs facts d) (dbFidx bs facts d) d
-    ?hforced (dbTargets d) ∅ DenseSolved.empty ?hbase
+    ?hforced (8192 ≤ d.algebraicConstraints.length) (dbTargets d) ∅ DenseSolved.empty ?hbase
   case hbase =>
     intro i t h
     rw [DenseSolved.empty, Std.HashMap.getElem?_empty] at h

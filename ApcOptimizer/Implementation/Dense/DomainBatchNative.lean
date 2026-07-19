@@ -295,20 +295,42 @@ def denseForcedOverV (bs : BusSemantics p) (facts : BusFacts p bs) (T : DenseDom
 
 Unchanged target-dedup key (`denseVarSetKey`, reused — out of this task's scope, see the module
 header) and unchanged solution-map data structure (`DenseSolved`/`.insertAll`, reused from
-`Dense/Gauss.lean`); only the per-target forcing (`denseForcedOverV`) is new. -/
+`Dense/Gauss.lean`); only the per-target forcing (`denseForcedOverV`) is new. Mirrors the spec's
+#165 split into a target dedup (`dedupTargets`) followed by an order-preserving fold, so the
+independent per-target enumerations can be spawned in parallel on large systems. -/
 
-/-- Collect forced constants from joint enumerations of the given targets' variable sets, skipping
-    variable sets already enumerated (mirrors `collectForced`/`denseCollectForced`). -/
-def denseCollectForcedV (bs : BusSemantics p) (facts : BusFacts p bs) (reg : VarRegistry)
-    (T : DenseDomainTable p) (fidx : DenseForcedIdx p) :
-    List (List VarId) → Std.HashSet String → DenseSolved p → DenseSolved p
-  | [], _, dσ => dσ
-  | xs :: rest, seen, dσ =>
+/-- The `seen`-deduplicated target list (value-only twin of the spec's `dedupTargets`, keyed by the
+    same `denseVarSetKey reg` the previous interleaved recursion used), split out so the per-target
+    enumerations can be spawned in parallel. Dedup behaviour is byte-for-byte the previous
+    interleaved threading — the exact-set-key repair is a separate follow-up (see the module
+    header). -/
+def denseDedupTargetsV (reg : VarRegistry) :
+    List (List VarId) → Std.HashSet String → List (List VarId)
+  | [], _ => []
+  | xs :: rest, seen =>
     let key := denseVarSetKey reg xs
-    if seen.contains key then denseCollectForcedV bs facts reg T fidx rest seen dσ
-    else
-      denseCollectForcedV bs facts reg T fidx rest (seen.insert key)
-        (dσ.insertAll ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2))))
+    if seen.contains key then denseDedupTargetsV reg rest seen
+    else xs :: denseDedupTargetsV reg rest (seen.insert key)
+
+/-- Collect every checked forced constant, mirroring the spec's `collectForced`: dedup the targets
+    once (`denseDedupTargetsV`), then combine each target's forced constants into the solution map
+    in target order. The per-target enumerations (`denseForcedOverV`) are independent — each is
+    evaluated against the same table/index — so on large systems each is spawned as a `Task` and the
+    results are joined **in target order** (`tasks.foldl … (t.get)`): the fold receives exactly the
+    insertions the sequential fold would perform, so the pass output is unchanged and only wall-clock
+    differs. Small systems keep the plain sequential fold. `parallel` is decided by the caller from
+    the system size, matching the spec pass's gate. -/
+def denseCollectForcedV (bs : BusSemantics p) (facts : BusFacts p bs) (reg : VarRegistry)
+    (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (parallel : Bool)
+    (targets : List (List VarId)) (seen : Std.HashSet String) (dσ0 : DenseSolved p) : DenseSolved p :=
+  let uniq := denseDedupTargetsV reg targets seen
+  if parallel then
+    let tasks := uniq.map (fun xs => Task.spawn fun _ => denseForcedOverV bs facts T fidx xs)
+    tasks.foldl (init := dσ0) fun dσ t =>
+      dσ.insertAll ((t.get).map (fun f => (f.1, DenseExpr.const f.2)))
+  else
+    uniq.foldl (init := dσ0) fun dσ xs =>
+      dσ.insertAll ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))
 
 /-! ## The pass transform, value-only (mirrors `domainBatchPass`/`denseDomainBatchF`)
 
@@ -335,7 +357,10 @@ def denseDomainBatchσV (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFa
       arrBis := d.busInteractions.toArray,
       activeIdx := denseCovBuild DenseExpr.vars activeCs,
       arrActive := activeCs.toArray }
-  denseCollectForcedV bs facts reg T fidx targets ∅ DenseSolved.empty
+  -- Fan out only at keccak/SHA scale (the same raw-count gate as the spec pass): below it the
+  -- sequential fold is byte-for-byte the same computation without spawn overhead.
+  denseCollectForcedV bs facts reg T fidx (8192 ≤ d.algebraicConstraints.length) targets ∅
+    DenseSolved.empty
 
 /-- The value-only dense domain-batch transform (mirrors `domainBatchPass`/`denseDomainBatchF`). -/
 def denseDomainBatchTransformV (pw : PrimeWitness p) (reg : VarRegistry) (bs : BusSemantics p)
