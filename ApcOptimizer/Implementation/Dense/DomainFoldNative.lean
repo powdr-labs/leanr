@@ -236,10 +236,11 @@ def denseSystemHasFoldableV (d : DenseConstraintSystem p) (xs : List VarId)
     d.busInteractions.any (fun bi =>
       bi.multiplicity.hasFoldableV xs survsV || bi.payload.any (fun e => e.hasFoldableV xs survsV))
 
-/-- The index-local form of `denseSystemHasFoldableV` (mirrors `systemHasFoldableIdx`/
-    `denseSystemHasFoldableIdx`, value-only survivors): scan only the items sharing a variable with
-    `xs` through the prebuilt inverted indexes, plus the precomputed const-foldable items when
-    disjoint from `xs`. Used by the indexed path. -/
+/-- The index-local form of `denseSystemHasFoldableV` (mirrors #165's `systemHasFoldableIdx`,
+    `OptimizerPasses/DomainFold.lean:817`, value-only survivors): scan only the items sharing a
+    variable with `xs` through the prebuilt inverted indexes. #165 dropped the const-foldable-item
+    disjuncts (the `cfCs`/`cfBis` caches) this used to carry — purely a two-bucket scan now. Used by
+    the indexed path. -/
 def denseSystemHasFoldableIdxV (fidx : DenseFoldIdx p) (xs : List VarId)
     (survsV : List (List (ZMod p))) : Bool :=
   (((xs.flatMap (fun v => fidx.idx.buckets.getD v [])).foldl (·.insert ·)
@@ -253,10 +254,7 @@ def denseSystemHasFoldableIdxV (fidx : DenseFoldIdx p) (xs : List VarId)
     if h : i < fidx.arrBis.size then
       let bi := fidx.arrBis[i]
       bi.multiplicity.hasFoldableV xs survsV || bi.payload.any (fun e => e.hasFoldableV xs survsV)
-    else false)) ||
-  (fidx.cfCs.any (fun c => !c.anyVarIn xs)) ||
-  (fidx.cfBis.any (fun bi =>
-    !(bi.multiplicity.anyVarIn xs || bi.payload.any (fun e => e.anyVarIn xs))))
+    else false))
 
 /-! ## The direct (unindexed) fold loop (mirrors `foldStepWith`/`foldLoopDirect`)
 
@@ -284,62 +282,6 @@ def denseFoldLoopDirectV : List (List VarId) → DenseConstraintSystem p → Den
   | [], d => d
   | xs :: rest, d => denseFoldLoopDirectV rest (denseFoldStepWithV d xs (denseCoveredCsOf d xs))
 
-/-! ## The indexed fold loop (mirrors `foldStep`/`foldLoop`)
-
-For systems at least `domainFoldIndexThreshold` large. The covered set is served from the prebuilt
-`DenseFoldIdx` and rebuilt only on an accepted fold — see `Dense/DomainFold.lean`'s module header for
-the rationale, unchanged here. The single-evaluation `let` for the whole step's result (restored,
-see the module header's first fix) is what makes the indexed loop run each `denseFoldStepV` exactly
-once per target. -/
-
-/-- One checked fold for a candidate group (mirrors `foldStep`/`denseFoldStep`), served from the
-    prebuilt covered-constraint index and refreshed only on an accepted fold. -/
-def denseFoldStepV (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId) :
-    DenseConstraintSystem p × DenseFoldIdx p :=
-  let es := denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs
-  match denseGroupDoms es xs with
-  | none => (d, fidx)
-  | some doms =>
-    if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
-      let survsV := denseGroupSurvivorsEV es xs (doms.map Prod.snd)
-      if 1 ≤ survsV.length && denseSystemHasFoldableIdxV fidx xs survsV then
-        let ro := denseFoldOutV d xs survsV
-        (ro, fidx.refresh ro)
-      else (d, fidx)
-    else (d, fidx)
-
-/-- Process the candidate groups sequentially, threading and refreshing the index (mirrors
-    `foldLoop`/`denseFoldLoop`). The whole step's result is bound once (`r`) and both its output and
-    its refreshed index are read from that single binding — restoring the spec's `let r1 :=
-    foldStep …` sharing that the old dense port's two separate `.1`/`.2` calls dropped (see the
-    module header). -/
-def denseFoldLoopV : List (List VarId) → DenseConstraintSystem p → DenseFoldIdx p →
-    DenseConstraintSystem p
-  | [], d, _ => d
-  | xs :: rest, d, fidx =>
-    let r := denseFoldStepV d fidx xs
-    denseFoldLoopV rest r.1 r.2
-
-/-! ## The candidate group list (mirrors the spec pass's inline `svSet`/`targets`)
-
-The one authorized divergence (`VarId`-order `mergeSort`, see the module header) and the third
-restored `let` (`svSet` bound once, outside the `filterMap`, see the module header) both live here. -/
-
-/-- The candidate fold targets: every constraint's 2–8-distinct-variable group, every variable of
-    which has some single-variable constraint somewhere (`denseSvSet`, bound **once** — the restored
-    fix), sorted by `VarId.index` (**the authorized divergence**: the reference sorts by the resolved
-    `Variable`'s order to canonicalise each group before dedup; here the natural dense order is used
-    instead — same `mergeSort`/`dedupHash` structure and stability, no `Variable` resolution) and
-    deduplicated (mirrors the spec pass's inline `svSet`/`targets`, and `denseTargets` in
-    `Dense/DomainFold.lean`, minus the `VarRegistry` it threaded only for the sort key). -/
-def denseTargetsV (d : DenseConstraintSystem p) : List (List VarId) :=
-  let svSet := denseSvSet d
-  dedupHash (d.algebraicConstraints.filterMap (fun c =>
-    let vs := c.vars.dedup
-    if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
-      some (vs.mergeSort (fun a b => compare a.index b.index != .gt))
-    else none))
-
 /-! ## The index-preserving indexed-path rewrite (mirrors #165's `foldRewrite`/`foldOut`/`touchedSet`/
 `foldOutIdx`, `OptimizerPasses/DomainFold.lean:121,374-378,887,899`)
 
@@ -348,13 +290,13 @@ Upstream #165 split what used to be one gate into two: the **direct** path keeps
 `denseFoldRewriteV` above, untouched, still wired as the direct-path/C twin. The **indexed** path
 now gets its own `anyVarIn`-only gate, `foldRewrite`, feeding an *order- and length-preserving*
 in-place `foldOut` (an `if`-`then`-`else` `.map`, not the old filter-then-append reshuffle
-`denseFoldOutV` above still performs) — which is what lets `FoldIdx.refresh` keep both inverted
+`denseFoldOutV` above still performs) — which is what lets `DenseFoldIdx.refresh` keep both inverted
 indexes **without any rebuild** across an accepted fold (positions never move). `foldOutIdx` then
 computes that same in-place fold *sparsely*, touching only the bucketed candidate positions.
 
-The four defs below are the dense twins of that new indexed-path shape. They are pure additions:
-nothing here is called by `denseFoldStepV`/`denseFoldLoopV`/`denseDomainFoldFV` yet (those still run
-the pre-#165 shape via `denseFoldOutV`/`denseFoldRewriteV`) — the wiring swap is a later chunk. -/
+The four defs below are the dense twins of that new indexed-path shape and are wired below:
+`denseFoldStepV` computes an accepted fold via `denseFoldOutIdxV` (provably `denseFoldOutInPlaceV`)
+and refreshes the index without rebuilding. -/
 
 /-- The indexed-path fold rewrite, gated by `anyVarIn` alone (mirrors NEW spec `foldRewrite`,
     `DomainFold.lean:121`): an expression sharing no variable with the group is returned untouched
@@ -410,6 +352,66 @@ def denseFoldOutIdxV (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs :
           multiplicity := denseFoldRewriteIdxV xs survsV bii.1.multiplicity,
           payload := bii.1.payload.map (denseFoldRewriteIdxV xs survsV) }
       else bii.1) }
+
+/-! ## The indexed fold loop (mirrors `foldStep`/`foldLoop`)
+
+For systems at least `domainFoldIndexThreshold` large. The covered set is served from the prebuilt
+`DenseFoldIdx` and refreshed (no rebuild) only on an accepted fold — see `Dense/DomainFold.lean`'s
+module header for the rationale, unchanged here. The single-evaluation `let` for the whole step's
+result (restored, see the module header's first fix) is what makes the indexed loop run each
+`denseFoldStepV` exactly once per target. -/
+
+/-- One checked fold for a candidate group (mirrors #165's `foldStep`,
+    `OptimizerPasses/DomainFold.lean:1009`), served from the prebuilt covered-constraint index. An
+    accepted fold is computed sparsely (`denseFoldOutIdxV`, provably the in-place fold) and bound
+    **once** as `ro` (spec binds it once at `DomainFold.lean:1024` — the arity trap), then the index
+    is **refreshed without any rebuild** (`fidx.refresh`, keeping both bucket maps, re-materialising
+    only the item arrays). -/
+def denseFoldStepV (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId) :
+    DenseConstraintSystem p × DenseFoldIdx p :=
+  let es := denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs
+  match denseGroupDoms es xs with
+  | none => (d, fidx)
+  | some doms =>
+    if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
+      let survsV := denseGroupSurvivorsEV es xs (doms.map Prod.snd)
+      if 1 ≤ survsV.length && denseSystemHasFoldableIdxV fidx xs survsV then
+        let ro := denseFoldOutIdxV d fidx xs survsV
+        (ro, fidx.refresh ro)
+      else (d, fidx)
+    else (d, fidx)
+
+/-- Process the candidate groups sequentially, threading and refreshing the index (mirrors
+    `foldLoop`/`denseFoldLoop`). The whole step's result is bound once (`r`) and both its output and
+    its refreshed index are read from that single binding — restoring the spec's `let r1 :=
+    foldStep …` sharing that the old dense port's two separate `.1`/`.2` calls dropped (see the
+    module header). -/
+def denseFoldLoopV : List (List VarId) → DenseConstraintSystem p → DenseFoldIdx p →
+    DenseConstraintSystem p
+  | [], d, _ => d
+  | xs :: rest, d, fidx =>
+    let r := denseFoldStepV d fidx xs
+    denseFoldLoopV rest r.1 r.2
+
+/-! ## The candidate group list (mirrors the spec pass's inline `svSet`/`targets`)
+
+The one authorized divergence (`VarId`-order `mergeSort`, see the module header) and the third
+restored `let` (`svSet` bound once, outside the `filterMap`, see the module header) both live here. -/
+
+/-- The candidate fold targets: every constraint's 2–8-distinct-variable group, every variable of
+    which has some single-variable constraint somewhere (`denseSvSet`, bound **once** — the restored
+    fix), sorted by `VarId.index` (**the authorized divergence**: the reference sorts by the resolved
+    `Variable`'s order to canonicalise each group before dedup; here the natural dense order is used
+    instead — same `mergeSort`/`dedupHash` structure and stability, no `Variable` resolution) and
+    deduplicated (mirrors the spec pass's inline `svSet`/`targets`, and `denseTargets` in
+    `Dense/DomainFold.lean`, minus the `VarRegistry` it threaded only for the sort key). -/
+def denseTargetsV (d : DenseConstraintSystem p) : List (List VarId) :=
+  let svSet := denseSvSet d
+  dedupHash (d.algebraicConstraints.filterMap (fun c =>
+    let vs := c.vars.dedup
+    if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
+      some (vs.mergeSort (fun a b => compare a.index b.index != .gt))
+    else none))
 
 /-! ## The pass -/
 

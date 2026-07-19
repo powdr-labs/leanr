@@ -605,7 +605,7 @@ theorem denseFoldStepV_fst (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p)
                 && denseSystemHasFoldableIdxV fidx xs
                     (denseGroupSurvivorsEV (denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs) xs
                       (doms.map Prod.snd))
-            then denseFoldOutV d xs
+            then denseFoldOutIdxV d fidx xs
                 (denseGroupSurvivorsEV (denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs) xs
                   (doms.map Prod.snd))
             else d)
@@ -615,13 +615,20 @@ theorem denseFoldStepV_fst (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p)
   | none => rfl
   | some doms => simp only [apply_ite Prod.fst]
 
-theorem denseFoldStepV_snd_idx (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
-    (hidx : fidx.idx = denseCovBuild DenseExpr.vars d.algebraicConstraints) :
-    (denseFoldStepV d fidx xs).2.idx
-      = denseCovBuild DenseExpr.vars (denseFoldStepV d fidx xs).1.algebraicConstraints := by
+/-- The step's refreshed index keeps the input's constraint bucket map (the flip's no-rebuild
+    refresh: `DenseFoldIdx.refresh` sets `idx := old.idx`). -/
+theorem denseFoldStepV_snd_idx_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId) :
+    (denseFoldStepV d fidx xs).2.idx = fidx.idx := by
   simp only [denseFoldStepV]; split
-  · exact hidx
-  · split_ifs <;> first | rfl | exact hidx
+  · rfl
+  · split_ifs <;> rfl
+
+/-- The step's refreshed index keeps the input's interaction bucket map (no-rebuild refresh). -/
+theorem denseFoldStepV_snd_bisIdx_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId) :
+    (denseFoldStepV d fidx xs).2.bisIdx = fidx.bisIdx := by
+  simp only [denseFoldStepV]; split
+  · rfl
+  · split_ifs <;> rfl
 
 theorem denseFoldStepV_snd_arr (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
     (harr : fidx.arr = d.algebraicConstraints.toArray) :
@@ -630,119 +637,33 @@ theorem denseFoldStepV_snd_arr (d : DenseConstraintSystem p) (fidx : DenseFoldId
   · exact harr
   · split_ifs <;> first | rfl | exact harr
 
-/-- Under the index-synchronisation invariant, the covered set the index serves equals the direct
-    covered set. -/
-theorem denseFoldStepV_es_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
-    (hidx : fidx.idx = denseCovBuild DenseExpr.vars d.algebraicConstraints)
-    (harr : fidx.arr = d.algebraicConstraints.toArray) :
-    denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs = denseCoveredCsOf d xs := by
-  rw [hidx, harr]
-  exact denseCoveredIdx_eq_filter DenseExpr.vars d.algebraicConstraints (denseCoveredBy xs) xs
-    (fun i _hi hQ => denseCoveredBy_shares_var xs d.algebraicConstraints[i] hQ)
-
-theorem denseFoldStepV_correct [Fact p.Prime] (bs : BusSemantics p) (isInput : VarId → Bool)
-    (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
-    (hidx : fidx.idx = denseCovBuild DenseExpr.vars d.algebraicConstraints)
-    (harr : fidx.arr = d.algebraicConstraints.toArray) :
-    DensePassCorrect isInput d (denseFoldStepV d fidx xs).1 [] bs := by
-  have hes := denseFoldStepV_es_eq d fidx xs hidx harr
-  rw [denseFoldStepV_fst, hes]
-  split
-  · exact DensePassCorrect_refl isInput d bs
-  · rename_i doms hgd
-    by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
-    · rw [if_pos hp]
-      by_cases hgate : (1 ≤ (denseGroupSurvivorsEV (denseCoveredCsOf d xs) xs (doms.map Prod.snd)).length
-          && denseSystemHasFoldableIdxV fidx xs (denseGroupSurvivorsEV (denseCoveredCsOf d xs) xs (doms.map Prod.snd))) = true
-      · rw [if_pos hgate]
-        exact denseFoldOutV_correct bs d xs doms hgd isInput
-      · rw [if_neg (by simpa using hgate)]; exact DensePassCorrect_refl isInput d bs
-    · rw [if_neg hp]; exact DensePassCorrect_refl isInput d bs
-
-theorem denseFoldStepV_covered (reg : VarRegistry) (d : DenseConstraintSystem p)
-    (hcov : d.CoveredBy reg) (fidx : DenseFoldIdx p) (xs : List VarId) :
-    (denseFoldStepV d fidx xs).1.CoveredBy reg := by
+/-- The step's output system is either the input verbatim (no fold accepted) or the sparse fold of
+    it (`denseFoldOutIdxV`). The single case analysis all three completeness/array invariants share. -/
+theorem denseFoldStepV_fst_alg (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId) :
+    (denseFoldStepV d fidx xs).1 = d ∨
+      ∃ survsV, (denseFoldStepV d fidx xs).1 = denseFoldOutIdxV d fidx xs survsV := by
   rw [denseFoldStepV_fst]
   split
-  · exact hcov
-  · rename_i doms _
-    by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
-    · rw [if_pos hp]
-      by_cases hgate : (1 ≤ (denseGroupSurvivorsEV (denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs) xs
-              (doms.map Prod.snd)).length
-          && denseSystemHasFoldableIdxV fidx xs (denseGroupSurvivorsEV (denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs) xs
-              (doms.map Prod.snd))) = true
-      · rw [if_pos hgate]; exact denseFoldOutV_covered reg d hcov xs _
-      · rw [if_neg (by simpa using hgate)]; exact hcov
-    · rw [if_neg hp]; exact hcov
+  · exact Or.inl rfl
+  · split_ifs
+    · exact Or.inr ⟨_, rfl⟩
+    · exact Or.inl rfl
+    · exact Or.inl rfl
 
-theorem denseFoldLoopV_correct [Fact p.Prime] (bs : BusSemantics p) (isInput : VarId → Bool) :
-    ∀ (targets : List (List VarId)) (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p),
-      fidx.idx = denseCovBuild DenseExpr.vars d.algebraicConstraints →
-      fidx.arr = d.algebraicConstraints.toArray →
-      DensePassCorrect isInput d (denseFoldLoopV targets d fidx) [] bs := by
-  intro targets
-  induction targets with
-  | nil => intro d fidx _ _; exact DensePassCorrect_refl isInput d bs
-  | cons xs rest ih =>
-      intro d fidx hidx harr
-      show DensePassCorrect isInput d
-        (denseFoldLoopV rest (denseFoldStepV d fidx xs).1 (denseFoldStepV d fidx xs).2) [] bs
-      refine DensePassCorrect.trans (denseFoldStepV_correct bs isInput d fidx xs hidx harr)
-        (ih _ _ ?_ ?_)
-      · exact denseFoldStepV_snd_idx d fidx xs hidx
-      · exact denseFoldStepV_snd_arr d fidx xs harr
-
-theorem denseFoldLoopV_covered (reg : VarRegistry) :
-    ∀ (targets : List (List VarId)) (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p),
-      d.CoveredBy reg → (denseFoldLoopV targets d fidx).CoveredBy reg := by
-  intro targets
-  induction targets with
-  | nil => intro d fidx hcov; exact hcov
-  | cons xs rest ih =>
-      intro d fidx hcov
-      exact ih _ _ (denseFoldStepV_covered reg d hcov fidx xs)
-
-/-! ## The whole pass -/
-
-theorem denseDomainFoldFV_correct (pw : PrimeWitness p) (bs : BusSemantics p) (isInput : VarId → Bool)
-    (d : DenseConstraintSystem p) :
-    DensePassCorrect isInput d (denseDomainFoldFV pw d) [] bs := by
-  unfold denseDomainFoldFV
-  by_cases hpB : pw.isPrime = true
-  · rw [if_pos hpB]
-    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
-    by_cases hthr : domainFoldIndexThreshold ≤ d.algebraicConstraints.length
-    · rw [if_pos hthr]
-      exact denseFoldLoopV_correct bs isInput (denseTargetsV d) d (DenseFoldIdx.mk' d) rfl rfl
-    · rw [if_neg hthr]
-      exact denseFoldLoopDirectV_correct bs isInput (denseTargetsV d) d
-  · rw [if_neg hpB]
-    exact DensePassCorrect_refl isInput d bs
-
-theorem denseDomainFoldFV_covered (pw : PrimeWitness p) (reg : VarRegistry)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
-    (denseDomainFoldFV pw d).CoveredBy reg := by
-  unfold denseDomainFoldFV
-  by_cases hpB : pw.isPrime = true
-  · rw [if_pos hpB]
-    by_cases hthr : domainFoldIndexThreshold ≤ d.algebraicConstraints.length
-    · rw [if_pos hthr]
-      exact denseFoldLoopV_covered reg (denseTargetsV d) d (DenseFoldIdx.mk' d) hcov
-    · rw [if_neg hthr]
-      exact denseFoldLoopDirectV_covered reg (denseTargetsV d) d hcov
-  · rw [if_neg hpB]; exact hcov
-
-/-- **The native value-only dense domain-fold pass.** Connects to the audited spec via
-    `DensePassCorrect.lift` (through `ofNative`) on the native `DensePassCorrect` proof — no
-    commutation with the reference pass, no `decode` in a discharged obligation. -/
-def denseDomainFoldPassV (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
-    (fun _ _ d => denseDomainFoldFV pw d)
-    (fun _ _ _ => [])
-    (fun reg _ _ d hcov => denseDomainFoldFV_covered pw reg d hcov)
-    (fun _ _ _ _ _ => by intro x hx; simp at hx)
-    (fun reg bs _ d _ => denseDomainFoldFV_correct pw bs reg.isInput d)
+/-- Under the constraint-side bucket-completeness invariant (and array-sync), the covered set the
+    index serves equals the direct covered set (mirrors #165's `coveredCsIdx_eq`,
+    `OptimizerPasses/DomainFold.lean:865`, which likewise needs only completeness — refreshed
+    stale-superset indexes work exactly like fresh builds). -/
+theorem denseFoldStepV_es_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
+    (hidx : ∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
+      ∀ v ∈ d.algebraicConstraints[i].vars, i ∈ fidx.idx.buckets.getD v [])
+    (harr : fidx.arr = d.algebraicConstraints.toArray) :
+    denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs = denseCoveredCsOf d xs := by
+  rw [harr, denseCoveredCsOf]
+  exact denseCoveredIdx_eq_filter_of_complete fidx.idx d.algebraicConstraints (denseCoveredBy xs) xs
+    (fun i hi hQ => by
+      obtain ⟨v, hv, hvxs⟩ := denseCoveredBy_shares_var xs d.algebraicConstraints[i] hQ
+      exact denseMem_candidates fidx.idx xs v i hvxs (hidx i hi v hv))
 
 /-! ## The index-preserving indexed path (delta re-port chunk C3)
 
@@ -1165,5 +1086,259 @@ theorem denseFoldOutIdxV_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p
       (fun e he => hfix e (fun v hv => by
         rw [denseBIVars]
         exact List.mem_append_right _ (List.mem_flatMap.2 ⟨e, he, hv⟩)))
+
+/-! ### Completeness preservation across an in-place fold (mirrors #165's `FoldIdx.refresh` field
+proofs, `OptimizerPasses/DomainFold.lean:781-810`)
+
+`denseFoldOutInPlaceV` rewrites items in place (order- and length-preserving) and only ever shrinks
+an expression's variable set (`denseFoldRewriteIdxV_vars` on the constraint side, that plus
+`denseMapExpr_vars_subset` on the interaction side), so a bucket map complete for the input stays
+complete for the folded output. These are exactly the two proofs #165's dependent `FoldIdx.refresh`
+carries as its `hidx`/`hbis` fields; on the data-only dense `DenseFoldIdx` they live as standalone
+lemmas the loop threads. -/
+
+/-- Constraint-side bucket completeness survives an in-place fold (mirrors `FoldIdx.refresh`'s `hidx`
+    field proof, `DomainFold.lean:781`). -/
+theorem denseFoldOutInPlaceV_hidx (bkts : Std.HashMap VarId (List Nat)) (d : DenseConstraintSystem p)
+    (xs : List VarId) (survsV : List (List (ZMod p)))
+    (hidx : ∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
+      ∀ v ∈ d.algebraicConstraints[i].vars, i ∈ bkts.getD v []) :
+    ∀ (i : Nat) (_ : i < (denseFoldOutInPlaceV d xs survsV).algebraicConstraints.length),
+      ∀ v ∈ (denseFoldOutInPlaceV d xs survsV).algebraicConstraints[i].vars,
+        i ∈ bkts.getD v [] := by
+  intro i hi v hv
+  have hlen : i < d.algebraicConstraints.length := by
+    simpa only [denseFoldOutInPlaceV, List.length_map] using hi
+  have hv' : v ∈ d.algebraicConstraints[i].vars := by
+    have hgm : (denseFoldOutInPlaceV d xs survsV).algebraicConstraints[i]'hi
+        = (if denseCoveredBy xs (d.algebraicConstraints[i]'hlen) then
+            d.algebraicConstraints[i]'hlen
+           else denseFoldRewriteIdxV xs survsV (d.algebraicConstraints[i]'hlen)) := by
+      simp only [denseFoldOutInPlaceV, List.getElem_map]
+    rw [hgm] at hv
+    by_cases hcov : denseCoveredBy xs (d.algebraicConstraints[i]'hlen) = true
+    · rwa [if_pos hcov] at hv
+    · rw [if_neg hcov] at hv
+      exact denseFoldRewriteIdxV_vars xs survsV _ v hv
+  exact hidx i hlen v hv'
+
+/-- Interaction-side bucket completeness survives an in-place fold (mirrors `FoldIdx.refresh`'s
+    `hbis` field proof, `DomainFold.lean:800`). -/
+theorem denseFoldOutInPlaceV_hbis (bkts : Std.HashMap VarId (List Nat)) (d : DenseConstraintSystem p)
+    (xs : List VarId) (survsV : List (List (ZMod p)))
+    (hbis : ∀ (i : Nat) (_ : i < d.busInteractions.length),
+      ∀ v ∈ denseBIVars d.busInteractions[i], i ∈ bkts.getD v []) :
+    ∀ (i : Nat) (_ : i < (denseFoldOutInPlaceV d xs survsV).busInteractions.length),
+      ∀ v ∈ denseBIVars (denseFoldOutInPlaceV d xs survsV).busInteractions[i],
+        i ∈ bkts.getD v [] := by
+  intro i hi v hv
+  have hlen : i < d.busInteractions.length := by
+    simpa only [denseFoldOutInPlaceV, List.length_map] using hi
+  have hv' : v ∈ denseBIVars (d.busInteractions[i]'hlen) := by
+    have hgm : (denseFoldOutInPlaceV d xs survsV).busInteractions[i]'hi
+        = { d.busInteractions[i]'hlen with
+            multiplicity := denseFoldRewriteIdxV xs survsV (d.busInteractions[i]'hlen).multiplicity,
+            payload := (d.busInteractions[i]'hlen).payload.map (denseFoldRewriteIdxV xs survsV) } := by
+      simp only [denseFoldOutInPlaceV, List.getElem_map]
+    rw [hgm] at hv
+    exact denseMapExpr_vars_subset (denseFoldRewriteIdxV xs survsV)
+      (denseFoldRewriteIdxV_vars xs survsV) (d.busInteractions[i]'hlen) v hv
+  exact hbis i hlen v hv'
+
+/-- Coverage survives the sparse indexed fold (native mirror of the coverage half of
+    `foldOutIdx`'s soundness; the sparse fold only rewrites — never introduces — variables at each
+    position, so every item stays registered). Proved directly, without the completeness hypotheses,
+    so the coverage loop needs none. -/
+theorem denseFoldOutIdxV_covered (reg : VarRegistry) (d : DenseConstraintSystem p)
+    (fidx : DenseFoldIdx p) (hcov : d.CoveredBy reg) (xs : List VarId)
+    (survsV : List (List (ZMod p))) :
+    (denseFoldOutIdxV d fidx xs survsV).CoveredBy reg := by
+  refine ⟨fun e he => ?_, fun bi hbi => ?_⟩
+  · have he' : e ∈ d.algebraicConstraints.zipIdx.map (fun ci =>
+        if (denseTouchedSet fidx.idx xs).contains ci.2 then
+          (if denseCoveredBy xs ci.1 then ci.1 else denseFoldRewriteIdxV xs survsV ci.1)
+        else ci.1) := he
+    obtain ⟨⟨c0, j⟩, hp, rfl⟩ := List.mem_map.1 he'
+    have hc0mem : c0 ∈ d.algebraicConstraints := by
+      have h2 : c0 ∈ d.algebraicConstraints.zipIdx.map Prod.fst :=
+        List.mem_map.2 ⟨(c0, j), hp, rfl⟩
+      rwa [List.zipIdx_map_fst] at h2
+    have hc0cov : c0.CoveredBy reg := hcov.1 c0 hc0mem
+    dsimp only
+    by_cases ht : (denseTouchedSet fidx.idx xs).contains j = true
+    · rw [if_pos ht]
+      by_cases hcc : denseCoveredBy xs c0 = true
+      · rw [if_pos hcc]; exact hc0cov
+      · rw [if_neg hcc]; exact denseFoldRewriteIdxV_covered reg xs survsV hc0cov
+    · rw [if_neg ht]; exact hc0cov
+  · have hbi' : bi ∈ d.busInteractions.zipIdx.map (fun bii =>
+        if (denseTouchedSet fidx.bisIdx xs).contains bii.2 then
+          { bii.1 with
+            multiplicity := denseFoldRewriteIdxV xs survsV bii.1.multiplicity,
+            payload := bii.1.payload.map (denseFoldRewriteIdxV xs survsV) }
+        else bii.1) := hbi
+    obtain ⟨⟨bi0, j⟩, hp, rfl⟩ := List.mem_map.1 hbi'
+    have hbi0mem : bi0 ∈ d.busInteractions := by
+      have h2 : bi0 ∈ d.busInteractions.zipIdx.map Prod.fst :=
+        List.mem_map.2 ⟨(bi0, j), hp, rfl⟩
+      rwa [List.zipIdx_map_fst] at h2
+    obtain ⟨hm, hpl⟩ := hcov.2 bi0 hbi0mem
+    dsimp only
+    by_cases ht : (denseTouchedSet fidx.bisIdx xs).contains j = true
+    · rw [if_pos ht]
+      refine ⟨denseFoldRewriteIdxV_covered reg xs survsV hm, fun e he => ?_⟩
+      have he'' : e ∈ bi0.payload.map (denseFoldRewriteIdxV xs survsV) := he
+      obtain ⟨e0, he0, rfl⟩ := List.mem_map.1 he''
+      exact denseFoldRewriteIdxV_covered reg xs survsV (hpl e0 he0)
+    · rw [if_neg ht]; exact ⟨hm, hpl⟩
+
+/-! ## The indexed fold loop (index-preserving path) -/
+
+/-- Constraint-side completeness of the input's index survives one step: the refreshed index keeps
+    the old bucket map (`denseFoldStepV_snd_idx_eq`), which stays complete for the step's output
+    (identity, or the sparse fold via `denseFoldOutInPlaceV_hidx`). -/
+theorem denseFoldStepV_snd_idx (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
+    (hidx : ∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
+      ∀ v ∈ d.algebraicConstraints[i].vars, i ∈ fidx.idx.buckets.getD v [])
+    (hbis : ∀ (i : Nat) (_ : i < d.busInteractions.length),
+      ∀ v ∈ denseBIVars d.busInteractions[i], i ∈ fidx.bisIdx.buckets.getD v []) :
+    ∀ (i : Nat) (_ : i < (denseFoldStepV d fidx xs).1.algebraicConstraints.length),
+      ∀ v ∈ (denseFoldStepV d fidx xs).1.algebraicConstraints[i].vars,
+        i ∈ (denseFoldStepV d fidx xs).2.idx.buckets.getD v [] := by
+  rw [denseFoldStepV_snd_idx_eq]
+  rcases denseFoldStepV_fst_alg d fidx xs with h | ⟨survsV, h⟩
+  · rw [h]; exact hidx
+  · rw [h, denseFoldOutIdxV_eq d fidx xs survsV hidx hbis]
+    exact denseFoldOutInPlaceV_hidx fidx.idx.buckets d xs survsV hidx
+
+/-- Interaction-side completeness survives one step (dual of `denseFoldStepV_snd_idx`, via
+    `denseFoldOutInPlaceV_hbis`). -/
+theorem denseFoldStepV_snd_bis (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
+    (hidx : ∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
+      ∀ v ∈ d.algebraicConstraints[i].vars, i ∈ fidx.idx.buckets.getD v [])
+    (hbis : ∀ (i : Nat) (_ : i < d.busInteractions.length),
+      ∀ v ∈ denseBIVars d.busInteractions[i], i ∈ fidx.bisIdx.buckets.getD v []) :
+    ∀ (i : Nat) (_ : i < (denseFoldStepV d fidx xs).1.busInteractions.length),
+      ∀ v ∈ denseBIVars (denseFoldStepV d fidx xs).1.busInteractions[i],
+        i ∈ (denseFoldStepV d fidx xs).2.bisIdx.buckets.getD v [] := by
+  rw [denseFoldStepV_snd_bisIdx_eq]
+  rcases denseFoldStepV_fst_alg d fidx xs with h | ⟨survsV, h⟩
+  · rw [h]; exact hbis
+  · rw [h, denseFoldOutIdxV_eq d fidx xs survsV hidx hbis]
+    exact denseFoldOutInPlaceV_hbis fidx.bisIdx.buckets d xs survsV hbis
+
+theorem denseFoldStepV_correct [Fact p.Prime] (bs : BusSemantics p) (isInput : VarId → Bool)
+    (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
+    (hidx : ∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
+      ∀ v ∈ d.algebraicConstraints[i].vars, i ∈ fidx.idx.buckets.getD v [])
+    (hbis : ∀ (i : Nat) (_ : i < d.busInteractions.length),
+      ∀ v ∈ denseBIVars d.busInteractions[i], i ∈ fidx.bisIdx.buckets.getD v [])
+    (harr : fidx.arr = d.algebraicConstraints.toArray) :
+    DensePassCorrect isInput d (denseFoldStepV d fidx xs).1 [] bs := by
+  have hes := denseFoldStepV_es_eq d fidx xs hidx harr
+  rw [denseFoldStepV_fst, hes]
+  split
+  · exact DensePassCorrect_refl isInput d bs
+  · rename_i doms hgd
+    by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
+    · rw [if_pos hp]
+      by_cases hgate : (1 ≤ (denseGroupSurvivorsEV (denseCoveredCsOf d xs) xs (doms.map Prod.snd)).length
+          && denseSystemHasFoldableIdxV fidx xs (denseGroupSurvivorsEV (denseCoveredCsOf d xs) xs (doms.map Prod.snd))) = true
+      · rw [if_pos hgate, denseFoldOutIdxV_eq d fidx xs _ hidx hbis]
+        exact denseFoldOutInPlaceV_correct bs d xs doms hgd isInput
+      · rw [if_neg (by simpa using hgate)]; exact DensePassCorrect_refl isInput d bs
+    · rw [if_neg hp]; exact DensePassCorrect_refl isInput d bs
+
+theorem denseFoldStepV_covered (reg : VarRegistry) (d : DenseConstraintSystem p)
+    (hcov : d.CoveredBy reg) (fidx : DenseFoldIdx p) (xs : List VarId) :
+    (denseFoldStepV d fidx xs).1.CoveredBy reg := by
+  rw [denseFoldStepV_fst]
+  split
+  · exact hcov
+  · rename_i doms _
+    by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
+    · rw [if_pos hp]
+      by_cases hgate : (1 ≤ (denseGroupSurvivorsEV (denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs) xs
+              (doms.map Prod.snd)).length
+          && denseSystemHasFoldableIdxV fidx xs (denseGroupSurvivorsEV (denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs) xs
+              (doms.map Prod.snd))) = true
+      · rw [if_pos hgate]; exact denseFoldOutIdxV_covered reg d fidx hcov xs _
+      · rw [if_neg (by simpa using hgate)]; exact hcov
+    · rw [if_neg hp]; exact hcov
+
+theorem denseFoldLoopV_correct [Fact p.Prime] (bs : BusSemantics p) (isInput : VarId → Bool) :
+    ∀ (targets : List (List VarId)) (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p),
+      (∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
+        ∀ v ∈ d.algebraicConstraints[i].vars, i ∈ fidx.idx.buckets.getD v []) →
+      (∀ (i : Nat) (_ : i < d.busInteractions.length),
+        ∀ v ∈ denseBIVars d.busInteractions[i], i ∈ fidx.bisIdx.buckets.getD v []) →
+      fidx.arr = d.algebraicConstraints.toArray →
+      DensePassCorrect isInput d (denseFoldLoopV targets d fidx) [] bs := by
+  intro targets
+  induction targets with
+  | nil => intro d fidx _ _ _; exact DensePassCorrect_refl isInput d bs
+  | cons xs rest ih =>
+      intro d fidx hidx hbis harr
+      show DensePassCorrect isInput d
+        (denseFoldLoopV rest (denseFoldStepV d fidx xs).1 (denseFoldStepV d fidx xs).2) [] bs
+      refine DensePassCorrect.trans (denseFoldStepV_correct bs isInput d fidx xs hidx hbis harr)
+        (ih _ _ ?_ ?_ ?_)
+      · exact denseFoldStepV_snd_idx d fidx xs hidx hbis
+      · exact denseFoldStepV_snd_bis d fidx xs hidx hbis
+      · exact denseFoldStepV_snd_arr d fidx xs harr
+
+theorem denseFoldLoopV_covered (reg : VarRegistry) :
+    ∀ (targets : List (List VarId)) (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p),
+      d.CoveredBy reg → (denseFoldLoopV targets d fidx).CoveredBy reg := by
+  intro targets
+  induction targets with
+  | nil => intro d fidx hcov; exact hcov
+  | cons xs rest ih =>
+      intro d fidx hcov
+      exact ih _ _ (denseFoldStepV_covered reg d hcov fidx xs)
+
+/-! ## The whole pass -/
+
+theorem denseDomainFoldFV_correct (pw : PrimeWitness p) (bs : BusSemantics p) (isInput : VarId → Bool)
+    (d : DenseConstraintSystem p) :
+    DensePassCorrect isInput d (denseDomainFoldFV pw d) [] bs := by
+  unfold denseDomainFoldFV
+  by_cases hpB : pw.isPrime = true
+  · rw [if_pos hpB]
+    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
+    by_cases hthr : domainFoldIndexThreshold ≤ d.algebraicConstraints.length
+    · rw [if_pos hthr]
+      exact denseFoldLoopV_correct bs isInput (denseTargetsV d) d (DenseFoldIdx.mk' d)
+        (fun i hi v hv => denseBuild_complete DenseExpr.vars d.algebraicConstraints i hi v hv)
+        (fun i hi v hv => denseBuild_complete denseBIVars d.busInteractions i hi v hv)
+        rfl
+    · rw [if_neg hthr]
+      exact denseFoldLoopDirectV_correct bs isInput (denseTargetsV d) d
+  · rw [if_neg hpB]
+    exact DensePassCorrect_refl isInput d bs
+
+theorem denseDomainFoldFV_covered (pw : PrimeWitness p) (reg : VarRegistry)
+    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
+    (denseDomainFoldFV pw d).CoveredBy reg := by
+  unfold denseDomainFoldFV
+  by_cases hpB : pw.isPrime = true
+  · rw [if_pos hpB]
+    by_cases hthr : domainFoldIndexThreshold ≤ d.algebraicConstraints.length
+    · rw [if_pos hthr]
+      exact denseFoldLoopV_covered reg (denseTargetsV d) d (DenseFoldIdx.mk' d) hcov
+    · rw [if_neg hthr]
+      exact denseFoldLoopDirectV_covered reg (denseTargetsV d) d hcov
+  · rw [if_neg hpB]; exact hcov
+
+/-- **The native value-only dense domain-fold pass.** Connects to the audited spec via
+    `DensePassCorrect.lift` (through `ofNative`) on the native `DensePassCorrect` proof — no
+    commutation with the reference pass, no `decode` in a discharged obligation. -/
+def denseDomainFoldPassV (pw : PrimeWitness p) : DenseVerifiedPassW p :=
+  DenseVerifiedPassW.ofNative
+    (fun _ _ d => denseDomainFoldFV pw d)
+    (fun _ _ _ => [])
+    (fun reg _ _ d hcov => denseDomainFoldFV_covered pw reg d hcov)
+    (fun _ _ _ _ _ => by intro x hx; simp at hx)
+    (fun reg bs _ d _ => denseDomainFoldFV_correct pw bs reg.isInput d)
 
 end ApcOptimizer.Dense

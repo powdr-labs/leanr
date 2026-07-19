@@ -327,14 +327,15 @@ Kept as shared infrastructure: `Dense/DomainFoldNative.lean` and its native proo
 the index-local *no-op gate* (`systemHasFoldableIdx`, part of the dead commutation-era cluster
 described above) moved to the value-only `denseSystemHasFoldableIdxV` in that file. -/
 
-/-- The dense analogue of `FoldIdx` (plain data; correctness rides on the correspondence). -/
+/-- The dense analogue of `FoldIdx` (plain data — no proof fields; completeness is threaded
+    externally through the native proofs, mirroring #165's data-only `FoldIdx` at
+    `OptimizerPasses/DomainFold.lean:727` minus the `cfCs`/`cfBis` const-foldable-item caches #165
+    dropped when it made `systemHasFoldableIdx` purely a two-bucket scan). -/
 structure DenseFoldIdx (p : ℕ) where
   idx : DenseCovIndex
   arr : Array (DenseExpr p)
   bisIdx : DenseCovIndex
   arrBis : Array (BusInteraction (DenseExpr p))
-  cfCs : List (DenseExpr p)
-  cfBis : List (BusInteraction (DenseExpr p))
 
 /-- Build the dense fold index for a system (mirrors `FoldIdx.mk'`). -/
 def DenseFoldIdx.mk' (d : DenseConstraintSystem p) : DenseFoldIdx p where
@@ -342,20 +343,18 @@ def DenseFoldIdx.mk' (d : DenseConstraintSystem p) : DenseFoldIdx p where
   arr := d.algebraicConstraints.toArray
   bisIdx := denseCovBuild denseBIVars d.busInteractions
   arrBis := d.busInteractions.toArray
-  cfCs := d.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
-  cfBis := d.busInteractions.filter (fun bi =>
-    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
 
-/-- Refresh the dense fold index after an accepted fold (mirrors `FoldIdx.refresh`: rebuild the
-    constraint side, reuse the interaction buckets stale). -/
+/-- Refresh the dense fold index after an accepted fold — **no rebuild** (mirrors #165's
+    `FoldIdx.refresh` at `OptimizerPasses/DomainFold.lean:777`, minus its proof arguments): the
+    in-place fold (`denseFoldOutInPlaceV`) is order- and length-preserving and only ever shrinks an
+    expression's variable set, so both bucket maps stay complete exactly as they are; only the item
+    arrays are re-materialized (O(n) pointer work). Completeness survival is proved separately (the
+    dense struct carries no proof fields). -/
 def DenseFoldIdx.refresh (old : DenseFoldIdx p) (ro : DenseConstraintSystem p) : DenseFoldIdx p where
-  idx := denseCovBuild DenseExpr.vars ro.algebraicConstraints
+  idx := old.idx
   arr := ro.algebraicConstraints.toArray
   bisIdx := old.bisIdx
   arrBis := ro.busInteractions.toArray
-  cfCs := ro.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
-  cfBis := ro.busInteractions.filter (fun bi =>
-    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
 
 /-! ## Foundational soundness lemmas
 
