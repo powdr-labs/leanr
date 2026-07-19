@@ -174,4 +174,105 @@ def denseDomainByteJustified (domCs : List (DenseExpr p)) (e : DenseExpr p) : Bo
     | none => false
   | _ => false
 
+/-! ## Affine bound propagation through a linearized form (Task 3, chunk C1b — impl)
+
+Dense, `VarId`-native transliteration of the *affine* justification tier
+(`BusPairCancel.lean:401-489`): `linTermsNatBound`/`LinExpr.natBound`/`affineJustified`. Reuses
+`denseLinearize`/`DenseLinExpr.norm` (already imported transitively — see the C1a header). -/
+
+/-- Natural upper bound of a term list `Σ cᵥ·v` under per-variable value bounds `bnd` (`bnd v`
+    bounds `(denv v).val` strictly): `Σ cᵥ.val·(bnd v − 1)`; `none` if any variable is unbounded.
+    Mirrors `linTermsNatBound` (`BusPairCancel.lean:413`). -/
+def denseLinTermsNatBound (bnd : VarId → Option Nat) : List (VarId × ZMod p) → Option Nat
+  | [] => some 0
+  | (v, c) :: rest =>
+    match bnd v, denseLinTermsNatBound bnd rest with
+    | some b, some acc => some (c.val * (b - 1) + acc)
+    | _, _ => none
+
+/-- Natural upper bound of `L.eval`: `L.const.val + Σ cᵥ.val·(bnd v − 1)`. Mirrors
+    `LinExpr.natBound` (`BusPairCancel.lean:421`). -/
+def DenseLinExpr.natBound (bnd : VarId → Option Nat) (L : DenseLinExpr p) : Option Nat :=
+  (denseLinTermsNatBound bnd L.terms).map (fun s => L.const.val + s)
+
+/-- Affine byte/limb justification: `e` linearizes to a form whose per-variable-bounded natural
+    value is `< bound` (and `< p`, so it does not wrap). Mirrors `affineJustified`
+    (`BusPairCancel.lean:483`). -/
+def denseAffineJustified (bound : Nat) (bnd : VarId → Option Nat) (e : DenseExpr p) : Bool :=
+  match denseLinearize e with
+  | some L =>
+    match L.natBound bnd with
+    | some M => decide (M < bound) && decide (M < p)
+    | none => false
+  | none => false
+
+/-! ## Basis justification (Task 3, chunk C1b — impl)
+
+Dense, `VarId`-native transliteration of the *basis* justification tier
+(`BusPairCancel.lean:506-706`): `formBoundAt`/`basisReduceGo`/`basisJustified`. `basisFuel`
+(`BusPairCancel.lean:580`) is a plain `Nat` literal, wholly representation-independent, so it is
+reused unqualified below — same precedent as `maxDeepPoints` in the C1a header.
+
+### `IntervalForce.srep` reuse (no dense counterpart needed)
+
+`IntervalForce.srep` (`OptimizerPasses/IntervalForce.lean:50`, already transitively imported
+through `OptimizerPasses.BusPairCancel`, which imports `OptimizerPasses.IntervalForce`) is
+`fun c : ZMod p => if c.val ≤ (p - 1) / 2 then (c.val : Int) else (c.val : Int) - p` — a plain
+`ZMod p → Int` function with no `Variable`/`Expression`/`VarId`/`DenseExpr` anywhere in its
+signature or body. It is representation-independent data, so `basisReduceGo`'s dense mirror below
+calls it exactly unqualified, exactly as it calls `p` itself. -/
+
+/-- The linearized (merged) form and bound of payload slot `i` of `bi`, when the multiplicity is
+    a nonzero constant and the slot carries a `slotBound`. Mirrors `formBoundAt`
+    (`BusPairCancel.lean:521`). -/
+def denseFormBoundAt {bs : BusSemantics p} (facts : BusFacts p bs)
+    (bi : BusInteraction (DenseExpr p)) (i : Nat) : Option (DenseLinExpr p × Nat) :=
+  match bi.multiplicity.constValue? with
+  | none => none
+  | some mval =>
+    if mval = 0 then none
+    else
+      match bi.payload[i]?,
+            facts.slotBound bi.busId mval (bi.payload.map DenseExpr.constValue?) i with
+      | some e, some B =>
+        match denseLinearize e with
+        | some L => some (L.norm, B)
+        | none => none
+      | _, _ => none
+
+/-- Fuel-bounded basis reduction: is `L`'s value provably `< bound − used` using per-variable
+    bounds (`bnd`, the finish arm) after subtracting positive integer multiples of range-checked
+    slot forms from `fwits` (each step accounts its form's worst case against `used`)? Structural
+    recursion on `fuel` preserved exactly (same recursion shape as spec). Mirrors `basisReduceGo`
+    (`BusPairCancel.lean:585`). -/
+def denseBasisReduceGo (bound : Nat) (bnd : VarId → Option Nat) {bs : BusSemantics p}
+    (facts : BusFacts p bs) (fwits : VarId → List (BusInteraction (DenseExpr p))) :
+    Nat → Nat → DenseLinExpr p → Bool
+  | 0, _, _ => false
+  | fuel + 1, used, L =>
+    (match L.natBound bnd with
+     | some M => decide (used + M < bound) && decide (used + M < p)
+     | none => false) ||
+    (L.terms.map Prod.fst).any (fun v =>
+      (fwits v).any (fun bi =>
+        (List.range bi.payload.length).any (fun i =>
+          match denseFormBoundAt facts bi i with
+          | none => false
+          | some (Lf, Bf) =>
+            let cF := IntervalForce.srep (Lf.coeff v)
+            let μi := IntervalForce.srep (L.coeff v) / cF
+            if cF ≠ 0 ∧ 0 < μi ∧ cF * μi = IntervalForce.srep (L.coeff v) then
+              denseBasisReduceGo bound bnd facts fwits fuel (used + μi.toNat * (Bf - 1))
+                ((L.add (Lf.scale (-(μi.toNat : ZMod p)))).norm)
+            else false)))
+
+/-- Basis justification: `e` linearizes to a form the fuel-bounded reduction proves `< bound`.
+    Mirrors `basisJustified` (`BusPairCancel.lean:681`). -/
+def denseBasisJustified (bound : Nat) (bnd : VarId → Option Nat) {bs : BusSemantics p}
+    (facts : BusFacts p bs) (fwits : VarId → List (BusInteraction (DenseExpr p)))
+    (e : DenseExpr p) : Bool :=
+  match denseLinearize e with
+  | some L => denseBasisReduceGo bound bnd facts fwits basisFuel 0 L.norm
+  | none => false
+
 end ApcOptimizer.Dense
