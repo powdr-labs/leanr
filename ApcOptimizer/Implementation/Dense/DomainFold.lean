@@ -626,36 +626,6 @@ theorem denseGroupDoms_fst (es : List (DenseExpr p)) :
               subst h
               simp [ih ds hr]
 
-/-! ## Spec `foldStepWith`/`foldLoopDirect` output projections
-
-`foldStepWith`/`foldLoopDirect` return `PassResult`s carrying `PassCorrect`; only their `.out` is
-byte-observable. These lemmas extract `.out` as a plain expression the dense correspondence matches. -/
-
-/-- The `.out` of one direct fold step, as a plain `if`-nest. -/
-theorem foldStepWith_out [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p)
-    (xs : List Variable) (es : List (Expression p)) (hes : es = coveredCsOf cs xs) :
-    (foldStepWith bs cs xs es hes).out =
-      (match groupDoms es xs with
-       | none => cs
-       | some doms =>
-         if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
-           (if 1 ≤ (groupSurvivorsE es doms).length && systemHasFoldable cs xs (groupSurvivorsE es doms)
-            then foldOut cs xs (groupSurvivorsE es doms) else cs)
-           else cs) := by
-  unfold foldStepWith
-  split
-  · rename_i hdoms
-    conv_rhs => rw [hdoms]
-  · rename_i doms hdoms
-    conv_rhs => rw [hdoms]
-    simp only [apply_ite PassResult.out]
-
-/-- The `.out` of the direct fold loop on a cons (its recursion, threaded through the step). -/
-theorem foldLoopDirect_out_cons [Fact p.Prime] (bs : BusSemantics p) (xs : List Variable)
-    (rest : List (List Variable)) (cs : ConstraintSystem p) :
-    (foldLoopDirect bs (xs :: rest) cs).out
-      = (foldLoopDirect bs rest (foldStepWith bs cs xs (coveredCsOf cs xs) rfl).out).out := rfl
-
 /-! ## The dense direct fold loop -/
 
 /-- One dense direct fold step (mirrors `foldStepWith`; only the output system, no `PassCorrect`). -/
@@ -692,103 +662,10 @@ theorem denseGroupSurvivorsE_keys (es : List (DenseExpr p)) (doms : List (VarId 
     s.map Prod.fst = doms.map Prod.fst :=
   denseAssignments_keys doms s (List.mem_of_mem_filter hs)
 
-theorem denseFoldStepWith_decode [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (xs : List VarId)
-    (hxv : ∀ x ∈ xs, reg.Valid x) (es : List (DenseExpr p)) (hesc : ∀ c ∈ es, c.CoveredBy reg)
-    (hes : es.map reg.decodeExpr = coveredCsOf (reg.decodeCS d) (xs.map reg.resolve)) :
-    reg.decodeCS (denseFoldStepWith d xs es)
-      = (foldStepWith bs (reg.decodeCS d) (xs.map reg.resolve)
-          (coveredCsOf (reg.decodeCS d) (xs.map reg.resolve)) rfl).out := by
-  rw [foldStepWith_out, ← hes, denseGroupDoms_decode reg es hesc xs hxv]
-  unfold denseFoldStepWith
-  cases hgd : denseGroupDoms es xs with
-  | none => rfl
-  | some doms =>
-      -- domain keys are the (valid) target variables
-      have hdk : doms.map Prod.fst = xs := denseGroupDoms_fst es xs doms hgd
-      have hdv : ∀ kd ∈ doms, reg.Valid kd.1 := by
-        intro kd hkd
-        have hm : kd.1 ∈ doms.map Prod.fst := List.mem_map.2 ⟨kd, hkd, rfl⟩
-        rw [hdk] at hm; exact hxv kd.1 hm
-      -- survivor keys are valid
-      have hsurvvalid : ∀ s ∈ denseGroupSurvivorsE es doms, ∀ kv ∈ s, reg.Valid kv.1 := by
-        intro s hs kv hkv
-        have hsk : s.map Prod.fst = doms.map Prod.fst := denseGroupSurvivorsE_keys es doms hs
-        have hm : kv.1 ∈ s.map Prod.fst := List.mem_map.2 ⟨kv, hkv, rfl⟩
-        rw [hsk] at hm
-        obtain ⟨kd, hkd, he⟩ := List.mem_map.1 hm
-        rw [← he]; exact hdv kd hkd
-      -- product gate agrees
-      have hprod : ((doms.map (fun kd => (reg.resolve kd.1, kd.2))).map (fun yd => yd.2.length)).prod
-          = (doms.map (fun yd => yd.2.length)).prod := by
-        simp only [List.map_map, Function.comp_def]
-      -- survivor decode
-      have hsurv : groupSurvivorsE (es.map reg.decodeExpr) (doms.map (fun kd => (reg.resolve kd.1, kd.2)))
-          = (denseGroupSurvivorsE es doms).map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))) :=
-        denseGroupSurvivorsE_decode reg es hesc doms hdv
-      have hlen : (groupSurvivorsE (es.map reg.decodeExpr) (doms.map (fun kd => (reg.resolve kd.1, kd.2)))).length
-          = (denseGroupSurvivorsE es doms).length := by rw [hsurv, List.length_map]
-      have hshf : systemHasFoldable (reg.decodeCS d) (xs.map reg.resolve)
-            (groupSurvivorsE (es.map reg.decodeExpr) (doms.map (fun kd => (reg.resolve kd.1, kd.2))))
-          = denseSystemHasFoldable d xs (denseGroupSurvivorsE es doms) := by
-        rw [hsurv]
-        exact denseSystemHasFoldable_decode reg d hcov xs hxv (denseGroupSurvivorsE es doms) hsurvvalid
-      simp only [Option.map_some, hprod]
-      by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
-      · rw [if_pos hp, if_pos hp]
-        have hHS : (decide (1 ≤ (groupSurvivorsE (es.map reg.decodeExpr)
-                  (doms.map (fun kd => (reg.resolve kd.1, kd.2)))).length)
-              && systemHasFoldable (reg.decodeCS d) (xs.map reg.resolve)
-                  (groupSurvivorsE (es.map reg.decodeExpr) (doms.map (fun kd => (reg.resolve kd.1, kd.2)))))
-            = (decide (1 ≤ (denseGroupSurvivorsE es doms).length)
-              && denseSystemHasFoldable d xs (denseGroupSurvivorsE es doms)) := by
-          rw [hlen, hshf]
-        rw [hHS]
-        by_cases hs : (decide (1 ≤ (denseGroupSurvivorsE es doms).length)
-            && denseSystemHasFoldable d xs (denseGroupSurvivorsE es doms)) = true
-        · rw [if_pos hs, if_pos hs, hsurv]
-          exact denseFoldOut_decode reg d hcov xs hxv (denseGroupSurvivorsE es doms) hsurvvalid
-        · rw [if_neg hs, if_neg hs]
-      · rw [if_neg hp, if_neg hp]
-
 /-- The dense direct fold loop (mirrors `foldLoopDirect`; only the output system). -/
 def denseFoldLoopDirect : List (List VarId) → DenseConstraintSystem p → DenseConstraintSystem p
   | [], d => d
   | xs :: rest, d => denseFoldLoopDirect rest (denseFoldStepWith d xs (denseCoveredCsOf d xs))
-
-theorem denseFoldLoopDirect_decode [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics p) :
-    ∀ (targets_d : List (List VarId)) (targets_s : List (List Variable)),
-      targets_d.map (fun xs => xs.map reg.resolve) = targets_s →
-      (∀ xs ∈ targets_d, ∀ x ∈ xs, reg.Valid x) →
-      ∀ (d : DenseConstraintSystem p), d.CoveredBy reg →
-        reg.decodeCS (denseFoldLoopDirect targets_d d)
-          = (foldLoopDirect bs targets_s (reg.decodeCS d)).out := by
-  intro targets_d
-  induction targets_d with
-  | nil => intro targets_s htgt _ d _; subst htgt; rfl
-  | cons xs rest ih =>
-      intro targets_s htgt hvalid d hcov
-      subst htgt
-      have hxv : ∀ x ∈ xs, reg.Valid x := hvalid xs (List.mem_cons_self ..)
-      have hvalidr : ∀ ys ∈ rest, ∀ x ∈ ys, reg.Valid x :=
-        fun ys h => hvalid ys (List.mem_cons_of_mem _ h)
-      -- the step decode (es = the dense covered set)
-      have hesc : ∀ c ∈ denseCoveredCsOf d xs, c.CoveredBy reg :=
-        fun c hc => hcov.1 c (List.mem_of_mem_filter hc)
-      have hes : (denseCoveredCsOf d xs).map reg.decodeExpr
-          = coveredCsOf (reg.decodeCS d) (xs.map reg.resolve) :=
-        (denseCoveredCsOf_decode reg d hcov xs hxv).symm
-      have hstep := denseFoldStepWith_decode reg bs d hcov xs hxv (denseCoveredCsOf d xs) hesc hes
-      have hstepcov : (denseFoldStepWith d xs (denseCoveredCsOf d xs)).CoveredBy reg :=
-        denseFoldStepWith_covered reg d hcov xs (denseCoveredCsOf d xs)
-      show reg.decodeCS (denseFoldLoopDirect rest (denseFoldStepWith d xs (denseCoveredCsOf d xs)))
-        = (foldLoopDirect bs (xs.map reg.resolve :: rest.map (fun ys => ys.map reg.resolve))
-            (reg.decodeCS d)).out
-      rw [foldLoopDirect_out_cons]
-      rw [ih (rest.map (fun ys => ys.map reg.resolve)) rfl hvalidr
-        (denseFoldStepWith d xs (denseCoveredCsOf d xs)) hstepcov]
-      -- the spec loop's first step output equals the decoded dense step output
-      rw [hstep]
 
 /-! ## Ordered dense inverted index (mirrors `CoveredIndex.coveredIdx` + `coveredIdx_eq_filter`)
 
@@ -1016,34 +893,6 @@ def denseSystemHasFoldableIdx (fidx : DenseFoldIdx p) (xs : List VarId)
   (fidx.cfBis.any (fun bi =>
     !(bi.multiplicity.anyVarIn xs || bi.payload.any (fun e => e.anyVarIn xs))))
 
-/-- Correspondence between a dense `DenseFoldIdx` and a spec `FoldIdx`, carrying exactly the data the
-    gate/covered-scan decode needs. The spec index is over an arbitrary `cs` equal to `reg.decodeCS d`
-    (`hcs`), so the loop's refreshed index — typed at the *previous* step's output — is accepted
-    without a dependent-type transport. -/
-structure DenseFoldIdxCorr (reg : VarRegistry) (d : DenseConstraintSystem p)
-    {cs : ConstraintSystem p} (hcs : cs = reg.decodeCS d)
-    (fidx_d : DenseFoldIdx p) (fidx_s : FoldIdx cs) : Prop where
-  idxEq : fidx_d.idx = denseCovBuild DenseExpr.vars d.algebraicConstraints
-  arrEq : fidx_d.arr = d.algebraicConstraints.toArray
-  bisVarless : fidx_d.bisIdx.varless = fidx_s.bisIdx.varless
-  bisBuckets : ∀ i, reg.Valid i →
-    fidx_d.bisIdx.buckets.getD i [] = fidx_s.bisIdx.buckets.getD (reg.resolve i) []
-  arrBisEq : fidx_d.arrBis = d.busInteractions.toArray
-  arrBisSpec : fidx_s.arrBis = (reg.decodeCS d).busInteractions.toArray
-  cfCsEq : fidx_s.cfCs = fidx_d.cfCs.map reg.decodeExpr
-  cfCsCov : ∀ c ∈ fidx_d.cfCs, c.CoveredBy reg
-  cfBisEq : fidx_s.cfBis = fidx_d.cfBis.map reg.decodeBI
-  cfBisCov : ∀ bi ∈ fidx_d.cfBis, denseBICovered reg bi
-  -- structural invariants (both indices are the mk'/refresh of their current system) — these thread
-  -- cleanly through the loop and let `denseFoldStep_corr` avoid a per-branch case analysis.
-  dCfCsEq : fidx_d.cfCs = d.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
-  dCfBisEq : fidx_d.cfBis = d.busInteractions.filter (fun bi =>
-    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
-  sArrBisEq : fidx_s.arrBis = cs.busInteractions.toArray
-  sCfCsEq : fidx_s.cfCs = cs.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
-  sCfBisEq : fidx_s.cfBis = cs.busInteractions.filter (fun bi =>
-    bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
-
 /-- One index-local flatMap/`any` term corresponds (shared `List Nat`, decode-corresponding
     per-position predicate). -/
 theorem denseIdxScan_corr {α β : Type} (reg : VarRegistry) (dec : α → β)
@@ -1069,85 +918,6 @@ theorem denseIdxScan_corr {α β : Type} (reg : VarRegistry) (dec : α → β)
     exact (hP l[i] (l.getElem_mem hlt)).symm
   · rw [dif_neg (by simp only [List.size_toArray, List.length_map]; exact hlt),
       dif_neg (by simpa using hlt)]
-
-/-- **`denseSystemHasFoldableIdx` decodes to `systemHasFoldableIdx`.** -/
-theorem denseSystemHasFoldableIdx_decode (reg : VarRegistry) (d : DenseConstraintSystem p)
-    (hcov : d.CoveredBy reg) {cs : ConstraintSystem p} (hcs : cs = reg.decodeCS d)
-    (fidx_d : DenseFoldIdx p) (fidx_s : FoldIdx cs)
-    (hfidx : DenseFoldIdxCorr reg d hcs fidx_d fidx_s) (xs : List VarId) (hxv : ∀ x ∈ xs, reg.Valid x)
-    (survs : List (List (VarId × ZMod p))) (hsv : ∀ s ∈ survs, ∀ kv ∈ s, reg.Valid kv.1) :
-    systemHasFoldableIdx fidx_s (xs.map reg.resolve)
-        (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-      = denseSystemHasFoldableIdx fidx_d xs survs := by
-  subst hcs
-  -- constraint-side buckets correspond (from the built index)
-  have hcsC := denseCovBuild_corr reg reg.decodeExpr DenseExpr.vars Expression.vars
-    (fun a => reg.decodeExpr_vars a) d.algebraicConstraints (fun a ha => hcov.1 a ha)
-  have hidxbuckets : ∀ i, reg.Valid i →
-      fidx_d.idx.buckets.getD i [] = fidx_s.idx.buckets.getD (reg.resolve i) [] := by
-    intro i hi
-    rw [hfidx.idxEq, fidx_s.hidx]
-    show (denseCovBuild DenseExpr.vars d.algebraicConstraints).buckets.getD i []
-      = (CoveredIndex.build Expression.vars (reg.decodeCS d).algebraicConstraints).buckets.getD (reg.resolve i) []
-    rw [show (reg.decodeCS d).algebraicConstraints = d.algebraicConstraints.map reg.decodeExpr from rfl]
-    exact hcsC.2 i hi
-  unfold systemHasFoldableIdx denseSystemHasFoldableIdx
-  congr 1
-  · congr 1
-    · congr 1
-      · -- constraint scan
-        rw [hfidx.arrEq, show fidx_s.arr = (d.algebraicConstraints.map reg.decodeExpr).toArray by
-          rw [fidx_s.harr]; rfl]
-        exact denseIdxScan_corr reg reg.decodeExpr fidx_d.idx.buckets fidx_s.idx.buckets
-          d.algebraicConstraints
-          (fun c => !denseCoveredBy xs c && c.hasFoldable xs survs)
-          (fun c => !coveredBy (xs.map reg.resolve) c
-            && c.hasFoldable (xs.map reg.resolve) (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2)))))
-          xs hxv hidxbuckets
-          (fun c hc => by
-            have hcc : c.CoveredBy reg := hcov.1 c hc
-            simp only [denseCoveredBy_decode reg xs hxv c hcc,
-              denseExpr_hasFoldable_decode reg xs hxv survs hsv c hcc])
-      · -- interaction scan
-        rw [hfidx.arrBisEq, hfidx.arrBisSpec,
-          show (reg.decodeCS d).busInteractions = d.busInteractions.map reg.decodeBI from rfl]
-        exact denseIdxScan_corr reg reg.decodeBI fidx_d.bisIdx.buckets fidx_s.bisIdx.buckets
-          d.busInteractions
-          (fun bi => bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
-          (fun bi => bi.multiplicity.hasFoldable (xs.map reg.resolve)
-                (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))
-              || bi.payload.any (fun e => e.hasFoldable (xs.map reg.resolve)
-                (survs.map (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))))))
-          xs hxv hfidx.bisBuckets
-          (fun bi hbi => by
-            obtain ⟨hm, hp⟩ := hcov.2 bi hbi
-            show (bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
-              = ((reg.decodeBI bi).multiplicity.hasFoldable (xs.map reg.resolve) _
-                  || (reg.decodeBI bi).payload.any (fun e => e.hasFoldable (xs.map reg.resolve) _))
-            congr 1
-            · exact (denseExpr_hasFoldable_decode reg xs hxv survs hsv bi.multiplicity hm).symm
-            · show _ = (bi.payload.map reg.decodeExpr).any (fun e => e.hasFoldable (xs.map reg.resolve) _)
-              rw [List.any_map]
-              exact (list_any_congr (fun e he =>
-                denseExpr_hasFoldable_decode reg xs hxv survs hsv e (hp e he))).symm)
-    · -- cfCs term
-      rw [hfidx.cfCsEq, List.any_map]
-      refine list_any_congr (fun c hc => ?_)
-      have hcc : c.CoveredBy reg := hfidx.cfCsCov c hc
-      simp only [Function.comp_apply, denseExpr_anyVarIn_decode reg xs hxv c hcc]
-  · -- cfBis term
-    rw [hfidx.cfBisEq, List.any_map]
-    refine list_any_congr (fun bi hbi => ?_)
-    obtain ⟨hm, hp⟩ := hfidx.cfBisCov bi hbi
-    have hpay : (bi.payload.map reg.decodeExpr).any (fun e => e.anyVarIn (xs.map reg.resolve))
-        = bi.payload.any (fun e => e.anyVarIn xs) := by
-      rw [List.any_map]
-      exact list_any_congr (fun e he => denseExpr_anyVarIn_decode reg xs hxv e (hp e he))
-    simp only [Function.comp_apply]
-    show (!((reg.decodeExpr bi.multiplicity).anyVarIn (xs.map reg.resolve)
-        || (bi.payload.map reg.decodeExpr).any (fun e => e.anyVarIn (xs.map reg.resolve))))
-      = (!(bi.multiplicity.anyVarIn xs || bi.payload.any (fun e => e.anyVarIn xs)))
-    rw [denseExpr_anyVarIn_decode reg xs hxv bi.multiplicity hm, hpay]
 
 /-! ## The dense indexed fold loop -/
 
@@ -1308,90 +1078,6 @@ theorem denseFoldStep_covered (reg : VarRegistry) (d : DenseConstraintSystem p) 
       · rw [if_neg (by simpa using hs)]; exact hcov
     · rw [if_neg hp]; exact hcov
 
-theorem denseFoldStep_decode [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) {cs : ConstraintSystem p}
-    (hcs : cs = reg.decodeCS d) (fidx_d : DenseFoldIdx p) (fidx_s : FoldIdx cs)
-    (hfidx : DenseFoldIdxCorr reg d hcs fidx_d fidx_s)
-    (xs : List VarId) (hxv : ∀ x ∈ xs, reg.Valid x) :
-    reg.decodeCS (denseFoldStep d fidx_d xs).1
-      = (foldStep bs cs fidx_s (xs.map reg.resolve)).1.out := by
-  subst hcs
-  rw [denseFoldStep_fst, foldStep_out,
-    coveredCsIdx_eq (reg.decodeCS d) (xs.map reg.resolve) fidx_s]
-  have hesD : denseCoveredIdx fidx_d.idx fidx_d.arr (denseCoveredBy xs) xs = denseCoveredCsOf d xs := by
-    rw [hfidx.idxEq, hfidx.arrEq]
-    exact denseCoveredIdx_eq_filter DenseExpr.vars d.algebraicConstraints (denseCoveredBy xs) xs
-      (fun i _hi hQ => denseCoveredBy_shares_var xs d.algebraicConstraints[i] hQ)
-  rw [hesD]
-  have hcc : ∀ c ∈ denseCoveredCsOf d xs, c.CoveredBy reg :=
-    fun c hc => hcov.1 c (List.mem_of_mem_filter hc)
-  rw [denseCoveredCsOf_decode reg d hcov xs hxv,
-    denseGroupDoms_decode reg (denseCoveredCsOf d xs) hcc xs hxv]
-  cases hgd : denseGroupDoms (denseCoveredCsOf d xs) xs with
-  | none => rfl
-  | some doms =>
-      have hdk : doms.map Prod.fst = xs := denseGroupDoms_fst (denseCoveredCsOf d xs) xs doms hgd
-      have hdv : ∀ kd ∈ doms, reg.Valid kd.1 := by
-        intro kd hkd
-        have hm : kd.1 ∈ doms.map Prod.fst := List.mem_map.2 ⟨kd, hkd, rfl⟩
-        rw [hdk] at hm; exact hxv kd.1 hm
-      have hsurvvalid : ∀ s ∈ denseGroupSurvivorsE (denseCoveredCsOf d xs) doms, ∀ kv ∈ s, reg.Valid kv.1 := by
-        intro s hs kv hkv
-        have hsk : s.map Prod.fst = doms.map Prod.fst :=
-          denseGroupSurvivorsE_keys (denseCoveredCsOf d xs) doms hs
-        have hm : kv.1 ∈ s.map Prod.fst := List.mem_map.2 ⟨kv, hkv, rfl⟩
-        rw [hsk] at hm
-        obtain ⟨kd, hkd, he⟩ := List.mem_map.1 hm
-        rw [← he]; exact hdv kd hkd
-      have hprod : ((doms.map (fun kd => (reg.resolve kd.1, kd.2))).map (fun yd => yd.2.length)).prod
-          = (doms.map (fun yd => yd.2.length)).prod := by
-        simp only [List.map_map, Function.comp_def]
-      have hsurv : groupSurvivorsE ((denseCoveredCsOf d xs).map reg.decodeExpr)
-            (doms.map (fun kd => (reg.resolve kd.1, kd.2)))
-          = (denseGroupSurvivorsE (denseCoveredCsOf d xs) doms).map
-              (fun s => s.map (fun kv => (reg.resolve kv.1, kv.2))) :=
-        denseGroupSurvivorsE_decode reg (denseCoveredCsOf d xs) hcc doms hdv
-      have hlen : (groupSurvivorsE ((denseCoveredCsOf d xs).map reg.decodeExpr)
-            (doms.map (fun kd => (reg.resolve kd.1, kd.2)))).length
-          = (denseGroupSurvivorsE (denseCoveredCsOf d xs) doms).length := by rw [hsurv, List.length_map]
-      have hshf : systemHasFoldableIdx fidx_s (xs.map reg.resolve)
-            (groupSurvivorsE ((denseCoveredCsOf d xs).map reg.decodeExpr)
-              (doms.map (fun kd => (reg.resolve kd.1, kd.2))))
-          = denseSystemHasFoldableIdx fidx_d xs (denseGroupSurvivorsE (denseCoveredCsOf d xs) doms) := by
-        rw [hsurv]
-        exact denseSystemHasFoldableIdx_decode reg d hcov rfl fidx_d fidx_s hfidx xs hxv
-          (denseGroupSurvivorsE (denseCoveredCsOf d xs) doms) hsurvvalid
-      simp only [Option.map_some, hprod]
-      by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
-      · rw [if_pos hp, if_pos hp]
-        have hHS : (decide (1 ≤ (groupSurvivorsE ((denseCoveredCsOf d xs).map reg.decodeExpr)
-                  (doms.map (fun kd => (reg.resolve kd.1, kd.2)))).length)
-              && systemHasFoldableIdx fidx_s (xs.map reg.resolve)
-                  (groupSurvivorsE ((denseCoveredCsOf d xs).map reg.decodeExpr)
-                    (doms.map (fun kd => (reg.resolve kd.1, kd.2)))))
-            = (decide (1 ≤ (denseGroupSurvivorsE (denseCoveredCsOf d xs) doms).length)
-              && denseSystemHasFoldableIdx fidx_d xs (denseGroupSurvivorsE (denseCoveredCsOf d xs) doms)) := by
-          rw [hlen, hshf]
-        rw [hHS]
-        by_cases hs : (decide (1 ≤ (denseGroupSurvivorsE (denseCoveredCsOf d xs) doms).length)
-            && denseSystemHasFoldableIdx fidx_d xs (denseGroupSurvivorsE (denseCoveredCsOf d xs) doms)) = true
-        · rw [if_pos hs, if_pos hs, hsurv]
-          exact denseFoldOut_decode reg d hcov xs hxv (denseGroupSurvivorsE (denseCoveredCsOf d xs) doms) hsurvvalid
-        · rw [if_neg hs, if_neg hs]
-      · rw [if_neg hp, if_neg hp]
-
-/-! ### Field extraction for the step's output index (both sides)
-
-The output index of a step is the `mk'`/`refresh` of the *output* system for every field except the
-stale interaction buckets, which are the input's. These small extractions let `denseFoldStep_corr`
-build the new `DenseFoldIdxCorr` without a per-branch case analysis. -/
-
-theorem denseFoldStep_snd_bisIdx (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId) :
-    (denseFoldStep d fidx xs).2.bisIdx = fidx.bisIdx := by
-  unfold denseFoldStep; split
-  · rfl
-  · split_ifs <;> rfl
-
 theorem denseFoldStep_snd_idx (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
     (hidx : fidx.idx = denseCovBuild DenseExpr.vars d.algebraicConstraints) :
     (denseFoldStep d fidx xs).2.idx
@@ -1464,135 +1150,6 @@ theorem foldStep_snd_arrBis [Fact p.Prime] (bs : BusSemantics p) (cs : Constrain
       · rw [if_pos hg]; rfl
       · rw [if_neg hg]; exact harrBis
     · rw [if_neg hp]; exact harrBis
-
-theorem foldStep_snd_cfCs [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p)
-    (fidx : FoldIdx cs) (xs : List Variable)
-    (hcf : fidx.cfCs = cs.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)) :
-    (foldStep bs cs fidx xs).2.cfCs
-      = (foldStep bs cs fidx xs).1.out.algebraicConstraints.filter (fun c => c.hasConstFoldableNode) := by
-  unfold foldStep; simp only []
-  split
-  · exact hcf
-  · rename_i doms _
-    simp only []
-    by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
-    · rw [if_pos hp]
-      by_cases hg : (1 ≤ (groupSurvivorsE (CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs) doms).length
-          && systemHasFoldableIdx fidx xs
-              (groupSurvivorsE (CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs) doms)) = true
-      · rw [if_pos hg]; rfl
-      · rw [if_neg hg]; exact hcf
-    · rw [if_neg hp]; exact hcf
-
-theorem foldStep_snd_cfBis [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p)
-    (fidx : FoldIdx cs) (xs : List Variable)
-    (hcf : fidx.cfBis = cs.busInteractions.filter (fun bi =>
-      bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))) :
-    (foldStep bs cs fidx xs).2.cfBis
-      = (foldStep bs cs fidx xs).1.out.busInteractions.filter (fun bi =>
-          bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode)) := by
-  unfold foldStep; simp only []
-  split
-  · exact hcf
-  · rename_i doms _
-    simp only []
-    by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
-    · rw [if_pos hp]
-      by_cases hg : (1 ≤ (groupSurvivorsE (CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs) doms).length
-          && systemHasFoldableIdx fidx xs
-              (groupSurvivorsE (CoveredIndex.coveredIdx fidx.idx fidx.arr (coveredBy xs) xs) doms)) = true
-      · rw [if_pos hg]; rfl
-      · rw [if_neg hg]; exact hcf
-    · rw [if_neg hp]; exact hcf
-
-/-! ### The step's `DenseFoldIdxCorr` correspondence, and the loop decode -/
-
-/-- The step's output index corresponds to the spec step's output index — assembled from the field
-    extractions, with no per-branch case analysis. -/
-theorem denseFoldStep_corr [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) {cs : ConstraintSystem p}
-    (hcs : cs = reg.decodeCS d) (fidx_d : DenseFoldIdx p) (fidx_s : FoldIdx cs)
-    (hfidx : DenseFoldIdxCorr reg d hcs fidx_d fidx_s) (xs : List VarId) (_hxv : ∀ x ∈ xs, reg.Valid x)
-    (hgo : (foldStep bs cs fidx_s (xs.map reg.resolve)).1.out = reg.decodeCS (denseFoldStep d fidx_d xs).1) :
-    DenseFoldIdxCorr reg (denseFoldStep d fidx_d xs).1 hgo (denseFoldStep d fidx_d xs).2
-      (foldStep bs cs fidx_s (xs.map reg.resolve)).2 := by
-  subst hcs
-  have hstepcov := denseFoldStep_covered reg d hcov fidx_d xs
-  refine ⟨?idxEq, ?arrEq, ?bisVarless, ?bisBuckets, ?arrBisEq, ?arrBisSpec, ?cfCsEq, ?cfCsCov,
-    ?cfBisEq, ?cfBisCov, ?dCfCsEq, ?dCfBisEq, ?sArrBisEq, ?sCfCsEq, ?sCfBisEq⟩
-  case idxEq => exact denseFoldStep_snd_idx d fidx_d xs hfidx.idxEq
-  case arrEq => exact denseFoldStep_snd_arr d fidx_d xs hfidx.arrEq
-  case bisVarless =>
-    rw [denseFoldStep_snd_bisIdx d fidx_d xs, foldStep_snd_bisIdx bs (reg.decodeCS d) fidx_s (xs.map reg.resolve)]
-    exact hfidx.bisVarless
-  case bisBuckets =>
-    rw [denseFoldStep_snd_bisIdx d fidx_d xs, foldStep_snd_bisIdx bs (reg.decodeCS d) fidx_s (xs.map reg.resolve)]
-    exact hfidx.bisBuckets
-  case arrBisEq => exact denseFoldStep_snd_arrBis d fidx_d xs hfidx.arrBisEq
-  case arrBisSpec =>
-    rw [foldStep_snd_arrBis bs (reg.decodeCS d) fidx_s (xs.map reg.resolve) hfidx.sArrBisEq, hgo]
-  case cfCsEq =>
-    rw [foldStep_snd_cfCs bs (reg.decodeCS d) fidx_s (xs.map reg.resolve) hfidx.sCfCsEq,
-      denseFoldStep_snd_cfCs d fidx_d xs hfidx.dCfCsEq, hgo]
-    exact (filter_map_comm reg.decodeExpr (fun c => c.hasConstFoldableNode)
-      (fun c => c.hasConstFoldableNode) (denseFoldStep d fidx_d xs).1.algebraicConstraints
-      (fun c _ => (reg.decodeExpr_hasConstFoldableNode c).symm)).symm
-  case cfCsCov =>
-    intro c hc
-    rw [denseFoldStep_snd_cfCs d fidx_d xs hfidx.dCfCsEq] at hc
-    exact hstepcov.1 c (List.mem_of_mem_filter hc)
-  case cfBisEq =>
-    rw [foldStep_snd_cfBis bs (reg.decodeCS d) fidx_s (xs.map reg.resolve) hfidx.sCfBisEq,
-      denseFoldStep_snd_cfBis d fidx_d xs hfidx.dCfBisEq, hgo]
-    refine (filter_map_comm reg.decodeBI
-      (fun bi => bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
-      (fun bi => bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
-      (denseFoldStep d fidx_d xs).1.busInteractions (fun bi _ => ?_)).symm
-    show (bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
-      = ((reg.decodeExpr bi.multiplicity).hasConstFoldableNode
-          || (bi.payload.map reg.decodeExpr).any (fun e => e.hasConstFoldableNode))
-    rw [reg.decodeExpr_hasConstFoldableNode bi.multiplicity]
-    congr 1
-    rw [List.any_map]
-    exact list_any_congr (fun e _ => (reg.decodeExpr_hasConstFoldableNode e).symm)
-  case cfBisCov =>
-    intro bi hbi
-    rw [denseFoldStep_snd_cfBis d fidx_d xs hfidx.dCfBisEq] at hbi
-    exact hstepcov.2 bi (List.mem_of_mem_filter hbi)
-  case dCfCsEq => exact denseFoldStep_snd_cfCs d fidx_d xs hfidx.dCfCsEq
-  case dCfBisEq => exact denseFoldStep_snd_cfBis d fidx_d xs hfidx.dCfBisEq
-  case sArrBisEq => exact foldStep_snd_arrBis bs (reg.decodeCS d) fidx_s (xs.map reg.resolve) hfidx.sArrBisEq
-  case sCfCsEq => exact foldStep_snd_cfCs bs (reg.decodeCS d) fidx_s (xs.map reg.resolve) hfidx.sCfCsEq
-  case sCfBisEq => exact foldStep_snd_cfBis bs (reg.decodeCS d) fidx_s (xs.map reg.resolve) hfidx.sCfBisEq
-
-/-- **The dense indexed fold loop decodes to the spec indexed fold loop.** -/
-theorem denseFoldLoop_decode [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics p) :
-    ∀ (targets_d : List (List VarId)) (targets_s : List (List Variable)),
-      targets_d.map (fun xs => xs.map reg.resolve) = targets_s →
-      (∀ xs ∈ targets_d, ∀ x ∈ xs, reg.Valid x) →
-      ∀ (d : DenseConstraintSystem p), d.CoveredBy reg → ∀ {cs : ConstraintSystem p}
-        (hcs : cs = reg.decodeCS d) (fidx_d : DenseFoldIdx p) (fidx_s : FoldIdx cs),
-        DenseFoldIdxCorr reg d hcs fidx_d fidx_s →
-        reg.decodeCS (denseFoldLoop targets_d d fidx_d) = (foldLoop bs targets_s cs fidx_s).out := by
-  intro targets_d
-  induction targets_d with
-  | nil => intro ts h _ d _ cs hcs _ _ _; subst h; subst hcs; rfl
-  | cons xs rest ih =>
-      intro ts h hvalid d hcov cs hcs fidx_d fidx_s hfidx
-      subst h; subst hcs
-      have hxv : ∀ x ∈ xs, reg.Valid x := hvalid xs (List.mem_cons_self ..)
-      have hvalidr : ∀ ys ∈ rest, ∀ x ∈ ys, reg.Valid x :=
-        fun ys hys => hvalid ys (List.mem_cons_of_mem _ hys)
-      have hsys := denseFoldStep_decode reg bs d hcov rfl fidx_d fidx_s hfidx xs hxv
-      have hcov' := denseFoldStep_covered reg d hcov fidx_d xs
-      have hcorr' := denseFoldStep_corr reg bs d hcov rfl fidx_d fidx_s hfidx xs hxv hsys.symm
-      show reg.decodeCS (denseFoldLoop rest (denseFoldStep d fidx_d xs).1 (denseFoldStep d fidx_d xs).2)
-        = (foldLoop bs (xs.map reg.resolve :: rest.map (fun ys => ys.map reg.resolve))
-            (reg.decodeCS d) fidx_s).out
-      rw [foldLoop_out_cons]
-      exact ih (rest.map (fun ys => ys.map reg.resolve)) rfl hvalidr (denseFoldStep d fidx_d xs).1 hcov'
-        hsys.symm (denseFoldStep d fidx_d xs).2
-        (foldStep bs (reg.decodeCS d) fidx_s (xs.map reg.resolve)).2 hcorr'
 
 /-! ## Target-list construction (cold path)
 
@@ -1800,23 +1357,6 @@ theorem denseTargets_corr (reg : VarRegistry) (d : DenseConstraintSystem p) (hco
     exact List.map_mergeSort (fun a _ b _ => rfl)
   · rw [if_neg hs, if_neg hs, Option.map_none]
 
-/-! ## Loop derivations are empty, dense loop coverage, the `mk'` correspondence -/
-
-theorem foldStepWith_derivs [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p)
-    (xs : List Variable) (es : List (Expression p)) (hes : es = coveredCsOf cs xs) :
-    (foldStepWith bs cs xs es hes).derivs = [] := by
-  unfold foldStepWith
-  simp only []
-  split
-  · rfl
-  · rename_i doms _
-    by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
-    · rw [if_pos hp]
-      by_cases hg : (1 ≤ (groupSurvivorsE es doms).length && systemHasFoldable cs xs (groupSurvivorsE es doms)) = true
-      · rw [if_pos hg]
-      · rw [if_neg hg]
-    · rw [if_neg hp]
-
 theorem foldStep_fst_derivs [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p)
     (fidx : FoldIdx cs) (xs : List Variable) : (foldStep bs cs fidx xs).1.derivs = [] := by
   unfold foldStep
@@ -1833,18 +1373,6 @@ theorem foldStep_fst_derivs [Fact p.Prime] (bs : BusSemantics p) (cs : Constrain
       · rw [if_neg hg]
     · rw [if_neg hp]
 
-theorem foldLoopDirect_derivs [Fact p.Prime] (bs : BusSemantics p) :
-    ∀ (targets : List (List Variable)) (cs : ConstraintSystem p),
-      (foldLoopDirect bs targets cs).derivs = [] := by
-  intro targets
-  induction targets with
-  | nil => intro cs; rfl
-  | cons xs rest ih =>
-      intro cs
-      show ((foldStepWith bs cs xs (coveredCsOf cs xs) rfl).derivs
-        ++ (foldLoopDirect bs rest (foldStepWith bs cs xs (coveredCsOf cs xs) rfl).out).derivs) = []
-      simp only [foldStepWith_derivs, ih, List.nil_append]
-
 theorem foldLoop_derivs [Fact p.Prime] (bs : BusSemantics p) :
     ∀ (targets : List (List Variable)) (cs : ConstraintSystem p) (fidx : FoldIdx cs),
       (foldLoop bs targets cs fidx).derivs = [] := by
@@ -1856,42 +1384,6 @@ theorem foldLoop_derivs [Fact p.Prime] (bs : BusSemantics p) :
       show ((foldStep bs cs fidx xs).1.derivs
         ++ (foldLoop bs rest (foldStep bs cs fidx xs).1.out (foldStep bs cs fidx xs).2).derivs) = []
       simp only [foldStep_fst_derivs, ih, List.nil_append]
-
-/-- **`domainFoldPass`'s output on prime `p`.** -/
-theorem domainFoldPass_out_prime [Fact p.Prime] {pw : PrimeWitness p} (hpB : pw.isPrime = true)
-    (cs : ConstraintSystem p) (bsem : BusSemantics p) :
-    (domainFoldPass pw cs bsem).out =
-      (if domainFoldIndexThreshold ≤ cs.algebraicConstraints.length then
-        (foldLoop bsem (dedupHash (cs.algebraicConstraints.filterMap (fun c =>
-          let vs := c.vars.dedup
-          if 2 ≤ vs.length && vs.length ≤ 8 && vs.all
-              ((cs.algebraicConstraints.foldl (init := (∅ : Std.HashSet Variable))
-                fun s c => match c.vars.dedup with | [x] => s.insert x | _ => s).contains ·) then
-            some (vs.mergeSort (fun a b => compare a b != .gt)) else none)))
-          cs (FoldIdx.mk' cs)).out
-      else
-        (foldLoopDirect bsem (dedupHash (cs.algebraicConstraints.filterMap (fun c =>
-          let vs := c.vars.dedup
-          if 2 ≤ vs.length && vs.length ≤ 8 && vs.all
-              ((cs.algebraicConstraints.foldl (init := (∅ : Std.HashSet Variable))
-                fun s c => match c.vars.dedup with | [x] => s.insert x | _ => s).contains ·) then
-            some (vs.mergeSort (fun a b => compare a b != .gt)) else none)))
-          cs).out) := by
-  simp only [domainFoldPass, dif_pos hpB]
-  exact apply_ite PassResult.out _ _ _
-
-/-- **`domainFoldPass` emits no derivations.** -/
-theorem domainFoldPass_derivs_nil (pw : PrimeWitness p) (cs : ConstraintSystem p)
-    (bsem : BusSemantics p) : (domainFoldPass pw cs bsem).derivs = [] := by
-  unfold domainFoldPass
-  split
-  · rename_i hpB
-    haveI : Fact p.Prime := ⟨pw.correct hpB⟩
-    simp only []
-    split
-    · exact foldLoop_derivs _ _ _ _
-    · exact foldLoopDirect_derivs _ _ _
-  · rfl
 
 theorem denseFoldLoopDirect_covered (reg : VarRegistry) :
     ∀ (targets : List (List VarId)) (d : DenseConstraintSystem p), d.CoveredBy reg →
@@ -1912,44 +1404,6 @@ theorem denseFoldLoop_covered (reg : VarRegistry) :
   | cons xs rest ih =>
       intro d fidx hcov
       exact ih _ _ (denseFoldStep_covered reg d hcov fidx xs)
-
-/-- The initial index correspondence: `DenseFoldIdx.mk' d` corresponds to `FoldIdx.mk' (decodeCS d)`. -/
-theorem denseFoldIdxMk'_corr (reg : VarRegistry) (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
-    DenseFoldIdxCorr reg d rfl (DenseFoldIdx.mk' d) (FoldIdx.mk' (reg.decodeCS d)) := by
-  have hbiC := denseCovBuild_corr reg reg.decodeBI denseBIVars BusInteraction.vars
-    (fun bi => reg.decodeBI_vars bi) d.busInteractions (fun bi hbi => denseBIVars_valid (hcov.2 bi hbi))
-  refine ⟨rfl, rfl, ?_, ?_, rfl, rfl, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl⟩
-  · exact hbiC.1
-  · exact hbiC.2
-  · -- cfCsEq
-    show (reg.decodeCS d).algebraicConstraints.filter (fun c => c.hasConstFoldableNode)
-      = (d.algebraicConstraints.filter (fun c => c.hasConstFoldableNode)).map reg.decodeExpr
-    exact (filter_map_comm reg.decodeExpr (fun c => c.hasConstFoldableNode)
-      (fun c => c.hasConstFoldableNode) d.algebraicConstraints
-      (fun c _ => (reg.decodeExpr_hasConstFoldableNode c).symm)).symm
-  · -- cfCsCov
-    intro c hc
-    exact hcov.1 c (List.mem_of_mem_filter hc)
-  · -- cfBisEq
-    show (reg.decodeCS d).busInteractions.filter (fun bi =>
-        bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
-      = (d.busInteractions.filter (fun bi =>
-          bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))).map
-          reg.decodeBI
-    refine (filter_map_comm reg.decodeBI
-      (fun bi => bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
-      (fun bi => bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
-      d.busInteractions (fun bi _ => ?_)).symm
-    show (bi.multiplicity.hasConstFoldableNode || bi.payload.any (fun e => e.hasConstFoldableNode))
-      = ((reg.decodeExpr bi.multiplicity).hasConstFoldableNode
-          || (bi.payload.map reg.decodeExpr).any (fun e => e.hasConstFoldableNode))
-    rw [reg.decodeExpr_hasConstFoldableNode bi.multiplicity]
-    congr 1
-    rw [List.any_map]
-    exact list_any_congr (fun e _ => (reg.decodeExpr_hasConstFoldableNode e).symm)
-  · -- cfBisCov
-    intro bi hbi
-    exact hcov.2 bi (List.mem_of_mem_filter hbi)
 
 /-- `dedupHash`'s fold only ever prepends processed elements. -/
 theorem mem_dedupHash_foldl {α : Type} [BEq α] [Hashable α] :
@@ -2017,45 +1471,3 @@ theorem denseDomainFoldF_covered (reg : VarRegistry) (pw : PrimeWitness p)
     · rw [if_pos hth]; exact denseFoldLoop_covered reg _ d _ hcov
     · rw [if_neg hth]; exact denseFoldLoopDirect_covered reg _ d hcov
   · rw [if_neg hpB]; exact hcov
-
-/-- **The dense domain-fold pass.** Built directly (fact-free); inherits `domainFoldPass`'s
-    `PassCorrect` through the decode equality. -/
-def denseDomainFoldPass (pw : PrimeWitness p) : DenseVerifiedPassW p := fun reg d hcov bs _ =>
-  { reg' := reg
-    out := denseDomainFoldF pw reg d
-    derivs := []
-    ext := VarRegistry.Extends.refl reg
-    covered := denseDomainFoldF_covered reg pw d hcov
-    dcovered := by intro x hx; simp at hx
-    correct := by
-      show PassCorrect (reg.decodeCS d) (reg.decodeCS (denseDomainFoldF pw reg d))
-        (reg.decodeDerivs ([] : DenseDerivations p)) bs
-      have hout : reg.decodeCS (denseDomainFoldF pw reg d) = (domainFoldPass pw (reg.decodeCS d) bs).out := by
-        by_cases hpB : pw.isPrime = true
-        · haveI : Fact p.Prime := ⟨pw.correct hpB⟩
-          rw [domainFoldPass_out_prime hpB (reg.decodeCS d) bs]
-          have hlen : domainFoldIndexThreshold ≤ (reg.decodeCS d).algebraicConstraints.length
-              ↔ domainFoldIndexThreshold ≤ d.algebraicConstraints.length := by
-            show _ ≤ (d.algebraicConstraints.map reg.decodeExpr).length ↔ _
-            rw [List.length_map]
-          simp only [denseDomainFoldF, if_pos hpB]
-          by_cases hth : domainFoldIndexThreshold ≤ d.algebraicConstraints.length
-          · rw [if_pos hth, if_pos (hlen.mpr hth)]
-            exact denseFoldLoop_decode reg bs (denseTargets reg d) _
-              (denseTargets_corr reg d hcov) (fun xs hxs x hx =>
-                denseTargets_valid reg d hcov xs hxs x hx) d hcov rfl
-              (DenseFoldIdx.mk' d) (FoldIdx.mk' (reg.decodeCS d)) (denseFoldIdxMk'_corr reg d hcov)
-          · rw [if_neg hth, if_neg (fun h => hth (hlen.mp h))]
-            exact denseFoldLoopDirect_decode reg bs (denseTargets reg d) _
-              (denseTargets_corr reg d hcov)
-              (fun xs hxs x hx => denseTargets_valid reg d hcov xs hxs x hx) d hcov
-        · have hLHS : denseDomainFoldF pw reg d = d := by simp only [denseDomainFoldF, if_neg hpB]
-          rw [hLHS]; simp only [domainFoldPass, dif_neg hpB]
-      rw [show reg.decodeDerivs ([] : DenseDerivations p) = [] from rfl, hout]
-      have hderiv : (domainFoldPass pw (reg.decodeCS d) bs).derivs = [] :=
-        domainFoldPass_derivs_nil pw (reg.decodeCS d) bs
-      have hc := (domainFoldPass pw (reg.decodeCS d) bs).correct
-      rw [hderiv] at hc
-      exact hc }
-
-end ApcOptimizer.Dense
