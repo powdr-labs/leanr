@@ -275,4 +275,71 @@ def denseBasisJustified (bound : Nat) (bnd : VarId → Option Nat) {bs : BusSema
   | some L => denseBasisReduceGo bound bnd facts fwits basisFuel 0 L.norm
   | none => false
 
+/-! ## The byte-justification dispatcher (Task 3, chunk C1c — impl)
+
+Dense, `VarId`-native transliteration of the top of the byte-justification tower
+(`BusPairCancel.lean:707-869`): `byteJustifiedW`/`byteJustified`/`recvSlotsJustified`. These tie
+together the leaf certificates from C1a (`denseDeepByteJustified`/`denseDomainByteJustified`) and
+C1b (`denseAffineJustified`/`denseBasisJustified`) via a fixed-order, short-circuiting
+disjunction — the alternative order and the `||`/`&&` short-circuiting are preserved exactly, and
+each `match`/`if` mirrors the spec's `dif`/`match` one for one. `Expression.isSingleVar`'s dense
+counterpart is `DenseExpr.isSingleVar` (C1a); `Expression.containsVar`'s is `DenseExpr.mentions`
+(reused unchanged from `Dense/SubstMap.lean`, flagged already in the C1a module header — no new
+declaration needed here either). No `_sound` lemma is ported (impl-only chunk). -/
+
+/-- Is `e` provably a byte under every assignment satisfying the remaining system? Either a
+    constant `< bound`, a variable with a proven bus-fact bound `≤ bound` derived from the
+    remaining interactions, or — when `deep` is set — a variable a constraint pins to a byte on
+    every point of its selector flags' finite domains (`denseDeepByteJustified`), or a
+    single-variable expression whose variable's finite domain makes `e` a byte at every point
+    (`denseDomainByteJustified`), or an affine recomposition of bounded limbs
+    (`denseAffineJustified`), or a basis reduction against range-checked slot forms from the
+    second witness lookup `fwits` (`denseBasisJustified`).
+
+    Parameterized form: the remaining interactions are consulted through the witness lookup
+    `wits` (see `denseDeepByteVars`), the single-variable constraints `domCs` and the
+    per-variable candidate constraints `candsOf` are precomputed by the caller. Mirrors
+    `byteJustifiedW` (`BusPairCancel.lean:722`). -/
+def denseByteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p))
+    (candsOf : VarId → List (DenseExpr p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (wits fwits : VarId → List (BusInteraction (DenseExpr p)))
+    (e : DenseExpr p) : Bool :=
+  match e.constValue? with
+  | some c => decide (c.val < bound)
+  | none =>
+    (match e with
+     | .var x =>
+       (match denseFindVarBound bs facts (wits x) x with
+        | some b => decide (b ≤ bound)
+        | none => false) ||
+       (deep && decide (256 ≤ bound) &&
+         denseDeepByteJustified domCs (candsOf x) bs facts wits x)
+     | _ => false) ||
+    (deep && decide (256 ≤ bound) && denseDomainByteJustified domCs e) ||
+    denseAffineJustified bound (fun x => denseFindVarBound bs facts (wits x) x) e ||
+    denseBasisJustified bound (fun x => denseFindVarBound bs facts (wits x) x) facts fwits e
+
+/-- The plain full-scan form (used by the coda's `RedundantByteDrop`): witness lookup and
+    precomputed constraint lists instantiated with the naive per-query filters. The basis arm is
+    disabled (`fwits = []`): feeding the whole region would rescan it per queried variable, and
+    the byte-level drops it serves don't need range-checked forms. Mirrors `byteJustified`
+    (`BusPairCancel.lean:744`). -/
+def denseByteJustified (bound : Nat) (deep : Bool) (all : List (DenseExpr p))
+    (bs : BusSemantics p) (facts : BusFacts p bs)
+    (rest : List (BusInteraction (DenseExpr p))) (e : DenseExpr p) : Bool :=
+  denseByteJustifiedW bound deep (all.filter DenseExpr.isSingleVar)
+    (fun x => all.filter (DenseExpr.mentions x)) bs facts (fun _ => rest) (fun _ => []) e
+
+/-- Are all of `R`'s payload entries at the declared byte slots justified (through the witness
+    lookup `wits` and precomputed `domCs`/`candsOf`, see `denseByteJustifiedW`)? Mirrors
+    `recvSlotsJustified` (`BusPairCancel.lean:833`). -/
+def denseRecvSlotsJustified (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p))
+    (candsOf : VarId → List (DenseExpr p)) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (wits fwits : VarId → List (BusInteraction (DenseExpr p)))
+    (slots : List Nat) (R : BusInteraction (DenseExpr p)) : Bool :=
+  slots.all (fun slot =>
+    match R.payload[slot]? with
+    | some e => denseByteJustifiedW bound deep domCs candsOf bs facts wits fwits e
+    | none => true)
+
 end ApcOptimizer.Dense
