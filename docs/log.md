@@ -4220,3 +4220,23 @@ identical. **Measured** (this container, serial, 4 cores): keccak profile **147.
 domainBatch 55.0 → 18.2 s, flagFold 20.8 → 17.1 s. Session total so far: **215 → 111 s
 (0.52×)**. CI matrix for `73d732c` (through entry 113): identical per-case sizes on all five
 sets; contended runtime rows keccak −37 %, wasm-eth −17 %. **Worked: yes.**
+
+### 115. Runtime: fixpoint sizeKey threading + fused normalization (small, output-identical)
+
+Two R4/R5-slice items from the round-2 sample attribution:
+
+- **`iterateToFixpoint` recomputed the input's `sizeKey` every cycle** alongside the output's —
+  `varCount` flat-maps every variable occurrence into a fresh list and hash-set (~6 % of
+  whole-run thread samples). `iterateToFixpointFrom` threads the previously computed key with
+  its proof, so each cycle computes only the output's key. Same comparisons, same results; the
+  degree/monotonicity theorems restate over the threaded variant.
+- **`normalizePass` computes through `normalizeFused`**: one bottom-up walk returning the
+  normalized expression *and* the node's linear form, instead of re-running `linearize` (a full
+  subtree walk) at every `add`/`mul` node along non-affine paths. `normalizeFused_eq` pins both
+  components to (`Expression.normalize`, `linearize`), so the pass output is provably unchanged.
+  Gauss's `substF |> normalize` sites are deliberately untouched — open PR #156 rewrites gauss
+  and should not be conflicted with.
+
+**Verification**: keccak and sp1 apc_030 exports byte-identical; proof integrity green; keccak
+profile steady at **111.0 s** (both items are a few-percent class on this container; they also
+shrink every future cycle-heavy case). **Worked: yes.**

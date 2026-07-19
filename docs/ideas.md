@@ -191,24 +191,26 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
      (`Reencode.lean:852/858`); rarely reached (post-gates), so low value now.
 
 **R4. Constant-factor levers that touch every pass**  ·  *medium value, cheap*:
-   - **Variable interning-lite, `Implementation/`-only**: the parser mints a fresh `String` per
-     occurrence (`Variable.ofPowdrName`, `JsonParser.lean:101`); intern one shared object per
-     distinct name so the runtime's pointer fast-path (`lean_string_eq`: `s1 == s2 || …`) makes
-     every hit-comparison O(1). Swap the `Hashable Variable` instance
-     (`Implementation/Variable.lean:19`, unaudited) to hash `powdrId?` first — O(1) vs O(name
-     length) on almost every key. `Spec.lean`'s `Variable` stays untouched.
+   - **Variable interning-lite, `Implementation/`-only**: parse-time interning is **done (entry
+     106)**. Still open: swap the `Hashable Variable` instance (`Implementation/Variable.lean`,
+     unaudited) to hash `powdrId?` first — O(1) vs O(name length) on almost every key. Caution:
+     hash values leak into `Std.HashMap`/`HashSet` **iteration orders**; audit (or
+     export-verify) every `toList`/`fold` whose order reaches the output before landing.
    - ~~`identitySubst`~~ **done (entry 106)**: the 2.8 s was an **arity-expansion bug** — a
      `def … : X → Y := let heavy := …; fun y => …` re-evaluates `heavy` per call (the map was
      rebuilt per queried occurrence). 2827 ms → 9 ms on apc_030. **Working rule: bind heavy
      values in the fully-applied pass body and pass them as parameters** (the `FlagFold`
      comment's pattern); when a pass's profile makes no sense relative to its work, suspect this
      first and bisect with a skip-the-body experiment.
-   - `normalize`: `linearize` re-runs on the whole subtree at every node along non-affine paths
-     (O(E·depth), `Normalize.lean:306`); fuse into one bottom-up pass returning per-node linear
-     forms. Also feeds gauss's per-constraint reduce.
-   - `gauss`: skip `c.substF σ.fn |> normalize` for constraints mentioning no solved key, and skip
-     sweep 2 when sweep 1 adopted nothing (`Gauss.lean:592`). (PR #156 has a proven dirty-sweep
-     variant of this — check its status before redoing.)
+   - ~~`normalize` linearize fusion~~ **done (entry 115)** for `normalizePass`
+     (`normalizeFused`, proven equal). Gauss's per-constraint `substF |> normalize` still walks
+     the old way — left alone deliberately: open PR #156 rewrites gauss's sweeps (dirty second
+     sweep, allocation-free pivots) and should not be conflicted with.
+   - ~~`iterateToFixpoint` sizeKey recomputation~~ **done (entry 115)**: the input's key is
+     threaded (`iterateToFixpointFrom`), halving the per-cycle occurrence-list walks (~6 % of
+     whole-run samples).
+   - `gauss`: covered by open **PR #156** (proven dirty second sweep + allocation-free pivot
+     selection, 0.78× on eth) — do not duplicate here.
 
 **R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
 *medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs
@@ -235,11 +237,25 @@ remaining cost is *productive first-time enumeration*; the levers there are effe
 (replace enumeration classes with algebra, cf. the quadratic-roots effectiveness idea 1) or
 intra-enumeration (survivor-scan compilation is already tuned).
 
-**R7. Intra-pass parallelism**  ·  *wall-clock lever, orthogonal*. The per-target enumeration in
-domainBatch/reencode/domainFold is embarrassingly parallel and pure; `Task.spawn`/`Task.get` with
-ordered joins keeps the output deterministic. CI runners have 32 cores; the serial Runtime Bench
-would show the win directly. Worth it only after the algorithmic waste is gone (parallelizing a
-triple-redundant gather is throwing cores at garbage).
+**R7. Intra-pass parallelism**  ·  partially **done (entry 114)**: domainBatch's per-target
+enumerations are `Task`-parallel with ordered joins (byte-identical σ; keccak domainBatch
+55 → 18 s on 4 cores — CI's 32 cores have more headroom). Still open: domainFold's and
+reencode's per-target *gating* work is also independent between accepts, but their loops rewrite
+`cs` on accept, so parallelizing needs a speculative gather-then-replay structure — only worth it
+if their serial remainder grows relative to the rest. busPairCancel/busUnify are inherently
+sequential scans (window state).
+
+**R8. busPairCancel residual quadratics** (formerly part of R1)  ·  ~7 % of the post-114 keccak
+profile. `shieldOk` re-scans (and `liveArr` materializes) the whole live before-region per
+candidate send; `midRefuted` likewise materializes the between-region. Two designs, in
+increasing effort: (a) fuse the materialization away — array-index twins of
+`liveArr`+`shieldScan`/`List.all` with `…_eq` lemmas (the `liveArr_eq` pattern), removing the
+O(i) allocation per candidate but keeping the O(i) scan; (b) the busUnify entry-111 treatment —
+`shieldOk` left-folds to a single per-address-key `pending` bit, maintainable across one sweep,
+but the pass's tombstone-and-restart structure (drops invalidate prefix state: removing a
+consumed receive un-shields earlier messages) forces a recompute-on-drop scheme, bounded by
+#drops × O(B). The whole-run sample share (~5 %) says (a) first, (b) only if SHA-scale profiles
+promote it.
 
 ### Runtime dead ends (measured; do not re-propose without new evidence)
 
