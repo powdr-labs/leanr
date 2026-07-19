@@ -192,10 +192,12 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
 
 **R4. Constant-factor levers that touch every pass**  ·  *medium value, cheap*:
    - **Variable interning-lite, `Implementation/`-only**: parse-time interning is **done (entry
-     106)**. Still open: swap the `Hashable Variable` instance (`Implementation/Variable.lean`,
-     unaudited) to hash `powdrId?` first — O(1) vs O(name length) on almost every key. Caution:
-     hash values leak into `Std.HashMap`/`HashSet` **iteration orders**; audit (or
-     export-verify) every `toList`/`fold` whose order reaches the output before landing.
+     106)**. The `powdrId?`-first `Hashable Variable` swap was **tried and reverted (entry
+     116)**: hash values leak into `Std.HashMap`/`HashSet` iteration orders, and *some* consumer
+     lets that order reach the output — sp1 apc_030's export changed (openvm-eth apc_100 was
+     identical). Before re-proposing, find and order-normalize the leaking `toList`/`fold`
+     (suspects: gauss's `Solved` reverse-dependency buckets, the pdDropSet sweep buckets) — the
+     swap itself is otherwise sound and cheap.
    - ~~`identitySubst`~~ **done (entry 106)**: the 2.8 s was an **arity-expansion bug** — a
      `def … : X → Y := let heavy := …; fun y => …` re-evaluates `heavy` per call (the map was
      rebuilt per queried occurrence). 2827 ms → 9 ms on apc_030. **Working rule: bind heavy

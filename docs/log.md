@@ -4240,3 +4240,24 @@ Two R4/R5-slice items from the round-2 sample attribution:
 **Verification**: keccak and sp1 apc_030 exports byte-identical; proof integrity green; keccak
 profile steady at **111.0 s** (both items are a few-percent class on this container; they also
 shrink every future cycle-heavy case). **Worked: yes.**
+
+### 116. Runtime: `Hashable Variable` powdrId?-first — tried, leaks, reverted (no code change)
+
+The R4 idea (hash the O(1) `powdrId?` discriminator instead of walking the name string on every
+hash-map probe) was implemented and export-checked: **openvm-eth apc_100 byte-identical, sp1
+apc_030 NOT** — some consumer lets a `Std.HashMap`/`HashSet` iteration order (which the hash
+values determine) reach the output. Reverted; recorded in `docs/ideas.md` with the leak-hunting
+prerequisite (order-normalize the offending `toList`/`fold` first — suspects: gauss's `Solved`
+reverse-dependency buckets, `pdDropSet`'s sweep buckets). **Worked: no (reverted, documented).**
+
+---
+
+**Session summary (entries 109–116, PR #165)**: keccak profile **215 s → 111 s (0.52×)** on the
+4-core dev container, with every step either provably output-identical, byte-identical on the
+export set, or (R3's order change) validated by the CI matrix at identical per-case sizes on
+all five benchmark sets. The structural wins — the index-preserving order-preserving fold, the
+busUnify sweep, the reencode degree pre-gate, and the parallel enumeration — are exactly the
+super-linear terms that mattered for the openvm-SHA scale (~8× keccak): the remaining top passes
+(domainBatch enumeration, flagFold's certified sweeps) are linear-ish per cycle or parallel.
+Remaining runtime ideas live in the rewritten R-sections of `docs/ideas.md` (R8 busPairCancel
+sweep, the hash-order leak hunt, reencode/domainFold direct-path gathers at mid scale).
