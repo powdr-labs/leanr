@@ -12,6 +12,7 @@ import ApcOptimizer.Implementation.Dense.Rewrite
 import ApcOptimizer.Implementation.Dense.DropPasses
 import ApcOptimizer.Implementation.Dense.Normalize
 import ApcOptimizer.Implementation.Dense.Dedup
+import ApcOptimizer.Implementation.Dense.DedupNativeProof
 import ApcOptimizer.Implementation.Dense.DigitFold
 import ApcOptimizer.Implementation.Dense.Gauss
 import ApcOptimizer.Implementation.Dense.DomainBatch

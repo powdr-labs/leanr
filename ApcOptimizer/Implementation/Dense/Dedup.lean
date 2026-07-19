@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.Dense.Adapter
 import ApcOptimizer.Implementation.OptimizerPasses.Dedup
+import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
@@ -178,6 +179,49 @@ theorem denseDedupStateless_subset (bs : BusSemantics p) :
       · exact List.mem_cons_self ..
       · exact List.mem_cons_of_mem _ (ih (b :: seen) bi h')
 
+/-- Every original interaction is either kept or was already in `seen` (mirrors
+    `dedupStateless_covers`). -/
+theorem denseDedupStateless_covers (bs : BusSemantics p) :
+    ∀ (seen l : List (BusInteraction (DenseExpr p))),
+      ∀ bi ∈ l, bi ∈ denseDedupStateless bs seen l ∨ bi ∈ seen := by
+  intro seen l
+  induction l generalizing seen with
+  | nil => intro bi h; simp at h
+  | cons b rest ih =>
+    intro bi h
+    rw [denseDedupStateless]
+    split_ifs with h1 h2
+    · rcases List.mem_cons.1 h with rfl | h'
+      · exact Or.inl (List.mem_cons_self ..)
+      · exact (ih seen bi h').imp (List.mem_cons_of_mem _) id
+    · rcases List.mem_cons.1 h with rfl | h'
+      · exact Or.inr h2
+      · exact ih seen bi h'
+    · rcases List.mem_cons.1 h with rfl | h'
+      · exact Or.inl (List.mem_cons_self ..)
+      · rcases ih (b :: seen) bi h' with hk | hs
+        · exact Or.inl (List.mem_cons_of_mem _ hk)
+        · rcases List.mem_cons.1 hs with rfl | hs'
+          · exact Or.inl (List.mem_cons_self ..)
+          · exact Or.inr hs'
+
+/-- The stateful sublist is untouched (syntactically) (mirrors `dedupStateless_statefulFilter`). -/
+theorem denseDedupStateless_statefulFilter (bs : BusSemantics p) :
+    ∀ (seen l : List (BusInteraction (DenseExpr p))),
+      (denseDedupStateless bs seen l).filter (fun bi => bs.isStateful bi.busId)
+        = l.filter (fun bi => bs.isStateful bi.busId) := by
+  intro seen l
+  induction l generalizing seen with
+  | nil => rfl
+  | cons b rest ih =>
+    rw [denseDedupStateless]
+    split_ifs with h1 h2
+    · rw [List.filter_cons_of_pos (by simpa using h1),
+          List.filter_cons_of_pos (by simpa using h1), ih]
+    · rw [List.filter_cons_of_neg (by simpa using h1), ih]
+    · rw [List.filter_cons_of_neg (by simpa using h1),
+          List.filter_cons_of_neg (by simpa using h1), ih]
+
 /-- **Stateless dedup commutes with decode** (validity-gated through `decodeBI_inj`): the dense
     keep-first dedup, decoded, is the spec keep-first dedup on the decoded interactions, with the
     seen-set decoded pointwise. -/
@@ -299,6 +343,21 @@ theorem denseDedupStatelessFast_eq_nil (bs : BusSemantics p)
     denseDedupStatelessFast bs ∅ bis = denseDedupStateless bs [] bis :=
   denseDedupStatelessFast_eq bs bis [] ∅ (by intro bi; simp [Std.HashMap.getD_empty])
 
+/-! ## Hash-bucketed constraint dedup (VarId-based, mirrors `dedupConstraintsFast`)
+
+`List.dedup` on the constraint list is O(C²·E) structural comparisons; `HashedDedup.hashedDedup`
+is its proven-identical bucketed twin (the identity `hashedDedup_eq` is hash-agnostic, so the
+output is byte-identical to `List.dedup`). -/
+
+/-- The bucketed constraint dedup: identical output to `List.dedup`, one-bucket membership tests
+    instead of whole-tail scans. -/
+def denseDedupConstraintsFast (l : List (DenseExpr p)) : List (DenseExpr p) :=
+  HashedDedup.hashedDedup DenseExpr.bHash l
+
+theorem denseDedupConstraintsFast_eq (l : List (DenseExpr p)) :
+    denseDedupConstraintsFast l = l.dedup :=
+  HashedDedup.hashedDedup_eq DenseExpr.bHash l
+
 /-! ## The deduplicated dense system -/
 
 /-- The deduplicated dense system (reference: keep-first stateless dedup). -/
@@ -330,6 +389,26 @@ theorem DenseConstraintSystem.dedup_covered {reg : VarRegistry} {d : DenseConstr
   · intro bi hbimem
     simp only [DenseConstraintSystem.dedup] at hbimem
     exact hbi bi (denseDedupStateless_subset bs [] d.busInteractions bi hbimem)
+
+/-! ## The fully hash-bucketed dense system -/
+
+/-- The deduplicated dense system, computed with the hash-bucketed constraint dedup and the
+    hash-bucketed keep-first stateless dedup. Equal to `DenseConstraintSystem.dedup`
+    (`dedupN_eq`), so it inherits its correctness and coverage. -/
+def DenseConstraintSystem.dedupN (d : DenseConstraintSystem p) (bs : BusSemantics p) :
+    DenseConstraintSystem p :=
+  { algebraicConstraints := denseDedupConstraintsFast d.algebraicConstraints,
+    busInteractions := denseDedupStatelessFast bs ∅ d.busInteractions }
+
+theorem DenseConstraintSystem.dedupN_eq (d : DenseConstraintSystem p) (bs : BusSemantics p) :
+    d.dedupN bs = d.dedup bs := by
+  simp only [DenseConstraintSystem.dedupN, DenseConstraintSystem.dedup,
+    denseDedupStatelessFast_eq_nil, denseDedupConstraintsFast_eq]
+
+/-- `dedupN` preserves coverage (via `dedupN_eq` through `dedup_covered`). -/
+theorem DenseConstraintSystem.dedupN_covered {reg : VarRegistry} {d : DenseConstraintSystem p}
+    {bs : BusSemantics p} (hc : d.CoveredBy reg) : (d.dedupN bs).CoveredBy reg := by
+  rw [DenseConstraintSystem.dedupN_eq]; exact DenseConstraintSystem.dedup_covered hc
 
 /-- **The dedup commutes with decode** on a covered system: the dense deduplicated system decodes to
     the spec deduplicated system of the decoded input. -/
