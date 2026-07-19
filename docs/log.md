@@ -4061,3 +4061,216 @@ figure does not translate to target-level reuse). domainBatch's remaining cost i
 first-time enumeration; its levers are effectiveness-side (quadratic-root algebra replacing
 enumeration classes). Instrumentation reverted; no behavioral change. **Worked: n/a
 (measurement; saved the refactor).**
+
+### 109. Runtime: domainFold order-preserving in-place fold — the per-accept rebuild is gone (keccak domainFold 47 s → 10.4 s)
+
+The R3 leftover from entry 107: 482 accepted folds on keccak each paid a full `foldOut` map
+(an `anyVarIn` gate walk over every expression node in the system) plus a constraint-side
+index rebuild (`CoveredIndex.build` over all ~28k constraints), because the old `foldOut`
+*reordered* constraints (rewritten-uncovered ++ covered-verbatim), invalidating bucket
+positions. This entry removes the reorder and, with it, every per-accept full-system cost:
+
+- **`foldOut` is now order-preserving**: each constraint is rewritten (or, if covered, kept
+  verbatim) **in place** — one `map` over the original list. Positions never move, and
+  `foldRewrite` only ever shrinks a variable set, so the inverted index survives an accept.
+- **`FoldIdx` carries bucket-completeness invariants instead of build-equalities** (`hidx`,
+  `hbis`: every item position is bucketed under each of its variables). Stale supersets are
+  fine — every consumer re-checks candidates — and completeness is monotone under in-place
+  variable-shrinking rewrites, so `FoldIdx.refresh` keeps both bucket maps **with no rebuild**
+  (only the O(n)-pointer item arrays are re-materialized). `CoveredIndex.coveredIdx_eq_filter`
+  is generalized to `coveredIdx_eq_filter_of_complete` (any index whose candidate set is
+  complete), which the covered-set equality `coveredCsIdx_eq` now consumes.
+- **The fold itself is computed sparsely** (`foldOutIdx`, proven equal to `foldOut` via the
+  completeness invariants): only bucketed candidate positions are walked; every other item is
+  passed through by position with one O(1) `Nat`-set probe — no expression walk at all.
+- `foldRewrite`'s gate drops the `hasConstFoldableNode` arm (and `FoldIdx` its cf lists): items
+  sharing no variable with the group are never rewritten now; purely variable-free compound
+  nodes are the constant-fold pass's job (they only arise transiently mid-cycle, and folding
+  them is size-neutral so it never extended the fixpoint).
+
+**Not byte-identical** (the old fold moved covered constraints to the end of the list; the new
+one leaves them in place), so this is validated by effectiveness counts, not export diffs:
+keccak reproduces **identical per-cycle sizes at every one of the 10 cycles** and the identical
+final circuit (2021 vars / 2022 bus / 186 constraints); openvm-eth apc_001 and apc_100
+reproduce identical counts. CI matrix pending for the full five-set per-case comparison.
+
+**Measured** (this container, serial): keccak `profile` total 215 s → 172 s, domainFold
+**47.0 s → 10.4 s (0.22×)**. Remaining keccak: domainBatch 47.9 s, reencode 43.2 s, flagFold
+16.2 s, busUnify 12.6 s, domainFold 10.4 s, busPairCancel 8.2 s, rootPairUnify 8.2 s.
+**Worked: yes.**
+
+### 110. Runtime follow-up: keep the historical fold on domainFold's direct path (fixes the sp1 +2-constraint drift)
+
+Entry 109's CI matrix: **+0.000× with identical per-case sizes on openvm-eth (100), wasm-eth
+(100), openvm keccak, and sp1 keccak** — but sp1/rsp changed on 2 of 100 cases (apc_024/040:
+175 → 177 constraints, vars/bus identical; aggregate −0.008× on the lowest axis). Export diff
+(canonical, modulo a positional `rnc*` rename) pinned it to two `lower_limb`↔bitwise-result
+product constraints that main's pipeline collapsed and the reworked direct path didn't — i.e.
+the drift came from the direct (unindexed) path's behavior change (in-place order and/or the
+dropped disjoint-item const-compound folding), not from the indexed path.
+
+Fix: the **direct path now runs the historical fold verbatim** — `foldRewriteC` (the old
+`anyVarIn ∨ hasConstFoldableNode` gate), `foldOutC` (the old rewritten-uncovered ++
+covered-verbatim output), the old `systemHasFoldableW` gate, and the old correctness proof —
+so every system below `domainFoldIndexThreshold` (8192; everything in the corpus except openvm
+keccak, and SHA when it lands) is **bit-for-bit unchanged from main**. apc_024 verified
+byte-identical (175 constraints). The order-preserving in-place fold + persistent index +
+sparse rewrite (entry 109) remain on the indexed path only, where the reorder would invalidate
+the index positions — keccak re-verified: identical final circuit, domainFold stays ~0.2× of
+its pre-109 cost. The survivor-pinning argument is shared (`groupSurvivors_mem_agree`), so the
+duplicated fold carries only its own thin agreement/output lemmas. **Worked: yes.**
+
+### 111. Runtime: busUnify single-sweep consumer matching (findConsumer O(B²) → per-key windows)
+
+R1's biggest open item. `findConsumer` scanned forward through the bus tail once per send —
+every position crossed by every open window that spans it, each step evaluating up to four
+address-disequality certificates (`addrNonzeroNeq` worst-case O(2^A·C)) — the dominant busUnify
+cost (12.6 s on keccak). Replaced by a single left-to-right sweep per bus (`sweepGo`):
+
+- **Canonical address keys** (`addrKey?`): each present address slot, constant-valued slots
+  normalized to their literal constant. Key equality is provably equivalent to `addrConstsEq`,
+  so the consumer test for an incoming message is one hash-map probe.
+- **Constant-address transparency**: an all-constant message is `addrConstsNeq`-excluded at
+  every open window with a *different* all-constant key — zero work — and runs the full
+  `findConsumer` branch test (`stepTest`, same arms, same order) only against the one window at
+  its own key. Windows with symbolic key components (`symOpen`) and messages with symbolic
+  address slots are tested literally — exactly the pairs the per-send scans also paid for.
+- **Split equations by drop arithmetic** (`split_of_positions`): an open window stores its send
+  position and suffix; `mid` is recovered as a `take` at consume time, so windows carry no
+  per-step bookkeeping. Candidates are sorted back into send-position order — the emitted list
+  is the one the per-send scans produced (the sweep is untrusted beyond the split equations:
+  `checkPair` re-verifies every pair condition on every candidate).
+- **`TwoRootMap`/`NonzeroWits` are `Thunk`ed**: invocations whose pairs are all decided by the
+  constant/affine certificates never pay the two O(#constraints) table builds.
+
+**Verification**: output byte-identical on {openvm keccak, sp1 rsp apc_024/apc_030} exports vs
+the pre-sweep binary; keccak in-pipeline cycle sizes identical at every cycle. Within-run share: busUnify 5.9% of the pre-sweep baseline run → 5.4% after — the scan is no longer the pass's floor; what remains is the pass body's eager per-invocation table builds (csVarSet over the ~10⁵-entry occurrence list, csHashes over every constraint), addressed next. **Worked: yes (exactness verified; modest wall-clock until the table builds are gated).**
+
+### 112. Runtime: busUnify body gating + by-construction variable check; domainFold fast membership tests (keccak 215 s → 193 s)
+
+Follow-ups from the gdb-sampled attribution (200 whole-run stack samples, function→pass mapped):
+
+- **busUnify's floor was its own body, not the scan**: every invocation eagerly built
+  `Std.HashSet.ofList cs.vars` (the ~10⁵-entry occurrence list) for the "no new variable" filter
+  and the structural-hash bucket map for the already-present filter — even with zero collected
+  equalities. Now: the equalities' variables come from payload slots of `cs`'s own interactions
+  **by construction** (`memEqConstraints_vars`, threaded through `collectForBus`/
+  `collectAllBuses`), so the occurrence-list HashSet is gone entirely — with the filter provably
+  unchanged — and the bucket map is built only when `eqs` is nonempty.
+- **domainFold's remaining direct-path cost was the slow spec-side `varsIn`** — a `List.elem`
+  running the full `Variable` `DecidableEq` (name-`String` compare first) per AST node inside
+  `foldRewriteGo`'s gates and `hasFoldable` — 26 % of all whole-run samples. Swapped for the
+  `containsFast`-backed `varsInF` (`powdrId?` compared first; `varsInF_eq` proves the value
+  unchanged, so the output is provably identical). Both fold paths share the fix.
+
+**Verification**: keccak and sp1 apc_030/apc_024 exports byte-identical across all of entries
+111–112; proof integrity green. **Measured** (this container, serial): keccak profile
+**215 s → 192.7 s** — domainFold **47.0 → 14.2 s (0.30×)**, busUnify 12.7 → 10.5 s. Remaining:
+domainBatch 55.1 s, reencode 49.4 s (per-accept `groupRewrite` full-system walks — next),
+flagFold 21.9 s, rootPairUnify 7.6 s, busPairCancel 7.4 s. **Worked: yes.**
+
+### 113. Runtime: reencode degree pre-gate — 100 % of keccak's accepted re-encodings were degree-rejected (reencode 49.4 s → 5.1 s)
+
+Instrumenting the reencode funnel on keccak: **1276 groups per run pass `checkReencode` and
+every single one is then rejected by the output degree check** (`reencodeOut … |>.withinDegreeB`)
+— the interpolations of the 7–8-variable flag groups are degree-3 polynomials in the bits, and
+any multiplicative use overshoots the openvm bound. Each rejection paid three whole-system
+walks — the certificate's freshness scan (`bits × system` `mentionsF`), the full `reencodeOut`
+rewrite, and the `withinDegreeB` walk — and the same groups were re-tried every cycle (nothing
+memoizes the rejection). That was essentially all of reencode's 49 s.
+
+Fix: `degPreReject`, a **necessary-condition pre-gate** right after `buildReencode` — one
+early-exit `any` over the system that rewrites *only* items sharing a variable with the group
+(`sharesVarIn`) and fires when a rewritten non-covered constraint (or any rewritten interaction
+expression) already exceeds the bound. Firing is exact: such an item appears verbatim in
+`reencodeOut`, so the full check would reject the same candidate — the pass output is unchanged,
+only the three whole-system walks are skipped (and on kill-cases the `any` exits at the first
+violating item, typically within a few candidates).
+
+**Verification**: keccak export byte-identical. **Measured** (this container, serial): keccak
+profile total **215 s (session baseline) → 147.4 s**; reencode **49.4 → 5.1 s (0.10×)**.
+Remaining: domainBatch 55.0 s, flagFold 20.8 s, domainFold 14.0 s, busUnify 10.5 s,
+rootPairUnify 8.0 s, busPairCancel 7.4 s. **Worked: yes.**
+
+### 114. Runtime: parallel domainBatch enumeration (R7) + flagFold verdict memoization and domain-cache bucketing (keccak 147 s → 111 s)
+
+- **domainBatch enumerations are now `Task`-parallel** (the R7 lever, now that the algorithmic
+  waste elsewhere is gone and domainBatch was the dominant pass at 55 s): every per-target
+  `forcedOver` is independent — the same `cs`, domain table, and index — so `collectForced`
+  spawns one task per deduplicated target and joins the results **in target order**; `σ`
+  receives exactly the sequential fold's insertions, so the pass output is byte-identical and
+  only wall-clock changes. The target dedup is split out (`dedupTargets`, same `seen`
+  threading). keccak domainBatch **55.0 → 18.2 s on 4 cores**; CI's 32-core runners have more
+  headroom.
+- **flagFold, part C**: `pointwiseDupDropPass` re-verified every flagged drop through `pdKeep` —
+  a `findIdx?` deep-equality scan plus prefix certificates **per occurrence**. `pdKeep` is
+  value-determined (its `findIdx?` locates the value's *first* occurrence), so the certified
+  verdicts are now computed once per distinct flagged value (`pdVerdictKeep`, entries carrying
+  their `pdKeep = false` proofs; `pointwiseDupDrop_correct` generalized to any keep-predicate
+  that implies `pdKeep = false` — the twin-keep argument recovers via the contrapositive).
+- **flagFold, part B**: `boxTautoDropPass` built its per-variable domain cache with
+  `findDomainAlg singles v` per distinct variable — an O(#singles) `mentions` walk each. A
+  single-variable constraint mentions exactly its one variable, so the singles are bucketed by
+  variable once and each lookup scans only its own bucket (original order preserved — identical
+  domains). `singleVarCs`'s per-constraint `eraseDups` swapped for the bucketed twin
+  (`hashedEraseDups_eq`, value-identical).
+
+**Verification**: keccak and sp1 apc_030 exports byte-identical; keccak per-cycle sizes
+identical. **Measured** (this container, serial, 4 cores): keccak profile **147.4 → 111.0 s** —
+domainBatch 55.0 → 18.2 s, flagFold 20.8 → 17.1 s. Session total so far: **215 → 111 s
+(0.52×)**. CI matrix for `73d732c` (through entry 113): identical per-case sizes on all five
+sets; contended runtime rows keccak −37 %, wasm-eth −17 %. **Worked: yes.**
+
+### 115. Runtime: fixpoint sizeKey threading + fused normalization (small, output-identical)
+
+Two R4/R5-slice items from the round-2 sample attribution:
+
+- **`iterateToFixpoint` recomputed the input's `sizeKey` every cycle** alongside the output's —
+  `varCount` flat-maps every variable occurrence into a fresh list and hash-set (~6 % of
+  whole-run thread samples). `iterateToFixpointFrom` threads the previously computed key with
+  its proof, so each cycle computes only the output's key. Same comparisons, same results; the
+  degree/monotonicity theorems restate over the threaded variant.
+- **`normalizePass` computes through `normalizeFused`**: one bottom-up walk returning the
+  normalized expression *and* the node's linear form, instead of re-running `linearize` (a full
+  subtree walk) at every `add`/`mul` node along non-affine paths. `normalizeFused_eq` pins both
+  components to (`Expression.normalize`, `linearize`), so the pass output is provably unchanged.
+  Gauss's `substF |> normalize` sites are deliberately untouched — open PR #156 rewrites gauss
+  and should not be conflicted with.
+
+**Verification**: keccak and sp1 apc_030 exports byte-identical; proof integrity green; keccak
+profile steady at **111.0 s** (both items are a few-percent class on this container; they also
+shrink every future cycle-heavy case). **Worked: yes.**
+
+### 116. Runtime: `Hashable Variable` powdrId?-first — tried, leaks, reverted (no code change)
+
+The R4 idea (hash the O(1) `powdrId?` discriminator instead of walking the name string on every
+hash-map probe) was implemented and export-checked: **openvm-eth apc_100 byte-identical, sp1
+apc_030 NOT** — some consumer lets a `Std.HashMap`/`HashSet` iteration order (which the hash
+values determine) reach the output. Reverted; recorded in `docs/ideas.md` with the leak-hunting
+prerequisite (order-normalize the offending `toList`/`fold` first — suspects: gauss's `Solved`
+reverse-dependency buckets, `pdDropSet`'s sweep buckets). **Worked: no (reverted, documented).**
+
+---
+
+**Session summary (entries 109–116, PR #165)**: keccak profile **215 s → 111 s (0.52×)** on the
+4-core dev container, with every step either provably output-identical, byte-identical on the
+export set, or (R3's order change) validated by the CI matrix at identical per-case sizes on
+all five benchmark sets. The structural wins — the index-preserving order-preserving fold, the
+busUnify sweep, the reencode degree pre-gate, and the parallel enumeration — are exactly the
+super-linear terms that mattered for the openvm-SHA scale (~8× keccak): the remaining top passes
+(domainBatch enumeration, flagFold's certified sweeps) are linear-ish per cycle or parallel.
+Remaining runtime ideas live in the rewritten R-sections of `docs/ideas.md` (R8 busPairCancel
+sweep, the hash-order leak hunt, reencode/domainFold direct-path gathers at mid scale).
+
+### 117. Runtime follow-up: gate domainBatch's fan-out on system size
+
+The full CI matrix for the session (all sizes identical on all five sets) showed the runtime
+rows at keccak **−52 %** and wasm-eth **−25 %**, but sp1/rsp at **+15 %** — the effectiveness
+matrix runs whole cases in parallel, and entry 114's unconditional per-target fan-out
+oversubscribes the runner on the many-small-cases sets (spawn overhead + scheduler contention
+per case, multiplied by 100 parallel cases). `collectForced` now fans out only when the system
+has ≥ 8192 constraints (the established big-case gate): below it the sequential fold is
+byte-for-byte the same computation without spawns, so sp1/rsp and openvm-eth behave exactly as
+before entry 114 while keccak/SHA-scale invocations keep the parallel win (keccak's ≥8192
+cycles carry ~90 % of its domainBatch cost). keccak and sp1 apc_030 exports byte-identical;
+keccak total steady at ~111 s locally. **Worked: yes (CI re-run pending).**

@@ -106,6 +106,13 @@ keccak, so anything superlinear is fatal there.
 - keccak per-pass (254 s profile): domainFold 48 s, domainBatch 48 s, reencode 42 s,
   busPairCancel 26 s, intervalForce 21 s, flagFold 16 s, busUnify 12.5 s, rootPairUnify 9.4 s,
   dedup 6.6 s, bytePack 5.5 s, gauss 4.5 s — no single villain; the cost is systemic.
+- **Post entries 109–113** (same container, serial): keccak 215 s → ~150 s expected — domainFold
+  47 → 14.2 s, busUnify 12.7 → 10.5 s, reencode's ~49 s was **1276-of-1276 degree-rejected
+  re-encodings per run** (each paying the freshness scan + full `reencodeOut` + degree walk,
+  retried every cycle) — killed by the `degPreReject` necessary-condition pre-gate. Remaining
+  big rocks: domainBatch ~50 s (productive enumeration + per-target gathers), flagFold ~20 s
+  (samples: `pdKeep` re-verification `findIdx?` deep-eq scans + boxTauto `mentions`/
+  `findDomainAlg`), rootPairUnify ~7.6 s, busPairCancel ~7.4 s.
 - keccak per-cycle (10 cycles): **cycles 0–2 are ~80 % of the total** (system still 28k→9.7k
   constraints there); the tail cycles 6–9 are ~1 % each. Fixing the big-system per-pass
   quadratics matters more than fixing the fixpoint tail.
@@ -124,21 +131,22 @@ entry-90 discipline: *untrusted, re-checked-at-use* candidate indexes (`buildFor
 `recvIndexAll`, `CoveredIndex`) — a wrong index entry costs time, never soundness, so most of
 these need no new proof.
 
-**R1. Kill the true O(N²) loops that dominate the big early cycles**  ·  *high value, mostly
-proof-free*. Confirmed quadratics, in rough per-case cost order:
-   - `busUnify.findConsumer` scans forward through the whole tail per send, and `checkPair`
-     re-scans the mid region `findConsumer` just stepped over (`BusUnify.lean:217/146`); each
-     step can hit `addrNonzeroNeq` = O(2^A·C) (`AddrDiseq.lean:519`). Fix: `(busId, addrHash)`
-     position buckets (port `recvIndexAll`), and thunk the eager `TwoRootMap`/`NonzeroWits`
-     builds (`BusUnify.lean:309-311`) so no-op invocations skip them. **Still open.** Note the
-     scan semantics are load-bearing: every stepped-over message must be *excluded*, so an
-     address-bucketed jump cannot skip the blocker checks — the win is bounding the scan via
-     per-position precomputed address forms, or a per-address-key incremental fold (complex; the
-     left-fold reformulation `ok' = (pr m ∨ ok) ∧ ref m` is exact but pairwise in `S`).
+**R1. Kill the true O(N²) loops that dominate the big early cycles**  ·  mostly **done**:
+   - ~~`busUnify.findConsumer` per-send forward scans~~ **done (entries 111–112)**: single
+     left-to-right sweep per bus with canonical-address-keyed open windows (`sweepGo` —
+     all-constant messages are provably invisible to other constant keys, so they cost one map
+     probe; `checkPair` re-verifies every emitted candidate, so the sweep is untrusted beyond
+     the split equations, which are recovered by drop arithmetic). `TwoRootMap`/`NonzeroWits`
+     thunked; the pass body's per-invocation `HashSet.ofList cs.vars` replaced by the
+     by-construction variable guarantee (`memEqConstraints_vars`) and the hash-bucket build
+     gated on nonempty candidates. Output byte-identical.
    - `busPairCancel`: `shieldOk` re-scans (and `liveArr` **materializes**) the whole before-region
-     per candidate send (`BusPairCancel.lean:1861/2428`) — O(B²) time *and* allocation on the long
-     same-address chains the pass exists for; in coda mode the `addrHash` bucket is O(B) per hot
-     address (`:1255`) — add a position cursor. **Still open.** ~~`dropWits` from-0 array scan per
+     per candidate send (`BusPairCancel.lean` `shieldOk`/`findCancelGoIdx`) — O(B²) time *and*
+     allocation on the long same-address chains the pass exists for; in coda mode the `addrHash`
+     bucket is O(B) per hot address — add a position cursor. **Still open**, but whole-run
+     samples put busPairCancel at only ~4 % on keccak post-111; the same per-key sweep pattern
+     as busUnify applies (`shieldOk` left-folds to a single per-key `pending` bit), complicated
+     by the tombstone-drop restarts. ~~`dropWits` from-0 array scan per
      queried variable~~ **done (entry 105)**: per-variable position index (`buildBoundIdx`),
      re-checked at use.
    - ~~`dedup` constraint-side `List.dedup` O(C²·E)~~ **done (entry 104)**: bucketed
@@ -161,7 +169,7 @@ enumeration core itself (SP1 apc_030's 19 s single-cycle spike) is untouched: th
 substrate), not setup cost.
 
 **R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
-index gate**  ·  *high value at eth/mid-keccak scale*. Partially **done (entry 105)**:
+index gate**  ·  mostly **done (entries 105/107/109)**:
    - reencode: the pruned index (`CoveredIndex.buildPruned`, entry 105 — items with more than 8
      distinct variables can never be covered by a ≤8-variable target, so pruning keeps covered
      sets identical) stays, but **behind the 8192 gate again** (entry 107): CI measured
@@ -170,42 +178,41 @@ index gate**  ·  *high value at eth/mid-keccak scale*. Partially **done (entry 
    - ~~domainFold's direct-path double `coveredBy` sweep~~ **done**: one `partition` per target
      feeds both the covered set and the no-op gate (`systemHasFoldableW`).
    - ~~both passes' doubled `c.vars.dedup` setup~~ **done** (`hashedDedup`, computed once).
-   - **Still open — domainFold's per-accept rebuild** (instrumented on keccak: 830 doms-bearing
-     targets, **482 accepts**, each paying `foldOut` + a constraint-index rebuild; entry 107
-     already removed the two per-accept const-foldable refilters and made all builds insert per
-     distinct variable). The remaining rebuild exists because `foldOut` *reorders* constraints
-     (rewritten-uncovered ++ covered-verbatim), invalidating bucket positions. Candidate fixes,
-     hardest-but-best first: (a) position-remap refresh — the reorder is a computable stable
-     partition, so buckets can be remapped in O(entries) integer work without re-hashing (needs
-     the completeness proof restated over the remap); (b) generalize `foldOut_correct` to any
-     covered *subset* (soundness only needs survivor supersets), making the gather untrusted —
-     but `systemHasFoldableIdx` must never under-approximate (a false negative skips a real fold
-     and changes output; a false positive triggers a no-op `foldOut` which *also* changes output
-     via the reorder), so the gate needs exact, current buckets either way; (c) make `foldOut`
-     order-preserving — simplest and fixes everything, but changes output order, so it needs a
-     full effectiveness re-validation rather than byte-identity.
+   - ~~domainFold's per-accept rebuild~~ **done (entry 109)**: `foldOut` is order-preserving
+     (in-place rewrite), `FoldIdx` carries bucket-completeness invariants (stale supersets fine,
+     re-checked at use), `refresh` keeps the buckets with no rebuild, and the fold itself is
+     computed sparsely over candidate positions (`foldOutIdx`). keccak domainFold 47 s → 10.4 s.
+     The **pattern generalizes**: any pass that rewrites items in place (shrinking variable
+     sets) can keep one inverted index for its whole run via
+     `coveredIdx_eq_filter_of_complete`; reencode is the next candidate (its rewrite *adds* bit
+     columns and drops covered constraints, so it needs the remap or a pruned-completeness
+     argument).
    - **Still open — reencode's `checkReencode`** re-runs the covered scan after `buildReencode`
      (`Reencode.lean:852/858`); rarely reached (post-gates), so low value now.
 
 **R4. Constant-factor levers that touch every pass**  ·  *medium value, cheap*:
-   - **Variable interning-lite, `Implementation/`-only**: the parser mints a fresh `String` per
-     occurrence (`Variable.ofPowdrName`, `JsonParser.lean:101`); intern one shared object per
-     distinct name so the runtime's pointer fast-path (`lean_string_eq`: `s1 == s2 || …`) makes
-     every hit-comparison O(1). Swap the `Hashable Variable` instance
-     (`Implementation/Variable.lean:19`, unaudited) to hash `powdrId?` first — O(1) vs O(name
-     length) on almost every key. `Spec.lean`'s `Variable` stays untouched.
+   - **Variable interning-lite, `Implementation/`-only**: parse-time interning is **done (entry
+     106)**. The `powdrId?`-first `Hashable Variable` swap was **tried and reverted (entry
+     116)**: hash values leak into `Std.HashMap`/`HashSet` iteration orders, and *some* consumer
+     lets that order reach the output — sp1 apc_030's export changed (openvm-eth apc_100 was
+     identical). Before re-proposing, find and order-normalize the leaking `toList`/`fold`
+     (suspects: gauss's `Solved` reverse-dependency buckets, the pdDropSet sweep buckets) — the
+     swap itself is otherwise sound and cheap.
    - ~~`identitySubst`~~ **done (entry 106)**: the 2.8 s was an **arity-expansion bug** — a
      `def … : X → Y := let heavy := …; fun y => …` re-evaluates `heavy` per call (the map was
      rebuilt per queried occurrence). 2827 ms → 9 ms on apc_030. **Working rule: bind heavy
      values in the fully-applied pass body and pass them as parameters** (the `FlagFold`
      comment's pattern); when a pass's profile makes no sense relative to its work, suspect this
      first and bisect with a skip-the-body experiment.
-   - `normalize`: `linearize` re-runs on the whole subtree at every node along non-affine paths
-     (O(E·depth), `Normalize.lean:306`); fuse into one bottom-up pass returning per-node linear
-     forms. Also feeds gauss's per-constraint reduce.
-   - `gauss`: skip `c.substF σ.fn |> normalize` for constraints mentioning no solved key, and skip
-     sweep 2 when sweep 1 adopted nothing (`Gauss.lean:592`). (PR #156 has a proven dirty-sweep
-     variant of this — check its status before redoing.)
+   - ~~`normalize` linearize fusion~~ **done (entry 115)** for `normalizePass`
+     (`normalizeFused`, proven equal). Gauss's per-constraint `substF |> normalize` still walks
+     the old way — left alone deliberately: open PR #156 rewrites gauss's sweeps (dirty second
+     sweep, allocation-free pivots) and should not be conflicted with.
+   - ~~`iterateToFixpoint` sizeKey recomputation~~ **done (entry 115)**: the input's key is
+     threaded (`iterateToFixpointFrom`), halving the per-cycle occurrence-list walks (~6 % of
+     whole-run samples).
+   - `gauss`: covered by open **PR #156** (proven dirty second sweep + allocation-free pivot
+     selection, 0.78× on eth) — do not duplicate here.
 
 **R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
 *medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs
@@ -232,11 +239,25 @@ remaining cost is *productive first-time enumeration*; the levers there are effe
 (replace enumeration classes with algebra, cf. the quadratic-roots effectiveness idea 1) or
 intra-enumeration (survivor-scan compilation is already tuned).
 
-**R7. Intra-pass parallelism**  ·  *wall-clock lever, orthogonal*. The per-target enumeration in
-domainBatch/reencode/domainFold is embarrassingly parallel and pure; `Task.spawn`/`Task.get` with
-ordered joins keeps the output deterministic. CI runners have 32 cores; the serial Runtime Bench
-would show the win directly. Worth it only after the algorithmic waste is gone (parallelizing a
-triple-redundant gather is throwing cores at garbage).
+**R7. Intra-pass parallelism**  ·  partially **done (entry 114)**: domainBatch's per-target
+enumerations are `Task`-parallel with ordered joins (byte-identical σ; keccak domainBatch
+55 → 18 s on 4 cores — CI's 32 cores have more headroom). Still open: domainFold's and
+reencode's per-target *gating* work is also independent between accepts, but their loops rewrite
+`cs` on accept, so parallelizing needs a speculative gather-then-replay structure — only worth it
+if their serial remainder grows relative to the rest. busPairCancel/busUnify are inherently
+sequential scans (window state).
+
+**R8. busPairCancel residual quadratics** (formerly part of R1)  ·  ~7 % of the post-114 keccak
+profile. `shieldOk` re-scans (and `liveArr` materializes) the whole live before-region per
+candidate send; `midRefuted` likewise materializes the between-region. Two designs, in
+increasing effort: (a) fuse the materialization away — array-index twins of
+`liveArr`+`shieldScan`/`List.all` with `…_eq` lemmas (the `liveArr_eq` pattern), removing the
+O(i) allocation per candidate but keeping the O(i) scan; (b) the busUnify entry-111 treatment —
+`shieldOk` left-folds to a single per-address-key `pending` bit, maintainable across one sweep,
+but the pass's tombstone-and-restart structure (drops invalidate prefix state: removing a
+consumed receive un-shields earlier messages) forces a recompute-on-drop scheme, bounded by
+#drops × O(B). The whole-run sample share (~5 %) says (a) first, (b) only if SHA-scale profiles
+promote it.
 
 ### Runtime dead ends (measured; do not re-propose without new evidence)
 

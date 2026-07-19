@@ -66,6 +66,22 @@ def ConstraintSystem.varCount (cs : ConstraintSystem p) : Nat :=
 def ConstraintSystem.sizeKey (cs : ConstraintSystem p) : Nat ×ₗ Nat ×ₗ Nat :=
   toLex (cs.varCount, toLex (cs.busInteractions.length, cs.algebraicConstraints.length))
 
+/-- The fixpoint worker, with the input's already-computed size key threaded through (`hk`):
+    each cycle computes only the *output*'s key — the old loop recomputed the input's key as well,
+    one redundant occurrence-list walk and hash-set build per cycle (`varCount` flat-maps every
+    variable occurrence in the system). Same comparisons, same results. -/
+def iterateToFixpointFrom (f : VerifiedPassW p) (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (k : Nat ×ₗ Nat ×ₗ Nat) (_hk : cs.sizeKey = k) : PassResult cs bs :=
+  let r := f cs bs facts
+  let k' := r.out.sizeKey
+  if _h : k' < k then
+    let r2 := iterateToFixpointFrom f r.out bs facts k' rfl
+    ⟨r2.out, r.derivs ++ r2.derivs, r.correct.andThen r2.correct⟩
+  else
+    ⟨cs, [], PassCorrect.refl cs bs⟩
+  termination_by cs.sizeKey
+  decreasing_by rw [_hk]; exact _h
+
 /-- Iterate a fact-aware pass to a fixpoint, with **no** iteration budget: apply `f`; if the result
     is strictly smaller (lexicographically in `sizeKey`), recurse from it; otherwise stop and return
     the input unchanged. Terminates because every recursive step strictly decreases the well-founded
@@ -73,14 +89,7 @@ def ConstraintSystem.sizeKey (cs : ConstraintSystem p) : Nat ×ₗ Nat ×ₗ Nat
     stopping returns the input, correct by reflexivity). -/
 def iterateToFixpoint (f : VerifiedPassW p) (cs : ConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) : PassResult cs bs :=
-  let r := f cs bs facts
-  if _h : r.out.sizeKey < cs.sizeKey then
-    let r2 := iterateToFixpoint f r.out bs facts
-    ⟨r2.out, r.derivs ++ r2.derivs, r.correct.andThen r2.correct⟩
-  else
-    ⟨cs, [], PassCorrect.refl cs bs⟩
-  termination_by cs.sizeKey
-  decreasing_by exact _h
+  iterateToFixpointFrom f cs bs facts cs.sizeKey rfl
 
 /-! ## Degree guarding
 
@@ -126,31 +135,47 @@ theorem VerifiedPassW.iterate_respectsDeg {b : DegreeBound} {f : VerifiedPassW p
 theorem sizeKey_wf : WellFounded (fun a b : ConstraintSystem p => a.sizeKey < b.sizeKey) :=
   InvImage.wf ConstraintSystem.sizeKey wellFounded_lt
 
-/-- `iterateToFixpoint` preserves the degree bound: every kept step is `f` (which respects the
-    bound) and the stopping case returns the unchanged input. Proved by strong induction on the
-    `sizeKey` measure the loop recurses on. -/
-theorem iterateToFixpoint_respectsDeg {b : DegreeBound} {f : VerifiedPassW p}
-    (hf : RespectsDeg b f) : RespectsDeg b (iterateToFixpoint f) := by
-  intro cs
+/-- `iterateToFixpointFrom` preserves the degree bound: every kept step is `f` (which respects
+    the bound) and the stopping case returns the unchanged input. Proved by strong induction on
+    the `sizeKey` measure the loop recurses on, generalizing the threaded key. -/
+theorem iterateToFixpointFrom_respectsDeg {b : DegreeBound} {f : VerifiedPassW p}
+    (hf : RespectsDeg b f) (cs : ConstraintSystem p) :
+    ∀ (bs : BusSemantics p) (facts : BusFacts p bs) (k : Nat ×ₗ Nat ×ₗ Nat)
+      (hk : cs.sizeKey = k), cs.withinDegree b →
+      (iterateToFixpointFrom f cs bs facts k hk).out.withinDegree b := by
   induction cs using sizeKey_wf.induction with
   | _ cs ih =>
-    intro bs facts hcs
-    rw [iterateToFixpoint]
+    intro bs facts k hk hcs
+    rw [iterateToFixpointFrom]
     split
     · rename_i h
-      exact ih _ h bs facts (hf cs bs facts hcs)
+      exact ih _ (by rw [hk]; exact h) bs facts _ rfl (hf cs bs facts hcs)
     · exact hcs
+
+/-- `iterateToFixpoint` preserves the degree bound. -/
+theorem iterateToFixpoint_respectsDeg {b : DegreeBound} {f : VerifiedPassW p}
+    (hf : RespectsDeg b f) : RespectsDeg b (iterateToFixpoint f) :=
+  fun cs bs facts hcs => iterateToFixpointFrom_respectsDeg hf cs bs facts _ rfl hcs
+
+/-- `iterateToFixpointFrom` never grows the size key (strong induction, key generalized). -/
+theorem iterateToFixpointFrom_monotone {f : VerifiedPassW p} (cs : ConstraintSystem p) :
+    ∀ (bs : BusSemantics p) (facts : BusFacts p bs) (k : Nat ×ₗ Nat ×ₗ Nat)
+      (hk : cs.sizeKey = k),
+      (iterateToFixpointFrom f cs bs facts k hk).out.sizeKey ≤ cs.sizeKey := by
+  induction cs using sizeKey_wf.induction with
+  | _ cs ih =>
+    intro bs facts k hk
+    rw [iterateToFixpointFrom]
+    split
+    · rename_i h
+      exact le_trans (ih _ (by rw [hk]; exact h) bs facts _ rfl)
+        (le_of_lt (by rw [hk]; exact h))
+    · exact le_refl _
 
 /-- **The cleanup loop can only improve the circuit.** `iterateToFixpoint f`'s output never has a
     larger lexicographic `sizeKey` (distinct vars, then bus interactions, then constraints) than its
     input: every recursive step strictly lowers the key, and the stopping case returns the input. -/
 theorem iterateToFixpoint_monotone {f : VerifiedPassW p}
     (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs) :
-    (iterateToFixpoint f cs bs facts).out.sizeKey ≤ cs.sizeKey := by
-  induction cs using sizeKey_wf.induction with
-  | _ cs ih =>
-    rw [iterateToFixpoint]
-    split
-    · rename_i h
-      exact le_trans (ih _ h) (le_of_lt h)
-    · exact le_refl _
+    (iterateToFixpoint f cs bs facts).out.sizeKey ≤ cs.sizeKey :=
+  iterateToFixpointFrom_monotone cs bs facts _ rfl

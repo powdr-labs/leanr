@@ -1520,6 +1520,37 @@ def buildReencode (useIdx : Bool) (csIdx : CoveredIndex.CovIndex) (arrCs : Array
       else none
     else none
 
+/-- Does the expression share a variable with `xs`? (No allocation; the `foldRewrite`-gate test,
+    local to this file because `DomainFold` imports it.) -/
+def Expression.sharesVarIn (xs : List Variable) : Expression p → Bool
+  | .const _ => false
+  | .var y => containsFast xs y
+  | .add a b => a.sharesVarIn xs || b.sharesVarIn xs
+  | .mul a b => a.sharesVarIn xs || b.sharesVarIn xs
+
+/-- **Degree pre-gate** (untrusted, necessary-condition — measured on keccak: *every one* of the
+    1276 `checkReencode`-passing groups per run was then rejected by the output degree check,
+    each after paying the whole-system freshness scan, the full `reencodeOut` rewrite, and a full
+    degree walk, re-tried every cycle). This walks the system once with an early-exit `any`,
+    rewriting **only** the items that share a variable with the group, and fires when such a
+    rewritten item already exceeds the bound. Firing is exact: a violating non-covered rewritten
+    constraint (or any rewritten interaction expression) appears verbatim in `reencodeOut`, so
+    the full `withinDegreeB` check would reject the same candidate — the pass's output is
+    unchanged; only the three whole-system walks are skipped. -/
+def degPreReject (b : DegreeBound) (cs : ConstraintSystem p)
+    (xs bits : List Variable) (hm : Std.HashMap Variable (Expression p)) : Bool :=
+  let σ := groupSubst xs hm
+  let patts := assignments (bitBox (p := p) bits)
+  cs.algebraicConstraints.any (fun c =>
+    c.sharesVarIn xs && !coveredBy xs c &&
+      decide (b.identities < (groupRewrite xs bits σ patts c).degree)) ||
+  cs.busInteractions.any (fun bi =>
+    (bi.multiplicity.sharesVarIn xs &&
+      decide (b.busInteractions < (groupRewrite xs bits σ patts bi.multiplicity).degree)) ||
+    bi.payload.any (fun e =>
+      e.sharesVarIn xs &&
+        decide (b.busInteractions < (groupRewrite xs bits σ patts e).degree)))
+
 /-- One checked re-encoding step (identity if construction or certificate fails). The expensive
     filter — `buildReencode` — runs first, so the remaining side conditions (all cheap: the group
     is all input columns and disjoint from the fresh bits, the bits carry no powdr ID) are only
@@ -1547,6 +1578,10 @@ def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (b : DegreeBound) (useId
   match hb : buildReencode useIdx csIdx arrCs xs freshBase with
   | none => ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
   | some (bits, hm) =>
+    -- Degree pre-gate: reject (exactly the candidates the final `withinDegreeB` would reject)
+    -- before the certificate's whole-system freshness scan and the output materialization.
+    if degPreReject b cs xs bits hm then ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
+    else
     if hxsCs : xs.all (fun x => varSet.val.contains x) = true then
     if hxsB : xs.all (fun x => decide (x ∉ bits)) = true then
     if hbn : bits.all (fun b => decide (b.powdrId? = none)) = true then

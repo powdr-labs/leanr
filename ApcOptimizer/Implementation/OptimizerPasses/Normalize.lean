@@ -397,8 +397,78 @@ theorem Expression.normalize_vars (e : Expression p) : ∀ x ∈ e.normalize.var
       · simp only [Expression.vars, List.mem_append] at hx ⊢
         exact hx.imp (iha x) (ihb x)
 
-/-- The affine-normalization pass. Correct via `mapExpr_correct` (only `normalize_eval`). -/
+/-- Fused normalization: one bottom-up pass returning the normalized expression *and* the node's
+    linear form (`linearize`'s value). `Expression.normalize` re-runs `linearize` — a full
+    subtree walk — at every `add`/`mul` node along non-affine paths (O(size × depth) on the deep
+    sum spines circuits are full of); threading the linear form up removes the re-walks.
+    `normalizeFused_eq` pins both components to the original functions, so consumers are provably
+    unchanged. -/
+def normalizeFused : Expression p → Expression p × Option (LinExpr p)
+  | .const n => (.const n, some ⟨n, []⟩)
+  | .var x => (.var x, some ⟨0, [(x, 1)]⟩)
+  | .add a b =>
+      let ra := normalizeFused a
+      let rb := normalizeFused b
+      match ra.2, rb.2 with
+      | some la, some lb =>
+          let l := la.add lb
+          (l.norm.toExpr, some l)
+      | _, _ => (.add ra.1 rb.1, none)
+  | .mul a b =>
+      let ra := normalizeFused a
+      let rb := normalizeFused b
+      match ra.2, rb.2 with
+      | some la, some lb =>
+          if la.terms.isEmpty then
+            let l := lb.scale la.const
+            (l.norm.toExpr, some l)
+          else if lb.terms.isEmpty then
+            let l := la.scale lb.const
+            (l.norm.toExpr, some l)
+          else (.mul ra.1 rb.1, none)
+      | _, _ => (.mul ra.1 rb.1, none)
+
+/-- The fused pass computes exactly (`normalize`, `linearize`). -/
+theorem normalizeFused_eq (e : Expression p) :
+    normalizeFused e = (e.normalize, linearize e) := by
+  induction e with
+  | const n => rfl
+  | var x => rfl
+  | add a b iha ihb =>
+      simp only [normalizeFused, iha, ihb]
+      cases hla : linearize a with
+      | none => simp [Expression.normalize, linearize, hla]
+      | some la =>
+        cases hlb : linearize b with
+        | none => simp [Expression.normalize, linearize, hla, hlb]
+        | some lb => simp [Expression.normalize, linearize, hla, hlb]
+  | mul a b iha ihb =>
+      simp only [normalizeFused, iha, ihb]
+      cases hla : linearize a with
+      | none => simp [Expression.normalize, linearize, hla]
+      | some la =>
+        cases hlb : linearize b with
+        | none => simp [Expression.normalize, linearize, hla, hlb]
+        | some lb =>
+          by_cases h1 : la.terms.isEmpty
+          · simp [Expression.normalize, linearize, hla, hlb, h1]
+          · by_cases h2 : lb.terms.isEmpty
+            · simp [Expression.normalize, linearize, hla, hlb, h1, h2]
+            · simp [Expression.normalize, linearize, hla, hlb, h1, h2]
+
+theorem normalizeFused_fst (e : Expression p) : (normalizeFused e).1 = e.normalize := by
+  rw [normalizeFused_eq]
+
+/-- The affine-normalization pass, computing through the fused walk (provably the same output).
+    Correct via `mapExpr_correct` (only `normalize_eval`, transported along
+    `normalizeFused_fst`). -/
 def normalizePass : VerifiedPass p := fun cs bs =>
-  ⟨cs.mapExpr Expression.normalize, [],
-   ConstraintSystem.mapExpr_correct (g := Expression.normalize)
-     (fun e env => Expression.normalize_eval e env) cs bs Expression.normalize_vars⟩
+  ⟨cs.mapExpr (fun e => (normalizeFused e).1), [],
+   ConstraintSystem.mapExpr_correct (g := fun e => (normalizeFused e).1)
+     (fun e env => by
+       show ((normalizeFused e).1).eval env = e.eval env
+       rw [normalizeFused_fst]
+       exact Expression.normalize_eval e env) cs bs
+     (fun e x hx => Expression.normalize_vars e x (by
+       have hx' : x ∈ ((normalizeFused e).1).vars := hx
+       rwa [normalizeFused_fst] at hx'))⟩

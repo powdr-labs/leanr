@@ -1344,28 +1344,52 @@ def forcedOver {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts
 def varSetKey (xs : List Variable) : String :=
   String.intercalate "\x00" ((xs.mergeSort (fun a b => compare a b != .gt)).map (fun x => x.name))
 
-/-- Collect forced constants from joint enumerations of the given targets' variable sets,
-    skipping variable sets already enumerated. `activeCs` (the non-redundant constraints) and its
-    membership witness are threaded to `forcedOver`. -/
-def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
-    (T : DomainTable p cs bs) (fidx : ForcedIdx cs) :
-    List (List Variable) → Std.HashSet String → Solved p cs bs → Solved p cs bs
-  | [], _, σ => σ
-  | xs :: rest, seen, σ =>
+/-- The `seen`-deduplicated target list, exactly as the old interleaved fold skipped them (same
+    key, same threading), split out so the per-target enumerations can be spawned in parallel. -/
+def dedupTargets : List (List Variable) → Std.HashSet String → List (List Variable)
+  | [], _ => []
+  | xs :: rest, seen =>
     let key := varSetKey xs
-    if seen.contains key then collectForced facts T fidx rest seen σ
-    else
-      let found := forcedOver facts T fidx xs
-      collectForced facts T fidx rest (seen.insert key)
-        (σ.insertAll (found.map (fun f => (f.1, .const f.2.val)))
-          (by
-            intro env hsat yt hyt
-            obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hyt
-            exact f.2.property env hsat)
-          (by
-            intro yt hyt z hz
-            obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hyt
-            simp [Expression.vars] at hz))
+    if seen.contains key then dedupTargets rest seen
+    else xs :: dedupTargets rest (seen.insert key)
+
+/-- Collect every checked forced constant. The per-target enumerations (`forcedOver`) are
+    independent — every target is evaluated against the same `cs`/domain table/index — so on
+    large systems each is spawned as a `Task` and the results are joined **in target order**:
+    `σ` receives exactly the insertions the sequential fold performed, so the pass output is
+    byte-identical and only wall-clock changes. Small systems keep the plain sequential fold:
+    the corpus's many-small-cases sets run whole cases in parallel (CI's effectiveness matrix),
+    where per-case fan-out only adds spawn overhead and scheduler contention — the parallelism
+    is for the keccak/SHA-scale invocations, matching the passes' other big-case gates.
+    (`parallel` is decided by the caller from the system size.) -/
+def collectForced {cs : ConstraintSystem p} {bs : BusSemantics p} (facts : BusFacts p bs)
+    (T : DomainTable p cs bs) (fidx : ForcedIdx cs) (parallel : Bool)
+    (targets : List (List Variable)) (seen : Std.HashSet String) (σ0 : Solved p cs bs) :
+    Solved p cs bs :=
+  let uniq := dedupTargets targets seen
+  if parallel then
+    let tasks := uniq.map (fun xs => Task.spawn fun _ => forcedOver facts T fidx xs)
+    tasks.foldl (init := σ0) fun σ t =>
+      σ.insertAll ((t.get).map (fun f => (f.1, .const f.2.val)))
+        (by
+          intro env hsat yt hyt
+          obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hyt
+          exact f.2.property env hsat)
+        (by
+          intro yt hyt z hz
+          obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hyt
+          simp [Expression.vars] at hz)
+  else
+    uniq.foldl (init := σ0) fun σ xs =>
+      σ.insertAll ((forcedOver facts T fidx xs).map (fun f => (f.1, .const f.2.val)))
+        (by
+          intro env hsat yt hyt
+          obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hyt
+          exact f.2.property env hsat)
+        (by
+          intro yt hyt z hz
+          obtain ⟨f, hf, rfl⟩ := List.mem_map.1 hyt
+          simp [Expression.vars] at hz)
 
 /-! ## The pass -/
 
@@ -1406,7 +1430,10 @@ def domainBatchPass (pw : PrimeWitness p) : VerifiedPassW p := fun cs bs facts =
           cs.busInteractions,
         arrBis := cs.busInteractions.toArray, harrBis := rfl,
         actFlags := actFlags }
-    let σ := collectForced facts T fidx targets ∅ Solved.empty
+    -- Fan out only at keccak/SHA scale (the same raw-count gate as `domainFoldIndexThreshold`):
+    -- below it the sequential fold is byte-for-byte the same computation without spawn overhead.
+    let σ := collectForced facts T fidx (8192 ≤ cs.algebraicConstraints.length) targets ∅
+      Solved.empty
     if σ.map.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs.substF σ.fn, [],
       cs.substF_correct σ.fn bs (fun env hsat y t hyt => σ.sound env hsat y t hyt)
