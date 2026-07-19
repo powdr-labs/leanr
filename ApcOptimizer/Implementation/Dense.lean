@@ -48,6 +48,7 @@ import ApcOptimizer.Implementation.Dense.BusPairCancelLive
 import ApcOptimizer.Implementation.Dense.BusPairCancelCheck
 import ApcOptimizer.Implementation.Dense.BusPairCancelCheckProof
 import ApcOptimizer.Implementation.Dense.BusPairCancelWits
+import ApcOptimizer.Implementation.Dense.BusPairCancelLoop
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 
