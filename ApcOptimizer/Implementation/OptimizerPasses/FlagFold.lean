@@ -557,13 +557,6 @@ def pdDropSet (bs : BusSemantics p) (singles : List (Expression p))
     pos := pos + 1
   return drops
 
-/-- Was `bi` flagged by the sweep? (`false` = flagged as a drop candidate.) -/
-def pdFastKeep (drops : Std.HashMap UInt64 (List (BusInteraction (Expression p))))
-    (bi : BusInteraction (Expression p)) : Bool :=
-  match drops[pdValHash bi]? with
-  | some l => !(l.any (fun b => decide (b = bi)))
-  | none => true
-
 /-- Part C as a standalone (unguarded) pass: drop stateless interactions pointwise-equal to an
     earlier first-of-class one. Stated over an arbitrary *prefilter* `fast`: the kept set is
     `fast bi || pdKeep … bi`, so a drop requires `pdKeep … = false` (the certified condition)
