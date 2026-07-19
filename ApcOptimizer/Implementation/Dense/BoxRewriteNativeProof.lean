@@ -249,6 +249,7 @@ theorem DenseConstraintSystem.boxRewrite_denseCorrect [Fact p.Prime]
     have hmem := List.mem_of_mem_filter hc
     have hs : c.vars.eraseDups.length ≤ 1 := by
       have h1 := (List.mem_filter.1 hc).2
+      rw [HashedDedup.hashedEraseDups_eq] at h1
       have h2 : c.vars.eraseDups.length = 1 := by simpa using h1
       omega
     exact List.mem_map.2 ⟨c, hmem, denseBrRw_singleVar _ _ c hs⟩

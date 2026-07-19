@@ -109,7 +109,9 @@ theorem DenseConstraintSystem.boxTautoReplace_denseCorrect [Fact p.Prime]
     have hdom : ∀ c' ∈ denseSingleVarCs d.algebraicConstraints, c'.eval denv = 0 := by
       intro c' hc'
       have hmem := List.mem_of_mem_filter hc'
-      have hsingle : (c'.vars.eraseDups.length == 1) = true := (List.mem_filter.1 hc').2
+      have hsingle : (c'.vars.eraseDups.length == 1) = true := by
+        have h := (List.mem_filter.1 hc').2
+        rwa [HashedDedup.hashedEraseDups_eq] at h
       exact hsat.1 c' (denseSingleVar_mem_boxTautoReplace d domOf c' hmem hsingle)
     have hmemdoms : ∀ vd ∈ c.vars.eraseDups.filterMap (fun v =>
         (denseFindDomainAlg (denseSingleVarCs d.algebraicConstraints) v).map (fun dm => (v, dm))),
