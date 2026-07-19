@@ -4145,3 +4145,26 @@ cost (12.6 s on keccak). Replaced by a single left-to-right sweep per bus (`swee
 
 **Verification**: output byte-identical on {openvm keccak, sp1 rsp apc_024/apc_030} exports vs
 the pre-sweep binary; keccak in-pipeline cycle sizes identical at every cycle. Within-run share: busUnify 5.9% of the pre-sweep baseline run → 5.4% after — the scan is no longer the pass's floor; what remains is the pass body's eager per-invocation table builds (csVarSet over the ~10⁵-entry occurrence list, csHashes over every constraint), addressed next. **Worked: yes (exactness verified; modest wall-clock until the table builds are gated).**
+
+### 112. Runtime: busUnify body gating + by-construction variable check; domainFold fast membership tests (keccak 215 s → 193 s)
+
+Follow-ups from the gdb-sampled attribution (200 whole-run stack samples, function→pass mapped):
+
+- **busUnify's floor was its own body, not the scan**: every invocation eagerly built
+  `Std.HashSet.ofList cs.vars` (the ~10⁵-entry occurrence list) for the "no new variable" filter
+  and the structural-hash bucket map for the already-present filter — even with zero collected
+  equalities. Now: the equalities' variables come from payload slots of `cs`'s own interactions
+  **by construction** (`memEqConstraints_vars`, threaded through `collectForBus`/
+  `collectAllBuses`), so the occurrence-list HashSet is gone entirely — with the filter provably
+  unchanged — and the bucket map is built only when `eqs` is nonempty.
+- **domainFold's remaining direct-path cost was the slow spec-side `varsIn`** — a `List.elem`
+  running the full `Variable` `DecidableEq` (name-`String` compare first) per AST node inside
+  `foldRewriteGo`'s gates and `hasFoldable` — 26 % of all whole-run samples. Swapped for the
+  `containsFast`-backed `varsInF` (`powdrId?` compared first; `varsInF_eq` proves the value
+  unchanged, so the output is provably identical). Both fold paths share the fix.
+
+**Verification**: keccak and sp1 apc_030/apc_024 exports byte-identical across all of entries
+111–112; proof integrity green. **Measured** (this container, serial): keccak profile
+**215 s → 192.7 s** — domainFold **47.0 → 14.2 s (0.30×)**, busUnify 12.7 → 10.5 s. Remaining:
+domainBatch 55.1 s, reencode 49.4 s (per-accept `groupRewrite` full-system walks — next),
+flagFold 21.9 s, rootPairUnify 7.6 s, busPairCancel 7.4 s. **Worked: yes.**

@@ -202,6 +202,23 @@ theorem checkPair_sound (cs : ConstraintSystem p) (bs : BusSemantics p)
 
 /-! ## The pass -/
 
+/-- Every variable of an entailed slot equality comes from the receive's or the send's payload —
+    so the pass's "no new variable" side condition holds *by construction* and needs no runtime
+    membership scan over the system's occurrence list. -/
+theorem memEqConstraints_vars (shape : MemoryBusShape) (S Rt : BusInteraction (Expression p))
+    {c : Expression p} (hc : c ∈ memEqConstraints shape S Rt) {z : Variable} (hz : z ∈ c.vars) :
+    (∃ e ∈ Rt.payload, z ∈ e.vars) ∨ (∃ e ∈ S.payload, z ∈ e.vars) := by
+  unfold memEqConstraints at hc
+  obtain ⟨i, _hi, rfl⟩ := List.mem_map.1 hc
+  simp only [eqExpr, Expression.vars, List.mem_append, List.not_mem_nil, false_or] at hz
+  rcases hz with hz | hz
+  · cases hR : Rt.payload[i]? with
+    | none => rw [hR] at hz; simp [Expression.vars] at hz
+    | some e => rw [hR] at hz; exact Or.inl ⟨e, List.mem_of_getElem? hR, hz⟩
+  · cases hS : S.payload[i]? with
+    | none => rw [hS] at hz; simp [Expression.vars] at hz
+    | some e => rw [hS] at hz; exact Or.inr ⟨e, List.mem_of_getElem? hS, hz⟩
+
 /-- One `(pre, S, mid, R, post)` candidate, carrying the split equation it was constructed
     from. -/
 def SplitCand (p : ℕ) (L : List (BusInteraction (Expression p))) :=
@@ -418,8 +435,10 @@ def candidateSplits (shape : MemoryBusShape) {constraints : List (Expression p)}
   ((sweepGo shape T nw L [] L rfl 0 rfl ∅ [] []).mergeSort
     (fun a b => decide (a.1 ≤ b.1))).map (·.2)
 
-/-- Collect the entailed equalities for one bus, with proof. The certificate tables are
-    `Thunk`s, forced only when a candidate reaches `checkPair`'s expensive arms. -/
+/-- Collect the entailed equalities for one bus, with proof — soundness *and* the by-construction
+    "no new variable" guarantee (`memEqConstraints_vars`), so the pass needs no runtime
+    variable-membership scan. The certificate tables are `Thunk`s, forced only when a candidate
+    reaches `checkPair`'s expensive arms. -/
 def collectForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (T : Thunk (TwoRootMap p cs.algebraicConstraints))
     (nw : Thunk (NonzeroWits p cs.algebraicConstraints))
@@ -427,17 +446,35 @@ def collectForBus (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFa
     (hshape : facts.memShape busId = some shape) :
     List (SplitCand p (cs.busInteractions.filter (fun bi => bi.busId = busId))) →
     { out : List (Expression p) //
-        ∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0 }
-  | [] => ⟨[], fun _ _ _ _ h => absurd h (by simp)⟩
+        (∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0) ∧
+        ∀ c ∈ out, ∀ z ∈ c.vars, z ∈ cs.vars }
+  | [] => ⟨[], fun _ _ _ _ h => absurd h (by simp), fun _ h => absurd h (by simp)⟩
   | ⟨(pre, S, mid, R, post), hsplit⟩ :: rest =>
     let ⟨acc, hacc⟩ := collectForBus cs bs facts hp1 T nw busId shape hshape rest
     if hchk : checkPair shape T.get nw.get S mid R = true then
+      have hSmem : S ∈ cs.busInteractions := by
+        have h : S ∈ cs.busInteractions.filter (fun bi => bi.busId = busId) := by
+          rw [hsplit]
+          exact List.mem_append_left _ (List.mem_append_right _ List.mem_cons_self)
+        exact List.mem_of_mem_filter h
+      have hRmem : R ∈ cs.busInteractions := by
+        have h : R ∈ cs.busInteractions.filter (fun bi => bi.busId = busId) := by
+          rw [hsplit]
+          exact List.mem_append_right _ List.mem_cons_self
+        exact List.mem_of_mem_filter h
       ⟨memEqConstraints shape S R ++ acc, by
-        intro env hadm hsat c hc
-        rcases List.mem_append.1 hc with h | h
-        · exact checkPair_sound cs bs facts hp1 busId shape hshape pre S mid R post T.get nw.get
-            hsplit hchk env hadm hsat c h
-        · exact hacc env hadm hsat c h⟩
+        constructor
+        · intro env hadm hsat c hc
+          rcases List.mem_append.1 hc with h | h
+          · exact checkPair_sound cs bs facts hp1 busId shape hshape pre S mid R post T.get nw.get
+              hsplit hchk env hadm hsat c h
+          · exact hacc.1 env hadm hsat c h
+        · intro c hc z hz
+          rcases List.mem_append.1 hc with h | h
+          · rcases memEqConstraints_vars shape S R h hz with ⟨e, he, hze⟩ | ⟨e, he, hze⟩
+            · exact ConstraintSystem.mem_vars_of_payload hRmem he hze
+            · exact ConstraintSystem.mem_vars_of_payload hSmem he hze
+          · exact hacc.2 c h z hz⟩
     else ⟨acc, hacc⟩
 
 /-- Collect over every declared bus, with proof. -/
@@ -446,8 +483,9 @@ def collectAllBuses (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
     (nw : Thunk (NonzeroWits p cs.algebraicConstraints)) :
     List Nat →
     { out : List (Expression p) //
-        ∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0 }
-  | [] => ⟨[], fun _ _ _ _ h => absurd h (by simp)⟩
+        (∀ env, cs.admissible bs env → cs.satisfies bs env → ∀ c ∈ out, c.eval env = 0) ∧
+        ∀ c ∈ out, ∀ z ∈ c.vars, z ∈ cs.vars }
+  | [] => ⟨[], fun _ _ _ _ h => absurd h (by simp), fun _ h => absurd h (by simp)⟩
   | busId :: rest =>
     let ⟨acc, hacc⟩ := collectAllBuses cs bs facts hp1 T nw rest
     match hshape : facts.memShape busId with
@@ -456,10 +494,15 @@ def collectAllBuses (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : Bus
         (candidateSplits shape T nw
           (cs.busInteractions.filter (fun bi => bi.busId = busId)))
       ⟨eqs ++ acc, by
-        intro env hadm hsat c hc
-        rcases List.mem_append.1 hc with h | h
-        · exact heqs env hadm hsat c h
-        · exact hacc env hadm hsat c h⟩
+        constructor
+        · intro env hadm hsat c hc
+          rcases List.mem_append.1 hc with h | h
+          · exact heqs.1 env hadm hsat c h
+          · exact hacc.1 env hadm hsat c h
+        · intro c hc z hz
+          rcases List.mem_append.1 hc with h | h
+          · exact heqs.2 c h z hz
+          · exact hacc.2 c h z hz⟩
     | none => ⟨acc, hacc⟩
 
 /-- The unified bus-unification pass: add the entailed consecutive send→receive slot equalities
@@ -478,36 +521,30 @@ def busUnifyPass : VerifiedPassW p := fun cs bs facts =>
       Thunk.mk fun _ => NonzeroWits.build cs.algebraicConstraints
     let ⟨eqs, heqs⟩ := collectAllBuses cs bs facts hp1 T nw
       ((cs.busInteractions.map (fun bi => bi.busId)).dedup)
-    -- keep only equalities over existing columns, so the pass introduces no new variable
-    -- (the real slot equalities are built from `cs`'s payloads, so none are dropped).
-    -- The membership test `z ∈ cs.vars` is the load-bearing "no new variable" check, run for
-    -- every variable of every candidate equality. `cs.vars` is the whole occurrence list (~10⁴
-    -- entries on large blocks), so the per-`z` **linear** list scan dominated this filter. Build a
-    -- `Std.HashSet` of it once and test membership in O(1); `Std.HashSet.contains_ofList` transports
-    -- the check back to genuine list membership `z ∈ cs.vars` (all the correctness proof needs).
-    let csVarSet := Std.HashSet.ofList cs.vars
-    -- The already-present test (`cs.algebraicConstraints.contains c`) is likewise a per-equality
-    -- O(#constraints) deep structural scan — most equalities *are* already present from the
-    -- previous cycle. Bucket the constraints by structural hash once and compare within the
-    -- bucket; the result is the identical Bool (hash inequality proves inequality).
-    let csHashes : Std.HashMap UInt64 (List (Expression p)) :=
-      cs.algebraicConstraints.foldl (fun m c =>
-        let h := c.structHash
-        m.insert h (c :: m.getD h [])) ∅
-    let containsC : Expression p → Bool := fun c =>
-      (csHashes.getD c.structHash []).any (fun c' => c' == c)
-    let new := eqs.filter
-      (fun c => !c.normalize.fold.isConstZero && !containsC c
-        && c.vars.all (fun z => csVarSet.contains z))
-    if new.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
+    -- Nothing collected (the common late-cycle case): skip the filter-table build outright.
+    if eqs.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
     else
-      ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new }, [],
-       cs.addConstraints_correct bs new
-         (fun env hadm hsat c hc => heqs env hadm hsat c (List.mem_of_mem_filter hc))
-         (fun c hc z hz => by
-           have hp := (List.mem_filter.1 hc).2
-           simp only [Bool.and_eq_true, List.all_eq_true] at hp
-           have hz' : csVarSet.contains z = true := hp.2 z hz
-           rw [Std.HashSet.contains_ofList] at hz'
-           exact List.contains_iff_mem.mp hz')⟩
+      -- The "no new variable" side condition holds **by construction** — every equality's
+      -- variables come from payload slots of `cs`'s own interactions (`memEqConstraints_vars`,
+      -- carried through `collectAllBuses`) — so the old per-variable membership scan over the
+      -- whole occurrence list (`Std.HashSet.ofList cs.vars`, ~10⁵ entries per invocation) is
+      -- gone, with the filter provably unchanged.
+      -- The already-present test (`cs.algebraicConstraints.contains c`) is a per-equality
+      -- O(#constraints) deep structural scan — most equalities *are* already present from the
+      -- previous cycle. Bucket the constraints by structural hash once and compare within the
+      -- bucket; the result is the identical Bool (hash inequality proves inequality).
+      let csHashes : Std.HashMap UInt64 (List (Expression p)) :=
+        cs.algebraicConstraints.foldl (fun m c =>
+          let h := c.structHash
+          m.insert h (c :: m.getD h [])) ∅
+      let containsC : Expression p → Bool := fun c =>
+        (csHashes.getD c.structHash []).any (fun c' => c' == c)
+      let new := eqs.filter
+        (fun c => !c.normalize.fold.isConstZero && !containsC c)
+      if new.isEmpty then ⟨cs, [], PassCorrect.refl cs bs⟩
+      else
+        ⟨{ cs with algebraicConstraints := cs.algebraicConstraints ++ new }, [],
+         cs.addConstraints_correct bs new
+           (fun env hadm hsat c hc => heqs.1 env hadm hsat c (List.mem_of_mem_filter hc))
+           (fun c hc z hz => heqs.2 c (List.mem_of_mem_filter hc) z hz)⟩
   else ⟨cs, [], PassCorrect.refl cs bs⟩

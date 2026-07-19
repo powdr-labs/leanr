@@ -100,13 +100,13 @@ def foldRewriteGo (xs : List Variable) (survs : List (List (Variable × ZMod p))
   | .const c => .const c
   | .var y => .var y
   | .add a b =>
-      if (Expression.add a b).varsIn xs then
+      if (Expression.add a b).varsInF xs then
         match constOnSurvs survs (.add a b) with
         | some c => .const c
         | none => .add (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
       else .add (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
   | .mul a b =>
-      if (Expression.mul a b).varsIn xs then
+      if (Expression.mul a b).varsInF xs then
         match constOnSurvs survs (.mul a b) with
         | some c => .const c
         | none => .mul (foldRewriteGo xs survs a) (foldRewriteGo xs survs b)
@@ -159,16 +159,17 @@ theorem foldRewriteGo_agree (xs : List Variable) (survs : List (List (Variable �
     (hxs : ∀ x ∈ xs, env x = envOf s x) :
     ∀ e : Expression p, (foldRewriteGo xs survs e).eval env = e.eval env := by
   -- For a wholly-in-`xs` expression, `env` and `envOf s` agree on its variables.
-  have hcongr : ∀ e : Expression p, e.varsIn xs = true → e.eval env = e.eval (envOf s) := by
+  have hcongr : ∀ e : Expression p, e.varsInF xs = true → e.eval env = e.eval (envOf s) := by
     intro e he
-    exact Expression.eval_congr e _ _ (fun x hx => hxs x (Expression.varsIn_sound xs e he x hx))
+    exact Expression.eval_congr e _ _ (fun x hx =>
+      hxs x (Expression.varsIn_sound xs e (Expression.varsInF_eq xs e ▸ he) x hx))
   intro e
   induction e with
   | const c => rfl
   | var y => rfl
   | add a b iha ihb =>
       unfold foldRewriteGo
-      by_cases hin : (Expression.add a b).varsIn xs = true
+      by_cases hin : (Expression.add a b).varsInF xs = true
       · rw [if_pos hin]
         cases hc : constOnSurvs survs (.add a b) with
         | none =>
@@ -188,7 +189,7 @@ theorem foldRewriteGo_agree (xs : List Variable) (survs : List (List (Variable �
         rw [iha, ihb]
   | mul a b iha ihb =>
       unfold foldRewriteGo
-      by_cases hin : (Expression.mul a b).varsIn xs = true
+      by_cases hin : (Expression.mul a b).varsInF xs = true
       · rw [if_pos hin]
         cases hc : constOnSurvs survs (.mul a b) with
         | none =>
@@ -251,7 +252,7 @@ theorem foldRewriteGo_vars (xs : List Variable) (survs : List (List (Variable ×
   | var y => intro v hv; exact hv
   | add a b iha ihb =>
       unfold foldRewriteGo
-      by_cases hin : (Expression.add a b).varsIn xs = true
+      by_cases hin : (Expression.add a b).varsInF xs = true
       · rw [if_pos hin]
         cases constOnSurvs survs (.add a b) with
         | none =>
@@ -269,7 +270,7 @@ theorem foldRewriteGo_vars (xs : List Variable) (survs : List (List (Variable ×
         · exact Or.inr (ihb v hv)
   | mul a b iha ihb =>
       unfold foldRewriteGo
-      by_cases hin : (Expression.mul a b).varsIn xs = true
+      by_cases hin : (Expression.mul a b).varsInF xs = true
       · rw [if_pos hin]
         cases constOnSurvs survs (.mul a b) with
         | none =>
@@ -664,10 +665,10 @@ def Expression.hasFoldable (xs : List Variable) (survs : List (List (Variable ×
   | .const _ => false
   | .var _ => false
   | .add a b =>
-      ((Expression.add a b).varsIn xs && (constOnSurvs survs (.add a b)).isSome) ||
+      ((Expression.add a b).varsInF xs && (constOnSurvs survs (.add a b)).isSome) ||
         Expression.hasFoldable xs survs a || Expression.hasFoldable xs survs b
   | .mul a b =>
-      ((Expression.mul a b).varsIn xs && (constOnSurvs survs (.mul a b)).isSome) ||
+      ((Expression.mul a b).varsInF xs && (constOnSurvs survs (.mul a b)).isSome) ||
         Expression.hasFoldable xs survs a || Expression.hasFoldable xs survs b
 
 /-- Does the fold change anything in the system? The no-op gate of the direct (unindexed) path —
