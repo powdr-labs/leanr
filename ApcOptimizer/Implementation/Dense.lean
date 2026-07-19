@@ -36,6 +36,7 @@ import ApcOptimizer.Implementation.Dense.FlagFoldDropsNative
 import ApcOptimizer.Implementation.Dense.FlagFoldDropsNativeProof
 import ApcOptimizer.Implementation.Dense.FxSubstNative
 import ApcOptimizer.Implementation.Dense.FxSubstNativeProof
+import ApcOptimizer.Implementation.Dense.BoxRewriteNative
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 
