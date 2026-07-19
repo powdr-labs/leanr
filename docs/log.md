@@ -4098,3 +4098,24 @@ reproduce identical counts. CI matrix pending for the full five-set per-case com
 **47.0 s → 10.4 s (0.22×)**. Remaining keccak: domainBatch 47.9 s, reencode 43.2 s, flagFold
 16.2 s, busUnify 12.6 s, domainFold 10.4 s, busPairCancel 8.2 s, rootPairUnify 8.2 s.
 **Worked: yes.**
+
+### 110. Runtime follow-up: keep the historical fold on domainFold's direct path (fixes the sp1 +2-constraint drift)
+
+Entry 109's CI matrix: **+0.000× with identical per-case sizes on openvm-eth (100), wasm-eth
+(100), openvm keccak, and sp1 keccak** — but sp1/rsp changed on 2 of 100 cases (apc_024/040:
+175 → 177 constraints, vars/bus identical; aggregate −0.008× on the lowest axis). Export diff
+(canonical, modulo a positional `rnc*` rename) pinned it to two `lower_limb`↔bitwise-result
+product constraints that main's pipeline collapsed and the reworked direct path didn't — i.e.
+the drift came from the direct (unindexed) path's behavior change (in-place order and/or the
+dropped disjoint-item const-compound folding), not from the indexed path.
+
+Fix: the **direct path now runs the historical fold verbatim** — `foldRewriteC` (the old
+`anyVarIn ∨ hasConstFoldableNode` gate), `foldOutC` (the old rewritten-uncovered ++
+covered-verbatim output), the old `systemHasFoldableW` gate, and the old correctness proof —
+so every system below `domainFoldIndexThreshold` (8192; everything in the corpus except openvm
+keccak, and SHA when it lands) is **bit-for-bit unchanged from main**. apc_024 verified
+byte-identical (175 constraints). The order-preserving in-place fold + persistent index +
+sparse rewrite (entry 109) remain on the indexed path only, where the reorder would invalidate
+the index positions — keccak re-verified: identical final circuit, domainFold stays ~0.2× of
+its pre-109 cost. The survivor-pinning argument is shared (`groupSurvivors_mem_agree`), so the
+duplicated fold carries only its own thin agreement/output lemmas. **Worked: yes.**

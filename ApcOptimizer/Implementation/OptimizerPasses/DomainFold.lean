@@ -128,6 +128,27 @@ theorem foldRewrite_eq_self {xs : List Variable} {survs : List (List (Variable �
     {e : Expression p} (h : e.anyVarIn xs = false) : foldRewrite xs survs e = e := by
   rw [foldRewrite, h]; rfl
 
+/-- Does the expression contain a variable-free `add`/`mul` node? For an expression sharing no
+    variable with the group, `hasFoldable` holds iff this does (given a nonempty survivor set). -/
+def Expression.hasConstFoldableNode : Expression p → Bool
+  | .const _ => false
+  | .var _ => false
+  | .add a b =>
+      !(Expression.add a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
+  | .mul a b =>
+      !(Expression.mul a b).hasVar || a.hasConstFoldableNode || b.hasConstFoldableNode
+
+/-- The direct (unindexed) path's fold rewrite — the historical gate: an expression sharing no
+    variable with the group *and* containing no variable-free compound node has no node the core
+    could fold (a qualifying node is either wholly-in-group with a variable — impossible — or
+    variable-free), so it is returned untouched without walking it node-by-node. Kept exactly as
+    it always was so the direct path (systems below `domainFoldIndexThreshold`, i.e. everything
+    but the keccak/SHA-scale stress cases) is bit-for-bit unchanged; the indexed path uses the
+    `anyVarIn`-gated `foldRewrite`, whose identity-off-index property the sparse fold needs. -/
+def foldRewriteC (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (e : Expression p) : Expression p :=
+  if e.anyVarIn xs || e.hasConstFoldableNode then foldRewriteGo xs survs e else e
+
 /-! ## Agreement with the identity on any survivor-matching environment -/
 
 /-- On an environment that agrees on `xs` with some survivor `s`, `foldRewrite` is
@@ -198,6 +219,17 @@ theorem foldRewrite_agree (xs : List Variable) (survs : List (List (Variable × 
   · exact foldRewriteGo_agree xs survs env s hs hxs e
   · rfl
 
+/-- `foldRewrite_agree` for the direct path's `foldRewriteC` (same split on the gate). -/
+theorem foldRewriteC_agree (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (env : Variable → ZMod p) (s : List (Variable × ZMod p)) (hs : s ∈ survs)
+    (hxs : ∀ x ∈ xs, env x = envOf s x) :
+    ∀ e : Expression p, (foldRewriteC xs survs e).eval env = e.eval env := by
+  intro e
+  unfold foldRewriteC
+  split
+  · exact foldRewriteGo_agree xs survs env s hs hxs e
+  · rfl
+
 /-- Bus-interaction-level agreement, from any expression-level agreement `hag`, applied to the
     multiplicity and every payload slot. -/
 theorem mapExpr_eval_of_agree (g : Expression p → Expression p) (env : Variable → ZMod p)
@@ -263,19 +295,29 @@ theorem foldRewrite_vars (xs : List Variable) (survs : List (List (Variable × Z
   · exact foldRewriteGo_vars xs survs e v hv
   · exact hv
 
+/-- `foldRewrite_vars` for the direct path's `foldRewriteC`. -/
+theorem foldRewriteC_vars (xs : List Variable) (survs : List (List (Variable × ZMod p)))
+    (e : Expression p) : ∀ v ∈ (foldRewriteC xs survs e).vars, v ∈ e.vars := by
+  intro v hv
+  unfold foldRewriteC at hv
+  split at hv
+  · exact foldRewriteGo_vars xs survs e v hv
+  · exact hv
+
 /-! ## Agreement on any environment satisfying the covered constraints
 
 The survivors were enumerated over the group's constraint-derived domains and filtered by the
 covered constraints, so any environment satisfying **all** the covered constraints pins the group
 to one of the survivors — under which `foldRewrite` is the identity. -/
 
-/-- If `env` satisfies every covered constraint, `foldRewrite` (over the survivors of those
-    constraints) is evaluation-preserving on `env`. Prime `p` (for `groupDoms_sound`). -/
-theorem foldRewrite_agree_covered [Fact p.Prime] (cs : ConstraintSystem p) (xs : List Variable)
+/-- If `env` satisfies every covered constraint, the group is pinned to a survivor `env` agrees
+    with on `xs`. Prime `p` (for `groupDoms_sound`). Shared by both rewrites' covered-agreement
+    lemmas. -/
+theorem groupSurvivors_mem_agree [Fact p.Prime] (cs : ConstraintSystem p) (xs : List Variable)
     (doms : List (Variable × List (ZMod p)))
     (hdoms : groupDoms (coveredCsOf cs xs) xs = some doms)
     (env : Variable → ZMod p) (hcov : ∀ c ∈ coveredCsOf cs xs, c.eval env = 0) :
-    ∀ e : Expression p, (foldRewrite xs (groupSurvivors cs xs doms) e).eval env = e.eval env := by
+    ∃ s ∈ groupSurvivors cs xs doms, ∀ x ∈ xs, env x = envOf s x := by
   have hkeys : doms.map Prod.fst = xs := groupDoms_fst (coveredCsOf cs xs) xs doms hdoms
   have hmemdoms : ∀ yd ∈ doms, env yd.1 ∈ yd.2 :=
     groupDoms_sound (coveredCsOf cs xs) xs doms hdoms env hcov
@@ -298,8 +340,28 @@ theorem foldRewrite_agree_covered [Fact p.Prime] (cs : ConstraintSystem p) (xs :
       Expression.eval_congr c _ _
         (fun x hx => (hagree x (Expression.varsIn_sound xs c hcvin x hx)).symm)
     rw [heq]; exact hcov c hc
+  exact ⟨s, hsurv, hagree⟩
+
+/-- If `env` satisfies every covered constraint, `foldRewrite` (over the survivors of those
+    constraints) is evaluation-preserving on `env`. -/
+theorem foldRewrite_agree_covered [Fact p.Prime] (cs : ConstraintSystem p) (xs : List Variable)
+    (doms : List (Variable × List (ZMod p)))
+    (hdoms : groupDoms (coveredCsOf cs xs) xs = some doms)
+    (env : Variable → ZMod p) (hcov : ∀ c ∈ coveredCsOf cs xs, c.eval env = 0) :
+    ∀ e : Expression p, (foldRewrite xs (groupSurvivors cs xs doms) e).eval env = e.eval env := by
+  obtain ⟨s, hsurv, hagree⟩ := groupSurvivors_mem_agree cs xs doms hdoms env hcov
   intro e
   exact foldRewrite_agree xs (groupSurvivors cs xs doms) env s hsurv hagree e
+
+/-- `foldRewrite_agree_covered` for the direct path's `foldRewriteC`. -/
+theorem foldRewriteC_agree_covered [Fact p.Prime] (cs : ConstraintSystem p) (xs : List Variable)
+    (doms : List (Variable × List (ZMod p)))
+    (hdoms : groupDoms (coveredCsOf cs xs) xs = some doms)
+    (env : Variable → ZMod p) (hcov : ∀ c ∈ coveredCsOf cs xs, c.eval env = 0) :
+    ∀ e : Expression p, (foldRewriteC xs (groupSurvivors cs xs doms) e).eval env = e.eval env := by
+  obtain ⟨s, hsurv, hagree⟩ := groupSurvivors_mem_agree cs xs doms hdoms env hcov
+  intro e
+  exact foldRewriteC_agree xs (groupSurvivors cs xs doms) env s hsurv hagree e
 
 /-! ## The folded output -/
 
@@ -445,6 +507,154 @@ theorem foldOut_correct [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemant
       (foldOut_admissible_iff cs bs xs survs env hag).2 hadm,
       by rw [foldOut_sideEffects_eq cs bs xs survs env hag]; exact BusState.equiv_refl _⟩
 
+/-! ## The direct path's folded output (historical, reordering)
+
+The direct (unindexed) path keeps the historical fold verbatim — `foldRewriteC`'s gate and the
+rewritten-uncovered ++ covered-verbatim output shape — so systems below
+`domainFoldIndexThreshold` (everything but keccak/SHA-scale) produce bit-for-bit the output they
+always did. Only the indexed path, where the reorder would invalidate the persistent index's
+positions, uses the order-preserving `foldOut`. -/
+
+/-- The historical fold output: rewritten non-covered constraints first, covered constraints
+    verbatim at the end. -/
+def foldOutC (cs : ConstraintSystem p) (xs : List Variable)
+    (survs : List (List (Variable × ZMod p))) : ConstraintSystem p :=
+  { algebraicConstraints :=
+      (cs.algebraicConstraints.filter (fun c => !coveredBy xs c)).map (foldRewriteC xs survs)
+        ++ coveredCsOf cs xs,
+    busInteractions := cs.busInteractions.map (·.mapExpr (foldRewriteC xs survs)) }
+
+/-- Under an agreeing `env`, the folded system's evaluated stateful side effects are the input's. -/
+theorem foldOutC_sideEffects_eq (cs : ConstraintSystem p) (bs : BusSemantics p) (xs : List Variable)
+    (survs : List (List (Variable × ZMod p))) (env : Variable → ZMod p)
+    (hag : ∀ e : Expression p, (foldRewriteC xs survs e).eval env = e.eval env) :
+    (foldOutC cs xs survs).sideEffects bs env = cs.sideEffects bs env := by
+  show ((cs.busInteractions.map (·.mapExpr (foldRewriteC xs survs))).filter
+      (fun bi => bs.isStateful bi.busId)).map
+        (fun bi => let m := bi.eval env; ((m.busId, m.payload), m.multiplicity)) = _
+  rw [List.filter_map]
+  rw [List.filter_congr (fun bi _ => (rfl :
+    ((fun b : BusInteraction (Expression p) => bs.isStateful b.busId) ∘
+      (fun b => b.mapExpr (foldRewriteC xs survs))) bi = bs.isStateful bi.busId))]
+  rw [List.map_map]
+  exact List.map_congr_left (fun bi _ => by
+    simp only [Function.comp_apply, mapExpr_eval_of_agree _ env hag bi])
+
+/-- Under an agreeing `env`, the folded system is admissible iff the input is. -/
+theorem foldOutC_admissible_iff (cs : ConstraintSystem p) (bs : BusSemantics p) (xs : List Variable)
+    (survs : List (List (Variable × ZMod p))) (env : Variable → ZMod p)
+    (hag : ∀ e : Expression p, (foldRewriteC xs survs e).eval env = e.eval env) :
+    (foldOutC cs xs survs).admissible bs env ↔ cs.admissible bs env := by
+  unfold ConstraintSystem.admissible
+  have hmsg : (foldOutC cs xs survs).busInteractions.map (fun bi => bi.eval env)
+      = cs.busInteractions.map (fun bi => bi.eval env) := by
+    show (cs.busInteractions.map (·.mapExpr (foldRewriteC xs survs))).map (fun bi => bi.eval env) = _
+    rw [List.map_map]
+    exact List.map_congr_left (fun bi _ => mapExpr_eval_of_agree _ env hag bi)
+  rw [hmsg]
+
+/-- Folding introduces no variable. -/
+theorem foldOutC_vars_subset (cs : ConstraintSystem p) (xs : List Variable)
+    (survs : List (List (Variable × ZMod p))) :
+    ∀ v ∈ (foldOutC cs xs survs).vars, v ∈ cs.vars := by
+  intro v hv
+  rcases ConstraintSystem.mem_vars.1 hv with ⟨c, hc, hcv⟩ | ⟨bi, hbi, hbiv⟩
+  · simp only [foldOutC, List.mem_append] at hc
+    rcases hc with hc | hc
+    · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 hc
+      exact ConstraintSystem.mem_vars_of_constraint (List.mem_of_mem_filter hc0)
+        (foldRewriteC_vars xs survs c0 v hcv)
+    · exact ConstraintSystem.mem_vars_of_constraint (List.mem_of_mem_filter hc) hcv
+  · simp only [foldOutC, List.mem_map] at hbi
+    obtain ⟨bi0, hbi0, rfl⟩ := hbi
+    rcases hbiv with hmv | ⟨e, he, hev⟩
+    · exact ConstraintSystem.mem_vars_of_mult hbi0
+        (foldRewriteC_vars xs survs bi0.multiplicity v hmv)
+    · simp only [BusInteraction.mapExpr] at he
+      obtain ⟨e0, he0, rfl⟩ := List.mem_map.1 he
+      exact ConstraintSystem.mem_vars_of_payload hbi0 he0 (foldRewriteC_vars xs survs e0 v hev)
+
+/-- **Correctness of one fold (direct path).** The folded system refines the input and preserves
+    invariants, with the identity witness (`ofEnvEq`): the covered constraints, kept verbatim, pin
+    the group so the rewrite agrees with the identity on every assignment satisfying either
+    system. -/
+theorem foldOutC_correct [Fact p.Prime] (cs : ConstraintSystem p) (bs : BusSemantics p)
+    (xs : List Variable) (doms : List (Variable × List (ZMod p)))
+    (hdoms : groupDoms (coveredCsOf cs xs) xs = some doms) :
+    PassCorrect cs (foldOutC cs xs (groupSurvivors cs xs doms)) [] bs := by
+  set survs := groupSurvivors cs xs doms with hsurv_def
+  -- covered constraints are satisfied by any assignment of the output (kept verbatim) or the input.
+  have hcov_out : ∀ env, (foldOutC cs xs survs).satisfies bs env →
+      ∀ c ∈ coveredCsOf cs xs, c.eval env = 0 := by
+    intro env hsat c hc
+    exact hsat.1 c (by simp only [foldOutC, List.mem_append]; exact Or.inr hc)
+  have hcov_cs : ∀ env, cs.satisfies bs env → ∀ c ∈ coveredCsOf cs xs, c.eval env = 0 :=
+    fun env hsat c hc => hsat.1 c (List.mem_of_mem_filter hc)
+  refine PassCorrect.ofEnvEq ?hsound ?hinv ?hsub ?hcomp
+  case hsub => exact foldOutC_vars_subset cs xs survs
+  case hsound =>
+    intro env hsatout
+    have hag := foldRewriteC_agree_covered cs xs doms hdoms env (hcov_out env hsatout)
+    refine ⟨env, ⟨?_, ?_⟩, ?_⟩
+    · -- every cs constraint holds
+      intro c hc
+      by_cases hccov : coveredBy xs c = true
+      · exact hcov_out env hsatout c (List.mem_filter.2 ⟨hc, hccov⟩)
+      · have hmem : foldRewriteC xs survs c ∈ (foldOutC cs xs survs).algebraicConstraints := by
+          simp only [foldOutC, List.mem_append]
+          exact Or.inl (List.mem_map.2 ⟨c, List.mem_filter.2 ⟨hc, by simpa using hccov⟩, rfl⟩)
+        have := hsatout.1 _ hmem
+        rwa [hag c] at this
+    · -- no cs bus interaction violates
+      intro bi hbi
+      have hmem : bi.mapExpr (foldRewriteC xs survs) ∈ (foldOutC cs xs survs).busInteractions :=
+        List.mem_map.2 ⟨bi, hbi, rfl⟩
+      have hval := mapExpr_eval_of_agree (foldRewriteC xs survs) env hag bi
+      have := hsatout.2 _ hmem
+      rw [hval] at this; exact this
+    · rw [foldOutC_sideEffects_eq cs bs xs survs env hag]; exact BusState.equiv_refl _
+  case hinv =>
+    intro hinv env hsatout bi' hbi'
+    have hag := foldRewriteC_agree_covered cs xs doms hdoms env (hcov_out env hsatout)
+    -- env satisfies cs (soundness reasoning inlined)
+    have hsatcs : cs.satisfies bs env := by
+      refine ⟨?_, ?_⟩
+      · intro c hc
+        by_cases hccov : coveredBy xs c = true
+        · exact hcov_out env hsatout c (List.mem_filter.2 ⟨hc, hccov⟩)
+        · have hmem : foldRewriteC xs survs c ∈ (foldOutC cs xs survs).algebraicConstraints := by
+            simp only [foldOutC, List.mem_append]
+            exact Or.inl (List.mem_map.2 ⟨c, List.mem_filter.2 ⟨hc, by simpa using hccov⟩, rfl⟩)
+          have := hsatout.1 _ hmem
+          rwa [hag c] at this
+      · intro bi hbi
+        have hmem : bi.mapExpr (foldRewriteC xs survs) ∈ (foldOutC cs xs survs).busInteractions :=
+          List.mem_map.2 ⟨bi, hbi, rfl⟩
+        have hval := mapExpr_eval_of_agree (foldRewriteC xs survs) env hag bi
+        have := hsatout.2 _ hmem
+        rw [hval] at this; exact this
+    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
+    rw [mapExpr_eval_of_agree (foldRewriteC xs survs) env hag bi0]
+    exact hinv env hsatcs bi0 hbi0
+  case hcomp =>
+    intro env hadm hsat
+    have hag := foldRewriteC_agree_covered cs xs doms hdoms env (hcov_cs env hsat)
+    refine ⟨⟨?_, ?_⟩, ?_, ?_⟩
+    · -- every out constraint holds
+      intro c hc
+      simp only [foldOutC, List.mem_append] at hc
+      rcases hc with hc | hc
+      · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 hc
+        rw [hag c0]; exact hsat.1 c0 (List.mem_of_mem_filter hc0)
+      · exact hsat.1 c (List.mem_of_mem_filter hc)
+    · -- no out bus interaction violates
+      intro bi hbi
+      obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi
+      rw [mapExpr_eval_of_agree (foldRewriteC xs survs) env hag bi0]
+      exact hsat.2 bi0 hbi0
+    · exact (foldOutC_admissible_iff cs bs xs survs env hag).2 hadm
+    · rw [foldOutC_sideEffects_eq cs bs xs survs env hag]; exact BusState.equiv_refl _
+
 /-! ## The pass -/
 
 /-- Whether any expression of the system has a maximal wholly-in-group subexpression that folds to a
@@ -460,19 +670,16 @@ def Expression.hasFoldable (xs : List Variable) (survs : List (List (Variable ×
       ((Expression.mul a b).varsIn xs && (constOnSurvs survs (.mul a b)).isSome) ||
         Expression.hasFoldable xs survs a || Expression.hasFoldable xs survs b
 
-/-- Does the fold change anything in the system? The no-op gate of the direct (unindexed) path,
-    with the non-covered constraints (`rest = coveredBy`'s complement) precomputed by the caller —
-    the direct path partitions the constraint list once per target, so the gate does not
-    re-evaluate `coveredBy` per constraint. Each item is gated on `anyVarIn` first, mirroring
-    `foldRewrite`'s reach exactly: an expression sharing no variable with the group is never
-    rewritten. Purely an efficiency gate (a false negative loses a fold; a false positive costs a
-    no-op `foldOut`, which — order-preserving — returns an equal system). -/
+/-- Does the fold change anything in the system? The no-op gate of the direct (unindexed) path —
+    the historical gate, verbatim — with the non-covered constraints (`rest = coveredBy`'s
+    complement) precomputed by the caller: the direct path partitions the constraint list once
+    per target, so the gate does not re-evaluate `coveredBy` per constraint. Purely an efficiency
+    gate. -/
 def systemHasFoldableW (cs : ConstraintSystem p) (xs : List Variable)
     (survs : List (List (Variable × ZMod p))) (rest : List (Expression p)) : Bool :=
-  rest.any (fun c => c.anyVarIn xs && c.hasFoldable xs survs) ||
+  rest.any (fun c => c.hasFoldable xs survs) ||
     cs.busInteractions.any (fun bi =>
-      (bi.multiplicity.anyVarIn xs && bi.multiplicity.hasFoldable xs survs) ||
-        bi.payload.any (fun e => e.anyVarIn xs && e.hasFoldable xs survs))
+      bi.multiplicity.hasFoldable xs survs || bi.payload.any (fun e => e.hasFoldable xs survs))
 
 /-! ### The index-local gate
 
@@ -857,7 +1064,7 @@ def foldStepWith [Fact p.Prime] (bs : BusSemantics p) (cs : ConstraintSystem p) 
         have hsurv : groupSurvivors cs xs doms = survs := by
           show groupSurvivors cs xs doms = groupSurvivorsE es doms
           rw [hes]; rfl
-        ⟨foldOut cs xs survs, [], hsurv ▸ foldOut_correct cs bs xs doms (hes ▸ hdoms)⟩
+        ⟨foldOutC cs xs survs, [], hsurv ▸ foldOutC_correct cs bs xs doms (hes ▸ hdoms)⟩
       else ⟨cs, [], PassCorrect.refl cs bs⟩
     else ⟨cs, [], PassCorrect.refl cs bs⟩
 
