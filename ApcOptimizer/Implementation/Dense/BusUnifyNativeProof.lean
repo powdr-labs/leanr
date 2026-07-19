@@ -284,6 +284,314 @@ theorem denseCandidateSplits_split {shape : MemoryBusShape} {T : DenseTwoRootMap
     · have hrec := ih (S :: revPre) cand h
       rw [← hrec]; simp [List.reverse_cons, List.append_assoc]
 
+/-! ## The consumer sweep recovers the split equation (#165 delta, chunk C2)
+
+Native mirror of the spec sweep's proof layer (`OptimizerPasses/BusUnify.lean:307-506`). The dense
+sweep defs are plain data, so the `OpenRec.hi`/`hsplit` invariants and `sweepGo`'s `hsplit`/`hj`
+arguments are reconstructed externally: `OpenWF`/`SplitEqC` state them, and `denseSweepGo_split`
+threads them across `insert`/`erase`/`getElem?`/`toList` as an all-values-satisfy-P HashMap
+invariant. -/
+
+private abbrev SplitEqC (L : List (BusInteraction (DenseExpr p))) (cand : DenseSplitCand p) : Prop :=
+  L = cand.1 ++ cand.2.1 :: cand.2.2.1 ++ cand.2.2.2.1 :: cand.2.2.2.2
+
+private def OpenWF (L : List (BusInteraction (DenseExpr p))) (w : DenseOpenRec p) : Prop :=
+  w.revPre.length = w.i ∧ L = w.revPre.reverse ++ w.S :: w.restAfter
+
+theorem dense_split_of_positions
+    {L revPre restAfter revSeen post : List (BusInteraction (DenseExpr p))}
+    {S R : BusInteraction (DenseExpr p)} {i j : Nat}
+    (hi : revPre.length = i) (hsplit : L = revPre.reverse ++ S :: restAfter)
+    (hj : revSeen.length = j) (hnow : L = revSeen.reverse ++ R :: post) (hlt : i < j) :
+    L = revPre.reverse ++ S :: restAfter.take (j - i - 1) ++ R :: post := by
+  have hRA : restAfter = L.drop (i + 1) := by
+    have h1 : L = (revPre.reverse ++ [S]) ++ restAfter := by rw [hsplit]; simp
+    rw [h1, List.drop_left' (by simp [hi])]
+  have hRp : R :: post = L.drop j := by rw [hnow, List.drop_left' (by simp [hj])]
+  have hdrop : restAfter.drop (j - i - 1) = R :: post := by
+    rw [hRA, List.drop_drop, hRp]; congr 1; omega
+  have hn : L = revPre.reverse ++ S :: (restAfter.take (j - i - 1) ++ R :: post) := by
+    rw [← hdrop, List.take_append_drop]; exact hsplit
+  simpa [List.append_assoc] using hn
+
+private theorem denseEmitCand_split {L : List (BusInteraction (DenseExpr p))} (w : DenseOpenRec p)
+    (hwf : OpenWF L w)
+    {revSeen : List (BusInteraction (DenseExpr p))} (j : Nat) (hj : revSeen.length = j)
+    (R : BusInteraction (DenseExpr p)) (post : List (BusInteraction (DenseExpr p)))
+    (hnow : L = revSeen.reverse ++ R :: post)
+    {ic : Nat × DenseSplitCand p} (h : denseEmitCand w j R post = some ic) :
+    SplitEqC L ic.2 := by
+  unfold denseEmitCand at h
+  by_cases hlt : w.i < j
+  · rw [if_pos hlt] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    exact dense_split_of_positions hwf.1 hwf.2 hj hnow hlt
+  · rw [if_neg hlt] at h; exact absurd h (by simp)
+
+private theorem denseEmitCand_cons_split {L : List (BusInteraction (DenseExpr p))}
+    (w : DenseOpenRec p) (hwf : OpenWF L w)
+    {revSeen : List (BusInteraction (DenseExpr p))} (j : Nat) (hj : revSeen.length = j)
+    (R : BusInteraction (DenseExpr p)) (post : List (BusInteraction (DenseExpr p)))
+    (hnow : L = revSeen.reverse ++ R :: post)
+    (acc : List (Nat × DenseSplitCand p)) (hacc : ∀ ic ∈ acc, SplitEqC L ic.2) :
+    ∀ ic ∈ (match denseEmitCand w j R post with | some c => c :: acc | none => acc),
+      SplitEqC L ic.2 := by
+  cases hem : denseEmitCand w j R post with
+  | none => intro ic hic; exact hacc ic hic
+  | some c =>
+    intro ic hic
+    simp only [List.mem_cons] at hic
+    rcases hic with rfl | hic
+    · exact denseEmitCand_split w hwf j hj R post hnow hem
+    · exact hacc ic hic
+
+-- HashMap value invariant under insert / erase / erase-fold
+private theorem insert_ow {L : List (BusInteraction (DenseExpr p))}
+    (cO : Std.HashMap (DenseAddrKey p) (DenseOpenRec p))
+    (hcO : ∀ (k : DenseAddrKey p) (w : DenseOpenRec p), cO[k]? = some w → OpenWF L w)
+    (k0 : DenseAddrKey p) (w0 : DenseOpenRec p) (hw0 : OpenWF L w0) :
+    ∀ (k : DenseAddrKey p) (w : DenseOpenRec p), (cO.insert k0 w0)[k]? = some w → OpenWF L w := by
+  intro k w h
+  rw [Std.HashMap.getElem?_insert] at h
+  split at h
+  · rw [Option.some.injEq] at h; subst h; exact hw0
+  · exact hcO k w h
+
+private theorem erase_ow {L : List (BusInteraction (DenseExpr p))}
+    (cO : Std.HashMap (DenseAddrKey p) (DenseOpenRec p))
+    (hcO : ∀ (k : DenseAddrKey p) (w : DenseOpenRec p), cO[k]? = some w → OpenWF L w)
+    (k0 : DenseAddrKey p) :
+    ∀ (k : DenseAddrKey p) (w : DenseOpenRec p), (cO.erase k0)[k]? = some w → OpenWF L w := by
+  intro k w h
+  rw [Std.HashMap.getElem?_erase] at h
+  split at h
+  · exact absurd h (by simp)
+  · exact hcO k w h
+
+private theorem eraseFold_ow {L : List (BusInteraction (DenseExpr p))}
+    (drops : List (DenseAddrKey p)) (cO : Std.HashMap (DenseAddrKey p) (DenseOpenRec p))
+    (hcO : ∀ (k : DenseAddrKey p) (w : DenseOpenRec p), cO[k]? = some w → OpenWF L w) :
+    ∀ (k : DenseAddrKey p) (w : DenseOpenRec p),
+      (List.foldl (fun x1 x2 => x1.erase x2) cO drops)[k]? = some w → OpenWF L w := by
+  induction drops generalizing cO with
+  | nil => exact hcO
+  | cons d rest ih =>
+    rw [List.foldl_cons]
+    exact ih (cO.erase d) (erase_ow cO hcO d)
+
+
+theorem denseSweepGo_split {shape : MemoryBusShape} {T : Thunk (DenseTwoRootMap p)}
+    {nw : Thunk (DenseNonzeroWits p)} (L : List (BusInteraction (DenseExpr p)))
+    (revSeen rest : List (BusInteraction (DenseExpr p))) (j : Nat)
+    (constOpen : Std.HashMap (DenseAddrKey p) (DenseOpenRec p))
+    (symOpen : List (DenseOpenRec p)) (acc : List (Nat × DenseSplitCand p))
+    (hsplit : L = revSeen.reverse ++ rest) (hj : revSeen.length = j)
+    (hcO : ∀ (k : DenseAddrKey p) (w : DenseOpenRec p), constOpen[k]? = some w → OpenWF L w)
+    (hsO : ∀ w ∈ symOpen, OpenWF L w)
+    (hacc : ∀ ic ∈ acc, SplitEqC L ic.2) :
+    ∀ ic ∈ denseSweepGo shape T nw revSeen rest j constOpen symOpen acc, SplitEqC L ic.2 := by
+  revert hsplit hj hcO hsO hacc
+  fun_induction denseSweepGo shape T nw revSeen rest j constOpen symOpen acc with
+  | case1 revSeen j constOpen symOpen acc =>
+    intro hsplit hj hcO hsO hacc ic hic
+    exact hacc ic hic
+  | case2 revSeen m rest' j constOpen symOpen acc mKey mAllC constOpen_1 acc_1 hP1 so a hP2 constOpen_2 symOpen_1 hP3 ih =>
+    intro hsplit hj hcO hsO hacc
+    clear_value mAllC mKey
+    have hnow : L = revSeen.reverse ++ m :: rest' := hsplit
+    have hP1inv : (∀ (k : DenseAddrKey p) (w : DenseOpenRec p), constOpen_1[k]? = some w → OpenWF L w)
+        ∧ (∀ ic ∈ acc_1, SplitEqC L ic.2) := by
+      split at hP1
+      · split at hP1
+        · rename_i k
+          split at hP1
+          · rename_i w heqw
+            split at hP1
+            · simp only [Prod.mk.injEq] at hP1; obtain ⟨rfl, rfl⟩ := hP1
+              exact ⟨erase_ow constOpen hcO k,
+                denseEmitCand_cons_split w (hcO k w heqw) j hj m rest' hnow acc hacc⟩
+            · simp only [Prod.mk.injEq] at hP1; obtain ⟨rfl, rfl⟩ := hP1
+              exact ⟨hcO, hacc⟩
+            · simp only [Prod.mk.injEq] at hP1; obtain ⟨rfl, rfl⟩ := hP1
+              exact ⟨erase_ow constOpen hcO k, hacc⟩
+          · simp only [Prod.mk.injEq] at hP1; obtain ⟨rfl, rfl⟩ := hP1
+            exact ⟨hcO, hacc⟩
+        · simp only [Prod.mk.injEq] at hP1; obtain ⟨rfl, rfl⟩ := hP1
+          exact ⟨hcO, hacc⟩
+      · have hlst : ∀ kw ∈ constOpen.toList, OpenWF L kw.2 := by
+          intro kw hkw
+          exact hcO kw.1 kw.2 (Std.HashMap.mem_toList_iff_getElem?_eq_some.mp
+            (show (kw.1, kw.2) ∈ constOpen.toList from hkw))
+        split at hP1
+        rename_i drops accf heqfold
+        simp only [Prod.mk.injEq] at hP1; obtain ⟨rfl, rfl⟩ := hP1
+        refine ⟨eraseFold_ow drops constOpen hcO, ?_⟩
+        show ∀ ic ∈ (drops, accf).2, SplitEqC L ic.2
+        rw [← heqfold]
+        refine List.foldlRecOn constOpen.toList _
+          (motive := fun (dsa : List (DenseAddrKey p) × List (Nat × DenseSplitCand p)) =>
+            ∀ ic ∈ dsa.2, SplitEqC L ic.2) hacc ?_
+        intro dsa hdsa kw hkw
+        obtain ⟨ds, a2⟩ := dsa
+        intro ic hic
+        cases hst : denseStepTest shape T nw kw.2.S m with
+        | consumer =>
+          simp only [hst] at hic
+          exact denseEmitCand_cons_split kw.2 (hlst kw hkw) j hj m rest' hnow a2 hdsa ic hic
+        | excluded => simp only [hst] at hic; exact hdsa ic hic
+        | blocker => simp only [hst] at hic; exact hdsa ic hic
+    obtain ⟨hcO1, hacc1⟩ := hP1inv
+    have hP2inv : (∀ w ∈ so, OpenWF L w) ∧ (∀ ic ∈ a, SplitEqC L ic.2) := by
+      split at hP2
+      · simp only [Prod.mk.injEq] at hP2; obtain ⟨rfl, rfl⟩ := hP2
+        exact ⟨hsO, hacc1⟩
+      · have hfr : (∀ w ∈ (so, a).1, OpenWF L w) ∧ (∀ ic ∈ (so, a).2, SplitEqC L ic.2) := by
+          rw [← hP2]
+          refine List.foldrRecOn symOpen _
+            (motive := fun (soa : List (DenseOpenRec p) × List (Nat × DenseSplitCand p)) =>
+              (∀ w ∈ soa.1, OpenWF L w) ∧ (∀ ic ∈ soa.2, SplitEqC L ic.2))
+            ⟨by intro w hw; simp at hw, hacc1⟩ ?_
+          intro soa hsoa w hw
+          obtain ⟨so2, a2⟩ := soa
+          obtain ⟨hso2, ha2⟩ := hsoa
+          cases hst : denseStepTest shape T nw w.S m with
+          | consumer => exact ⟨hso2, denseEmitCand_cons_split w (hsO w hw) j hj m rest' hnow a2 ha2⟩
+          | excluded =>
+            exact ⟨List.forall_mem_cons.mpr ⟨hsO w hw, hso2⟩, ha2⟩
+          | blocker => exact ⟨hso2, ha2⟩
+        exact ⟨hfr.1, hfr.2⟩
+    obtain ⟨hso3, hacc2⟩ := hP2inv
+    have hwNew : OpenWF L (⟨revSeen, m, rest', j⟩ : DenseOpenRec p) := ⟨hj, hnow⟩
+    have hP3inv : (∀ (k : DenseAddrKey p) (w : DenseOpenRec p), constOpen_2[k]? = some w → OpenWF L w)
+        ∧ (∀ w ∈ symOpen_1, OpenWF L w) := by
+      split at hP3
+      · split at hP3
+        · rename_i k
+          split at hP3
+          · split at hP3
+            · rename_i old heqold
+              simp only [Prod.mk.injEq] at hP3; obtain ⟨rfl, rfl⟩ := hP3
+              exact ⟨insert_ow constOpen_1 hcO1 k _ hwNew,
+                List.forall_mem_cons.mpr ⟨hcO1 k old heqold, hso3⟩⟩
+            · simp only [Prod.mk.injEq] at hP3; obtain ⟨rfl, rfl⟩ := hP3
+              exact ⟨insert_ow constOpen_1 hcO1 k _ hwNew, hso3⟩
+          · simp only [Prod.mk.injEq] at hP3; obtain ⟨rfl, rfl⟩ := hP3
+            exact ⟨hcO1, List.forall_mem_cons.mpr ⟨hwNew, hso3⟩⟩
+        · simp only [Prod.mk.injEq] at hP3; obtain ⟨rfl, rfl⟩ := hP3
+          exact ⟨hcO1, hso3⟩
+      · simp only [Prod.mk.injEq] at hP3; obtain ⟨rfl, rfl⟩ := hP3
+        exact ⟨hcO1, hso3⟩
+    intro ic hic
+    exact ih (by rw [List.reverse_cons, List.append_assoc]; exact hsplit)
+             (by rw [List.length_cons, hj])
+             hP3inv.1 hP3inv.2 hacc2 ic hic
+
+
+/-- Wrapper: every candidate the sweep enumerator returns recomposes the swept list. -/
+theorem denseCandidateSplitsSweep_split {shape : MemoryBusShape} {T : Thunk (DenseTwoRootMap p)}
+    {nw : Thunk (DenseNonzeroWits p)} (L : List (BusInteraction (DenseExpr p)))
+    (cand : DenseSplitCand p) (hcand : cand ∈ denseCandidateSplitsSweep shape T nw L) :
+    L = cand.1 ++ cand.2.1 :: cand.2.2.1 ++ cand.2.2.2.1 :: cand.2.2.2.2 := by
+  unfold denseCandidateSplitsSweep at hcand
+  rw [List.mem_map] at hcand
+  obtain ⟨ic, hic, rfl⟩ := hcand
+  rw [List.mem_mergeSort] at hic
+  exact denseSweepGo_split L [] L 0 ∅ [] []
+    (by simp) rfl
+    (by intro k w h; rw [Std.HashMap.getElem?_empty] at h; exact absurd h (by simp))
+    (by intro w hw; simp at hw)
+    (by intro ic hic; simp at hic) ic hic
+
+/-- Every var of an entailed slot equality comes from the send's or receive's payload. Native mirror
+    of `memEqConstraints_vars`. -/
+theorem denseMemEqConstraints_vars (shape : MemoryBusShape) (S Rt : BusInteraction (DenseExpr p))
+    {c : DenseExpr p} (hc : c ∈ denseMemEqConstraints shape S Rt) {z : VarId} (hz : z ∈ c.vars) :
+    (∃ e ∈ Rt.payload, z ∈ e.vars) ∨ (∃ e ∈ S.payload, z ∈ e.vars) := by
+  unfold denseMemEqConstraints at hc
+  obtain ⟨i, _hi, rfl⟩ := List.mem_map.1 hc
+  simp only [denseEqExpr, DenseExpr.vars, List.mem_append, List.not_mem_nil, false_or] at hz
+  rcases hz with hz | hz
+  · cases hR : Rt.payload[i]? with
+    | none => rw [hR] at hz; simp [DenseExpr.vars] at hz
+    | some e => rw [hR] at hz; exact Or.inl ⟨e, List.mem_of_getElem? hR, hz⟩
+  · cases hS : S.payload[i]? with
+    | none => rw [hS] at hz; simp [DenseExpr.vars] at hz
+    | some e => rw [hS] at hz; exact Or.inr ⟨e, List.mem_of_getElem? hS, hz⟩
+
+/-- A var of a bus interaction's payload occurs in `d`. Native mirror of
+    `ConstraintSystem.mem_vars_of_payload`. -/
+theorem DenseConstraintSystem.mem_occ_of_payload {d : DenseConstraintSystem p}
+    {bi : BusInteraction (DenseExpr p)} {e : DenseExpr p} {z : VarId}
+    (hbi : bi ∈ d.busInteractions) (he : e ∈ bi.payload) (hz : z ∈ e.vars) : z ∈ d.occ :=
+  DenseConstraintSystem.mem_occ_of_bi hbi (by
+    simp only [denseBIVars, List.mem_append, List.mem_flatMap]
+    exact Or.inr ⟨e, he, hz⟩)
+
+/-- Every var of an equality collected for one bus is an occurrence of `d`, by construction — the
+    split equation gives `S, R ∈ d.busInteractions`, and `denseMemEqConstraints_vars` traces each var
+    back to a payload slot. Native mirror of `collectForBus`'s "no new variable" conjunct. -/
+theorem denseCollectForBus_vars (d : DenseConstraintSystem p)
+    (T : DenseTwoRootMap p) (nw : DenseNonzeroWits p) (shape : MemoryBusShape) (busId : Nat) :
+    ∀ (cands : List (DenseSplitCand p)),
+    (∀ cand ∈ cands, d.busInteractions.filter (fun bi => bi.busId = busId)
+        = cand.1 ++ cand.2.1 :: cand.2.2.1 ++ cand.2.2.2.1 :: cand.2.2.2.2) →
+    ∀ c ∈ denseCollectForBus shape T nw cands, ∀ z ∈ c.vars, z ∈ d.occ := by
+  intro cands
+  induction cands with
+  | nil => intro _ c hc; simp [denseCollectForBus] at hc
+  | cons cand rest ih =>
+    intro hsplitc c hc z hz
+    obtain ⟨pre, S, mid, R, post⟩ := cand
+    have hsplit : d.busInteractions.filter (fun bi => bi.busId = busId)
+        = pre ++ S :: mid ++ R :: post := hsplitc (pre, S, mid, R, post) (List.mem_cons_self ..)
+    have hrest : ∀ cand ∈ rest, d.busInteractions.filter (fun bi => bi.busId = busId)
+        = cand.1 ++ cand.2.1 :: cand.2.2.1 ++ cand.2.2.2.1 :: cand.2.2.2.2 :=
+      fun cand h => hsplitc cand (List.mem_cons_of_mem _ h)
+    have hSmem : S ∈ d.busInteractions := by
+      have h : S ∈ d.busInteractions.filter (fun bi => bi.busId = busId) := by
+        rw [hsplit]
+        exact List.mem_append_left _ (List.mem_append_right _ List.mem_cons_self)
+      exact List.mem_of_mem_filter h
+    have hRmem : R ∈ d.busInteractions := by
+      have h : R ∈ d.busInteractions.filter (fun bi => bi.busId = busId) := by
+        rw [hsplit]
+        exact List.mem_append_right _ List.mem_cons_self
+      exact List.mem_of_mem_filter h
+    rw [denseCollectForBus] at hc
+    split_ifs at hc with hchk
+    · rw [List.mem_append] at hc
+      rcases hc with h | h
+      · rcases denseMemEqConstraints_vars shape S R h hz with ⟨e, he, hze⟩ | ⟨e, he, hze⟩
+        · exact DenseConstraintSystem.mem_occ_of_payload hRmem he hze
+        · exact DenseConstraintSystem.mem_occ_of_payload hSmem he hze
+      · exact ih hrest c h z hz
+    · exact ih hrest c hc z hz
+
+/-- Every var of an equality collected across all declared buses is an occurrence of `d`. Native
+    mirror of `collectAllBuses`'s "no new variable" conjunct. -/
+theorem denseCollectAllBuses_vars (d : DenseConstraintSystem p) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (T : DenseTwoRootMap p) (nw : DenseNonzeroWits p) :
+    ∀ (busIds : List Nat),
+    ∀ c ∈ denseCollectAllBuses d bs facts T nw busIds, ∀ z ∈ c.vars, z ∈ d.occ := by
+  intro busIds
+  induction busIds with
+  | nil => intro c hc; simp [denseCollectAllBuses] at hc
+  | cons busId rest ih =>
+    intro c hc z hz
+    rw [denseCollectAllBuses] at hc
+    cases hms : facts.memShape busId with
+    | none => rw [hms] at hc; exact ih c hc z hz
+    | some shape =>
+      rw [hms, List.mem_append] at hc
+      rcases hc with hc | hc
+      · refine denseCollectForBus_vars d T nw shape busId _ ?_ c hc z hz
+        intro cand hcand
+        have hh := denseCandidateSplits_split
+          (d.busInteractions.filter (fun bi => bi.busId = busId)) [] cand hcand
+        simpa using hh
+      · exact ih c hc z hz
+
 /-! ## The per-bus / all-bus entailment -/
 
 /-- Every entailed equality collected for one bus evaluates to zero on admissible satisfying
