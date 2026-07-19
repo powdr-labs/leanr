@@ -266,4 +266,267 @@ theorem denseDomainByteJustified_sound [Fact p.Prime] (domCs : List (DenseExpr p
         have hpt : denseExprPointByte e x (denv x) = true := List.all_eq_true.mp hall _ hmem
         exact denseExprPointByte_sound e x denv hpt
 
+/-! # Native soundness of the affine + basis justification tier (Task 3, chunk C1b — prover)
+
+Native, `VarId`-native `_sound` lemmas for the affine and basis justification certificates defined in
+`Dense/BusPairCancelJustify.lean` (`denseLinTermsNatBound`/`DenseLinExpr.natBound`/
+`denseAffineJustified`, `denseFormBoundAt`/`denseBasisReduceGo`/`denseBasisJustified`). These mirror,
+without any decode dependency, the spec soundness chain (`terms_eval_eq_cast`/`linTermsNatBound_le`/
+`LinExpr.eval_val_lt`/`affineJustified_sound`, `formBoundAt_sound`/`basisReduceGo_sound`/
+`basisJustified_sound` in `OptimizerPasses/BusPairCancel.lean`).
+
+Every argument is linear/natural arithmetic over dense environments (`VarId → ZMod p`). The affine
+tier needs no primality at all (it is pure nat-level wraparound bookkeeping); the basis tier reuses
+`denseFormBoundAt_sound` (value-level `facts.slotBound_sound` + `denseMatches_evalPattern` +
+`DenseExpr.constValue?_sound`, the same value-level fact-application precedent as
+`denseScaledSlotBound_sound`) and the exact `DenseLinExpr` algebra
+(`DenseLinExpr.add_eval`/`scale_eval`/`norm_eval`, `denseLinearize_eval`). `IntervalForce.srep` only
+selects the reduction multiplier `μ`; its numeric correctness is *never used* in soundness — the
+subtraction `L = μ·Lf + L'` is exact `DenseLinExpr` algebra regardless of how `μ` is chosen — so no
+`srep` fact is required. No spec `_sound` lemma is reused (no decode); the tier is proven directly.
+
+The statement shapes match the spec versions exactly (`Variable → VarId`, `Expression → DenseExpr`,
+`bi.eval env → denseBIEval bi denv`) so the byte-justification tower top (chunk C1c,
+`byteJustifiedW`) consumes `denseAffineJustified_sound`/`denseBasisJustified_sound` exactly as the
+spec `byteJustifiedW_sound` consumes `affineJustified_sound`/`basisJustified_sound`. -/
+
+/-! ## `denseAffineJustified` soundness (native mirror of `affineJustified_sound`) -/
+
+/-- Over `ZMod p` a dense term-list sum equals the cast of its natural (`.val`-wise) sum. Native
+    mirror of `terms_eval_eq_cast`. -/
+theorem denseTerms_eval_eq_cast [NeZero p] (terms : List (VarId × ZMod p))
+    (denv : VarId → ZMod p) :
+    (terms.map (fun t => t.2 * denv t.1)).sum
+      = (((terms.map (fun t => t.2.val * (denv t.1).val)).sum : ℕ) : ZMod p) := by
+  induction terms with
+  | nil => simp
+  | cons t rest ih =>
+    simp only [List.map_cons, List.sum_cons, ih, Nat.cast_add, Nat.cast_mul]
+    congr 1
+    rw [ZMod.natCast_val, ZMod.natCast_val, ZMod.cast_id, ZMod.cast_id]
+
+/-- The natural term-sum is bounded by `denseLinTermsNatBound` when every variable is bounded. Native
+    mirror of `linTermsNatBound_le`. -/
+theorem denseLinTermsNatBound_le (bnd : VarId → Option Nat) (denv : VarId → ZMod p)
+    (terms : List (VarId × ZMod p)) (M : Nat) (h : denseLinTermsNatBound bnd terms = some M)
+    (hbnd : ∀ v ∈ terms.map Prod.fst, ∀ b, bnd v = some b → (denv v).val < b) :
+    (terms.map (fun t => t.2.val * (denv t.1).val)).sum ≤ M := by
+  induction terms generalizing M with
+  | nil => simp only [denseLinTermsNatBound, Option.some.injEq] at h; subst h; simp
+  | cons t rest ih =>
+    simp only [denseLinTermsNatBound] at h
+    cases hb : bnd t.1 with
+    | none => rw [hb] at h; simp at h
+    | some b =>
+      cases hr : denseLinTermsNatBound bnd rest with
+      | none => rw [hb, hr] at h; simp at h
+      | some Macc =>
+        rw [hb, hr] at h; simp only [Option.some.injEq] at h; subst h
+        have hvt : (denv t.1).val < b := hbnd t.1 (by simp) b hb
+        have hacc : (rest.map (fun t => t.2.val * (denv t.1).val)).sum ≤ Macc :=
+          ih Macc hr
+            (fun v hv => hbnd v (by simp only [List.map_cons, List.mem_cons]; exact Or.inr hv))
+        simp only [List.map_cons, List.sum_cons]
+        have hmul : t.2.val * (denv t.1).val ≤ t.2.val * (b - 1) :=
+          Nat.mul_le_mul_left _ (by omega)
+        omega
+
+/-- If `L`'s natural bound `M` is `< p`, then `L.eval` has value `≤ M` (`< bound` when `M < bound`):
+    no wraparound, so the field value equals the natural value. Native mirror of
+    `LinExpr.eval_val_lt`. -/
+theorem DenseLinExpr.eval_val_lt (L : DenseLinExpr p) (denv : VarId → ZMod p)
+    (bnd : VarId → Option Nat)
+    (hbnd : ∀ v ∈ L.terms.map Prod.fst, ∀ b, bnd v = some b → (denv v).val < b)
+    (M : Nat) (hM : L.natBound bnd = some M) (bound : Nat) (hMb : M < bound) (hMp : M < p) :
+    (L.eval denv).val < bound := by
+  have hNe : NeZero p := ⟨by omega⟩
+  unfold DenseLinExpr.natBound at hM
+  cases hs : denseLinTermsNatBound bnd L.terms with
+  | none => rw [hs] at hM; simp at hM
+  | some S =>
+    rw [hs] at hM
+    simp only [Option.map_some, Option.some.injEq] at hM
+    subst hM
+    have hsum := denseLinTermsNatBound_le bnd denv L.terms S hs hbnd
+    have hcast : L.eval denv
+        = (((L.const.val + (L.terms.map (fun t => t.2.val * (denv t.1).val)).sum : ℕ)) : ZMod p) := by
+      rw [DenseLinExpr.eval, denseTerms_eval_eq_cast, Nat.cast_add, ZMod.natCast_val, ZMod.cast_id]
+    have hlt : L.const.val + (L.terms.map (fun t => t.2.val * (denv t.1).val)).sum < p := by omega
+    rw [hcast, ZMod.val_natCast, Nat.mod_eq_of_lt hlt]
+    omega
+
+/-- **`denseAffineJustified` is sound.** If `e` linearizes to a form whose per-variable-bounded
+    natural value is `< bound` (and `< p`), then `e` is a byte/limb under any assignment respecting
+    the bounds. Native mirror of `affineJustified_sound`. -/
+theorem denseAffineJustified_sound (bound : Nat) (bnd : VarId → Option Nat) (e : DenseExpr p)
+    (denv : VarId → ZMod p)
+    (hbnd : ∀ v b, bnd v = some b → (denv v).val < b)
+    (h : denseAffineJustified bound bnd e = true) : (e.eval denv).val < bound := by
+  unfold denseAffineJustified at h
+  cases hL : denseLinearize e with
+  | none => simp [hL] at h
+  | some L =>
+    cases hM : L.natBound bnd with
+    | none => simp [hL, hM] at h
+    | some M =>
+      simp only [hL, hM, Bool.and_eq_true, decide_eq_true_eq] at h
+      rw [denseLinearize_eval e L hL denv]
+      exact DenseLinExpr.eval_val_lt L denv bnd (fun v _ b hb => hbnd v b hb) M hM bound h.1 h.2
+
+/-! ## `denseFormBoundAt` soundness (native mirror of `formBoundAt_sound`) -/
+
+/-- **`denseFormBoundAt` is sound.** If payload slot `i` of `bi` linearizes to `Lr` with slot bound
+    `Br`, and the interaction never violates when active, then `Lr`'s value is `< Br`. Native mirror
+    of `formBoundAt_sound`: the value-level `facts.slotBound_sound` is applied at `denseBIEval`, with
+    `denseMatches_evalPattern` supplying the pattern match — no decode. -/
+theorem denseFormBoundAt_sound {bs : BusSemantics p} (facts : BusFacts p bs)
+    (bi : BusInteraction (DenseExpr p)) (i : Nat) (Lr : DenseLinExpr p) (Br : Nat)
+    (h : denseFormBoundAt facts bi i = some (Lr, Br)) (denv : VarId → ZMod p)
+    (hviol : (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false) :
+    (Lr.eval denv).val < Br := by
+  unfold denseFormBoundAt at h
+  cases hmc : bi.multiplicity.constValue? with
+  | none => simp only [hmc] at h; exact absurd h (by simp)
+  | some mval =>
+    simp only [hmc] at h
+    split_ifs at h with hmz
+    cases hpe : bi.payload[i]? with
+    | none => simp only [hpe] at h; exact absurd h (by simp)
+    | some e =>
+      cases hsb : facts.slotBound bi.busId mval (bi.payload.map DenseExpr.constValue?) i with
+      | none => simp only [hpe, hsb] at h; exact absurd h (by simp)
+      | some B =>
+        simp only [hpe, hsb] at h
+        cases hL : denseLinearize e with
+        | none => simp only [hL] at h; exact absurd h (by simp)
+        | some L' =>
+          simp only [hL, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hmeval : (denseBIEval bi denv).multiplicity = mval :=
+            bi.multiplicity.constValue?_sound mval hmc denv
+          have hv : bs.violatesConstraint (denseBIEval bi denv) = false := by
+            apply hviol
+            rw [hmeval]
+            exact hmz
+          have hget : (denseBIEval bi denv).payload[i]? = some (e.eval denv) := by
+            show (bi.payload.map (fun e => e.eval denv))[i]? = some (e.eval denv)
+            rw [List.getElem?_map, hpe]
+            rfl
+          have hsb' : facts.slotBound (denseBIEval bi denv).busId (denseBIEval bi denv).multiplicity
+              (bi.payload.map DenseExpr.constValue?) i = some B := by
+            show facts.slotBound bi.busId (denseBIEval bi denv).multiplicity _ i = some B
+            rw [hmeval]
+            exact hsb
+          have hbound : (e.eval denv).val < B :=
+            facts.slotBound_sound (denseBIEval bi denv) (bi.payload.map DenseExpr.constValue?) i B
+              (e.eval denv) hsb' (denseMatches_evalPattern bi.payload denv) hv hget
+          rwa [DenseLinExpr.norm_eval, ← denseLinearize_eval e L' hL denv]
+
+/-! ## `denseBasisReduceGo`/`denseBasisJustified` soundness (native mirror of
+    `basisReduceGo_sound`/`basisJustified_sound`) -/
+
+/-- **`denseBasisReduceGo` is sound.** Fuel-bounded induction: at each step it either finishes on the
+    plain per-variable natural bound, or subtracts an integer multiple `μ` of a range-checked slot
+    form (`denseFormBoundAt`, value-bounded by `denseFormBoundAt_sound`) accounting `μ·(B_F − 1)`
+    against the budget; the subtraction is exact `DenseLinExpr` algebra (`μ` is chosen by
+    `IntervalForce.srep`, but its numeric correctness is unused). Native mirror of
+    `basisReduceGo_sound`. -/
+theorem denseBasisReduceGo_sound (bound : Nat) (bnd : VarId → Option Nat) {bs : BusSemantics p}
+    (facts : BusFacts p bs) (fwits : VarId → List (BusInteraction (DenseExpr p)))
+    (denv : VarId → ZMod p)
+    (hbnd : ∀ v b, bnd v = some b → (denv v).val < b)
+    (hfw : ∀ v, ∀ bi ∈ fwits v, (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false) :
+    ∀ (fuel used : Nat) (L : DenseLinExpr p),
+      denseBasisReduceGo bound bnd facts fwits fuel used L = true →
+      ∃ n : ℕ, L.eval denv = (n : ZMod p) ∧ n + used < bound ∧ n + used < p := by
+  intro fuel
+  induction fuel with
+  | zero => intro used L h; exact absurd h (by simp [denseBasisReduceGo])
+  | succ fuel ih =>
+    intro used L h
+    rw [denseBasisReduceGo, Bool.or_eq_true] at h
+    rcases h with hfin | hstep
+    · -- finish arm: the plain per-variable natural bound
+      cases hM : L.natBound bnd with
+      | none => rw [hM] at hfin; simp at hfin
+      | some M =>
+        rw [hM] at hfin
+        rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at hfin
+        obtain ⟨hb, hp'⟩ := hfin
+        haveI : NeZero p := ⟨by omega⟩
+        unfold DenseLinExpr.natBound at hM
+        cases hs : denseLinTermsNatBound bnd L.terms with
+        | none => rw [hs] at hM; simp at hM
+        | some SN =>
+          rw [hs] at hM
+          simp only [Option.map_some, Option.some.injEq] at hM
+          subst hM
+          refine ⟨L.const.val + (L.terms.map (fun t => t.2.val * (denv t.1).val)).sum, ?_, ?_, ?_⟩
+          · rw [DenseLinExpr.eval, denseTerms_eval_eq_cast, Nat.cast_add, ZMod.natCast_val,
+              ZMod.cast_id]
+          · have := denseLinTermsNatBound_le bnd denv L.terms SN hs
+              (fun v _ b hb' => hbnd v b hb')
+            omega
+          · have := denseLinTermsNatBound_le bnd denv L.terms SN hs
+              (fun v _ b hb' => hbnd v b hb')
+            omega
+    · -- reduction arm: subtract μ·F for a range-checked slot form F
+      rw [List.any_eq_true] at hstep
+      obtain ⟨v, _, hstep⟩ := hstep
+      rw [List.any_eq_true] at hstep
+      obtain ⟨bi, hbi, hstep⟩ := hstep
+      rw [List.any_eq_true] at hstep
+      obtain ⟨i, _, hstep⟩ := hstep
+      cases hfb : denseFormBoundAt facts bi i with
+      | none => rw [hfb] at hstep; simp at hstep
+      | some LfBf =>
+        obtain ⟨Lf, Bf⟩ := LfBf
+        rw [hfb] at hstep
+        simp only at hstep
+        split_ifs at hstep with hcond
+        obtain ⟨n', heval', hb', hp'⟩ := ih _ _ hstep
+        haveI : NeZero p := ⟨by omega⟩
+        have hef : (Lf.eval denv).val < Bf :=
+          denseFormBoundAt_sound facts bi i Lf Bf hfb denv (hfw v bi hbi)
+        set μ := (IntervalForce.srep (L.coeff v) / IntervalForce.srep (Lf.coeff v)).toNat with hμ
+        -- the exact algebraic decomposition L = μ·Lf + L'
+        have hdecomp : L.eval denv
+            = (μ : ZMod p) * Lf.eval denv + ((L.add (Lf.scale (-(μ : ZMod p)))).norm).eval denv := by
+          rw [DenseLinExpr.norm_eval, DenseLinExpr.add_eval, DenseLinExpr.scale_eval]
+          ring
+        refine ⟨μ * (Lf.eval denv).val + n', ?_, ?_, ?_⟩
+        · rw [hdecomp, heval']
+          push_cast
+          rw [ZMod.natCast_val, ZMod.cast_id]
+        · have hmul : μ * (Lf.eval denv).val ≤ μ * (Bf - 1) :=
+            Nat.mul_le_mul_left _ (by omega)
+          omega
+        · have hmul : μ * (Lf.eval denv).val ≤ μ * (Bf - 1) :=
+            Nat.mul_le_mul_left _ (by omega)
+          omega
+
+/-- **`denseBasisJustified` is sound.** If `e` linearizes to a form the fuel-bounded reduction proves
+    `< bound`, then `e` is a byte/limb under any assignment respecting the bounds and never violating
+    the witness interactions. Native mirror of `basisJustified_sound`. -/
+theorem denseBasisJustified_sound (bound : Nat) (bnd : VarId → Option Nat) {bs : BusSemantics p}
+    (facts : BusFacts p bs) (fwits : VarId → List (BusInteraction (DenseExpr p)))
+    (e : DenseExpr p) (denv : VarId → ZMod p)
+    (hbnd : ∀ v b, bnd v = some b → (denv v).val < b)
+    (hfw : ∀ v, ∀ bi ∈ fwits v, (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false)
+    (h : denseBasisJustified bound bnd facts fwits e = true) : (e.eval denv).val < bound := by
+  unfold denseBasisJustified at h
+  cases hL : denseLinearize e with
+  | none => rw [hL] at h; simp at h
+  | some L =>
+    rw [hL] at h
+    obtain ⟨n, heval, hb, hp'⟩ :=
+      denseBasisReduceGo_sound bound bnd facts fwits denv hbnd hfw basisFuel 0 L.norm h
+    haveI : NeZero p := ⟨by omega⟩
+    rw [denseLinearize_eval e L hL denv, ← DenseLinExpr.norm_eval, heval, ZMod.val_natCast,
+      Nat.mod_eq_of_lt (by omega)]
+    omega
+
 end ApcOptimizer.Dense
