@@ -135,7 +135,7 @@ theorem DenseConstraintSystem.dedup_denseCorrect {isInput : VarId → Bool}
     the `ofNative` transform ignores `facts`. Its `PassCorrect`-on-decode is discharged natively via
     `DensePassCorrect.lift` (through `ofNative`) on `dedup_denseCorrect`, transported along
     `dedupN_eq` — no commutation with the reference pass. -/
-def denseDedupPassNative : DenseVerifiedPassW p :=
+def denseDedupPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.ofNative
     (fun bs _ d => d.dedupN bs)
     (fun _ _ _ => [])

@@ -1,5 +1,4 @@
 import ApcOptimizer.Implementation.Dense.Adapter
-import ApcOptimizer.Implementation.OptimizerPasses.Dedup
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
@@ -7,20 +6,20 @@ set_option autoImplicit false
 /-! # Dense syntactic-duplicate removal (Task 3)
 
 The dense mirror of `OptimizerPasses/Dedup.lean`: drop structurally-duplicate algebraic constraints
-(`List.dedup`) and stateless bus interactions (keep-first, hash-bucketed), keeping the first
-occurrence. Unlike the eval-preserving folds, dedup *compares whole values structurally* (equality
-of `DenseExpr`/`BusInteraction (DenseExpr p)`), so its decode-commutation is **validity-gated**:
-`resolve` is injective only on valid ids, so two dense values are structurally equal iff their
-decodes are only when every leaf id is valid. The injectivity lemmas `decodeExpr_inj` /
-`decodeBI_inj` therefore carry coverage hypotheses, and the pass discharges them from the threaded
-coverage invariant.
+and stateless bus interactions (keep-first), keeping the first occurrence. Because dedup compares
+whole values structurally (equality of `DenseExpr`/`BusInteraction (DenseExpr p)`), it only shrinks
+the constraint/interaction sets — the satisfying set, the stateful-only side effects and
+`admissible` are all unchanged.
 
 Correctness rests on the exact structural comparison (`denseDedupStateless`, `List.dedup`); the
-hash-bucketed `denseDedupStatelessFast` — the VarId-based mirror of the spec's `dedupStatelessFast`
-— is proven equal to it (`denseDedupStatelessFast_eq`), so the pass runs the fast version yet
-inherits the slow version's proof, exactly as the spec pass does. The pass is built with
-`ofTransform`, inheriting `dedupPass`'s `PassCorrect`: the dense output decodes to exactly
-`(decode d).dedupFast bs`, the spec pass's output. -/
+hash-bucketed twins — `denseDedupStatelessFast` (interactions) and `denseDedupConstraintsFast`
+(constraints, via `HashedDedup.hashedDedup`) — are proven to return the *identical* lists
+(`denseDedupStatelessFast_eq`, `denseDedupConstraintsFast_eq`, both hash-agnostic), so the pass runs
+the fast versions (`DenseConstraintSystem.dedupN`) yet the proof is stated over the reference
+version. The **native** `DensePassCorrect` proof and the pass itself live in
+`Dense/DedupNativeProof.lean` (which imports `Dense/Bridge`); this module stays `Bridge`-free so its
+runtime defs and structural helpers can be reused by other dense modules
+(`DenseExpr.bHash`, `decodeExpr_inj`, `denseDedupStateless`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -81,71 +80,6 @@ theorem VarRegistry.decodeExpr_inj (reg : VarRegistry) :
           obtain ⟨ha1, hb1⟩ := DenseExpr.coveredBy_mul.mp hca
           obtain ⟨ha2, hb2⟩ := DenseExpr.coveredBy_mul.mp hcb
           rw [iha ha1 ha2 h.1, ihb hb1 hb2 h.2]
-
-/-- `decodeExpr` is injective on lists of covered dense expressions (elementwise). -/
-theorem VarRegistry.decodeExprs_inj (reg : VarRegistry) :
-    ∀ {l1 l2 : List (DenseExpr p)}, (∀ e ∈ l1, e.CoveredBy reg) → (∀ e ∈ l2, e.CoveredBy reg) →
-      l1.map reg.decodeExpr = l2.map reg.decodeExpr → l1 = l2 := by
-  intro l1
-  induction l1 with
-  | nil =>
-      intro l2 _ _ h
-      cases l2 with
-      | nil => rfl
-      | cons b r => simp at h
-  | cons a rest ih =>
-      intro l2 hc1 hc2 h
-      cases l2 with
-      | nil => simp at h
-      | cons b rest2 =>
-          simp only [List.map_cons, List.cons.injEq] at h
-          obtain ⟨hab, hrest⟩ := h
-          rw [reg.decodeExpr_inj (hc1 a (List.mem_cons_self ..)) (hc2 b (List.mem_cons_self ..)) hab,
-            ih (fun e he => hc1 e (List.mem_cons_of_mem _ he))
-              (fun e he => hc2 e (List.mem_cons_of_mem _ he)) hrest]
-
-/-- **`decodeBI` is injective on covered dense bus interactions.** -/
-theorem VarRegistry.decodeBI_inj (reg : VarRegistry) {a b : BusInteraction (DenseExpr p)}
-    (hca : denseBICovered reg a) (hcb : denseBICovered reg b)
-    (h : reg.decodeBI a = reg.decodeBI b) : a = b := by
-  obtain ⟨hma, hpa⟩ := hca
-  obtain ⟨hmb, hpb⟩ := hcb
-  simp only [VarRegistry.decodeBI, BusInteraction.mk.injEq] at h
-  obtain ⟨hbus, hmult, hpay⟩ := h
-  cases a with
-  | mk ba ma pa =>
-    cases b with
-    | mk bb mb pb =>
-      obtain rfl := hbus
-      obtain rfl := reg.decodeExpr_inj hma hmb hmult
-      obtain rfl := reg.decodeExprs_inj hpa hpb hpay
-      rfl
-
-/-! ## Dense algebraic dedup commutation (validity-gated) -/
-
-/-- **`List.dedup` commutes with `decodeExpr`** on a covered list: dedup-then-decode equals
-    decode-then-dedup, because `decodeExpr` is injective on the covered elements (so it neither
-    merges nor splits duplicates). -/
-theorem VarRegistry.map_dedup_decodeExpr (reg : VarRegistry) :
-    ∀ (l : List (DenseExpr p)), (∀ e ∈ l, e.CoveredBy reg) →
-      (l.dedup).map reg.decodeExpr = (l.map reg.decodeExpr).dedup := by
-  intro l
-  induction l with
-  | nil => intro _; rfl
-  | cons a rest ih =>
-      intro hc
-      have hca : a.CoveredBy reg := hc a (List.mem_cons_self ..)
-      have hcrest : ∀ e ∈ rest, e.CoveredBy reg := fun e he => hc e (List.mem_cons_of_mem _ he)
-      by_cases h : a ∈ rest
-      · rw [List.dedup_cons_of_mem h, List.map_cons,
-          List.dedup_cons_of_mem (List.mem_map.2 ⟨a, h, rfl⟩), ih hcrest]
-      · have hnm : reg.decodeExpr a ∉ rest.map reg.decodeExpr := by
-          intro hcon
-          rw [List.mem_map] at hcon
-          obtain ⟨e, he, heq⟩ := hcon
-          exact h (reg.decodeExpr_inj (hcrest e he) hca heq ▸ he)
-        rw [List.dedup_cons_of_notMem h, List.map_cons, List.map_cons,
-          List.dedup_cons_of_notMem hnm, ih hcrest]
 
 /-! ## Dense keep-first stateless dedup (reference version) -/
 
@@ -221,63 +155,6 @@ theorem denseDedupStateless_statefulFilter (bs : BusSemantics p) :
     · rw [List.filter_cons_of_neg (by simpa using h1), ih]
     · rw [List.filter_cons_of_neg (by simpa using h1),
           List.filter_cons_of_neg (by simpa using h1), ih]
-
-/-- **Stateless dedup commutes with decode** (validity-gated through `decodeBI_inj`): the dense
-    keep-first dedup, decoded, is the spec keep-first dedup on the decoded interactions, with the
-    seen-set decoded pointwise. -/
-theorem VarRegistry.denseDedupStateless_map (reg : VarRegistry) (bs : BusSemantics p) :
-    ∀ (l seen : List (BusInteraction (DenseExpr p))),
-      (∀ bi ∈ l, denseBICovered reg bi) → (∀ bi ∈ seen, denseBICovered reg bi) →
-      (denseDedupStateless bs seen l).map reg.decodeBI
-        = dedupStateless bs (seen.map reg.decodeBI) (l.map reg.decodeBI) := by
-  intro l
-  induction l with
-  | nil => intro seen _ _; rfl
-  | cons bi rest ih =>
-      intro seen hcl hcseen
-      have hcbi : denseBICovered reg bi := hcl bi (List.mem_cons_self ..)
-      have hcrest : ∀ b ∈ rest, denseBICovered reg b :=
-        fun b hb => hcl b (List.mem_cons_of_mem _ hb)
-      by_cases hst : bs.isStateful bi.busId = true
-      · have e1 : denseDedupStateless bs seen (bi :: rest)
-              = bi :: denseDedupStateless bs seen rest := by
-          rw [denseDedupStateless, if_pos hst]
-        have e2 : dedupStateless bs (seen.map reg.decodeBI) ((bi :: rest).map reg.decodeBI)
-              = reg.decodeBI bi
-                :: dedupStateless bs (seen.map reg.decodeBI) (rest.map reg.decodeBI) := by
-          rw [List.map_cons, dedupStateless,
-            if_pos (show bs.isStateful (reg.decodeBI bi).busId = true from hst)]
-        rw [e1, e2, List.map_cons, ih seen hcrest hcseen]
-      · by_cases hmem : bi ∈ seen
-        · have e1 : denseDedupStateless bs seen (bi :: rest)
-                = denseDedupStateless bs seen rest := by
-            rw [denseDedupStateless, if_neg hst, if_pos hmem]
-          have e2 : dedupStateless bs (seen.map reg.decodeBI) ((bi :: rest).map reg.decodeBI)
-                = dedupStateless bs (seen.map reg.decodeBI) (rest.map reg.decodeBI) := by
-            rw [List.map_cons, dedupStateless,
-              if_neg (show ¬ bs.isStateful (reg.decodeBI bi).busId = true from hst),
-              if_pos (List.mem_map.2 ⟨bi, hmem, rfl⟩)]
-          rw [e1, e2, ih seen hcrest hcseen]
-        · have hnm : reg.decodeBI bi ∉ seen.map reg.decodeBI := by
-            intro hcon
-            rw [List.mem_map] at hcon
-            obtain ⟨s, hs, hseq⟩ := hcon
-            exact hmem (reg.decodeBI_inj (hcseen s hs) hcbi hseq ▸ hs)
-          have hcseen' : ∀ b ∈ (bi :: seen), denseBICovered reg b := by
-            intro b hb
-            rcases List.mem_cons.mp hb with rfl | hb'
-            · exact hcbi
-            · exact hcseen b hb'
-          have e1 : denseDedupStateless bs seen (bi :: rest)
-                = bi :: denseDedupStateless bs (bi :: seen) rest := by
-            rw [denseDedupStateless, if_neg hst, if_neg hmem]
-          have e2 : dedupStateless bs (seen.map reg.decodeBI) ((bi :: rest).map reg.decodeBI)
-                = reg.decodeBI bi
-                  :: dedupStateless bs (reg.decodeBI bi :: seen.map reg.decodeBI)
-                      (rest.map reg.decodeBI) := by
-            rw [List.map_cons, dedupStateless,
-              if_neg (show ¬ bs.isStateful (reg.decodeBI bi).busId = true from hst), if_neg hnm]
-          rw [e1, e2, List.map_cons, ih (bi :: seen) hcrest hcseen', List.map_cons]
 
 /-! ## Hash-bucketed stateless dedup (VarId-based, mirrors `dedupStatelessFast`) -/
 
@@ -366,18 +243,6 @@ def DenseConstraintSystem.dedup (d : DenseConstraintSystem p) (bs : BusSemantics
   { algebraicConstraints := d.algebraicConstraints.dedup,
     busInteractions := denseDedupStateless bs [] d.busInteractions }
 
-/-- The deduplicated dense system, computed with the hash-bucketed stateless dedup. Equal to
-    `DenseConstraintSystem.dedup` (`dedupFast_eq`). -/
-def DenseConstraintSystem.dedupFast (d : DenseConstraintSystem p) (bs : BusSemantics p) :
-    DenseConstraintSystem p :=
-  { algebraicConstraints := d.algebraicConstraints.dedup,
-    busInteractions := denseDedupStatelessFast bs ∅ d.busInteractions }
-
-theorem DenseConstraintSystem.dedupFast_eq (d : DenseConstraintSystem p) (bs : BusSemantics p) :
-    d.dedupFast bs = d.dedup bs := by
-  simp only [DenseConstraintSystem.dedupFast, DenseConstraintSystem.dedup,
-    denseDedupStatelessFast_eq_nil]
-
 /-- Dedup only drops interactions and constraints, so it preserves coverage. -/
 theorem DenseConstraintSystem.dedup_covered {reg : VarRegistry} {d : DenseConstraintSystem p}
     {bs : BusSemantics p} (hc : d.CoveredBy reg) : (d.dedup bs).CoveredBy reg := by
@@ -409,39 +274,5 @@ theorem DenseConstraintSystem.dedupN_eq (d : DenseConstraintSystem p) (bs : BusS
 theorem DenseConstraintSystem.dedupN_covered {reg : VarRegistry} {d : DenseConstraintSystem p}
     {bs : BusSemantics p} (hc : d.CoveredBy reg) : (d.dedupN bs).CoveredBy reg := by
   rw [DenseConstraintSystem.dedupN_eq]; exact DenseConstraintSystem.dedup_covered hc
-
-/-- **The dedup commutes with decode** on a covered system: the dense deduplicated system decodes to
-    the spec deduplicated system of the decoded input. -/
-theorem VarRegistry.decodeCS_dedup (reg : VarRegistry) (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) (hc : d.CoveredBy reg) :
-    reg.decodeCS (d.dedup bs) = (reg.decodeCS d).dedup bs := by
-  obtain ⟨hac, hbi⟩ := hc
-  simp only [DenseConstraintSystem.dedup, ConstraintSystem.dedup, VarRegistry.decodeCS]
-  congr 1
-  · exact reg.map_dedup_decodeExpr d.algebraicConstraints hac
-  · have hmap := reg.denseDedupStateless_map bs d.busInteractions [] hbi (by intro bi hbi; simp at hbi)
-    simpa using hmap
-
-/-! ## The dense dedup pass -/
-
-/-- The dense duplicate-removal pass (runs the hash-bucketed dedup). Its `PassCorrect` is inherited
-    from the spec `dedupPass` — the dense output decodes to exactly `(decode d).dedupFast bs`, the
-    spec pass's output. -/
-def denseDedupPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofTransform
-    (fun bs d => d.dedupFast bs)
-    dedupPass.withFacts
-    (fun reg bs d hc => by
-      show (d.dedupFast bs).CoveredBy reg
-      rw [DenseConstraintSystem.dedupFast_eq]
-      exact DenseConstraintSystem.dedup_covered hc)
-    (fun reg bs facts d hc => by
-      show reg.decodeCS (d.dedupFast bs) = (dedupPass.withFacts (reg.decodeCS d) bs facts).out
-      have hR : (dedupPass.withFacts (reg.decodeCS d) bs facts).out = (reg.decodeCS d).dedup bs := by
-        show (reg.decodeCS d).dedupFast bs = (reg.decodeCS d).dedup bs
-        exact ConstraintSystem.dedupFast_eq _ _
-      rw [hR, DenseConstraintSystem.dedupFast_eq]
-      exact reg.decodeCS_dedup bs d hc)
-    (fun _ _ _ => rfl)
 
 end ApcOptimizer.Dense
