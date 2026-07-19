@@ -328,18 +328,22 @@ theorem filterMap_congr' {β γ : Type _} {f g : β → Option γ} (l : List β)
     | none => rw [List.filterMap_cons_none hfa, List.filterMap_cons_none (ha ▸ hfa), hr]
     | some b => rw [List.filterMap_cons_some hfa, List.filterMap_cons_some (ha ▸ hfa), hr]
 
-/-- **`coveredIdx` equals the plain filter** whenever every `Q`-item shares a variable with `xs`.
-    All the fold/sort machinery collapses: the index gathers every `Q`-position (completeness), the
-    `HashSet` dedup and `mergeSort` reorder them into ascending (i.e. original list) order, and the
-    per-position `Q` re-check reproduces `items.filter Q` exactly. -/
-theorem coveredIdx_eq_filter (varsOf : α → List Variable) (items : List α)
+/-- **`coveredIdx` equals the plain filter for any index whose candidate set is complete** —
+    every in-range `Q`-position must be a candidate of `xs`; *extra* (stale or spurious) candidate
+    positions are harmless because every candidate is re-checked against the in-range bound and
+    `Q`. All the fold/sort machinery collapses: the `HashSet` dedup and `mergeSort` reorder the
+    candidates into ascending (i.e. original list) order, and the per-position `Q` re-check
+    reproduces `items.filter Q` exactly. This is what lets a pass keep one index across in-place
+    (order- and length-preserving, variable-shrinking) system rewrites: completeness survives such
+    rewrites, so no rebuild is needed. `coveredIdx_eq_filter` below is the fresh-`build` instance. -/
+theorem coveredIdx_eq_filter_of_complete (idx : CovIndex) (items : List α)
     (Q : α → Bool) (xs : List Variable)
     (hcomplete : ∀ (i : Nat) (hi : i < items.length),
-      Q items[i] = true → ∃ v ∈ varsOf items[i], v ∈ xs) :
-    coveredIdx (build varsOf items) items.toArray Q xs = items.filter Q := by
+      Q items[i] = true → i ∈ candidates idx xs) :
+    coveredIdx idx items.toArray Q xs = items.filter Q := by
   rw [coveredIdx]
   simp only [List.size_toArray, List.getElem_toArray]
-  set cand := candidates (build varsOf items) xs with hcand
+  set cand := candidates idx xs with hcand
   set gI : Nat → Option α :=
     (fun i => if h : i < items.length then (if Q items[i] then some items[i] else none) else none)
     with hgI
@@ -358,16 +362,8 @@ theorem coveredIdx_eq_filter (varsOf : α → List Variable) (items : List α)
   -- (F3) the sorted list is `≤`-sorted
   have F3 : sortedL.Pairwise (· ≤ ·) := by
     rw [hsortedL]; exact List.sortedLE_mergeSort.pairwise
-  -- (F4) completeness: every in-range `Q`-position is a candidate
-  have F4 : ∀ (i : Nat) (hi : i < items.length), Q items[i] = true → i ∈ cand := by
-    intro i hi hQ
-    obtain ⟨v, hvvars, hvxs⟩ := hcomplete i hi hQ
-    have hz : (items.zipIdx)[i]? = some (items[i], i) := by
-      rw [List.getElem?_zipIdx, List.getElem?_eq_getElem hi]; simp
-    have hmem : (items[i], i) ∈ items.zipIdx := List.mem_of_getElem? hz
-    have hbucket := buildStep_bucket_complete varsOf items.zipIdx items[i] i hmem v hvvars
-    rw [hcand]
-    exact mem_candidates (build varsOf items) xs v i hvxs hbucket
+  -- (F4) completeness: every in-range `Q`-position is a candidate (the hypothesis)
+  have F4 : ∀ (i : Nat) (hi : i < items.length), Q items[i] = true → i ∈ cand := hcomplete
   -- the keep-predicate coincides with `gI`'s definedness
   set keepB : Nat → Bool := (fun i => (gI i).isSome) with hkeepB
   have hkeep_lt : ∀ i, keepB i = true → i < items.length := by
@@ -433,5 +429,28 @@ theorem coveredIdx_eq_filter (varsOf : α → List Variable) (items : List α)
     _ = ((List.range items.length).filter keepB).filterMap gI := by rw [L2]
     _ = (List.range items.length).filterMap gI := (L1 _).symm
     _ = items.filter Q := claim1
+
+/-- **Completeness of a fresh `build`**: every item position is bucketed under each variable
+    `varsOf` yields for it. -/
+theorem build_complete (varsOf : α → List Variable) (items : List α)
+    (i : Nat) (hi : i < items.length) (v : Variable) (hv : v ∈ varsOf items[i]) :
+    i ∈ (build varsOf items).buckets.getD v [] := by
+  have hz : (items.zipIdx)[i]? = some (items[i], i) := by
+    rw [List.getElem?_zipIdx, List.getElem?_eq_getElem hi]; simp
+  exact buildStep_bucket_complete varsOf items.zipIdx items[i] i (List.mem_of_getElem? hz) v hv
+
+/-- **`coveredIdx` of a fresh `build` equals the plain filter** whenever every `Q`-item shares a
+    variable with `xs`: the build is complete (`build_complete`), so every `Q`-position is a
+    candidate. -/
+theorem coveredIdx_eq_filter (varsOf : α → List Variable) (items : List α)
+    (Q : α → Bool) (xs : List Variable)
+    (hcomplete : ∀ (i : Nat) (hi : i < items.length),
+      Q items[i] = true → ∃ v ∈ varsOf items[i], v ∈ xs) :
+    coveredIdx (build varsOf items) items.toArray Q xs = items.filter Q := by
+  refine coveredIdx_eq_filter_of_complete (build varsOf items) items Q xs ?_
+  intro i hi hQ
+  obtain ⟨v, hvvars, hvxs⟩ := hcomplete i hi hQ
+  exact mem_candidates (build varsOf items) xs v i hvxs
+    (build_complete varsOf items i hi v hvvars)
 
 end CoveredIndex

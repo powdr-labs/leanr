@@ -4061,3 +4061,40 @@ figure does not translate to target-level reuse). domainBatch's remaining cost i
 first-time enumeration; its levers are effectiveness-side (quadratic-root algebra replacing
 enumeration classes). Instrumentation reverted; no behavioral change. **Worked: n/a
 (measurement; saved the refactor).**
+
+### 109. Runtime: domainFold order-preserving in-place fold — the per-accept rebuild is gone (keccak domainFold 47 s → 10.4 s)
+
+The R3 leftover from entry 107: 482 accepted folds on keccak each paid a full `foldOut` map
+(an `anyVarIn` gate walk over every expression node in the system) plus a constraint-side
+index rebuild (`CoveredIndex.build` over all ~28k constraints), because the old `foldOut`
+*reordered* constraints (rewritten-uncovered ++ covered-verbatim), invalidating bucket
+positions. This entry removes the reorder and, with it, every per-accept full-system cost:
+
+- **`foldOut` is now order-preserving**: each constraint is rewritten (or, if covered, kept
+  verbatim) **in place** — one `map` over the original list. Positions never move, and
+  `foldRewrite` only ever shrinks a variable set, so the inverted index survives an accept.
+- **`FoldIdx` carries bucket-completeness invariants instead of build-equalities** (`hidx`,
+  `hbis`: every item position is bucketed under each of its variables). Stale supersets are
+  fine — every consumer re-checks candidates — and completeness is monotone under in-place
+  variable-shrinking rewrites, so `FoldIdx.refresh` keeps both bucket maps **with no rebuild**
+  (only the O(n)-pointer item arrays are re-materialized). `CoveredIndex.coveredIdx_eq_filter`
+  is generalized to `coveredIdx_eq_filter_of_complete` (any index whose candidate set is
+  complete), which the covered-set equality `coveredCsIdx_eq` now consumes.
+- **The fold itself is computed sparsely** (`foldOutIdx`, proven equal to `foldOut` via the
+  completeness invariants): only bucketed candidate positions are walked; every other item is
+  passed through by position with one O(1) `Nat`-set probe — no expression walk at all.
+- `foldRewrite`'s gate drops the `hasConstFoldableNode` arm (and `FoldIdx` its cf lists): items
+  sharing no variable with the group are never rewritten now; purely variable-free compound
+  nodes are the constant-fold pass's job (they only arise transiently mid-cycle, and folding
+  them is size-neutral so it never extended the fixpoint).
+
+**Not byte-identical** (the old fold moved covered constraints to the end of the list; the new
+one leaves them in place), so this is validated by effectiveness counts, not export diffs:
+keccak reproduces **identical per-cycle sizes at every one of the 10 cycles** and the identical
+final circuit (2021 vars / 2022 bus / 186 constraints); openvm-eth apc_001 and apc_100
+reproduce identical counts. CI matrix pending for the full five-set per-case comparison.
+
+**Measured** (this container, serial): keccak `profile` total 215 s → 172 s, domainFold
+**47.0 s → 10.4 s (0.22×)**. Remaining keccak: domainBatch 47.9 s, reencode 43.2 s, flagFold
+16.2 s, busUnify 12.6 s, domainFold 10.4 s, busPairCancel 8.2 s, rootPairUnify 8.2 s.
+**Worked: yes.**
