@@ -4261,3 +4261,16 @@ super-linear terms that mattered for the openvm-SHA scale (~8× keccak): the rem
 (domainBatch enumeration, flagFold's certified sweeps) are linear-ish per cycle or parallel.
 Remaining runtime ideas live in the rewritten R-sections of `docs/ideas.md` (R8 busPairCancel
 sweep, the hash-order leak hunt, reencode/domainFold direct-path gathers at mid scale).
+
+### 117. Runtime follow-up: gate domainBatch's fan-out on system size
+
+The full CI matrix for the session (all sizes identical on all five sets) showed the runtime
+rows at keccak **−52 %** and wasm-eth **−25 %**, but sp1/rsp at **+15 %** — the effectiveness
+matrix runs whole cases in parallel, and entry 114's unconditional per-target fan-out
+oversubscribes the runner on the many-small-cases sets (spawn overhead + scheduler contention
+per case, multiplied by 100 parallel cases). `collectForced` now fans out only when the system
+has ≥ 8192 constraints (the established big-case gate): below it the sequential fold is
+byte-for-byte the same computation without spawns, so sp1/rsp and openvm-eth behave exactly as
+before entry 114 while keccak/SHA-scale invocations keep the parallel win (keccak's ≥8192
+cycles carry ~90 % of its domainBatch cost). keccak and sp1 apc_030 exports byte-identical;
+keccak total steady at ~111 s locally. **Worked: yes (CI re-run pending).**
