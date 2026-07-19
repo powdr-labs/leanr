@@ -203,16 +203,22 @@ theorem denseMem_candidates (idx : DenseCovIndex) (xs : List VarId) (v : VarId) 
     (hv : v ∈ xs) (hi : i ∈ idx.buckets.getD v []) : i ∈ denseCandidates idx xs :=
   List.mem_append_left _ (List.mem_flatMap.2 ⟨v, hv, hi⟩)
 
-/-- **`denseCoveredIdx` equals the plain filter** whenever every `Q`-item shares a variable with
-    `xs` (mirrors `CoveredIndex.coveredIdx_eq_filter`). -/
-theorem denseCoveredIdx_eq_filter (varsOf : α → List VarId) (items : List α)
+/-- **`denseCoveredIdx` equals the plain filter for any index whose candidate set is complete** —
+    every in-range `Q`-position must be a dense candidate of `xs`; *extra* (stale or spurious)
+    candidate positions are harmless because every candidate is re-checked against the in-range
+    bound and `Q`. All the fold/sort machinery collapses: the `HashSet` dedup and `mergeSort`
+    reorder the candidates into ascending (i.e. original list) order, and the per-position `Q`
+    re-check reproduces `items.filter Q` exactly. Mirrors
+    `CoveredIndex.coveredIdx_eq_filter_of_complete`; `denseCoveredIdx_eq_filter` below is the
+    fresh-`build` instance. -/
+theorem denseCoveredIdx_eq_filter_of_complete (idx : DenseCovIndex) (items : List α)
     (Q : α → Bool) (xs : List VarId)
     (hcomplete : ∀ (i : Nat) (hi : i < items.length),
-      Q items[i] = true → ∃ v ∈ varsOf items[i], v ∈ xs) :
-    denseCoveredIdx (denseCovBuild varsOf items) items.toArray Q xs = items.filter Q := by
+      Q items[i] = true → i ∈ denseCandidates idx xs) :
+    denseCoveredIdx idx items.toArray Q xs = items.filter Q := by
   rw [denseCoveredIdx]
   simp only [List.size_toArray, List.getElem_toArray]
-  set cand := denseCandidates (denseCovBuild varsOf items) xs with hcand
+  set cand := denseCandidates idx xs with hcand
   set gI : Nat → Option α :=
     (fun i => if h : i < items.length then (if Q items[i] then some items[i] else none) else none)
     with hgI
@@ -228,15 +234,7 @@ theorem denseCoveredIdx_eq_filter (varsOf : α → List VarId) (items : List α)
     rw [hsortedL]; exact (List.mergeSort_perm _ _).nodup_iff.mpr hnodupUniq
   have F3 : sortedL.Pairwise (· ≤ ·) := by
     rw [hsortedL]; exact List.sortedLE_mergeSort.pairwise
-  have F4 : ∀ (i : Nat) (hi : i < items.length), Q items[i] = true → i ∈ cand := by
-    intro i hi hQ
-    obtain ⟨v, hvvars, hvxs⟩ := hcomplete i hi hQ
-    have hz : (items.zipIdx)[i]? = some (items[i], i) := by
-      rw [List.getElem?_zipIdx, List.getElem?_eq_getElem hi]; simp
-    have hmem : (items[i], i) ∈ items.zipIdx := List.mem_of_getElem? hz
-    have hbucket := denseBuildStep_bucket_complete varsOf items.zipIdx items[i] i hmem v hvvars
-    rw [hcand]
-    exact denseMem_candidates (denseCovBuild varsOf items) xs v i hvxs hbucket
+  have F4 : ∀ (i : Nat) (hi : i < items.length), Q items[i] = true → i ∈ cand := hcomplete
   set keepB : Nat → Bool := (fun i => (gI i).isSome) with hkeepB
   have hkeep_lt : ∀ i, keepB i = true → i < items.length := by
     intro i hk
@@ -298,6 +296,29 @@ theorem denseCoveredIdx_eq_filter (varsOf : α → List VarId) (items : List α)
     _ = ((List.range items.length).filter keepB).filterMap gI := by rw [L2]
     _ = (List.range items.length).filterMap gI := (L1 _).symm
     _ = items.filter Q := claim1
+
+/-- **Completeness of a fresh dense `build`**: every item position is bucketed under each variable
+    `varsOf` yields for it (mirrors `CoveredIndex.build_complete`). -/
+theorem denseBuild_complete (varsOf : α → List VarId) (items : List α)
+    (i : Nat) (hi : i < items.length) (v : VarId) (hv : v ∈ varsOf items[i]) :
+    i ∈ (denseCovBuild varsOf items).buckets.getD v [] := by
+  have hz : (items.zipIdx)[i]? = some (items[i], i) := by
+    rw [List.getElem?_zipIdx, List.getElem?_eq_getElem hi]; simp
+  exact denseBuildStep_bucket_complete varsOf items.zipIdx items[i] i (List.mem_of_getElem? hz) v hv
+
+/-- **`denseCoveredIdx` of a fresh `build` equals the plain filter** whenever every `Q`-item shares
+    a variable with `xs`: the build is complete (`denseBuild_complete`), so every `Q`-position is a
+    candidate (mirrors `CoveredIndex.coveredIdx_eq_filter`). -/
+theorem denseCoveredIdx_eq_filter (varsOf : α → List VarId) (items : List α)
+    (Q : α → Bool) (xs : List VarId)
+    (hcomplete : ∀ (i : Nat) (hi : i < items.length),
+      Q items[i] = true → ∃ v ∈ varsOf items[i], v ∈ xs) :
+    denseCoveredIdx (denseCovBuild varsOf items) items.toArray Q xs = items.filter Q := by
+  refine denseCoveredIdx_eq_filter_of_complete (denseCovBuild varsOf items) items Q xs ?_
+  intro i hi hQ
+  obtain ⟨v, hvvars, hvxs⟩ := hcomplete i hi hQ
+  exact denseMem_candidates (denseCovBuild varsOf items) xs v i hvxs
+    (denseBuild_complete varsOf items i hi v hvvars)
 
 /-! ## The dense fold index
 
