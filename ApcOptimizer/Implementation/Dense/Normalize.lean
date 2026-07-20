@@ -5,19 +5,26 @@ import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 
 set_option autoImplicit false
 
-/-! # Dense affine normalization (Task 3)
+/-! # Dense affine normalization (Task 3, native proof)
 
 The dense mirror of `Expression.normalize` (`OptimizerPasses/Normalize.lean`): replace every maximal
 affine subexpression by its **merged** normal form (`denseLinearize`, combine coefficients of equal
-`VarId`s, drop zeros, rebuild via `DenseLinExpr.toExpr`). Unlike the eval-preserving folds,
-`mergeTerms`/`addCoeff` *compare variables* (`if v' = v`), so the decode-commutation is
-**validity-gated**: `resolve` is injective only on valid ids, so `denseMergeTerms` mapped through
-`resolve` equals the spec `mergeTerms` of the decoded terms only when every term's `VarId` is valid.
-The commutation lemma `decodeLin_norm` therefore carries a validity hypothesis, discharged for the
-pass from the threaded coverage invariant (via `denseLinearize_vars`).
+`VarId`s, drop zeros, rebuild via `DenseLinExpr.toExpr`).
 
-The pass is built with `ofTransform`, inheriting `normalizePass`'s `PassCorrect`: the dense output
-decodes to exactly `(decode d).mapExpr Expression.normalize`, the spec pass's output. -/
+The pass (`denseNormalizePass`) computes through the fused walk `denseNormalizeFused` — one bottom-up
+traversal returning both the normalized expression and the node's linear form, killing
+`Expression.normalize`'s O(size × depth) `denseLinearize` re-walks (mirrors #165's spec
+`normalizeFused`). Its correctness is proved **natively** as a `DensePassCorrect` over
+`VarId → ZMod p` environments (the walk is eval-preserving and introduces no variables) and lifted to
+the spec `PassCorrect` once, at the pipeline edge, by `DenseVerifiedPassW.ofNative` — no dependency on
+the reference `normalizePass`. Mirrors the native `denseConstantFoldPass` (`Dense/ExprOps.lean`).
+
+The validity-gated decode-commutation lemmas at the end (`decodeLin_norm`, `decodeExpr_normalize`,
+and their `denseMergeTerms`/`addCoeff` supporting lemmas) are **not** used by this pass; they remain
+as shared commutation machinery consumed by other passes (CarryBranch, AddrDiseq, DomainBatch,
+ZeroRegister, Gauss). `resolve` is injective only on valid ids, so `denseMergeTerms` mapped through
+`resolve` equals the spec `mergeTerms` of the decoded terms only when every term's `VarId` is valid;
+those lemmas therefore carry a validity hypothesis, discharged from a coverage invariant. -/
 
 namespace ApcOptimizer.Dense
 
@@ -350,8 +357,8 @@ and lifted to the spec `PassCorrect` by `DenseVerifiedPassW.ofNative` — no dep
 `normalizePass`. Mirrors `denseConstantFoldPass` (`Dense/ExprOps.lean`), the closest native mapExpr
 precedent. -/
 
-/-- The dense affine-normalization pass, native proof. (Wired in as `denseNormalizePass` in N2.) -/
-def denseNormalizePassN : DenseVerifiedPassW p :=
+/-- The dense affine-normalization pass, native proof (wired into `normalize1`/`normalize2`). -/
+def denseNormalizePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.ofNative
     (fun _ _ d => d.mapExpr (fun e => (denseNormalizeFused e).1))
     (fun _ _ _ => [])
@@ -498,56 +505,5 @@ theorem VarRegistry.decodeExpr_normalize (reg : VarRegistry) (e : DenseExpr p) :
       | some l =>
           simp only [Option.map_some]
           rw [reg.decodeLin_toExpr l.norm, reg.decodeLin_norm l (hvalid l hP)]
-
-/-! ## Coverage-aware `mapExpr` commutation -/
-
-/-- Coverage-aware bus-interaction map commutation: if `g` decodes to `g'` on covered expressions,
-    the mapped-then-decoded interaction is the decoded-then-mapped one. -/
-theorem VarRegistry.decodeBI_mapExpr_covered (reg : VarRegistry)
-    {g : DenseExpr p → DenseExpr p} {g' : Expression p → Expression p}
-    (hg : ∀ e, e.CoveredBy reg → reg.decodeExpr (g e) = g' (reg.decodeExpr e))
-    (bi : BusInteraction (DenseExpr p)) (hc : denseBICovered reg bi) :
-    reg.decodeBI { bi with multiplicity := g bi.multiplicity, payload := bi.payload.map g }
-      = (reg.decodeBI bi).mapExpr g' := by
-  obtain ⟨hm, hp⟩ := hc
-  simp only [VarRegistry.decodeBI, BusInteraction.mapExpr, List.map_map, Function.comp_def,
-    hg bi.multiplicity hm]
-  congr 1
-  exact List.map_congr_left (fun e he => hg e (hp e he))
-
-/-- **Coverage-aware `mapExpr` commutation.** If `g` decodes to `g'` on *covered* expressions, the
-    dense map decodes to the spec map. Mirrors `decodeCS_mapExpr`, threading coverage. -/
-theorem VarRegistry.decodeCS_mapExpr_covered (reg : VarRegistry)
-    {g : DenseExpr p → DenseExpr p} {g' : Expression p → Expression p}
-    (hg : ∀ e, e.CoveredBy reg → reg.decodeExpr (g e) = g' (reg.decodeExpr e))
-    (d : DenseConstraintSystem p) (hc : d.CoveredBy reg) :
-    reg.decodeCS (d.mapExpr g) = (reg.decodeCS d).mapExpr g' := by
-  obtain ⟨hac, hbi⟩ := hc
-  simp only [DenseConstraintSystem.mapExpr, VarRegistry.decodeCS, ConstraintSystem.mapExpr,
-    List.map_map, Function.comp_def]
-  congr 1
-  · exact List.map_congr_left (fun e he => hg e (hac e he))
-  · exact List.map_congr_left (fun bi hbimem => reg.decodeBI_mapExpr_covered hg bi (hbi bi hbimem))
-
-/-! ## The dense normalization pass -/
-
-/-- The dense affine-normalization pass. Its `PassCorrect` is inherited from the spec `normalizePass`
-    — the dense output decodes to exactly `(decode d).mapExpr Expression.normalize`. -/
-def denseNormalizePass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofTransform
-    (fun _ d => d.mapExpr DenseExpr.normalize)
-    normalizePass.withFacts
-    (fun _ _ _ hc =>
-      DenseConstraintSystem.mapExpr_covered
-        (fun e i hi => DenseExpr.normalize_vars e i hi) hc)
-    (fun reg _ _ d hc =>
-      -- #165 changed `normalizePass`'s output from `mapExpr Expression.normalize` to
-      -- `mapExpr (fun e => (normalizeFused e).1)`; the two functions are provably equal via the
-      -- new `normalizeFused_fst` lemma, so we bridge the commutation target through it. The dense
-      -- runtime transform stays `DenseExpr.normalize` (old algorithm, unchanged).
-      reg.decodeCS_mapExpr_covered (g' := fun e => (normalizeFused e).1)
-        (fun e he => (reg.decodeExpr_normalize e he).trans
-          (normalizeFused_fst (reg.decodeExpr e)).symm) d hc)
-    (fun _ _ _ => rfl)
 
 end ApcOptimizer.Dense
