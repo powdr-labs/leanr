@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.Dense.RootPairUnifyNative
-import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancel
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BusPairCancel
 
 set_option autoImplicit false
 

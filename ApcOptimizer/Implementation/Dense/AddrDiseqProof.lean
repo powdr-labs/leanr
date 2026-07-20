@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.Dense.AddrDiseq
 import ApcOptimizer.Implementation.Dense.Bridge
-import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseq
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.AddrDiseq
 
 set_option autoImplicit false
 

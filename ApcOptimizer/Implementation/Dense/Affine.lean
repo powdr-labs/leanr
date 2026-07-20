@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.Dense.Subst
-import ApcOptimizer.Implementation.OptimizerPasses.Affine
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Affine
 
 set_option autoImplicit false
 

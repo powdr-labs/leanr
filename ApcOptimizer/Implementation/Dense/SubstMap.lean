@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.Dense.Measure
-import ApcOptimizer.Implementation.OptimizerPasses.Gauss
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Gauss
 
 set_option autoImplicit false
 

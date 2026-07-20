@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.Subst
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
 import ApcOptimizer.Utils.Size
 import Mathlib.Tactic.LinearCombination
 import Mathlib.Tactic.Ring

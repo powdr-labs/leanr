@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
-import ApcOptimizer.Implementation.OptimizerPasses.FlagFold
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.FlagFold
 
 set_option autoImplicit false
 

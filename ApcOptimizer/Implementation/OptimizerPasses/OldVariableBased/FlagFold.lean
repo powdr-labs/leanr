@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.FlagUnify
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false

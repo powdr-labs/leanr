@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.Dense.Affine
 import ApcOptimizer.Implementation.Dense.DropPasses
-import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
 
 set_option autoImplicit false

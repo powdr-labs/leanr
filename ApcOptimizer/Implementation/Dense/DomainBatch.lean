@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.DomainBatch
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DomainBatch
 import ApcOptimizer.Implementation.Dense.DigitFold
 import ApcOptimizer.Implementation.Dense.Normalize
 import ApcOptimizer.Implementation.Dense.Gauss

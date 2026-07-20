@@ -2,7 +2,7 @@ import ApcOptimizer.Implementation.Dense.RootPairUnifyNative
 import ApcOptimizer.Implementation.Dense.AddrDiseqProof
 import ApcOptimizer.Implementation.Dense.DomainBatchNativeProof
 import ApcOptimizer.Implementation.Dense.DomainFoldNativeProof
-import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.RootPairUnify
 
 set_option autoImplicit false
 

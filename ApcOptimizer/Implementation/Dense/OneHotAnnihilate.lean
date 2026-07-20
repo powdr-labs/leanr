@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.Dense.Dedup
 import ApcOptimizer.Implementation.Dense.DigitFold
-import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.OneHotAnnihilate
 
 set_option autoImplicit false
 

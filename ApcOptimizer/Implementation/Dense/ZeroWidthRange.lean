@@ -1,7 +1,7 @@
 import ApcOptimizer.Implementation.Dense.DigitFold
 import ApcOptimizer.Implementation.Dense.OneHotAnnihilate
 import ApcOptimizer.Implementation.Dense.Rewrite
-import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.ZeroWidthRange
 
 set_option autoImplicit false
 

@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
-import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseq
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.AddrDiseq
 import ApcOptimizer.Implementation.MemoryBusDrop
 import ApcOptimizer.MemoryBus
 

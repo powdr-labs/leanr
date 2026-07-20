@@ -1,7 +1,7 @@
 import ApcOptimizer.Implementation.Dense.DigitFold
 import ApcOptimizer.Implementation.Dense.Normalize
 import ApcOptimizer.Implementation.Dense.OneHotAnnihilate
-import ApcOptimizer.Implementation.OptimizerPasses.CarryBranch
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.CarryBranch
 
 set_option autoImplicit false
 

@@ -1,7 +1,7 @@
-import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BusUnify
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
-import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.BytePack
 import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 import ApcOptimizer.Implementation.MemoryBusDrop

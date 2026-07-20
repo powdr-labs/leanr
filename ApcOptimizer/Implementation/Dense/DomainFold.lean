@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DomainFold
 import ApcOptimizer.Implementation.Dense.DomainBatch
 import ApcOptimizer.Implementation.Dense.OneHotAnnihilate
 

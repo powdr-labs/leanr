@@ -1,7 +1,7 @@
 import ApcOptimizer.Implementation.Dense.Affine
 import ApcOptimizer.Implementation.Dense.SubstMap
 import ApcOptimizer.Implementation.Dense.Normalize
-import ApcOptimizer.Implementation.OptimizerPasses.Gauss
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Gauss
 
 set_option autoImplicit false
 

@@ -1,5 +1,5 @@
-import ApcOptimizer.Implementation.OptimizerPasses.Gauss
-import ApcOptimizer.Implementation.OptimizerPasses.Normalize
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Gauss
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
 import ApcOptimizer.Utils.Size

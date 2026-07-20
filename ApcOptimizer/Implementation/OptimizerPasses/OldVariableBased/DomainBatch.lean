@@ -1,8 +1,8 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
-import ApcOptimizer.Implementation.OptimizerPasses.Gauss
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.CoveredIndex
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
-import ApcOptimizer.Implementation.OptimizerPasses.Dedup
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Dedup
 
 set_option autoImplicit false
 

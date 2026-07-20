@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
-import ApcOptimizer.Implementation.OptimizerPasses.Subst
-import ApcOptimizer.Implementation.OptimizerPasses.Affine
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
 import ApcOptimizer.Implementation.OptimizerPasses.BytePack
 

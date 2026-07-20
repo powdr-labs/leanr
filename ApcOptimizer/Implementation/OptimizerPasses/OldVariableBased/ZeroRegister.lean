@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BusUnify
 import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
 
 set_option autoImplicit false

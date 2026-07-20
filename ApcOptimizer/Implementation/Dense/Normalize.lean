@@ -1,7 +1,7 @@
 import ApcOptimizer.Implementation.Dense.Affine
 import ApcOptimizer.Implementation.Dense.ExprOps
 import ApcOptimizer.Implementation.Dense.Adapter
-import ApcOptimizer.Implementation.OptimizerPasses.Normalize
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Normalize
 
 set_option autoImplicit false
 

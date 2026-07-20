@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.Dense.Measure
-import ApcOptimizer.Implementation.OptimizerPasses.Subst
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
 
 set_option autoImplicit false
 

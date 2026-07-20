@@ -1,5 +1,5 @@
-import ApcOptimizer.Implementation.OptimizerPasses.Affine
-import ApcOptimizer.Implementation.OptimizerPasses.Rewrite
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Affine
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Rewrite
 
 set_option autoImplicit false
 

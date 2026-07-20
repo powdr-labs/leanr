@@ -1,7 +1,7 @@
-import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
-import ApcOptimizer.Implementation.OptimizerPasses.Subst
-import ApcOptimizer.Implementation.OptimizerPasses.Affine
-import ApcOptimizer.Implementation.OptimizerPasses.Normalize
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubstMap
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Affine
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Normalize
 
 set_option autoImplicit false
 
