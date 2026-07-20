@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.Dense.AddrDiseq
 import ApcOptimizer.Implementation.Dense.DomainFold
+import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
@@ -198,17 +199,34 @@ structure DenseRPSeen (p : ℕ) where
   key : ZMod p × List (VarId × ZMod p) × ZMod p × ZMod p
 
 /-- The two-root candidates of one constraint, with their matching keys. Candidates whose root gap
-    `g = k⁻¹·δ` is tiny are dropped up front (see the spec doc: never-unifiable, expensive-to-reject
-    booleanity candidates). Mirrors `rpCandidates`. -/
+    `g = k⁻¹·δ` is tiny are dropped up front: the pair condition `B ≤ min(g.val, p − g.val)` can
+    never hold for a useful bound `B`, and booleanity constraints `b(b−1) = 0` would otherwise make
+    every boolean variable a (never-unifiable, expensive-to-reject) candidate. Mirrors `rpCandidates`
+    (`RootPairUnify.lean:525-546`, the linearize-once hoist added there over the old per-variable
+    `twoRootOf?` re-walk shape this def used to have — `denseTwoRootOf?` still exists unchanged for
+    its other consumers). -/
 def denseRpCandidates (c : DenseExpr p) :
     List (VarId × (ZMod p × List (VarId × ZMod p) × ZMod p × ZMod p)) :=
-  c.vars.eraseDups.filterMap (fun x =>
-    match denseTwoRootOf? c x with
-    | some (k, A, δ) =>
-      if 256 ≤ min (k⁻¹ * δ).val (p - (k⁻¹ * δ).val) then
-        some (x, (k, A.terms, A.const, δ))
-      else none
-    | none => none)
+  -- The two factors are linearized **once**, not once per candidate variable (`denseTwoRootOf?`
+  -- would re-walk both factor trees per variable); each `x` then reads its coefficient and x-free
+  -- part off the shared linear forms — exactly `denseTwoRootOf?`'s values, so the candidate list
+  -- (and the pass output) is unchanged.
+  match c with
+  | .mul f1 f2 =>
+    (match denseLinearize f1, denseLinearize f2 with
+     | some l1, some l2 =>
+       (HashedDedup.hashedEraseDups (hash ·) c.vars).filterMap (fun x =>
+         let k := l1.coeff x
+         let A := (l1.others x).norm
+         let A2 := (l2.others x).norm
+         if k ≠ 0 ∧ l2.coeff x = k ∧ A2.terms = A.terms then
+           let δ := A2.const - A.const
+           if 256 ≤ min (k⁻¹ * δ).val (p - (k⁻¹ * δ).val) then
+             some (x, (k, A.terms, A.const, δ))
+           else none
+         else none)
+     | _, _ => [])
+  | _ => []
 
 /-- Hash of a candidate key, used to bucket the `seen` accumulator (bucketing never hides a twin;
     the exact `key == key'` check inside the scan separates any hash collision). Mirrors
