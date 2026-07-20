@@ -42,6 +42,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
 import ApcOptimizer.Implementation.OptimizerPasses.FlagUnifyProof
 import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDrops
 import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDropsProof
+import ApcOptimizer.Implementation.OptimizerPasses.DropPassesProof
 import ApcOptimizer.Implementation.OptimizerPasses.FxSubst
 import ApcOptimizer.Implementation.OptimizerPasses.FxSubstProof
 import ApcOptimizer.Implementation.OptimizerPasses.BoxRewrite
