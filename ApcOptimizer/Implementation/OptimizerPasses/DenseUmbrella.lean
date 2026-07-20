@@ -26,6 +26,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.ZeroRegister
 import ApcOptimizer.Implementation.OptimizerPasses.CarryBranch
 import ApcOptimizer.Implementation.OptimizerPasses.CarryBranchProof
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
+import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRangeProof
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFoldRuntime
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFoldProof
