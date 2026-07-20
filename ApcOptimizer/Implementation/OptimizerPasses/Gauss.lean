@@ -1515,29 +1515,8 @@ theorem denseGaussElim_corr (reg : VarRegistry) (bs : BusSemantics p) (d : Dense
   · intro c hc'
     exact hc.1 c ((List.mem_append.1 hc').elim id id)
 
-/-- **The dense Gauss-elimination pass.** Built with `ofTransform`, inheriting `gaussElimPass`'s
-    `PassCorrect`; the commutation `decode (denseGaussElim bs d) = gaussElimPass (decode d)` rides on
-    the `Corr` bisimulation. -/
-def denseGaussElimPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofTransform
-    denseGaussElim
-    gaussElimPass.withFacts
-    (fun reg bs d hc => by
-      have hcorr := denseGaussElim_corr reg bs d hc
-      rw [denseGaussElim_eq]
-      split_ifs with h
-      · exact hc
-      · exact DenseConstraintSystem.substF_covered hc
-          (fun i _ t ht => hcorr.mapCov i t ht))
-    (fun reg bs _ d hc => by
-      have hcorr := denseGaussElim_corr reg bs d hc
-      show reg.decodeCS (denseGaussElim bs d) = (gaussElimPass (reg.decodeCS d) bs).out
-      rw [denseGaussElim_eq, gaussElimPass_out]
-      by_cases h : (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-          (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty).map.isEmpty = true
-      · rw [if_pos h, if_pos (hcorr.isEmptyEq.symm.trans h)]
-      · rw [if_neg h, if_neg (fun hh => h (hcorr.isEmptyEq.trans hh))]
-        exact reg.decodeCS_substF _ _ (fun i hi => hcorr.mapVal i hi) d hc)
-    (fun _ _ _ => by simp only [VerifiedPass.withFacts, gaussElimPass]; split <;> rfl)
+/-! `denseGaussElimPass` (the wired pass) is now built and proved **natively** in
+`OptimizerPasses/GaussProof.lean` via `DenseVerifiedPassW.ofNative` — no commutation with the
+reference `gaussElimPass`. The commutation-era `Corr` cluster above is dead once that lands. -/
 
 end ApcOptimizer.Dense

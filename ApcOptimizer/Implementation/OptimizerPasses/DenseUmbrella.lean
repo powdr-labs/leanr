@@ -16,6 +16,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Dedup
 import ApcOptimizer.Implementation.OptimizerPasses.DedupProof
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
+import ApcOptimizer.Implementation.OptimizerPasses.GaussProof
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatch
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchRuntime
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
