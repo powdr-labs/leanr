@@ -258,48 +258,4 @@ theorem DenseVerifiedPassW.ofSpec_respectsDeg {b : DegreeBound} {f : VerifiedPas
   rw [ofSpec_out_decode]
   exact h (reg.decodeCS d) bs facts hin
 
-/-! ## Generic builder for true dense passes (no fresh variables)
-
-Every scheduled pass except the variable-introducers (`HintCollapse`, `Reencode` in cleanup;
-`SeqzCollapse` in the coda) is a pure `CS → CS` transform emitting no derivations. Those three need
-the fresh-variable/registry-extension path (WP-F) instead. `ofTransform` turns such a dense
-transform `denseF`
-into a real dense pass (registry unchanged) by **inheriting** the spec pass's `PassCorrect`: the one
-obligation is the commutation `decode (denseF d) = specPass(decode d).out`, plus coverage
-preservation and the spec pass emitting no derivations. This is the workhorse the concrete dense
-passes are built with. -/
-def DenseVerifiedPassW.ofTransform
-    (denseF : BusSemantics p → DenseConstraintSystem p → DenseConstraintSystem p)
-    (specPass : VerifiedPassW p)
-    (hcov : ∀ (reg : VarRegistry) (bs : BusSemantics p) (d : DenseConstraintSystem p),
-      d.CoveredBy reg → (denseF bs d).CoveredBy reg)
-    (hout : ∀ (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
-      (d : DenseConstraintSystem p), d.CoveredBy reg →
-      reg.decodeCS (denseF bs d) = (specPass (reg.decodeCS d) bs facts).out)
-    (hderivs : ∀ (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs),
-      (specPass cs bs facts).derivs = []) : DenseVerifiedPassW p :=
-  fun reg d hcovd bs facts =>
-    { reg' := reg
-      out := denseF bs d
-      derivs := []
-      ext := VarRegistry.Extends.refl reg
-      covered := hcov reg bs d hcovd
-      dcovered := by intro x hx; simp at hx
-      correct := by
-        rw [hout reg bs facts d hcovd]
-        have hc := (specPass (reg.decodeCS d) bs facts).correct
-        rw [hderivs] at hc
-        exact hc }
-
-/-- A pass built by `ofTransform` respects the degree bound if the spec pass does (its decoded output
-    is exactly the spec pass's output). -/
-theorem DenseVerifiedPassW.ofTransform_respectsDeg {b : DegreeBound}
-    {denseF : BusSemantics p → DenseConstraintSystem p → DenseConstraintSystem p}
-    {specPass : VerifiedPassW p} {hcov hout hderivs} (h : RespectsDeg b specPass) :
-    DenseRespectsDeg b (ofTransform denseF specPass hcov hout hderivs) := by
-  intro reg d hcovd bs facts hin
-  show (reg.decodeCS (denseF bs d)).withinDegree b
-  rw [hout reg bs facts d hcovd]
-  exact h (reg.decodeCS d) bs facts hin
-
 end ApcOptimizer.Dense

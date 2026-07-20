@@ -468,11 +468,8 @@ theorem denseTrySolveUnit_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarI
 
 The `VarId`-native mirror of `gaussElimPass`: build the occurrence map / protected set, run
 `denseGaussLoop` over two sweeps of the algebraic constraints, and — unless no pivot was adopted —
-substitute the whole solution map through the system. The `Corr` bisimulation
-(`denseGaussElim_corr`) makes the dense loop result correspond to the spec `σ`, so the two `if`
-branches agree (`Corr.isEmptyEq`) and the substituted output decodes to the spec output
-(`decodeCS_substF` via `Corr.mapVal`). The pass inherits `gaussElimPass`'s `PassCorrect` through
-`ofTransform`. -/
+substitute the whole solution map through the system. Correctness is proved **natively** as a
+`DensePassCorrect` in `GaussProof.lean` (no dependency on the spec `gaussElimPass`). -/
 
 /-- The dense batch linear-elimination transform, mirroring `gaussElimPass`. -/
 def denseGaussElim (bs : BusSemantics p) (d : DenseConstraintSystem p) : DenseConstraintSystem p :=

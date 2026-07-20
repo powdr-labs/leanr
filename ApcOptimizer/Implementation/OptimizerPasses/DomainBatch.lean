@@ -703,8 +703,8 @@ theorem denseSurvivesAllM_decode (reg : VarRegistry) (bs : BusSemantics p)
 
 /-! ### The dense compiled survivor predicate
 
-Structurally mirrors `compiledSurv`, but returns a *plain* predicate (chunk 3 inherits soundness via
-`ofTransform`; no subtype property is carried). Its correspondence to `(compiledSurv …).val` on a
+Structurally mirrors `compiledSurv`, but returns a *plain* predicate (chunk 3's native proof carries
+soundness value-level; no subtype property is carried). Its correspondence to `(compiledSurv …).val` on a
 decoded right-keyed point routes through each side's uncompiled `survivesAllM` form: the spec side by
 its own carried `.property`, the dense side by `denseCompiledSurv_property` below (which reuses the
 *spec* `survivesAllCW_eq`/`survivesAllC_eq` on the identical compiled `IExpr`/`CBi`s). -/
