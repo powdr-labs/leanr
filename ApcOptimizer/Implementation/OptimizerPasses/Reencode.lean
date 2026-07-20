@@ -18,16 +18,89 @@ enumerated-assignment structure lemmas, the pointwise environment facts, the boo
 method soundness lemmas, and the capstone `checkReencode_sound_D`) is proof-side and left for the
 prover — nothing here states or proves anything beyond the runtime computation.
 
-Still **out of scope for this chunk** (later chunks, per the reencode port plan): `buildReencode`
-(the proof-free construction of a candidate group's bits + interpolation map, including its
-hopeless-target prefilter and its indexed-vs-direct covered-set gathering), `degPreReject` (the
-degree pre-gate), `reencodeStep`/`reencodeLoop` (the per-candidate step and the sequential driver,
-including the registry-extending fresh-variable plumbing that consumes the `ofNativeExtending`
-builder already added to `Bridge.lean`), and `reencodePass` (the top-level pass assembling the
-candidate-group list and dispatching indexed vs direct covered-set gathering). The
+## Chunk R2: the build/step/loop/pass layer
+
+This chunk adds the *proof-free construction* layer on top of R1's expression ops:
+`denseBuildReencode` (↔ `buildReencode`, including its hopeless-target prefilter and its
+indexed-vs-direct covered-set gathering — reusing `denseCoveredIdx`, `DomainFold.lean:137`, and
+`denseCovBuild`/`denseBuildStep`, `DomainBatch.lean:1195/1200`), `denseDegPreReject` (↔
+`degPreReject`, the #165 degree pre-gate), `denseReencodeStep`/`denseReencodeLoop` (↔
+`reencodeStep`/`reencodeLoop`, the per-candidate step and the sequential driver, including the
+registry-extending fresh-variable plumbing), and `denseReencodeF` (↔ `reencodePass`, as a plain
+transform matching the `ofNativeExtending` builder's shape — the prover wires it with
+`DenseVerifiedPassW.ofNativeExtending (denseReencodeF pw b) …`). Still **out of scope**: the
+correctness theorems and the `ofNativeExtending` call itself (the prover's job, P3). The
 `OldVariableBased.Reencode` import is kept: the `ofSpec` selector branch still runs the spec pass
-until a later chunk flips it, and the prover's native proof may cite the spec's own transport
-lemmas while it is under construction.
+until the prover flips it, and the native proof may cite the spec's own transport lemmas while it
+is under construction.
+
+### Fresh bits: where they are minted, and the freshness prefilter mechanism
+
+The spec constructs the fresh bit `Variable`s **inside `buildReencode`** (`OldVariableBased/
+Reencode.lean:1514`), not in `reencodeStep` — only on the single accepting path (box small enough,
+not the single-var-only hopeless case, `2 ≤ survs.length`, `k < xs.length`). `denseBuildReencode`
+mints them at the **identical point**: `denseRegisterBits` constructs the same full `Variable`
+values (`{ name := freshBase ++ "_" ++ toString j }`, `j = 0, …, k-1`, in order) and registers each
+via `reg.register`, threading the registry through only that one branch; every rejecting branch of
+`denseBuildReencode` returns the registry **unchanged**. `VarRegistry.register` is append-only and
+idempotent on an already-registered `Variable` (returns the existing `VarId`), which is exactly the
+bijection a canonical registry must have — so a `denseReencodeStep` invocation whose candidate is
+later rejected by `denseDegPreReject`/`denseCheckReencode`/`withinDegreeB` still threads the
+registry *as extended by* `denseBuildReencode` onward (harmless: the orphaned bit `VarId`s never
+occur in any expression, so they cannot affect any downstream `VarId`-keyed decision); this mirrors
+the spec exactly, where the constructed `Variable` values are simply discarded on rejection (no
+persistent effect either way, since `Variable` has no identity beyond structural equality).
+
+`reencodeStep`'s **freshness prefilter** (`varSet.val.contains { name := freshBase ++ "_0" }`,
+`:1574`) runs *before* `buildReencode`, so no bit exists yet to look up by `VarId` — the dense
+mirror resolves the decision honestly instead: a `Variable` is a member of the current system iff
+it was registered *and* its `VarId` is in the current dense `varSet`. Concretely,
+`match reg.idOf? { name := freshBase ++ "_0" } with | some i => varSet.contains i | none => false`
+— if the candidate name was never registered at all it cannot be a system member (everything a
+`DenseConstraintSystem` mentions is registered, by the pipeline's own coverage invariant), so the
+`none` case is a clean "no collision"; if it *was* registered, membership in the current `varSet`
+is exactly the spec's `Std.HashSet Variable` membership test transported through the registry
+bijection.
+
+### `varSet` is a plain `Std.HashSet VarId`
+
+The spec threads `varSet` as a `Subtype` (`{ s : Std.HashSet Variable // ∀ x, s.contains x = true
+→ x ∈ cs.vars }`) because `reencodeStep` returns a `PassCorrect`-carrying `Σ'` and needs the
+membership-implies-coverage fact for its proof. `denseReencodeStep`/`denseReencodeLoop` carry
+**no proof at all** (this chunk is impl-only), so `varSet` here is the plain `Std.HashSet VarId` —
+the `.contains` decision and the accept-time rebuild (`Std.HashSet.ofList ro.occ`, mirroring the
+spec's `Std.HashSet.ofList ro.vars`) are behaviourally identical to the spec's carried set; only the
+subtype's proof obligation is dropped (left for the prover to restate and discharge against
+`DenseConstraintSystem.CoveredBy`, not to re-derive here).
+
+### Ordering parity for the candidate-group targets (deliberate divergence exception)
+
+`denseReencodeF`'s target list (mirroring the spec's `csVs`/`svSet`/`targets` construction,
+`OldVariableBased/Reencode.lean:1650-1658`, byte-identical text to `domainFoldPass`'s own preamble)
+sorts each candidate group with a **resolve-based comparator**,
+`compare (reg.resolve a) (reg.resolve b) != .gt` — reproducing the spec's `Variable`-`compare`
+order exactly, rather than the `VarId.index`-native order `Dense/DomainFoldNative.lean`'s sibling
+`denseTargetsV` uses. This is a deliberate, isolated exception to the general `VarId`-order
+convention (`VarIdAddendum.md`: ordering is not normally a requirement): this candidate order is
+directly the *iteration* order of `denseReencodeLoop`'s greedy, order-sensitive accept/reject
+sequence, byte-identity is part of this merge's bar, and the cost is paid only on this pass's cold
+target-construction path (once per fixpoint iteration, not per box point) — the opposite trade made
+by `Dense/DomainFoldNative.lean`/`BoxRewrite.lean` on their genuinely hot paths. No precedent exists
+for this specific choice (this is the first pass to make it); `csVs`/`svSet` are reconstructed here
+literally from the spec text (the shared `let csVs := …` hoist feeding both `svSet` and `targets`)
+rather than reusing `DomainFoldRuntime.lean`'s `denseSvSet`/`denseTargetsV`, which already diverge
+from *their own* spec's identical shared-hoist shape (an audited, approved choice for domainFold
+specifically, not one this chunk re-derives without instruction) — preserving the spec's own
+`let`-sharing here is the more literal, lower-risk transliteration. `dedupHash`'s dedup order is
+list-order-preserving regardless of the key's hash (`VarId` vs `Variable`), so no divergence there.
+
+### `denseBuildPruned`: a local twin of `CoveredIndex.buildPruned`
+
+No dense twin of `CoveredIndex.buildPruned` (`CoveredIndex.lean:59`) exists yet, and this chunk may
+not edit any file besides this one — `denseBuildPruned` below is a local, `VarId`-keyed
+transliteration (reusing the already-dense `denseBuildStep`/`DenseCovIndex` from
+`DomainBatch.lean`), used exactly where the spec calls `CoveredIndex.buildPruned Expression.vars 8
+…` (the pass-level initial index and the accept-time rebuilt index in `denseReencodeStep`).
 
 ## Import-graph note (cycle resolved at the coordinator level)
 
@@ -300,7 +373,7 @@ def denseBitCM (patts : List (List (VarId × ZMod p))) (xs : List VarId)
 /-! ## Building the interpolation (proof-free) -/
 
 /-- Interpolation polynomial for group variable `x` over pattern/survivor pairs. Mirrors
-    `interpPoly` — consumed by `buildReencode` (later chunk), which supplies `pz` from
+    `interpPoly` — consumed by `denseBuildReencode` below, which supplies `pz` from
     `denseGroupSurvivorsE`'s keyed output. -/
 def denseInterpPoly (pz : List (List (VarId × ZMod p) × List (VarId × ZMod p))) (x : VarId) :
     DenseExpr p :=
@@ -320,5 +393,192 @@ def DenseExpr.sharesVarIn (xs : List VarId) : DenseExpr p → Bool
   | .var y => denseContainsFast xs y
   | .add a b => a.sharesVarIn xs || b.sharesVarIn xs
   | .mul a b => a.sharesVarIn xs || b.sharesVarIn xs
+
+/-! ## Chunk R2: the build/step/loop/pass layer (see the module header) -/
+
+/-! ### A local dense twin of `CoveredIndex.buildPruned` -/
+
+/-- `VarId`-keyed twin of `CoveredIndex.buildPruned` (`CoveredIndex.lean:59`): build the inverted
+    index, skipping items with more than `maxVars` distinct variables. Local to this file (see the
+    module header: no dense twin exists elsewhere, and this chunk may not edit `DomainBatch.lean`,
+    where `denseBuildStep`/`DenseCovIndex` — reused here unchanged — live). -/
+def denseBuildPruned {α : Type} (varsOf : α → List VarId) (maxVars : Nat) (items : List α) :
+    DenseCovIndex :=
+  items.zipIdx.foldr (fun ai idx =>
+    if (HashedDedup.hashedEraseDups (hash ·) (varsOf ai.1)).length ≤ maxVars then
+      denseBuildStep varsOf ai idx
+    else idx) ⟨∅, []⟩
+
+/-! ### Minting the fresh bits -/
+
+/-- Register the `k` fresh bit variables `freshBase ++ "_0", …, freshBase ++ "_(k-1)"` into `reg`,
+    in order — the exact point `buildReencode` constructs them (see the module header: bit `VarId`s
+    do not exist before this call). -/
+def denseRegisterBits (reg : VarRegistry) (freshBase : String) (k : Nat) :
+    VarRegistry × List VarId :=
+  (List.range k).foldl
+    (fun (acc : VarRegistry × List VarId) (j : Nat) =>
+      let (r, bs) := acc
+      let (r', i) := r.register ({ name := freshBase ++ "_" ++ toString j } : Variable)
+      (r', bs ++ [i]))
+    (reg, [])
+
+/-! ### Building the candidate group's bits and substitution map -/
+
+/-- Construct the bits and the substitution map for a candidate group (proof-free — the checked
+    certificate re-verifies everything). Mirrors `buildReencode`, threading the registry through
+    (registration happens only on the single accepting path, exactly where the spec constructs the
+    bit `Variable`s — see the module header). Reuses `denseCoveredIdx` (`DomainFold.lean:137`,
+    order-restoring, mirrors `CoveredIndex.coveredIdx`) for the indexed branch and a plain
+    `Array.foldr` filter for the direct branch, exactly as the spec dispatches. -/
+def denseBuildReencode (reg : VarRegistry) (useIdx : Bool) (csIdx : DenseCovIndex)
+    (arrCs : Array (DenseExpr p)) (xs : List VarId) (freshBase : String) :
+    VarRegistry × Option (List VarId × Std.HashMap VarId (DenseExpr p)) :=
+  let es := if useIdx then denseCoveredIdx csIdx arrCs (denseCoveredBy xs) xs
+    else arrCs.foldr (fun c acc => if denseCoveredBy xs c then c :: acc else acc) []
+  match denseGroupDoms es xs with
+  | none => (reg, none)
+  | some doms =>
+    let boxSize := (doms.map (fun yd => yd.2.length)).prod
+    if boxSize ≤ 256 then
+      if es.length == xs.length && es.all (fun c => c.vars.eraseDups.length == 1)
+          && xs.length ≤ Nat.clog 2 boxSize then
+        -- single-var-only covered set (one per variable): survivors = box; unencodable
+        (reg, none)
+      else
+      let survs := denseGroupSurvivorsE es doms
+      if 2 ≤ survs.length then
+        let k := Nat.clog 2 survs.length
+        if k < xs.length then
+          let (reg1, bits) := denseRegisterBits reg freshBase k
+          let patts := denseAssignments (denseBitBox bits)
+          let survsP := survs ++ List.replicate (patts.length - survs.length) (survs.headD [])
+          let pz := patts.zip survsP
+          (reg1, some (bits, Std.HashMap.ofList (xs.map (fun x => (x, (denseInterpPoly pz x).fold)))))
+        else (reg, none)
+      else (reg, none)
+    else (reg, none)
+
+/-! ### The degree pre-gate -/
+
+/-- **Degree pre-gate** (untrusted, necessary-condition). Mirrors `degPreReject`: walk the system
+    once with an early-exit `any`, rewriting only the items sharing a variable with the group, and
+    fire when a rewritten item already exceeds the bound. -/
+def denseDegPreReject (b : DegreeBound) (d : DenseConstraintSystem p)
+    (xs bits : List VarId) (hm : Std.HashMap VarId (DenseExpr p)) : Bool :=
+  let σ := denseGroupSubst xs hm
+  let patts := denseAssignments (denseBitBox bits)
+  d.algebraicConstraints.any (fun c =>
+    c.sharesVarIn xs && !denseCoveredBy xs c &&
+      decide (b.identities < (denseGroupRewrite xs bits σ patts c).degree)) ||
+  d.busInteractions.any (fun bi =>
+    (bi.multiplicity.sharesVarIn xs &&
+      decide (b.busInteractions < (denseGroupRewrite xs bits σ patts bi.multiplicity).degree)) ||
+    bi.payload.any (fun e =>
+      e.sharesVarIn xs &&
+        decide (b.busInteractions < (denseGroupRewrite xs bits σ patts e).degree)))
+
+/-! ### One checked re-encoding step -/
+
+/-- One checked re-encoding step (identity if construction or certificate fails). Mirrors
+    `reencodeStep`, **preserving the exact gate order**: the input-column gate, the fresh-name
+    collision prefilter (see the module header for the exact mechanism), `denseBuildReencode`, the
+    degree pre-gate, the group-membership/bits-disjointness/no-powdr-ID gates, `denseCheckReencode`,
+    then the final `withinDegreeB` gate. Returns a plain 6-tuple `(reg', d', derivs, csIdx', arrCs',
+    varSet')` — no proof is carried (`varSet` is a plain `Std.HashSet VarId`, see the module
+    header). The spec threads `bsem : BusSemantics p` only to build the discarded branches'
+    `PassCorrect.refl cs bsem` proof witness; since this chunk carries no proof at all, `bsem` has
+    no runtime role here and is dropped (kept, necessarily, at `denseReencodeF`, whose signature
+    `ofNativeExtending` fixes). -/
+def denseReencodeStep (b : DegreeBound) (useIdx : Bool)
+    (reg : VarRegistry) (d : DenseConstraintSystem p) (csIdx : DenseCovIndex)
+    (arrCs : Array (DenseExpr p)) (varSet : Std.HashSet VarId) (xs : List VarId)
+    (freshBase : String) :
+    VarRegistry × DenseConstraintSystem p × DenseDerivations p × DenseCovIndex ×
+      Array (DenseExpr p) × Std.HashSet VarId :=
+  if xs.all (fun x => reg.isInput x) then
+  if (match reg.idOf? ({ name := freshBase ++ "_0" } : Variable) with
+      | some i => varSet.contains i
+      | none => false) then
+    -- fresh-name collision: `denseCheckReencode` would reject after the full freshness scan
+    (reg, d, [], csIdx, arrCs, varSet)
+  else
+  match denseBuildReencode reg useIdx csIdx arrCs xs freshBase with
+  | (reg1, none) => (reg1, d, [], csIdx, arrCs, varSet)
+  | (reg1, some (bits, hm)) =>
+    -- Degree pre-gate: reject (exactly the candidates the final `withinDegreeB` would reject)
+    -- before the certificate's whole-system freshness scan and the output materialization.
+    if denseDegPreReject b d xs bits hm then (reg1, d, [], csIdx, arrCs, varSet)
+    else
+    if xs.all (fun x => varSet.contains x) then
+    if xs.all (fun x => decide (x ∉ bits)) then
+    if bits.all (fun b => decide ((reg1.resolve b).powdrId? = none)) then
+    if denseCheckReencode d xs bits hm then
+      let ro := denseReencodeOut d xs bits hm
+      if ro.withinDegreeB b then
+        -- `d` changed: rebuild the index and the variable set for `ro` (accepts are rare, so this
+        -- is cheap overall).
+        (reg1, ro,
+         bits.map (fun b => (b, denseBitCM (denseAssignments (denseBitBox bits)) xs hm b)),
+         (if useIdx then denseBuildPruned DenseExpr.vars 8 ro.algebraicConstraints else ⟨∅, []⟩),
+         ro.algebraicConstraints.toArray,
+         Std.HashSet.ofList ro.occ)
+      else (reg1, d, [], csIdx, arrCs, varSet)
+    else (reg1, d, [], csIdx, arrCs, varSet)
+    else (reg1, d, [], csIdx, arrCs, varSet)
+    else (reg1, d, [], csIdx, arrCs, varSet)
+    else (reg1, d, [], csIdx, arrCs, varSet)
+  else (reg, d, [], csIdx, arrCs, varSet)
+
+/-! ### The sequential driver -/
+
+/-- Process the candidate groups sequentially (derivations concatenate; the registry, the inverted
+    index, and the variable set are threaded and rebuilt by `denseReencodeStep` whenever it rewrites
+    `d`). Mirrors `reencodeLoop`, including the exact `freshBase` format string (`bsem` dropped for
+    the same reason as `denseReencodeStep`, see its docstring). -/
+def denseReencodeLoop (b : DegreeBound) (useIdx : Bool) :
+    List (List VarId) → Nat → VarRegistry → DenseConstraintSystem p → DenseCovIndex →
+      Array (DenseExpr p) → Std.HashSet VarId →
+      VarRegistry × DenseConstraintSystem p × DenseDerivations p
+  | [], _, reg, d, _, _, _ => (reg, d, [])
+  | xs :: rest, idx, reg, d, csIdx, arrCs, varSet =>
+    let (reg1, d1, derivs1, csIdx1, arrCs1, varSet1) :=
+      denseReencodeStep b useIdx reg d csIdx arrCs varSet xs
+        (s!"rnc{d.algebraicConstraints.length}_{d.busInteractions.length}_{idx}")
+    let (reg2, d2, derivs2) :=
+      denseReencodeLoop b useIdx rest (idx + 1) reg1 d1 csIdx1 arrCs1 varSet1
+    (reg2, d2, derivs1 ++ derivs2)
+
+/-! ### The pass, as a plain registry-extending transform -/
+
+/-- The witness re-encoding transform, shaped exactly for `DenseVerifiedPassW.ofNativeExtending`
+    (the prover wires it with `DenseVerifiedPassW.ofNativeExtending (denseReencodeF pw b) …`).
+    Mirrors `reencodePass`'s target-group construction (see the module header for the ordering-
+    parity comparator and the shared-`csVs` hoist) and dispatch. `facts` is unused: reencode is
+    fact-free, as the spec pass is (its signature takes only `bsem`); the parameter exists solely to
+    match `ofNativeExtending`'s uniform transform shape. -/
+def denseReencodeF (pw : PrimeWitness p) (b : DegreeBound) (reg : VarRegistry)
+    (bsem : BusSemantics p) (_facts : BusFacts p bsem) (d : DenseConstraintSystem p) :
+    VarRegistry × DenseConstraintSystem p × DenseDerivations p :=
+  if pw.isPrime = true then
+    -- Each constraint's deduped variable list is computed once and shared between the single-
+    -- variable set and the target list, exactly as the spec's `csVs` hoist does.
+    let csVs := d.algebraicConstraints.map (fun c => HashedDedup.hashedDedup (hash ·) c.vars)
+    let svSet : Std.HashSet VarId := csVs.foldl (init := ∅) fun s vs =>
+      match vs with
+      | [x] => s.insert x
+      | _ => s
+    let targets := dedupHash (csVs.filterMap (fun vs =>
+      if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
+        -- Ordering parity (deliberate divergence exception, see the module header): sort by the
+        -- resolved `Variable`'s order, reproducing the spec's canonicalisation exactly.
+        some (vs.mergeSort (fun a b => compare (reg.resolve a) (reg.resolve b) != .gt))
+      else none))
+    let useIdx := 8192 ≤ d.algebraicConstraints.length
+    denseReencodeLoop b useIdx targets 0 reg d
+      (if useIdx then denseBuildPruned DenseExpr.vars 8 d.algebraicConstraints else ⟨∅, []⟩)
+      d.algebraicConstraints.toArray
+      (Std.HashSet.ofList d.occ)
+  else (reg, d, [])
 
 end ApcOptimizer.Dense
