@@ -50,6 +50,8 @@ import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheck
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheckProof
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelWits
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancel
+import ApcOptimizer.Implementation.OptimizerPasses.Reencode
+import ApcOptimizer.Implementation.OptimizerPasses.ReencodeProof
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 
