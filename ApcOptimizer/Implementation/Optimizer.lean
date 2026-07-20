@@ -254,6 +254,8 @@ def denseImpl (b : DegreeBound) (pw : PrimeWitness p) (name : String) (fallback 
     DenseVerifiedPassW.guardDegree b (denseFlagFoldPass' pw b)
   else if name == "busPairCancel" then
     DenseVerifiedPassW.guardDegree b (denseBusPairCancelPass pw false)
+  else if name == "bytePack" then
+    DenseVerifiedPassW.guardDegree b denseByteCheckPackPass
   else if name == "reencode" then
     DenseVerifiedPassW.guardDegree b (denseReencodePass pw b)
   else DenseVerifiedPassW.ofSpec fallback

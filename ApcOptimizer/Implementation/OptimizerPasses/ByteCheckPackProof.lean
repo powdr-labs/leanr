@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheckProof
+import ApcOptimizer.Implementation.OptimizerPasses.BridgeSteps
 
 set_option autoImplicit false
 
@@ -328,5 +329,329 @@ theorem denseFindSecond_sound (bs : BusSemantics p) (facts : BusFacts p bs) (bus
         obtain ⟨_, hcb, hceb, _⟩ := h
         rw [← hcb, ← hceb]; exact hc
       · exact ih (c :: revMid) mid b eB post h
+
+/-! ## Native correctness of one stateless two-for-one pack (chunk BP-P2)
+
+`denseMergeStateless2_correct` is the dense mirror of `mergeStateless2_correct`
+(`OldVariableBased/TupleRange.lean:54`): replacing two stateless multiplicity-1 interactions `D₁`,
+`D₂` by one stateless multiplicity-1 interaction `C` whose obligation is exactly their conjunction is
+`DensePassCorrect`. Since every interaction involved is stateless, both the stateful-bus side effects
+and the active∧stateful admissibility argument collapse (the filtered lists coincide), so the
+assembly is `DensePassCorrect.ofEnvEq` (env' = env). -/
+
+theorem denseMergeStateless2_correct (isInput : VarId → Bool) (d : DenseConstraintSystem p)
+    (bs : BusSemantics p) (hp1 : (1 : ZMod p) ≠ 0)
+    (D₁ D₂ C : BusInteraction (DenseExpr p))
+    (hst1 : bs.isStateful D₁.busId = false) (hst2 : bs.isStateful D₂.busId = false)
+    (hstC : bs.isStateful C.busId = false)
+    (hm1 : D₁.multiplicity = DenseExpr.const 1) (hm2 : D₂.multiplicity = DenseExpr.const 1)
+    (hmC : C.multiplicity = DenseExpr.const 1)
+    (hkey : ∀ denv, bs.violatesConstraint (denseBIEval C denv) = false ↔
+        bs.violatesConstraint (denseBIEval D₁ denv) = false ∧
+          bs.violatesConstraint (denseBIEval D₂ denv) = false)
+    (hbrk : ∀ denv, bs.breaksInvariant (denseBIEval C denv) = false)
+    (hvars : ∀ v ∈ denseBIVars C, v ∈ denseBIVars D₁ ∨ v ∈ denseBIVars D₂)
+    (pre mid post : List (BusInteraction (DenseExpr p)))
+    (hsplit : d.busInteractions = pre ++ D₁ :: mid ++ D₂ :: post) :
+    DensePassCorrect isInput d { d with busInteractions := pre ++ C :: mid ++ post } [] bs := by
+  set out : DenseConstraintSystem p := { d with busInteractions := pre ++ C :: mid ++ post }
+    with hout
+  have houtb : out.busInteractions = pre ++ C :: mid ++ post := rfl
+  -- the obligation predicate that appears in `satisfies`
+  set P : (VarId → ZMod p) → BusInteraction (DenseExpr p) → Prop :=
+    fun denv bi => (denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false
+    with hP
+  have hme1 : ∀ denv, (denseBIEval D₁ denv).multiplicity = 1 := fun denv => by
+    show D₁.multiplicity.eval denv = 1; rw [hm1]; rfl
+  have hme2 : ∀ denv, (denseBIEval D₂ denv).multiplicity = 1 := fun denv => by
+    show D₂.multiplicity.eval denv = 1; rw [hm2]; rfl
+  have hmeC : ∀ denv, (denseBIEval C denv).multiplicity = 1 := fun denv => by
+    show C.multiplicity.eval denv = 1; rw [hmC]; rfl
+  have hP1 : ∀ denv, (P denv D₁ ↔ bs.violatesConstraint (denseBIEval D₁ denv) = false) := fun denv =>
+    ⟨fun h => h (by rw [hme1 denv]; exact hp1), fun h _ => h⟩
+  have hP2 : ∀ denv, (P denv D₂ ↔ bs.violatesConstraint (denseBIEval D₂ denv) = false) := fun denv =>
+    ⟨fun h => h (by rw [hme2 denv]; exact hp1), fun h _ => h⟩
+  have hPC : ∀ denv, (P denv C ↔ bs.violatesConstraint (denseBIEval C denv) = false) := fun denv =>
+    ⟨fun h => h (by rw [hmeC denv]; exact hp1), fun h _ => h⟩
+  -- satisfaction equivalence
+  have hsatiff : ∀ denv, d.satisfies bs denv ↔ out.satisfies bs denv := by
+    intro denv
+    have hbus : (∀ bi ∈ d.busInteractions, P denv bi) ↔ (∀ bi ∈ out.busInteractions, P denv bi) := by
+      rw [hsplit, houtb]
+      simp only [List.forall_mem_append, List.forall_mem_cons]
+      have hc := hPC denv; have h1 := hP1 denv; have h2 := hP2 denv; have hk := hkey denv
+      tauto
+    exact ⟨fun ⟨hcons, hb⟩ => ⟨hcons, hbus.1 hb⟩, fun ⟨hcons, hb⟩ => ⟨hcons, hbus.2 hb⟩⟩
+  -- the stateful-filtered interaction lists coincide (all three are stateless)
+  have hfilt : d.busInteractions.filter (fun bi => bs.isStateful bi.busId)
+      = out.busInteractions.filter (fun bi => bs.isStateful bi.busId) := by
+    rw [hsplit, houtb]
+    simp only [List.filter_append, List.filter_cons, hst1, hst2, hstC, Bool.false_eq_true, if_false]
+  have hside : ∀ denv, d.sideEffects bs denv = out.sideEffects bs denv := by
+    intro denv
+    simp only [DenseConstraintSystem.sideEffects, hfilt]
+  have hstE1 : ∀ denv, bs.isStateful (denseBIEval D₁ denv).busId = false := fun _ => hst1
+  have hstE2 : ∀ denv, bs.isStateful (denseBIEval D₂ denv).busId = false := fun _ => hst2
+  have hstEC : ∀ denv, bs.isStateful (denseBIEval C denv).busId = false := fun _ => hstC
+  have hadmarg : ∀ denv,
+      (d.busInteractions.map (fun bi => denseBIEval bi denv)).filter
+        (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId)
+      = (out.busInteractions.map (fun bi => denseBIEval bi denv)).filter
+        (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId) := by
+    intro denv
+    rw [hsplit, houtb]
+    simp only [List.map_append, List.map_cons, List.filter_append, List.filter_cons,
+      hstE1 denv, hstE2 denv, hstEC denv, Bool.and_false, Bool.false_eq_true, if_false]
+  have hadm : ∀ denv, d.admissible bs denv ↔ out.admissible bs denv := by
+    intro denv
+    simp only [DenseConstraintSystem.admissible, hadmarg]
+  -- membership: `out`'s variables come from `d`'s
+  have hmemD1 : D₁ ∈ d.busInteractions := by
+    rw [hsplit]; simp only [List.mem_append, List.mem_cons]; tauto
+  have hmemD2 : D₂ ∈ d.busInteractions := by
+    rw [hsplit]; simp only [List.mem_append, List.mem_cons]; tauto
+  have hmem : ∀ x, x ∈ pre ∨ x ∈ mid ∨ x ∈ post → x ∈ d.busInteractions := by
+    intro x hx; rw [hsplit]; simp only [List.mem_append, List.mem_cons]; tauto
+  have hsub : ∀ i ∈ out.occ, i ∈ d.occ := by
+    intro i hi
+    simp only [DenseConstraintSystem.occ, List.mem_append, List.mem_flatMap] at hi ⊢
+    rcases hi with hi | ⟨bi, hbi, hibi⟩
+    · exact Or.inl hi
+    · rw [houtb] at hbi
+      simp only [List.mem_append, List.mem_cons] at hbi
+      rcases hbi with (h | rfl | h) | h
+      · exact Or.inr ⟨bi, hmem bi (Or.inl h), hibi⟩
+      · rcases hvars i hibi with h | h
+        · exact Or.inr ⟨D₁, hmemD1, h⟩
+        · exact Or.inr ⟨D₂, hmemD2, h⟩
+      · exact Or.inr ⟨bi, hmem bi (Or.inr (Or.inl h)), hibi⟩
+      · exact Or.inr ⟨bi, hmem bi (Or.inr (Or.inr h)), hibi⟩
+  refine DensePassCorrect.ofEnvEq
+    (fun denv hsat => ⟨denv, (hsatiff denv).mpr hsat,
+      by rw [← hside denv]; exact BusState.equiv_refl _⟩)
+    (fun hgi denv hsat bi hbi => ?_)
+    hsub
+    (fun denv hadmE hsat => ⟨(hsatiff denv).mp hsat, (hadm denv).mp hadmE,
+      by rw [hside denv]; exact BusState.equiv_refl _⟩)
+  -- invariant preservation: `bi` is in `pre`/`mid`/`post` (defer to `d`) or is `C` (`hbrk`).
+  rw [houtb] at hbi
+  simp only [List.mem_append, List.mem_cons] at hbi
+  rcases hbi with (h | rfl | h) | h
+  · exact hgi denv ((hsatiff denv).mpr hsat) bi (hmem bi (Or.inl h))
+  · exact fun _ => hbrk denv
+  · exact hgi denv ((hsatiff denv).mpr hsat) bi (hmem bi (Or.inr (Or.inl h)))
+  · exact hgi denv ((hsatiff denv).mpr hsat) bi (hmem bi (Or.inr (Or.inr h)))
+
+/-! ## Coverage of an emitted pair check -/
+
+/-- An emitted pair check `denseMkBytePair spec busId e₁ e₂` mentions no variable beyond `e₁`'s and
+    `e₂`'s, so it is covered whenever both are. Native analogue of `denseMkByteCheck_covered`. -/
+theorem denseMkBytePair_covered (reg : VarRegistry) (spec : ByteXorSpec p) (busId : Nat)
+    (e₁ e₂ : DenseExpr p) (he₁ : e₁.CoveredBy reg) (he₂ : e₂.CoveredBy reg) :
+    denseBICovered reg (denseMkBytePair spec busId e₁ e₂) := by
+  refine ⟨?_, ?_⟩
+  · intro i hi; simp only [denseMkBytePair, DenseExpr.vars, List.not_mem_nil] at hi
+  · intro pe hpe i hi
+    rcases denseMkBytePair_payload_vars spec busId e₁ e₂ pe hpe hi with h | h
+    · exact he₁ i h
+    · exact he₂ i h
+
+/-! ## Scan invariants: reconstructing the split equation
+
+The dense `denseFindSecond`/`denseFindGo` return plain positionally-split data; the split equations
+`revMid.reverse ++ rest = mid ++ b :: post` and `revPre.reverse ++ bis = pre ++ a :: mid ++ b :: post`
+are recovered here as loop invariants of the scan (mirroring the spec `findGo`'s `dite`-carried
+`hsplit`, which never fails at runtime). Together with the selection facts (`denseSvCheck?` on the
+two chosen interactions, `a`'s `byteXorSpec` and its `bound = 256` gate) this is exactly the input to
+`denseMergeStateless2_correct`. -/
+
+/-- The positional split reconstructed from `denseFindSecond`. -/
+theorem denseFindSecond_split (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) :
+    ∀ (revMid rest : List (BusInteraction (DenseExpr p)))
+      (mid : List (BusInteraction (DenseExpr p))) (b : BusInteraction (DenseExpr p))
+      (eB : DenseExpr p) (post : List (BusInteraction (DenseExpr p))),
+      denseFindSecond bs facts busId revMid rest = some (mid, b, eB, post) →
+      revMid.reverse ++ rest = mid ++ b :: post := by
+  intro revMid rest
+  induction rest generalizing revMid with
+  | nil => intro _ _ _ _ h; exact absurd h (by simp [denseFindSecond])
+  | cons c cs ih =>
+    intro mid b eB post h
+    rw [denseFindSecond] at h
+    cases hc : denseSvCheck? bs facts c with
+    | none =>
+      rw [hc] at h
+      have := ih (c :: revMid) mid b eB post h
+      simpa [List.reverse_cons, List.append_assoc] using this
+    | some eC =>
+      rw [hc] at h
+      split_ifs at h with hbus
+      · rw [Option.some.injEq, Prod.mk.injEq, Prod.mk.injEq, Prod.mk.injEq] at h
+        obtain ⟨hmid, hcb, _, hpost⟩ := h
+        subst hmid; subst hcb; subst hpost; rfl
+      · have := ih (c :: revMid) mid b eB post h
+        simpa [List.reverse_cons, List.append_assoc] using this
+
+/-- The positional split and selection facts reconstructed from `denseFindGo`. -/
+theorem denseFindGo_split (bs : BusSemantics p) (facts : BusFacts p bs) :
+    ∀ (revPre bis : List (BusInteraction (DenseExpr p))) (busId : Nat) (spec : ByteXorSpec p)
+      (pre : List (BusInteraction (DenseExpr p))) (eA : DenseExpr p)
+      (mid : List (BusInteraction (DenseExpr p))) (eB : DenseExpr p)
+      (post : List (BusInteraction (DenseExpr p))),
+      denseFindGo bs facts revPre bis = some (busId, spec, pre, eA, mid, eB, post) →
+      ∃ a b, revPre.reverse ++ bis = pre ++ a :: mid ++ b :: post ∧
+        denseSvCheck? bs facts a = some eA ∧ denseSvCheck? bs facts b = some eB ∧
+        a.busId = busId ∧ facts.byteXorSpec busId = some spec ∧ spec.bound = 256 := by
+  intro revPre bis
+  induction bis generalizing revPre with
+  | nil => intro _ _ _ _ _ _ _ h; exact absurd h (by simp [denseFindGo])
+  | cons a rest ih =>
+    intro busId spec pre eA mid eB post h
+    rw [denseFindGo] at h
+    cases hsa : denseSvCheck? bs facts a with
+    | none =>
+      simp only [hsa] at h
+      obtain ⟨a', b', heq, rest'⟩ := ih (a :: revPre) busId spec pre eA mid eB post h
+      exact ⟨a', b',
+        by simpa only [List.reverse_cons, List.append_assoc, List.singleton_append] using heq, rest'⟩
+    | some eA' =>
+      cases hfs : denseFindSecond bs facts a.busId [] rest with
+      | none =>
+        simp only [hsa, hfs] at h
+        obtain ⟨a', b', heq, rest'⟩ := ih (a :: revPre) busId spec pre eA mid eB post h
+        exact ⟨a', b',
+          by simpa only [List.reverse_cons, List.append_assoc, List.singleton_append] using heq, rest'⟩
+      | some res =>
+        obtain ⟨mid', b, eB', post'⟩ := res
+        cases hbx : facts.byteXorSpec a.busId with
+        | none =>
+          simp only [hsa, hfs, hbx] at h
+          obtain ⟨a', b', heq, rest'⟩ := ih (a :: revPre) busId spec pre eA mid eB post h
+          exact ⟨a', b',
+            by simpa only [List.reverse_cons, List.append_assoc, List.singleton_append] using heq, rest'⟩
+        | some spec' =>
+          simp only [hsa, hfs, hbx] at h
+          split_ifs at h with hbound
+          · simp only [Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ := h
+            have hrest : rest = mid' ++ b :: post' :=
+              denseFindSecond_split bs facts a.busId [] rest mid' b eB' post' hfs
+            refine ⟨a, b, ?_, hsa,
+              denseFindSecond_sound bs facts a.busId [] rest mid' b eB' post' hfs,
+              rfl, hbx, of_decide_eq_true hbound⟩
+            rw [hrest]; simp only [List.append_assoc, List.cons_append]
+          · obtain ⟨a', b', heq, rest'⟩ := ih (a :: revPre) busId spec pre eA mid eB post h
+            exact ⟨a', b',
+              by simpa only [List.reverse_cons, List.append_assoc, List.singleton_append] using heq, rest'⟩
+
+/-! ## One pack step, as a native certified step
+
+`denseBytePackStep_correct` packages one accepted `denseFindGo` pack into a `DensePassCorrect` via
+`denseMergeStateless2_correct`; `denseBytePackStep_covered` gives the output coverage. The merge key
+is routed through `denseMkBytePair_iff_singles`, reusing `denseMkByteCheck_accepted`. -/
+
+theorem denseBytePackStep_correct (isInput : VarId → Bool) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (d : DenseConstraintSystem p)
+    (busId : Nat) (spec : ByteXorSpec p) (pre : List (BusInteraction (DenseExpr p)))
+    (eA : DenseExpr p) (mid : List (BusInteraction (DenseExpr p))) (eB : DenseExpr p)
+    (post : List (BusInteraction (DenseExpr p)))
+    (hfg : denseFindGo bs facts [] d.busInteractions = some (busId, spec, pre, eA, mid, eB, post)) :
+    DensePassCorrect isInput d
+      { d with busInteractions := pre ++ denseMkBytePair spec busId eA eB :: mid ++ post } [] bs := by
+  obtain ⟨a, b, hsplit0, hsaEq, hsbEq, hab, hspec, hbound⟩ :=
+    denseFindGo_split bs facts [] d.busInteractions busId spec pre eA mid eB post hfg
+  have hsplit : d.busInteractions = pre ++ a :: mid ++ b :: post := by
+    rw [← hsplit0, List.reverse_nil, List.nil_append]
+  have hsa := denseSvCheck?_sound bs facts a eA hsaEq
+  have hsbd := denseSvCheck?_sound bs facts b eB hsbEq
+  have hstC : bs.isStateful (denseMkBytePair spec busId eA eB).busId = false := by
+    show bs.isStateful busId = false; rw [← hab]; exact hsa.1
+  refine denseMergeStateless2_correct isInput d bs hp1 a b (denseMkBytePair spec busId eA eB)
+    hsa.1 hsbd.1 hstC hsa.2.1 hsbd.2.1 rfl (fun denv => ?_) (fun denv => ?_) (fun v hv => ?_)
+    pre mid post hsplit
+  · -- obligation equivalence, via the pack/split law reusing `denseMkByteCheck_accepted`
+    rw [denseMkBytePair_iff_singles bs facts spec busId hspec eA eB denv,
+        denseMkByteCheck_accepted bs facts spec busId hspec eA denv,
+        denseMkByteCheck_accepted bs facts spec busId hspec eB denv, hbound]
+    exact and_congr (hsa.2.2.2 denv).symm (hsbd.2.2.2 denv).symm
+  · -- the pair check breaks no invariant
+    exact denseMkBytePair_breaks bs facts spec busId hspec eA eB denv
+  · -- the pair check's variables come from `a` and `b`
+    have hvab : v ∈ eA.vars ∨ v ∈ eB.vars := by
+      rw [denseBIVars, List.mem_append] at hv
+      rcases hv with hm | hpp
+      · simp only [denseMkBytePair, DenseExpr.vars, List.not_mem_nil] at hm
+      · rw [List.mem_flatMap] at hpp
+        obtain ⟨pe, hpe, hx⟩ := hpp
+        exact denseMkBytePair_payload_vars spec busId eA eB pe hpe hx
+    rcases hvab with h | h
+    · exact Or.inl (denseMem_biVars_of_payload a eA hsa.2.2.1 h)
+    · exact Or.inr (denseMem_biVars_of_payload b eB hsbd.2.2.1 h)
+
+theorem denseBytePackStep_covered (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg)
+    (busId : Nat) (spec : ByteXorSpec p) (pre : List (BusInteraction (DenseExpr p)))
+    (eA : DenseExpr p) (mid : List (BusInteraction (DenseExpr p))) (eB : DenseExpr p)
+    (post : List (BusInteraction (DenseExpr p)))
+    (hfg : denseFindGo bs facts [] d.busInteractions = some (busId, spec, pre, eA, mid, eB, post)) :
+    ({ d with busInteractions := pre ++ denseMkBytePair spec busId eA eB :: mid ++ post } :
+      DenseConstraintSystem p).CoveredBy reg := by
+  obtain ⟨a, b, hsplit0, hsaEq, hsbEq, _hab, _hspec, _hbound⟩ :=
+    denseFindGo_split bs facts [] d.busInteractions busId spec pre eA mid eB post hfg
+  have hsplit : d.busInteractions = pre ++ a :: mid ++ b :: post := by
+    rw [← hsplit0, List.reverse_nil, List.nil_append]
+  have hsa := denseSvCheck?_sound bs facts a eA hsaEq
+  have hsbd := denseSvCheck?_sound bs facts b eB hsbEq
+  obtain ⟨hcac, hcbi⟩ := hcov
+  have hmemD1 : a ∈ d.busInteractions := by
+    rw [hsplit]; simp only [List.mem_append, List.mem_cons]; tauto
+  have hmemD2 : b ∈ d.busInteractions := by
+    rw [hsplit]; simp only [List.mem_append, List.mem_cons]; tauto
+  have hmem : ∀ x, x ∈ pre ∨ x ∈ mid ∨ x ∈ post → x ∈ d.busInteractions := by
+    intro x hx; rw [hsplit]; simp only [List.mem_append, List.mem_cons]; tauto
+  -- `eA`/`eB` are covered (payload entries of the covered `a`/`b`)
+  have heA : eA.CoveredBy reg := (hcbi a hmemD1).2 eA hsa.2.2.1
+  have heB : eB.CoveredBy reg := (hcbi b hmemD2).2 eB hsbd.2.2.1
+  refine ⟨hcac, ?_⟩
+  intro bi hbi
+  simp only [List.mem_append, List.mem_cons] at hbi
+  rcases hbi with (h | rfl | h) | h
+  · exact hcbi bi (hmem bi (Or.inl h))
+  · exact denseMkBytePair_covered reg spec busId eA eB heA heB
+  · exact hcbi bi (hmem bi (Or.inr (Or.inl h)))
+  · exact hcbi bi (hmem bi (Or.inr (Or.inr h)))
+
+/-! ## The dense `bytePack` pass: drain packs through `DenseNativeStep.drain`
+
+Each drain step scans for the next packable pair (`denseFindGo`) and, on a hit, produces a
+non-extending certified step (`DenseNativeStep.ofSame`) whose correctness is `denseBytePackStep_correct`
+and whose coverage is `denseBytePackStep_covered`; the loop composes them via `DenseNativeStep.drain`
+(fuel = interaction-list length, a safe bound: each pack strictly drops that count by one). The
+runtime work per step is identical to the plain `denseDrainBytePacks` recursion (same `denseFindGo`
+scan, same `pre ++ denseMkBytePair … :: mid ++ post` rebuild); the loop carrier is the erasing
+combinator. The whole thing is closed into a `DenseVerifiedPassW` by `ofDenseStep`, folding the
+label's outer `iterateToFixpoint` into this single dense call (mirroring `denseByteCheckPackF`'s
+`(1 : ZMod p) ≠ 0` self-gate). -/
+
+/-- One drain step: on a `denseFindGo` hit, a non-extending certified pack step; otherwise `none`. -/
+def denseBytePackStep (bs : BusSemantics p) (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) :
+    Unit → (reg : VarRegistry) → (d : DenseConstraintSystem p) → d.CoveredBy reg →
+      Option (Unit × DenseNativeStep p bs reg d) :=
+  fun _ reg d hcov =>
+    match hfg : denseFindGo bs facts [] d.busInteractions with
+    | none => none
+    | some (busId, spec, pre, eA, mid, eB, post) =>
+      some ((), DenseNativeStep.ofSame bs
+        (denseBytePackStep_covered reg bs facts d hcov busId spec pre eA mid eB post hfg)
+        (denseBytePackStep_correct reg.isInput bs facts hp1 d busId spec pre eA mid eB post hfg))
+
+/-- The dense generalized single-value byte-check packing pass. Registry-preserving (no fresh
+    variables): `ofDenseStep` over the `DenseNativeStep.drain` of `denseBytePackStep`. -/
+def denseByteCheckPackPass : DenseVerifiedPassW p :=
+  DenseVerifiedPassW.ofDenseStep (fun reg bs facts d hcov =>
+    if hp1 : (1 : ZMod p) ≠ 0 then
+      (DenseNativeStep.drain bs (denseBytePackStep bs facts hp1) d.busInteractions.length ()
+        reg d hcov).2
+    else DenseNativeStep.refl bs hcov)
 
 end ApcOptimizer.Dense
