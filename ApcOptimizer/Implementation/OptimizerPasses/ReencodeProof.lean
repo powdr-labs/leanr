@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
+import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnifyProof
 
 set_option autoImplicit false
 
@@ -721,6 +722,140 @@ theorem denseGroupSurvivorsE_eq (es : List (DenseExpr p)) (doms : List (VarId ×
       (fun _ _ => rfl) (fun _ _ => rfl) (doms.map Prod.fst) es ces hce a hkeys
   · rfl
 
+/-! ## The generic dense transport core (↔ `reencode_correct`/`reencode_correct_D`)
+
+The keyed assignment membership/readout facts the capstone consumes (`mem_denseAssignments` for the
+keyed `denseAssignments doms`, and `denseEnvOfFast_map`, the keyed sibling of the value-only
+`mem_assignmentsV`) are reused unchanged from `RootPairUnifyProof.lean` — they are generic
+`VarId`-keyed enumeration facts, not reencode-specific, so no local copy is added.
+
+The native `VarId`-side analogue of the spec's `ConstraintSystem.reencode_correct_D`: a witness
+transport principle producing `DensePassCorrect` directly. `out` replaces every expression `e` by
+`grw e` (field-inlined for bus interactions — there is no dense `BusInteraction.mapExpr`), keeps only
+the constraints selected by `keep`, and appends `newCs`; the fresh columns carry the dense
+derivations `dd`. Given forward transport (with the input-column frame and the native
+`DenseOutReconstructs` obligation) and backward transport under which every original expression
+evaluates identically, the step is `DensePassCorrect`. Nothing here mentions bits or groups — a
+generic principle, decode-free. -/
+
+theorem DenseConstraintSystem.reencode_correct_D (d out : DenseConstraintSystem p)
+    (bs : BusSemantics p) (isInput : VarId → Bool)
+    (grw : DenseExpr p → DenseExpr p) (keep : DenseExpr p → Bool)
+    (newCs : List (DenseExpr p)) (dd : DenseDerivations p)
+    (hout : out =
+      { algebraicConstraints := ((d.algebraicConstraints.filter keep).map grw) ++ newCs,
+        busInteractions := d.busInteractions.map (fun bi =>
+          { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw }) })
+    (hfwd : ∀ denv, d.satisfies bs denv → ∃ denv',
+      (∀ c ∈ d.algebraicConstraints, (grw c).eval denv' = c.eval denv) ∧
+      (∀ bi ∈ d.busInteractions,
+        denseBIEval { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw } denv' = denseBIEval bi denv) ∧
+      (∀ c ∈ newCs, c.eval denv' = 0) ∧
+      (∀ i, isInput i = true → denv' i = denv i) ∧
+      (∀ inputVarIds, (∀ i ∈ d.occ, isInput i = true → i ∈ inputVarIds) →
+        DenseOutReconstructs isInput inputVarIds d out dd denv denv'))
+    (hbwd : ∀ denv', out.satisfies bs denv' → ∃ denv,
+      (∀ c ∈ d.algebraicConstraints, (grw c).eval denv' = c.eval denv) ∧
+      (∀ bi ∈ d.busInteractions,
+        denseBIEval { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw } denv' = denseBIEval bi denv) ∧
+      (∀ c ∈ d.algebraicConstraints, keep c = false → c.eval denv = 0))
+    (hVars : ∀ i ∈ out.occ, isInput i = true → i ∈ d.occ) :
+    DensePassCorrect isInput d out dd bs := by
+  subst hout
+  -- side-effect equality under bus-interaction agreement
+  have hside : ∀ (denv denv' : VarId → ZMod p),
+      (∀ bi ∈ d.busInteractions,
+        denseBIEval { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw } denv' = denseBIEval bi denv) →
+      DenseConstraintSystem.sideEffects
+        { algebraicConstraints := ((d.algebraicConstraints.filter keep).map grw) ++ newCs,
+          busInteractions := d.busInteractions.map (fun bi =>
+            { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw }) }
+        bs denv' = d.sideEffects bs denv := by
+    intro denv denv' hB
+    show ((d.busInteractions.map (fun bi =>
+        { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw })).filter
+        (fun bi => bs.isStateful bi.busId)).map _ = _
+    rw [filter_map_busId_comm d.busInteractions
+        (fun bi => { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw })
+        bs (fun _ => rfl), List.map_map]
+    exact List.map_congr_left (fun bi hbi => by
+      simp only [Function.comp_apply, hB bi (List.mem_of_mem_filter hbi)])
+  -- admissible transfer under bus-interaction agreement
+  have hdisc : ∀ (denv denv' : VarId → ZMod p),
+      (∀ bi ∈ d.busInteractions,
+        denseBIEval { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw } denv' = denseBIEval bi denv) →
+      (DenseConstraintSystem.admissible
+        { algebraicConstraints := ((d.algebraicConstraints.filter keep).map grw) ++ newCs,
+          busInteractions := d.busInteractions.map (fun bi =>
+            { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw }) }
+        bs denv' ↔ d.admissible bs denv) := by
+    intro denv denv' hB
+    unfold DenseConstraintSystem.admissible
+    have hmap : ((d.busInteractions.map (fun bi =>
+          { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw })).map
+          (fun bi => denseBIEval bi denv'))
+        = d.busInteractions.map (fun bi => denseBIEval bi denv) := by
+      rw [List.map_map]
+      exact List.map_congr_left (fun bi hbi => hB bi hbi)
+    rw [hmap]
+  -- recover `d.satisfies denv` from a satisfying output and the backward agreement
+  have hsatd : ∀ (denv denv' : VarId → ZMod p),
+      (∀ c ∈ d.algebraicConstraints, (grw c).eval denv' = c.eval denv) →
+      (∀ bi ∈ d.busInteractions,
+        denseBIEval { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw } denv' = denseBIEval bi denv) →
+      (∀ c ∈ d.algebraicConstraints, keep c = false → c.eval denv = 0) →
+      DenseConstraintSystem.satisfies
+        { algebraicConstraints := ((d.algebraicConstraints.filter keep).map grw) ++ newCs,
+          busInteractions := d.busInteractions.map (fun bi =>
+            { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw }) }
+        bs denv' → d.satisfies bs denv := by
+    intro denv denv' hA hB hdrop hsat'
+    refine ⟨fun c hc => ?_, fun bi hbi => ?_⟩
+    · by_cases hk : keep c = true
+      · have hmem : grw c ∈ ((d.algebraicConstraints.filter keep).map grw) ++ newCs :=
+          List.mem_append_left _ (List.mem_map.2 ⟨c, List.mem_filter.2 ⟨hc, hk⟩, rfl⟩)
+        have h1 := hsat'.1 _ hmem
+        rw [hA c hc] at h1; exact h1
+      · exact hdrop c hc (by simpa using hk)
+    · show (denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false
+      have hmem : { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw }
+          ∈ (d.busInteractions.map (fun bi =>
+            { bi with multiplicity := grw bi.multiplicity, payload := bi.payload.map grw })) :=
+        List.mem_map.2 ⟨bi, hbi, rfl⟩
+      have h2 := hsat'.2 _ hmem
+      rw [hB bi hbi] at h2
+      exact h2
+  refine ⟨?_, ?_, hVars, ?_⟩
+  · -- Soundness: `out.implies d`.
+    intro denv' hsat'
+    obtain ⟨denv, hA, hB, hdrop⟩ := hbwd denv' hsat'
+    refine ⟨denv, hsatd denv denv' hA hB hdrop hsat', ?_⟩
+    rw [hside denv denv' hB]; exact BusState.equiv_refl _
+  · -- Invariant preservation.
+    intro hinv denv' hsat' bi' hbi'
+    obtain ⟨denv, hA, hB, hdrop⟩ := hbwd denv' hsat'
+    have hd := hsatd denv denv' hA hB hdrop hsat'
+    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
+    show (denseBIEval { bi0 with multiplicity := grw bi0.multiplicity, payload := bi0.payload.map grw } denv').multiplicity ≠ 0 →
+      bs.breaksInvariant (denseBIEval { bi0 with multiplicity := grw bi0.multiplicity, payload := bi0.payload.map grw } denv') = false
+    rw [hB bi0 hbi0]
+    exact hinv denv hd bi0 hbi0
+  · -- Completeness with derivations.
+    intro denv hadm hsat
+    obtain ⟨denv', hA, hB, hnew, hframe, hrec⟩ := hfwd denv hsat
+    refine ⟨denv', ⟨fun c hc => ?_, fun bi hbi => ?_⟩, (hdisc denv denv' hB).2 hadm, ?_, hframe, hrec⟩
+    · rcases List.mem_append.1 hc with h | h
+      · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 h
+        rw [hA c0 (List.mem_of_mem_filter hc0)]
+        exact hsat.1 c0 (List.mem_of_mem_filter hc0)
+      · exact hnew c h
+    · obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi
+      show (denseBIEval { bi0 with multiplicity := grw bi0.multiplicity, payload := bi0.payload.map grw } denv').multiplicity ≠ 0 →
+        bs.violatesConstraint (denseBIEval { bi0 with multiplicity := grw bi0.multiplicity, payload := bi0.payload.map grw } denv') = false
+      rw [hB bi0 hbi0]
+      exact hsat.2 bi0 hbi0
+    · rw [hside denv denv' hB]; exact BusState.equiv_refl _
+
 /-! ## Derivation-list map lookup (↔ `Derivations.methodFor_map`) -/
 
 /-- The method list built for the fresh bits supplies `g w` for a bit `w`, nothing otherwise.
@@ -739,5 +874,286 @@ theorem DenseDerivations.methodFor_map (bits : List VarId) (g : VarId → DenseC
         · subst hbw; simp [hw]
         · have hwb : w ≠ b := fun h => hbw h.symm
           simp [hw, hbw, hwb, Option.orElse]
+
+/-! ## The capstone: certificate soundness (↔ `checkReencode_sound_D`)
+
+The native `VarId`-side analogue of `checkReencode_sound_D`. It supplies the forward transport (with
+the input-column frame and the native `DenseOutReconstructs` obligation for the minted bits) and the
+backward transport to `DenseConstraintSystem.reencode_correct_D`, producing `DensePassCorrect` for
+the re-encoded output and the fresh bits' derivations, over the **extended** registry's `isInput`.
+
+Freshness / `isInput` of the minted bits (spec's `hbn : b.powdrId? = none`) enters as the abstract
+hypothesis `hbnInput : ∀ b ∈ bits, isInput b = false` — the extended registry's `reg1.isInput b =
+(reg1.resolve b).powdrId?.isSome`, which is `false` for a bit registered with
+`{ name := freshBase ++ … }` (no `powdrId?`), discharged by the wiring step (P3). The group columns'
+`isInput = true` and their `d.occ` membership (spec's `hxs`/`hxsCs`) likewise enter abstractly
+(`hxsInput`/`hxsOcc`); P3 supplies them from the runtime `xs.all (fun x => reg.isInput x)` gate and
+the registry extension (`reg1.isInput x = reg.isInput x` for a valid `x`). -/
+
+theorem denseCheckReencode_sound [Fact p.Prime] (d : DenseConstraintSystem p) (bs : BusSemantics p)
+    (isInput : VarId → Bool) (xs bits : List VarId) (hm : Std.HashMap VarId (DenseExpr p))
+    (hxsInput : ∀ x ∈ xs, isInput x = true) (hxsOcc : ∀ x ∈ xs, x ∈ d.occ)
+    (hxsB : ∀ x ∈ xs, x ∉ bits) (hbnInput : ∀ b ∈ bits, isInput b = false)
+    (hchk : denseCheckReencode d xs bits hm = true) :
+    DensePassCorrect isInput d (denseReencodeOut d xs bits hm)
+      (bits.map (fun b => (b, denseBitCM (denseAssignments (denseBitBox bits)) xs hm b))) bs := by
+  unfold denseCheckReencode at hchk
+  split at hchk
+  · exact absurd hchk (by simp)
+  rename_i doms hdoms
+  simp only [Bool.and_eq_true] at hchk
+  obtain ⟨⟨⟨⟨⟨⟨⟨_hbox, _hm2⟩, _hprofit⟩, hnodup⟩, hvarsB⟩, hC5⟩, hC6⟩, hfreshB⟩ := hchk
+  have hnodup' : bits.Nodup := of_decide_eq_true hnodup
+  have hkeys : doms.map Prod.fst = xs := denseGroupDoms_fst (denseCoveredCsOf d xs) xs doms hdoms
+  have hbitKeys : (denseBitBox (p := p) bits).map Prod.fst = bits := by
+    unfold denseBitBox; rw [List.map_map]; simp [Function.comp_def]
+  have hpolyVars : ∀ y ∈ xs, ∀ v ∈ ((DenseExpr.var y).substF (denseGroupSubst xs hm)).vars,
+      v ∈ bits := by
+    intro y hy v hv
+    exact List.contains_iff_mem.mp
+      (List.all_eq_true.mp (List.all_eq_true.mp hvarsB y hy) v hv)
+  have hσnone : ∀ y, y ∉ xs → denseGroupSubst xs hm y = none := by
+    intro y hy
+    show (if denseContainsFast xs y = true then hm[y]? else none) = none
+    rw [if_neg (fun h => hy (denseContainsFast_sound xs y h))]
+  have hfreshCm : ∀ c ∈ d.algebraicConstraints, ∀ b ∈ bits, c.mentions b = false := by
+    intro c hc b hb
+    have h1 := List.all_eq_true.mp hfreshB b hb
+    rw [Bool.and_eq_true] at h1
+    simpa using List.all_eq_true.mp h1.1 c hc
+  have hfreshMm : ∀ bi ∈ d.busInteractions, ∀ b ∈ bits, bi.multiplicity.mentions b = false := by
+    intro bi hbi b hb
+    have h1 := List.all_eq_true.mp hfreshB b hb
+    rw [Bool.and_eq_true] at h1
+    have h2 := List.all_eq_true.mp h1.2 bi hbi
+    rw [Bool.and_eq_true] at h2
+    simpa using h2.1
+  have hfreshPm : ∀ bi ∈ d.busInteractions, ∀ e ∈ bi.payload, ∀ b ∈ bits,
+      e.mentions b = false := by
+    intro bi hbi e he b hb
+    have h1 := List.all_eq_true.mp hfreshB b hb
+    rw [Bool.and_eq_true] at h1
+    have h2 := List.all_eq_true.mp h1.2 bi hbi
+    rw [Bool.and_eq_true] at h2
+    simpa using List.all_eq_true.mp h2.2 e he
+  -- FORWARD (with the input frame and the native `DenseOutReconstructs` obligation)
+  have hfwd_D : ∀ denv, d.satisfies bs denv → ∃ denv',
+      (∀ c ∈ d.algebraicConstraints,
+        ((denseGroupRewrite xs bits (denseGroupSubst xs hm)
+          (denseAssignments (denseBitBox bits))) c).eval denv' = c.eval denv) ∧
+      (∀ bi ∈ d.busInteractions,
+        denseBIEval { bi with
+            multiplicity := denseGroupRewrite xs bits (denseGroupSubst xs hm)
+              (denseAssignments (denseBitBox bits)) bi.multiplicity,
+            payload := bi.payload.map (denseGroupRewrite xs bits (denseGroupSubst xs hm)
+              (denseAssignments (denseBitBox bits))) } denv' = denseBIEval bi denv) ∧
+      (∀ c ∈ bits.map denseBoolConstraint, c.eval denv' = 0) ∧
+      (∀ i, isInput i = true → denv' i = denv i) ∧
+      (∀ inputVarIds, (∀ i ∈ d.occ, isInput i = true → i ∈ inputVarIds) →
+        DenseOutReconstructs isInput inputVarIds d (denseReencodeOut d xs bits hm)
+          (bits.map (fun b => (b, denseBitCM (denseAssignments (denseBitBox bits)) xs hm b)))
+          denv denv') := by
+    intro denv hsat
+    have hallES : ∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0 := fun c hc =>
+      hsat.1 c (List.mem_of_mem_filter hc)
+    have hdsound := denseGroupDoms_sound denv (denseCoveredCsOf d xs) hallES xs doms hdoms
+    have hamem : (doms.map (fun yd => (yd.1, denv yd.1))) ∈ denseAssignments doms :=
+      mem_denseAssignments doms denv hdsound
+    have hasurv : (doms.map (fun yd => (yd.1, denv yd.1)))
+        ∈ denseGroupSurvivorsE (denseCoveredCsOf d xs) doms := by
+      rw [denseGroupSurvivorsE_eq]
+      refine List.mem_filter.2 ⟨hamem, ?_⟩
+      rw [List.all_eq_true]
+      intro c hc
+      rw [decide_eq_true_iff, DenseExpr.evalFast_eq]
+      have hcov := List.of_mem_filter hc
+      rw [denseCoveredBy, Bool.and_eq_true] at hcov
+      have hcvars : ∀ v ∈ c.vars, v ∈ doms.map Prod.fst := by
+        rw [hkeys]; exact denseVarsInF_sound xs c hcov.2
+      have heq : c.eval (denseEnvOfFast (doms.map (fun yd => (yd.1, denv yd.1)))) = c.eval denv :=
+        DenseExpr.eval_congr c _ _ (fun v hv => denseEnvOfFast_map doms denv v (hcvars v hv))
+      rw [heq]; exact hallES c hc
+    have hC5' : (denseAssignments (denseBitBox bits)).any
+        (fun aβ => xs.all (fun x => decide (denseImgVal xs hm aβ x = denv x))) = true := by
+      rw [List.any_eq_true]
+      obtain ⟨aβ, ha, hp⟩ := List.any_eq_true.1 (List.all_eq_true.mp hC5 _ hasurv)
+      refine ⟨aβ, ha, ?_⟩
+      rw [List.all_eq_true] at hp ⊢
+      intro x hx
+      have hsx : denseEnvOfFast (doms.map (fun yd => (yd.1, denv yd.1))) x = denv x :=
+        denseEnvOfFast_map doms denv x (by rw [hkeys]; exact hx)
+      have hpp := hp x hx
+      rw [hsx] at hpp
+      exact hpp
+    cases hfindEnv : (denseAssignments (denseBitBox bits)).find?
+        (fun aβ => xs.all (fun x => decide (denseImgVal xs hm aβ x = denv x))) with
+    | none =>
+        exfalso
+        rw [List.find?_eq_none] at hfindEnv
+        obtain ⟨aβ0, ha0, hp0⟩ := List.any_eq_true.1 hC5'
+        exact absurd hp0 (by simpa using hfindEnv aβ0 ha0)
+    | some aβ =>
+      have haβ : aβ ∈ denseAssignments (denseBitBox bits) := List.mem_of_find?_eq_some hfindEnv
+      have hβpred : xs.all (fun x => decide (denseImgVal xs hm aβ x = denv x)) = true := by
+        simpa using List.find?_some hfindEnv
+      have hkeysβ : aβ.map Prod.fst = bits := by
+        rw [denseAssignments_keys (denseBitBox bits) aβ haβ, hbitKeys]
+      have henvxs : ∀ x ∈ xs, denseEnvExt aβ denv x = denv x := fun x hx =>
+        denseEnvExt_eq_env_of_notmem aβ denv x (by rw [hkeysβ]; exact hxsB x hx)
+      have hpoint : ∀ y, y ∉ bits →
+          denseEnvF (denseGroupSubst xs hm) (denseEnvExt aβ denv) y = denv y := by
+        intro y hyb
+        by_cases hyx : y ∈ xs
+        · rw [denseEnvF_eq_varSubst]
+          have hagree : ((DenseExpr.var y).substF (denseGroupSubst xs hm)).eval (denseEnvExt aβ denv)
+              = ((DenseExpr.var y).substF (denseGroupSubst xs hm)).eval (denseEnvOfFast aβ) := by
+            apply DenseExpr.eval_congr
+            intro v hv
+            exact denseEnvExt_eq_envOfFast_of_mem aβ denv v (by rw [hkeysβ]; exact hpolyVars y hyx v hv)
+          rw [hagree, ← DenseExpr.evalFast_eq]
+          exact of_decide_eq_true (List.all_eq_true.mp hβpred y hyx)
+        · unfold denseEnvF
+          rw [hσnone y hyx]
+          exact denseEnvExt_eq_env_of_notmem aβ denv y (by rw [hkeysβ]; exact hyb)
+      have hbitsagree : ∀ b ∈ bits, denseEnvExt aβ denv b = denseEnvOfFast aβ b := fun b hb =>
+        denseEnvExt_eq_envOfFast_of_mem aβ denv b (by rw [hkeysβ]; exact hb)
+      refine ⟨denseEnvExt aβ denv, ?_, ?_, ?_, ?_, ?_⟩
+      · intro c hc
+        exact denseGroupRewrite_agree xs bits (denseGroupSubst xs hm)
+          (denseAssignments (denseBitBox bits)) hσnone (denseEnvExt aβ denv) denv aβ haβ
+          hbitsagree hpolyVars hpoint c (hfreshCm c hc)
+      · intro bi hbi
+        exact denseGroupRewrite_bi_agree xs bits (denseGroupSubst xs hm)
+          (denseAssignments (denseBitBox bits)) hσnone (denseEnvExt aβ denv) denv aβ haβ
+          hbitsagree hpolyVars hpoint bi (hfreshMm bi hbi) (hfreshPm bi hbi)
+      · intro c hc
+        obtain ⟨b, hb, rfl⟩ := List.mem_map.1 hc
+        apply denseBoolConstraint_eval_of_bool
+        have hbk : b ∈ aβ.map Prod.fst := hkeysβ ▸ hb
+        rw [denseEnvExt_eq_envOfFast_of_mem aβ denv b hbk]
+        have hmem := denseEnvOf_mem_of_assignments (denseBitBox bits)
+          (by rw [hbitKeys]; exact hnodup') aβ haβ
+          (b, ([0, 1] : List (ZMod p))) (List.mem_map.2 ⟨b, hb, rfl⟩)
+        simpa using hmem
+      · intro i hii
+        refine denseEnvExt_eq_env_of_notmem aβ denv i ?_
+        rw [hkeysβ]
+        intro hib
+        rw [hbnInput i hib] at hii
+        simp at hii
+      · intro inputVarIds hcov1 i hiout hisF
+        rw [DenseDerivations.methodFor_map bits
+          (fun b => denseBitCM (denseAssignments (denseBitBox bits)) xs hm b) i]
+        by_cases hib : i ∈ bits
+        · rw [if_pos hib]
+          refine ⟨fun j hj => hxsInput j (denseBitCM_vars _ xs hm i j hj), fun j hj => ?_, ?_⟩
+          · exact hcov1 j (hxsOcc j (denseBitCM_vars _ xs hm i j hj))
+              (hxsInput j (denseBitCM_vars _ xs hm i j hj))
+          · have hval : (denseBitCM (denseAssignments (denseBitBox bits)) xs hm i).eval
+                (denseEnvExt aβ denv) = denseEnvOfFast aβ i := by
+              rw [DenseComputationMethod.eval_congr
+                  (denseBitCM (denseAssignments (denseBitBox bits)) xs hm i)
+                  (denseEnvExt aβ denv) denv
+                  (fun v hv => henvxs v (denseBitCM_vars _ xs hm i v hv)),
+                denseBitCM_eval, hfindEnv]
+            rw [hval]
+            exact (hbitsagree i hib).symm
+        · rw [if_neg hib]
+          refine ⟨?_, denseEnvExt_eq_env_of_notmem aβ denv i (by rw [hkeysβ]; exact hib)⟩
+          rcases denseReencodeOut_vars_subset d xs bits hm hpolyVars i hiout with h | h
+          · exact h
+          · exact absurd h hib
+  -- BACKWARD
+  have hbwd : ∀ denv', (denseReencodeOut d xs bits hm).satisfies bs denv' → ∃ denv,
+      (∀ c ∈ d.algebraicConstraints,
+        ((denseGroupRewrite xs bits (denseGroupSubst xs hm)
+          (denseAssignments (denseBitBox bits))) c).eval denv' = c.eval denv) ∧
+      (∀ bi ∈ d.busInteractions,
+        denseBIEval { bi with
+            multiplicity := denseGroupRewrite xs bits (denseGroupSubst xs hm)
+              (denseAssignments (denseBitBox bits)) bi.multiplicity,
+            payload := bi.payload.map (denseGroupRewrite xs bits (denseGroupSubst xs hm)
+              (denseAssignments (denseBitBox bits))) } denv' = denseBIEval bi denv) ∧
+      (∀ c ∈ d.algebraicConstraints, (fun c => !denseCoveredBy xs c) c = false → c.eval denv = 0) := by
+    intro denv' hsat'
+    have hbool : ∀ b ∈ bits, denv' b = 0 ∨ denv' b = 1 := by
+      intro b hb
+      apply dense_bool_of_boolConstraint_eval
+      exact hsat'.1 _ (List.mem_append_right _ (List.mem_map.2 ⟨b, hb, rfl⟩))
+    have haβmem : ((denseBitBox (p := p) bits).map (fun yd => (yd.1, denv' yd.1)))
+        ∈ denseAssignments (denseBitBox bits) := by
+      apply mem_denseAssignments
+      intro yd hyd
+      obtain ⟨b, hb, rfl⟩ := List.mem_map.1 hyd
+      simpa using hbool b hb
+    have hβenv : ∀ b ∈ bits,
+        denseEnvOfFast ((denseBitBox (p := p) bits).map (fun yd => (yd.1, denv' yd.1))) b = denv' b := by
+      intro b hb
+      exact denseEnvOfFast_map (denseBitBox bits) denv' b (by rw [hbitKeys]; exact hb)
+    have hkeysP : (xs.map (fun x =>
+        (x, ((DenseExpr.var x).substF (denseGroupSubst xs hm)).eval denv'))).map Prod.fst = xs := by
+      rw [List.map_map]; simp [Function.comp_def]
+    have hpoint : ∀ y, denseEnvF (denseGroupSubst xs hm) denv' y
+        = denseEnvExt (xs.map (fun x =>
+            (x, ((DenseExpr.var x).substF (denseGroupSubst xs hm)).eval denv'))) denv' y := by
+      intro y
+      by_cases hyx : y ∈ xs
+      · rw [denseEnvF_eq_varSubst,
+          denseEnvExt_eq_envOfFast_of_mem _ denv' y (by rw [hkeysP]; exact hyx),
+          denseEnvOf_zipimg xs _ y hyx]
+      · unfold denseEnvF
+        rw [hσnone y hyx]
+        exact (denseEnvExt_eq_env_of_notmem _ denv' y (by rw [hkeysP]; exact hyx)).symm
+    have hexpr : ∀ e : DenseExpr p, (e.substF (denseGroupSubst xs hm)).eval denv'
+        = e.eval (denseEnvExt (xs.map (fun x =>
+            (x, ((DenseExpr.var x).substF (denseGroupSubst xs hm)).eval denv'))) denv') :=
+      fun e => denseSubstF_eval_agree (denseGroupSubst xs hm) denv' _ e (fun y _ => hpoint y)
+    have hbitsagree' : ∀ b ∈ bits,
+        denv' b = denseEnvOfFast ((denseBitBox (p := p) bits).map (fun yd => (yd.1, denv' yd.1))) b :=
+      fun b hb => (hβenv b hb).symm
+    refine ⟨denseEnvExt (xs.map (fun x =>
+        (x, ((DenseExpr.var x).substF (denseGroupSubst xs hm)).eval denv'))) denv', ?_, ?_, ?_⟩
+    · intro c hc
+      exact denseGroupRewrite_agree xs bits (denseGroupSubst xs hm)
+        (denseAssignments (denseBitBox bits)) hσnone denv' _
+        ((denseBitBox (p := p) bits).map (fun yd => (yd.1, denv' yd.1))) haβmem hbitsagree' hpolyVars
+        (fun y _ => hpoint y) c (hfreshCm c hc)
+    · intro bi hbi
+      exact denseGroupRewrite_bi_agree xs bits (denseGroupSubst xs hm)
+        (denseAssignments (denseBitBox bits)) hσnone denv' _
+        ((denseBitBox (p := p) bits).map (fun yd => (yd.1, denv' yd.1))) haβmem hbitsagree' hpolyVars
+        (fun y _ => hpoint y) bi (hfreshMm bi hbi) (hfreshPm bi hbi)
+    · intro c hc hkc
+      have hcov : denseCoveredBy xs c = true := by simpa using hkc
+      have hcmem : c ∈ denseCoveredCsOf d xs := List.mem_filter.2 ⟨hc, hcov⟩
+      have h6 := List.all_eq_true.mp (List.all_eq_true.mp hC6 _ haβmem) c hcmem
+      rw [decide_eq_true_iff, DenseExpr.evalFast_eq] at h6
+      have hcvars : ∀ v ∈ c.vars, v ∈ xs := by
+        rw [denseCoveredBy, Bool.and_eq_true] at hcov
+        exact denseVarsInF_sound xs c hcov.2
+      have hagree : (c.substF (denseGroupSubst xs hm)).eval
+            (denseEnvOfFast ((denseBitBox (p := p) bits).map (fun yd => (yd.1, denv' yd.1))))
+          = (c.substF (denseGroupSubst xs hm)).eval denv' := by
+        rw [DenseExpr.eval_substF, DenseExpr.eval_substF]
+        apply DenseExpr.eval_congr
+        intro y hy
+        rw [denseEnvF_eq_varSubst, denseEnvF_eq_varSubst]
+        apply DenseExpr.eval_congr
+        intro v hv
+        exact hβenv v (hpolyVars y (hcvars y hy) v hv)
+      rw [← hexpr c, ← hagree]
+      exact h6
+  -- no new powdr-ID column: every output variable is a `d`-column or a (non-input) bit
+  have hVars : ∀ i ∈ (denseReencodeOut d xs bits hm).occ, isInput i = true → i ∈ d.occ := by
+    intro i hi hii
+    rcases denseReencodeOut_vars_subset d xs bits hm hpolyVars i hi with h | h
+    · exact h
+    · rw [hbnInput i h] at hii; simp at hii
+  exact DenseConstraintSystem.reencode_correct_D d (denseReencodeOut d xs bits hm) bs isInput
+    (denseGroupRewrite xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits)))
+    (fun c => !denseCoveredBy xs c)
+    (bits.map denseBoolConstraint)
+    (bits.map (fun b => (b, denseBitCM (denseAssignments (denseBitBox bits)) xs hm b)))
+    rfl hfwd_D hbwd hVars
 
 end ApcOptimizer.Dense
