@@ -158,14 +158,20 @@ theorem denseSizeKey_wf :
     WellFounded (fun a b : DenseConstraintSystem p => a.sizeKey < b.sizeKey) :=
   InvImage.wf DenseConstraintSystem.sizeKey wellFounded_lt
 
-/-- Iterate a dense pass to a fixpoint on the dense size key. Correct by construction (each kept step
-    is `PassCorrect`, derivations concatenating; stopping returns the input by reflexivity). -/
-def denseIterateToFixpoint (f : DenseVerifiedPassW p) (reg : VarRegistry)
+/-- The dense fixpoint worker, with the input's already-computed size key threaded through (`_hk`):
+    each cycle computes only the *output*'s key, mirroring the spec `iterateToFixpointFrom` — the old
+    dense loop recomputed the input's key (`d.sizeKey`, a fresh occurrence-list walk plus `HashSet`
+    build) every cycle, and on recursion recomputed the previous output's key as well. Same
+    comparisons, same results. Correct by construction (each kept step is `PassCorrect`, derivations
+    concatenating; stopping returns the input by reflexivity). -/
+def denseIterateToFixpointFrom (f : DenseVerifiedPassW p) (reg : VarRegistry)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (bs : BusSemantics p)
-    (facts : BusFacts p bs) : DensePassResult reg d bs :=
+    (facts : BusFacts p bs) (k : Nat ×ₗ Nat ×ₗ Nat) (_hk : d.sizeKey = k) :
+    DensePassResult reg d bs :=
   let r := f reg d hcov bs facts
-  if h : r.out.sizeKey < d.sizeKey then
-    let r2 := denseIterateToFixpoint f r.reg' r.out r.covered bs facts
+  let k' := r.out.sizeKey
+  if h : k' < k then
+    let r2 := denseIterateToFixpointFrom f r.reg' r.out r.covered bs facts k' rfl
     { reg' := r2.reg'
       out := r2.out
       derivs := r.derivs ++ r2.derivs
@@ -180,18 +186,63 @@ def denseIterateToFixpoint (f : DenseVerifiedPassW p) (reg : VarRegistry)
       dcovered := by intro x hx; simp at hx,
       correct := PassCorrect.refl (reg.decodeCS d) bs }
   termination_by d.sizeKey
-  decreasing_by exact h
+  decreasing_by rw [_hk]; exact h
+
+/-- Iterate a dense pass to a fixpoint on the dense size key. Computes the initial key once and
+    threads it into `denseIterateToFixpointFrom`. Correct by construction. -/
+def denseIterateToFixpoint (f : DenseVerifiedPassW p) (reg : VarRegistry)
+    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (bs : BusSemantics p)
+    (facts : BusFacts p bs) : DensePassResult reg d bs :=
+  denseIterateToFixpointFrom f reg d hcov bs facts d.sizeKey rfl
+
+/-- `denseIterateToFixpointFrom` preserves the degree bound: every kept step is `f` (which respects
+    the bound) and the stopping case returns the unchanged input. Proved by strong induction on the
+    dense `sizeKey` measure the loop recurses on, generalizing the registry and the threaded key. -/
+theorem denseIterateToFixpointFrom_respectsDeg {b : DegreeBound} {f : DenseVerifiedPassW p}
+    (hf : DenseRespectsDeg b f) (reg : VarRegistry) (d : DenseConstraintSystem p) :
+    ∀ (hcov : d.CoveredBy reg) (bs : BusSemantics p) (facts : BusFacts p bs)
+      (k : Nat ×ₗ Nat ×ₗ Nat) (hk : d.sizeKey = k),
+      (reg.decodeCS d).withinDegree b →
+      ((denseIterateToFixpointFrom f reg d hcov bs facts k hk).reg'.decodeCS
+        (denseIterateToFixpointFrom f reg d hcov bs facts k hk).out).withinDegree b := by
+  induction d using denseSizeKey_wf.induction generalizing reg with
+  | _ d ih =>
+    intro hcov bs facts k hk hin
+    rw [denseIterateToFixpointFrom]
+    split
+    · rename_i h
+      exact ih _ (by rw [hk]; exact h) _ (f reg d hcov bs facts).covered bs facts _ rfl
+        (hf reg d hcov bs facts hin)
+    · exact hin
 
 theorem denseIterateToFixpoint_respectsDeg {b : DegreeBound} {f : DenseVerifiedPassW p}
     (hf : DenseRespectsDeg b f) : DenseRespectsDeg b (denseIterateToFixpoint f) := by
-  intro reg d
+  intro reg d hcov bs facts hin
+  exact denseIterateToFixpointFrom_respectsDeg hf reg d hcov bs facts d.sizeKey rfl hin
+
+/-- `denseIterateToFixpointFrom` never grows the size key (strong induction, key generalized). -/
+theorem denseIterateToFixpointFrom_monotone {f : DenseVerifiedPassW p} (reg : VarRegistry)
+    (d : DenseConstraintSystem p) :
+    ∀ (hcov : d.CoveredBy reg) (bs : BusSemantics p) (facts : BusFacts p bs)
+      (k : Nat ×ₗ Nat ×ₗ Nat) (hk : d.sizeKey = k),
+      (denseIterateToFixpointFrom f reg d hcov bs facts k hk).out.sizeKey ≤ d.sizeKey := by
   induction d using denseSizeKey_wf.induction generalizing reg with
   | _ d ih =>
-    intro hcov bs facts hin
-    rw [denseIterateToFixpoint]
+    intro hcov bs facts k hk
+    rw [denseIterateToFixpointFrom]
     split
     · rename_i h
-      exact ih _ h _ (f reg d hcov bs facts).covered bs facts (hf reg d hcov bs facts hin)
-    · exact hin
+      exact le_trans
+        (ih _ (by rw [hk]; exact h) _ (f reg d hcov bs facts).covered bs facts _ rfl)
+        (le_of_lt (by rw [hk]; exact h))
+    · exact le_refl _
+
+/-- **The dense cleanup loop can only improve the circuit.** `denseIterateToFixpoint f`'s output
+    never has a larger lexicographic `sizeKey` than its input. -/
+theorem denseIterateToFixpoint_monotone {f : DenseVerifiedPassW p} (reg : VarRegistry)
+    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (bs : BusSemantics p)
+    (facts : BusFacts p bs) :
+    (denseIterateToFixpoint f reg d hcov bs facts).out.sizeKey ≤ d.sizeKey :=
+  denseIterateToFixpointFrom_monotone reg d hcov bs facts d.sizeKey rfl
 
 end ApcOptimizer.Dense
