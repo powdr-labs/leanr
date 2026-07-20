@@ -19,10 +19,10 @@ traversal returning both the normalized expression and the node's linear form, k
 the spec `PassCorrect` once, at the pipeline edge, by `DenseVerifiedPassW.ofNative` — no dependency on
 the reference `normalizePass`. Mirrors the native `denseConstantFoldPass` (`Dense/ExprOps.lean`).
 
-The validity-gated decode-commutation lemmas at the end (`decodeLin_norm`, `decodeExpr_normalize`,
-and their `denseMergeTerms`/`addCoeff` supporting lemmas) are **not** used by this pass; they remain
-as shared commutation machinery consumed by other passes (CarryBranch, AddrDiseq, DomainBatch,
-ZeroRegister, Gauss). `resolve` is injective only on valid ids, so `denseMergeTerms` mapped through
+The validity-gated decode-commutation lemma at the end (`decodeLin_norm` and its
+`denseMergeTerms`/`addCoeff` supporting lemmas) is **not** used by this pass; it remains as shared
+commutation machinery consumed by other passes (AddrDiseq). `resolve` is injective only on valid
+ids, so `denseMergeTerms` mapped through
 `resolve` equals the spec `mergeTerms` of the decoded terms only when every term's `VarId` is valid;
 those lemmas therefore carry a validity hypothesis, discharged from a coverage invariant. -/
 
@@ -691,45 +691,5 @@ theorem VarRegistry.decodeLin_norm (reg : VarRegistry) (l : DenseLinExpr p)
     reg.decodeLin (DenseLinExpr.norm l) = (reg.decodeLin l).norm := by
   simp only [DenseLinExpr.norm, VarRegistry.decodeLin, LinExpr.norm]
   rw [reg.map_resolve_filter (denseMergeTerms l.terms), reg.denseMergeTerms_map l.terms hv]
-
-/-- **`DenseExpr.normalize` commutes with decode** for covered expressions (validity-gated through
-    `decodeLin_norm`). -/
-theorem VarRegistry.decodeExpr_normalize (reg : VarRegistry) (e : DenseExpr p) : e.CoveredBy reg →
-    reg.decodeExpr (DenseExpr.normalize e) = Expression.normalize (reg.decodeExpr e) := by
-  induction e with
-  | const n => intro _; rfl
-  | var i => intro _; rfl
-  | add a b iha ihb =>
-      intro hc
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_add.mp hc
-      have hvalid : ∀ (l : DenseLinExpr p), denseLinearize (DenseExpr.add a b) = some l →
-          ∀ i ∈ l.terms.map Prod.fst, reg.Valid i :=
-        fun l hl i hi => hc i (denseLinearize_vars (DenseExpr.add a b) l hl i hi)
-      have hkey : (denseLinearize (DenseExpr.add a b)).map reg.decodeLin
-          = linearize (Expression.add (reg.decodeExpr a) (reg.decodeExpr b)) :=
-        reg.denseLinearize_decode (DenseExpr.add a b)
-      simp only [DenseExpr.normalize, VarRegistry.decodeExpr, Expression.normalize]
-      rw [← hkey]
-      cases hP : denseLinearize (DenseExpr.add a b) with
-      | none => simp only [Option.map_none, VarRegistry.decodeExpr, iha ha, ihb hb]
-      | some l =>
-          simp only [Option.map_some]
-          rw [reg.decodeLin_toExpr l.norm, reg.decodeLin_norm l (hvalid l hP)]
-  | mul a b iha ihb =>
-      intro hc
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_mul.mp hc
-      have hvalid : ∀ (l : DenseLinExpr p), denseLinearize (DenseExpr.mul a b) = some l →
-          ∀ i ∈ l.terms.map Prod.fst, reg.Valid i :=
-        fun l hl i hi => hc i (denseLinearize_vars (DenseExpr.mul a b) l hl i hi)
-      have hkey : (denseLinearize (DenseExpr.mul a b)).map reg.decodeLin
-          = linearize (Expression.mul (reg.decodeExpr a) (reg.decodeExpr b)) :=
-        reg.denseLinearize_decode (DenseExpr.mul a b)
-      simp only [DenseExpr.normalize, VarRegistry.decodeExpr, Expression.normalize]
-      rw [← hkey]
-      cases hP : denseLinearize (DenseExpr.mul a b) with
-      | none => simp only [Option.map_none, VarRegistry.decodeExpr, iha ha, ihb hb]
-      | some l =>
-          simp only [Option.map_some]
-          rw [reg.decodeLin_toExpr l.norm, reg.decodeLin_norm l (hvalid l hP)]
 
 end ApcOptimizer.Dense

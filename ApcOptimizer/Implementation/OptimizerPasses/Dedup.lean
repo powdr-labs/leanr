@@ -19,7 +19,7 @@ the fast versions (`DenseConstraintSystem.dedupN`) yet the proof is stated over 
 version. The **native** `DensePassCorrect` proof and the pass itself live in
 `Dense/DedupNativeProof.lean` (which imports `Dense/Bridge`); this module stays `Bridge`-free so its
 runtime defs and structural helpers can be reused by other dense modules
-(`DenseExpr.bHash`, `decodeExpr_inj`, `denseDedupStateless`). -/
+(`DenseExpr.bHash`, `denseDedupStateless`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -28,58 +28,6 @@ variable {p : ℕ}
 -- `DenseExpr` has decidable equality (needed for `List.dedup` and the `∈ seen` membership test);
 -- it also induces `DecidableEq (BusInteraction (DenseExpr p))` via the generic instance.
 deriving instance DecidableEq for DenseExpr
-
-/-! ## Structural injectivity of decode under coverage
-
-`resolve` is injective on valid ids, so `decodeExpr`/`decodeBI` are injective on *covered* values —
-the fact that lets structural comparison commute with decode. -/
-
-/-- **`decodeExpr` is injective on covered dense expressions.** -/
-theorem VarRegistry.decodeExpr_inj (reg : VarRegistry) :
-    ∀ {a b : DenseExpr p}, a.CoveredBy reg → b.CoveredBy reg →
-      reg.decodeExpr a = reg.decodeExpr b → a = b := by
-  intro a
-  induction a with
-  | const m =>
-      intro b _ _ h
-      cases b with
-      | const n => simp only [VarRegistry.decodeExpr, Expression.const.injEq] at h; rw [h]
-      | var j => simp [VarRegistry.decodeExpr] at h
-      | add a2 b2 => simp [VarRegistry.decodeExpr] at h
-      | mul a2 b2 => simp [VarRegistry.decodeExpr] at h
-  | var i =>
-      intro b hca hcb h
-      cases b with
-      | const n => simp [VarRegistry.decodeExpr] at h
-      | var j =>
-          simp only [VarRegistry.decodeExpr, Expression.var.injEq] at h
-          have hvi : reg.Valid i := hca i (by simp [DenseExpr.vars])
-          have hvj : reg.Valid j := hcb j (by simp [DenseExpr.vars])
-          rw [reg.resolve_inj hvi hvj h]
-      | add a2 b2 => simp [VarRegistry.decodeExpr] at h
-      | mul a2 b2 => simp [VarRegistry.decodeExpr] at h
-  | add a1 b1 iha ihb =>
-      intro b hca hcb h
-      cases b with
-      | const n => simp [VarRegistry.decodeExpr] at h
-      | var j => simp [VarRegistry.decodeExpr] at h
-      | add a2 b2 =>
-          simp only [VarRegistry.decodeExpr, Expression.add.injEq] at h
-          obtain ⟨ha1, hb1⟩ := DenseExpr.coveredBy_add.mp hca
-          obtain ⟨ha2, hb2⟩ := DenseExpr.coveredBy_add.mp hcb
-          rw [iha ha1 ha2 h.1, ihb hb1 hb2 h.2]
-      | mul a2 b2 => simp [VarRegistry.decodeExpr] at h
-  | mul a1 b1 iha ihb =>
-      intro b hca hcb h
-      cases b with
-      | const n => simp [VarRegistry.decodeExpr] at h
-      | var j => simp [VarRegistry.decodeExpr] at h
-      | add a2 b2 => simp [VarRegistry.decodeExpr] at h
-      | mul a2 b2 =>
-          simp only [VarRegistry.decodeExpr, Expression.mul.injEq] at h
-          obtain ⟨ha1, hb1⟩ := DenseExpr.coveredBy_mul.mp hca
-          obtain ⟨ha2, hb2⟩ := DenseExpr.coveredBy_mul.mp hcb
-          rw [iha ha1 ha2 h.1, ihb hb1 hb2 h.2]
 
 /-! ## Dense keep-first stateless dedup (reference version) -/
 

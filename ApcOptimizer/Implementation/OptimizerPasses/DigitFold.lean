@@ -66,53 +66,6 @@ theorem densePayload_constValue?_decode (reg : VarRegistry) (pl : List (DenseExp
   rw [List.map_map]
   exact List.map_congr_left (fun e _ => reg.decodeExpr_constValue? e)
 
-/-- Scaling preserves a dense linear form's term-variable list. -/
-theorem DenseLinExpr.scale_terms_fst (k : ZMod p) (l : DenseLinExpr p) :
-    (l.scale k).terms.map Prod.fst = l.terms.map Prod.fst := by
-  simp [DenseLinExpr.scale, List.map_map, Function.comp_def]
-
-/-- Dense linearization introduces no `VarId` outside the expression. -/
-theorem denseLinearize_vars (e : DenseExpr p) (l : DenseLinExpr p) (h : denseLinearize e = some l) :
-    ∀ i ∈ l.terms.map Prod.fst, i ∈ e.vars := by
-  induction e generalizing l with
-  | const n => simp only [denseLinearize, Option.some.injEq] at h; subst h; simp
-  | var x =>
-      simp only [denseLinearize, Option.some.injEq] at h; subst h
-      intro i hi; simpa [DenseExpr.vars] using hi
-  | add a b iha ihb =>
-      cases hla : denseLinearize a with
-      | none => simp [denseLinearize, hla] at h
-      | some la => cases hlb : denseLinearize b with
-        | none => simp [denseLinearize, hla, hlb] at h
-        | some lb =>
-          simp only [denseLinearize, hla, hlb, Option.some.injEq] at h
-          subst h
-          intro i hi
-          simp only [DenseLinExpr.add, List.map_append, List.mem_append] at hi
-          simp only [DenseExpr.vars, List.mem_append]
-          exact hi.imp (iha la hla i) (ihb lb hlb i)
-  | mul a b iha ihb =>
-      cases hla : denseLinearize a with
-      | none => simp [denseLinearize, hla] at h
-      | some la => cases hlb : denseLinearize b with
-        | none => simp [denseLinearize, hla, hlb] at h
-        | some lb =>
-          by_cases h1 : la.terms.isEmpty = true
-          · simp only [denseLinearize, hla, hlb, if_pos h1, Option.some.injEq] at h
-            subst h
-            intro i hi
-            rw [DenseLinExpr.scale_terms_fst] at hi
-            exact List.mem_append.2 (Or.inr (ihb lb hlb i hi))
-          · by_cases h2 : lb.terms.isEmpty = true
-            · simp only [denseLinearize, hla, hlb, if_neg h1, if_pos h2, Option.some.injEq] at h
-              subst h
-              intro i hi
-              rw [DenseLinExpr.scale_terms_fst] at hi
-              exact List.mem_append.2 (Or.inl (iha la hla i hi))
-            · simp only [denseLinearize, hla, hlb] at h
-              rw [if_neg h1, if_neg h2] at h
-              exact absurd h (by simp)
-
 /-- Dense `interactionBound`: one value bound for `i` from a constant-nonzero-multiplicity
     interaction carrying `.var i` in a fact-bounded raw payload slot. -/
 def denseInteractionBound (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -261,13 +214,6 @@ def denseBuild (bs : BusSemantics p) (facts : BusFacts p bs)
   denseAddAll bs facts dbis ∅
 
 /-! ## Dense byte-pair recognizer -/
-
-/-- Decoding sends a dense expression to a literal constant exactly when it already is one.
-    Kept: still consumed by the commutation-era proofs in `ZeroWidthRange.lean` and
-    `ZeroRegister.lean` (dies with that batched trio in a later equivalence-pile dispatch). -/
-theorem VarRegistry.decodeExpr_eq_const (reg : VarRegistry) (e : DenseExpr p) (c : ZMod p) :
-    reg.decodeExpr e = Expression.const c ↔ e = DenseExpr.const c := by
-  cases e <;> simp [VarRegistry.decodeExpr]
 
 /-- Dense byte-pair-check recognizer: a `pairOp`/`result 0`/`mult 1` check on a `byteXorSpec` bus. -/
 def densePairByteOps? (bs : BusSemantics p) (facts : BusFacts p bs)
