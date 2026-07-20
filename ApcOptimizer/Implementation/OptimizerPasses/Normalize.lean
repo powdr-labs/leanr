@@ -43,6 +43,232 @@ def denseAddCoeff (v : VarId) (c : ZMod p) :
 def denseMergeTerms (ts : List (VarId × ZMod p)) : List (VarId × ZMod p) :=
   ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) []
 
+/-! ## Linear like-term merge (runtime `@[csimp]` replacement for `denseMergeTerms`)
+
+`denseMergeTerms`/`denseAddCoeff` are O(terms²): every input term linearly scans the accumulated
+deduped list. For long affine forms (post-substitution reduced constraints; large blocks such as the
+sha256 APC) this is the dominant cost. `denseMergeTermsFast` accumulates each `VarId`'s coefficient
+in a `Std.HashMap` while recording first-occurrence order in an `Array`, then rebuilds by walking the
+recorded order — O(terms) expected. Below a small constant threshold the list fold is faster (no hash
+setup), so a hybrid keeps the tiny-form path (asymptotically still linear: the bounded branch is
+O(1)). Proven `= denseMergeTerms` and installed via `@[csimp]`, so every call site
+(`DenseLinExpr.norm`, hence the fused normalize walk and gauss's per-constraint reduce) uses it at
+runtime with **no proof churn** and the byte-identical result. Dense twin of the spec's #153
+`mergeTermsFast`/`mergeTerms_eq_fast` (`OldVariableBased/Normalize.lean`); the proof structure
+transfers line-by-line since `VarId` has `DecidableEq`/`Hashable`/`LawfulBEq` like `Variable`. -/
+
+/-- The coefficient the first-occurrence-ordered accumulator holds for `v` after merging (the
+    coefficient of the unique accumulator entry for `v`, if any). Mirrors `denseAddCoeff`'s structure
+    so its update lemmas are one-line inductions. Dense twin of `assocCoeff`. -/
+def denseAssocCoeff : List (VarId × ZMod p) → VarId → Option (ZMod p)
+  | [], _ => none
+  | (v', c') :: rest, v => if v' = v then some c' else denseAssocCoeff rest v
+
+theorem denseNotMem_of_assocCoeff_none (acc : List (VarId × ZMod p)) (v : VarId)
+    (h : denseAssocCoeff acc v = none) : v ∉ acc.map Prod.fst := by
+  induction acc with
+  | nil => simp
+  | cons t rest ih =>
+      obtain ⟨v', c'⟩ := t
+      simp only [denseAssocCoeff] at h
+      split at h
+      · exact absurd h (by simp)
+      · next hne =>
+          simp only [List.map_cons, List.mem_cons, not_or]
+          exact ⟨fun hh => hne hh.symm, ih h⟩
+
+theorem denseMem_of_assocCoeff_some (acc : List (VarId × ZMod p)) (v : VarId) (c : ZMod p)
+    (h : denseAssocCoeff acc v = some c) : v ∈ acc.map Prod.fst := by
+  induction acc with
+  | nil => simp [denseAssocCoeff] at h
+  | cons t rest ih =>
+      obtain ⟨v', c'⟩ := t
+      simp only [denseAssocCoeff] at h
+      simp only [List.map_cons, List.mem_cons]
+      split at h
+      · next he => exact Or.inl he.symm
+      · next hne => exact Or.inr (ih h)
+
+/-- The effect of one `denseAddCoeff` on `denseAssocCoeff`: bump `v`'s coefficient (0 if absent),
+    leave every other variable untouched. Dense twin of `assocCoeff_addCoeff`. -/
+theorem denseAssocCoeff_addCoeff (v : VarId) (c : ZMod p) (acc : List (VarId × ZMod p))
+    (w : VarId) :
+    denseAssocCoeff (denseAddCoeff v c acc) w
+      = if w = v then some ((denseAssocCoeff acc v).getD 0 + c) else denseAssocCoeff acc w := by
+  induction acc with
+  | nil =>
+      simp only [denseAddCoeff, denseAssocCoeff, Option.getD_none, zero_add]
+      by_cases hwv : w = v
+      · subst hwv; simp
+      · rw [if_neg hwv, if_neg (fun he => hwv he.symm)]
+  | cons t rest ih =>
+      obtain ⟨v', c'⟩ := t
+      simp only [denseAddCoeff]
+      by_cases hv' : v' = v
+      · rw [if_pos hv']
+        subst hv'
+        simp only [denseAssocCoeff]
+        by_cases hwv : w = v'
+        · subst hwv; simp
+        · have hwv' : ¬ v' = w := fun he => hwv he.symm
+          simp only [if_neg hwv, if_neg hwv']
+      · rw [if_neg hv']
+        simp only [denseAssocCoeff, ih]
+        rw [if_neg hv']
+        by_cases hv'w : v' = w
+        · have hwv : ¬ w = v := fun he => hv' (hv'w.trans he)
+          rw [if_pos hv'w, if_neg hwv, if_pos hv'w]
+        · rw [if_neg hv'w, if_neg hv'w]
+
+theorem denseAddCoeff_map_fst_of_mem (v : VarId) (c : ZMod p) (acc : List (VarId × ZMod p))
+    (h : v ∈ acc.map Prod.fst) : (denseAddCoeff v c acc).map Prod.fst = acc.map Prod.fst := by
+  induction acc with
+  | nil => simp at h
+  | cons t rest ih =>
+      obtain ⟨v', c'⟩ := t
+      simp only [denseAddCoeff]
+      split
+      · next he => simp
+      · next hne =>
+          simp only [List.map_cons, List.mem_cons] at h
+          have hmem : v ∈ rest.map Prod.fst := by
+            rcases h with h | h
+            · exact absurd h.symm hne
+            · exact h
+          simp [ih hmem]
+
+theorem denseAddCoeff_append_of_not_mem (v : VarId) (c : ZMod p) (acc : List (VarId × ZMod p))
+    (h : v ∉ acc.map Prod.fst) : denseAddCoeff v c acc = acc ++ [(v, c)] := by
+  induction acc with
+  | nil => simp [denseAddCoeff]
+  | cons t rest ih =>
+      obtain ⟨v', c'⟩ := t
+      simp only [List.map_cons, List.mem_cons, not_or] at h
+      obtain ⟨hne, hrest⟩ := h
+      simp only [denseAddCoeff]
+      rw [if_neg (fun he => hne he.symm)]
+      simp [ih hrest]
+
+/-- One step of the fast merge: bump `t.1`'s coefficient in the map, appending `t.1` to the order
+    array on first occurrence. Dense twin of `mtStep`. -/
+def denseMtStep (st : Array VarId × Std.HashMap VarId (ZMod p)) (t : VarId × ZMod p) :
+    Array VarId × Std.HashMap VarId (ZMod p) :=
+  match st.2[t.1]? with
+  | some c0 => (st.1, st.2.insert t.1 (c0 + t.2))
+  | none => (st.1.push t.1, st.2.insert t.1 t.2)
+
+/-- Correspondence invariant tying the fast `(order, map)` state to the `denseAddCoeff`-fold list.
+    Dense twin of `MergeCorr`. -/
+def DenseMergeCorr (acc : List (VarId × ZMod p)) (order : Array VarId)
+    (m : Std.HashMap VarId (ZMod p)) : Prop :=
+  order.toList = acc.map Prod.fst ∧ (acc.map Prod.fst).Nodup ∧ ∀ v, m[v]? = denseAssocCoeff acc v
+
+theorem denseMtStep_corr (acc : List (VarId × ZMod p)) (order : Array VarId)
+    (m : Std.HashMap VarId (ZMod p)) (t : VarId × ZMod p) (h : DenseMergeCorr acc order m) :
+    DenseMergeCorr (denseAddCoeff t.1 t.2 acc) (denseMtStep (order, m) t).1
+      (denseMtStep (order, m) t).2 := by
+  obtain ⟨hord, hnod, hm⟩ := h
+  obtain ⟨tv, tc⟩ := t
+  have hmtv := hm tv
+  rcases hcase : (m[tv]? : Option (ZMod p)) with _ | c0
+  · have habs : denseAssocCoeff acc tv = none := by rw [← hmtv, hcase]
+    have hnmem : tv ∉ acc.map Prod.fst := denseNotMem_of_assocCoeff_none acc tv habs
+    have hstep : denseMtStep (order, m) (tv, tc) = (order.push tv, m.insert tv tc) := by
+      simp only [denseMtStep, hcase]
+    have hfst : (denseAddCoeff tv tc acc).map Prod.fst = acc.map Prod.fst ++ [tv] := by
+      rw [denseAddCoeff_append_of_not_mem tv tc acc hnmem]; simp
+    rw [hstep]
+    refine ⟨?_, ?_, ?_⟩
+    · rw [hfst, Array.toList_push, hord]
+    · rw [hfst]
+      exact hnod.append (List.nodup_singleton tv) (List.disjoint_singleton.2 hnmem)
+    · intro w
+      rw [Std.HashMap.getElem?_insert, denseAssocCoeff_addCoeff, habs]
+      simp only [beq_iff_eq, Option.getD_none, zero_add]
+      by_cases hwv : tv = w
+      · subst hwv; simp
+      · rw [if_neg hwv, if_neg (fun he => hwv he.symm)]
+        exact hm w
+  · have hpres : denseAssocCoeff acc tv = some c0 := by rw [← hmtv, hcase]
+    have hmem : tv ∈ acc.map Prod.fst := denseMem_of_assocCoeff_some acc tv c0 hpres
+    have hstep : denseMtStep (order, m) (tv, tc) = (order, m.insert tv (c0 + tc)) := by
+      simp only [denseMtStep, hcase]
+    have hfst : (denseAddCoeff tv tc acc).map Prod.fst = acc.map Prod.fst :=
+      denseAddCoeff_map_fst_of_mem tv tc acc hmem
+    rw [hstep]
+    refine ⟨?_, ?_, ?_⟩
+    · rw [hfst]; exact hord
+    · rw [hfst]; exact hnod
+    · intro w
+      rw [Std.HashMap.getElem?_insert, denseAssocCoeff_addCoeff, hpres]
+      simp only [beq_iff_eq, Option.getD_some]
+      by_cases hwv : tv = w
+      · subst hwv; simp
+      · rw [if_neg hwv, if_neg (fun he => hwv he.symm)]
+        exact hm w
+
+theorem denseMtFold_corr (ts : List (VarId × ZMod p)) :
+    ∀ (acc : List (VarId × ZMod p)) (order : Array VarId)
+      (m : Std.HashMap VarId (ZMod p)), DenseMergeCorr acc order m →
+      DenseMergeCorr (ts.foldl (fun a t => denseAddCoeff t.1 t.2 a) acc)
+        (ts.foldl denseMtStep (order, m)).1 (ts.foldl denseMtStep (order, m)).2 := by
+  induction ts with
+  | nil => intro acc order m h; simpa using h
+  | cons t rest ih =>
+      intro acc order m h
+      simp only [List.foldl_cons]
+      exact ih (denseAddCoeff t.1 t.2 acc) (denseMtStep (order, m) t).1
+        (denseMtStep (order, m) t).2 (denseMtStep_corr acc order m t h)
+
+theorem denseReconAssoc (acc : List (VarId × ZMod p)) (hnod : (acc.map Prod.fst).Nodup) :
+    (acc.map Prod.fst).map (fun v => (v, (denseAssocCoeff acc v).getD 0)) = acc := by
+  induction acc with
+  | nil => simp
+  | cons t rest ih =>
+      obtain ⟨v', c'⟩ := t
+      simp only [List.map_cons] at hnod ⊢
+      rw [List.nodup_cons] at hnod
+      obtain ⟨hnotin, hnod'⟩ := hnod
+      have hhead : (denseAssocCoeff ((v', c') :: rest) v').getD 0 = c' := by simp [denseAssocCoeff]
+      have htail : (rest.map Prod.fst).map
+          (fun v => (v, (denseAssocCoeff ((v', c') :: rest) v).getD 0))
+          = (rest.map Prod.fst).map (fun v => (v, (denseAssocCoeff rest v).getD 0)) := by
+        apply List.map_congr_left
+        intro v hv
+        have hvne : ¬ v' = v := fun he => hnotin (he ▸ hv)
+        simp [denseAssocCoeff, if_neg hvne]
+      rw [hhead, htail, ih hnod']
+
+theorem denseRecon (acc : List (VarId × ZMod p)) (order : Array VarId)
+    (m : Std.HashMap VarId (ZMod p)) (h : DenseMergeCorr acc order m) :
+    order.toList.map (fun v => (v, (m[v]?).getD 0)) = acc := by
+  obtain ⟨hord, hnod, hm⟩ := h
+  rw [hord]
+  rw [show (fun v => (v, (m[v]?).getD 0)) = (fun v => (v, (denseAssocCoeff acc v).getD 0)) from
+    funext (fun v => by rw [hm v])]
+  exact denseReconAssoc acc hnod
+
+/-- The dense linear like-term merge. Proven `= denseMergeTerms` and installed via `@[csimp]`.
+    Dense twin of `mergeTermsFast`. -/
+def denseMergeTermsFast (ts : List (VarId × ZMod p)) : List (VarId × ZMod p) :=
+  if ts.length ≤ 32 then
+    ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) []
+  else
+    let st := ts.foldl denseMtStep (#[], ∅)
+    st.1.toList.map (fun v => (v, (st.2[v]?).getD 0))
+
+@[csimp] theorem denseMergeTerms_eq_fast : @denseMergeTerms = @denseMergeTermsFast := by
+  funext p ts
+  show denseMergeTerms ts = denseMergeTermsFast ts
+  unfold denseMergeTermsFast
+  split
+  · rfl
+  · have hbase : DenseMergeCorr ([] : List (VarId × ZMod p)) (#[] : Array VarId)
+        (∅ : Std.HashMap VarId (ZMod p)) :=
+      ⟨by simp, by simp, fun v => by simp [denseAssocCoeff]⟩
+    have hcorr := denseMtFold_corr ts [] #[] ∅ hbase
+    exact (denseRecon _ _ _ hcorr).symm
+
 /-- The fully-merged normal form of a dense linear form: combine like terms, drop zeros. -/
 def DenseLinExpr.norm (l : DenseLinExpr p) : DenseLinExpr p :=
   ⟨l.const, (denseMergeTerms l.terms).filter (fun t => t.2 ≠ 0)⟩
