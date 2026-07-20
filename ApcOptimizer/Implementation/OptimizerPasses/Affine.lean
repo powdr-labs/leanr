@@ -445,28 +445,6 @@ def densePm1PivotsOf (c : DenseExpr p) : List (VarId × DenseExpr p) :=
   | none => []
   | some l => (l.terms.map Prod.fst).filterMap l.trySolve
 
-/-- **`pm1PivotsOf` commutes with decode** for covered expressions. -/
-theorem VarRegistry.densePm1PivotsOf_decode (reg : VarRegistry) (c : DenseExpr p)
-    (hc : c.CoveredBy reg) :
-    (densePm1PivotsOf c).map reg.decodePivot = pm1PivotsOf (reg.decodeExpr c) := by
-  have hkey := reg.denseLinearize_decode c
-  cases hL : denseLinearize c with
-  | none =>
-      have hRHS : linearize (reg.decodeExpr c) = none := by rw [← hkey, hL, Option.map_none]
-      simp [densePm1PivotsOf, pm1PivotsOf, hL, hRHS]
-  | some l =>
-      have hRHS : linearize (reg.decodeExpr c) = some (reg.decodeLin l) := by
-        rw [← hkey, hL, Option.map_some]
-      have hterms := reg.denseLinearize_covered_terms hc hL
-      have hLHS : densePm1PivotsOf c = (l.terms.map Prod.fst).filterMap l.trySolve := by
-        simp only [densePm1PivotsOf, hL]
-      have hpm : pm1PivotsOf (reg.decodeExpr c)
-          = ((reg.decodeLin l).terms.map Prod.fst).filterMap (reg.decodeLin l).trySolve := by
-        simp only [pm1PivotsOf, hRHS]
-      rw [hLHS, hpm, reg.decodeLin_terms_fst]
-      exact reg.filterMap_pivots (l.terms.map Prod.fst) l.trySolve (reg.decodeLin l).trySolve
-        (fun v hvm => reg.denseTrySolve_decode l (hterms v hvm) hterms)
-
 /-- Unit-coefficient pivots of one dense constraint, for variables with no `±1` solution
     (mirrors `unitPivotsOf`). -/
 def denseUnitPivotsOf (c : DenseExpr p) : List (VarId × DenseExpr p) :=
@@ -478,44 +456,9 @@ def denseUnitPivotsOf (c : DenseExpr p) : List (VarId × DenseExpr p) :=
       | some _ => none
       | none => l.trySolveUnit v)
 
-/-- **`unitPivotsOf` commutes with decode** for covered expressions. -/
-theorem VarRegistry.denseUnitPivotsOf_decode (reg : VarRegistry) (c : DenseExpr p)
-    (hc : c.CoveredBy reg) :
-    (denseUnitPivotsOf c).map reg.decodePivot = unitPivotsOf (reg.decodeExpr c) := by
-  have hkey := reg.denseLinearize_decode c
-  cases hL : denseLinearize c with
-  | none =>
-      have hRHS : linearize (reg.decodeExpr c) = none := by rw [← hkey, hL, Option.map_none]
-      simp [denseUnitPivotsOf, unitPivotsOf, hL, hRHS]
-  | some l =>
-      have hRHS : linearize (reg.decodeExpr c) = some (reg.decodeLin l) := by
-        rw [← hkey, hL, Option.map_some]
-      have hterms := reg.denseLinearize_covered_terms hc hL
-      -- Unfold both defs, reduce the `some l` matches (iota), resolve the term ids; the two
-      -- `filterMap` functions keep their own (differing) matchers, bridged per-id via `cases`.
-      simp only [denseUnitPivotsOf, unitPivotsOf, hL, hRHS, reg.decodeLin_terms_fst]
-      refine reg.filterMap_pivots _ _ _ (fun v hvm => ?_)
-      have h1 := reg.denseTrySolve_decode l (hterms v hvm) hterms
-      cases htr : l.trySolve v with
-      | some r => rw [htr] at h1; rw [← h1]; simp
-      | none =>
-          rw [htr] at h1; rw [← h1]
-          simpa using reg.denseTrySolveUnit_decode l (hterms v hvm) hterms
-
 /-- All solvable pivots across a dense constraint list, `±1` pivots first (mirrors `solvableFrom`). -/
 def denseSolvableFrom (all : List (DenseExpr p)) : List (VarId × DenseExpr p) :=
   all.flatMap densePm1PivotsOf ++ all.flatMap denseUnitPivotsOf
-
-/-- **`solvableFrom` commutes with decode** for a covered constraint list. -/
-theorem VarRegistry.denseSolvableFrom_decode (reg : VarRegistry) (all : List (DenseExpr p))
-    (hc : ∀ c ∈ all, c.CoveredBy reg) :
-    (denseSolvableFrom all).map reg.decodePivot = solvableFrom (all.map reg.decodeExpr) := by
-  simp only [denseSolvableFrom, solvableFrom, List.map_append]
-  congr 1
-  · rw [List.map_flatMap, List.flatMap_map]
-    exact flatMap_congr_mem _ (fun c hcm => reg.densePm1PivotsOf_decode c (hc c hcm))
-  · rw [List.map_flatMap, List.flatMap_map]
-    exact flatMap_congr_mem _ (fun c hcm => reg.denseUnitPivotsOf_decode c (hc c hcm))
 
 /-! ## Native affine-form evaluation (mirrors `LinExpr.add_eval`/`scale_eval`/`linearize_eval`)
 

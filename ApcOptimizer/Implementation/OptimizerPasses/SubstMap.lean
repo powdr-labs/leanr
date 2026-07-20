@@ -7,20 +7,13 @@ set_option autoImplicit false
 
 The dense mirror of the *batch* substitution machinery `Expression.substF` /
 `ConstraintSystem.substF` (`OptimizerPasses/SubstMap.lean`) and of the syntactic occurrence test
-`Expression.mentions` (`OptimizerPasses/Gauss.lean`). These are the three dense primitives the
-Gauss capstone (the next chunk — `gaussLoop`, `DenseSolved`, the pass) consumes; nothing here is
-defined or wired into the pipeline beyond these pure/equational cores.
+`Expression.mentions` (`OptimizerPasses/Gauss.lean`). These are the dense substitution primitives
+the Gauss / domain / flag / rootPair passes consume: `DenseExpr.substF` / `denseBIsubstF` /
+`DenseConstraintSystem.substF`, their variable-bound and coverage-preservation lemmas
+(`substF_vars` / `substF_covered`), and `DenseExpr.mentions`. All pure/equational and `VarId`-native.
 
-Like the single-variable `Dense/Subst.lean`, substitution *compares variables* (a `VarId`-keyed
-lookup, and `mentions` does an `==`), so decode-commutation needs validity: `resolve` is injective
-only on valid IDs. Both commutation lemmas therefore carry coverage/validity hypotheses.
-
-Unlike `Dense/Subst.lean`, the substitution here is by a whole *function* `df : VarId → Option _`.
-Its decode-commutation cannot be stated unconditionally against a fixed spec map: the caller
-(`gaussLoop`) supplies its own dense map and the corresponding spec map, so the commutation carries
-an explicit *relationship hypothesis* `hrel` — at every valid id, the dense map's value decodes to
-the spec map's value at the resolved variable. `gaussLoop` discharges `hrel` from its map
-correspondence. -/
+The decode-commutation lemmas that the commutation-era Gauss proof consumed have been removed; the
+native Gauss proof (`GaussProof.lean`) needs only these dense cores. -/
 
 namespace ApcOptimizer.Dense
 
@@ -75,35 +68,6 @@ theorem DenseExpr.substF_vars (df : VarId → Option (DenseExpr p)) (e : DenseEx
         · exact Or.inl (List.mem_append.2 (Or.inr h))
         · exact Or.inr ⟨i, List.mem_append.2 (Or.inr hi), t, hft, hkt⟩
 
-/-- **Simultaneous substitution commutes with decode.** Given a relationship `hrel` between the
-    dense map `df` and the spec map `sf` — at every valid id `i`, the dense value `df i` decodes to
-    the spec value `sf (resolve i)` — decoding a dense `substF` is the spec `substF` of the decode.
-    Validity-gated: every leaf of `e` is valid via coverage, so `hrel` is only invoked on valid ids.
-    The caller (`gaussLoop`) discharges `hrel` from its map correspondence. -/
-theorem VarRegistry.decodeExpr_substF (reg : VarRegistry)
-    (df : VarId → Option (DenseExpr p)) (sf : Variable → Option (Expression p))
-    (hrel : ∀ i, reg.Valid i → (df i).map reg.decodeExpr = sf (reg.resolve i))
-    (e : DenseExpr p) : e.CoveredBy reg →
-    reg.decodeExpr (e.substF df) = Expression.substF sf (reg.decodeExpr e) := by
-  induction e with
-  | const n => intro _; rfl
-  | var j =>
-      intro hc
-      have hjv : reg.Valid j := hc j (by simp [DenseExpr.vars])
-      have hr := hrel j hjv
-      show reg.decodeExpr (match df j with | some t => t | none => .var j)
-        = match sf (reg.resolve j) with | some t => t | none => .var (reg.resolve j)
-      rw [← hr]
-      cases df j <;> rfl
-  | add a b iha ihb =>
-      intro hc
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_add.mp hc
-      simp only [DenseExpr.substF, VarRegistry.decodeExpr, Expression.substF, iha ha, ihb hb]
-  | mul a b iha ihb =>
-      intro hc
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_mul.mp hc
-      simp only [DenseExpr.substF, VarRegistry.decodeExpr, Expression.substF, iha ha, ihb hb]
-
 /-- Substitution preserves coverage when every solution `df` produces for a *valid* id is covered.
     (Only valid ids are ever looked up, since `e` is covered — see `substF_vars`.) -/
 theorem DenseExpr.substF_covered {reg : VarRegistry} {e : DenseExpr p}
@@ -129,36 +93,6 @@ def DenseConstraintSystem.substF (d : DenseConstraintSystem p)
     (df : VarId → Option (DenseExpr p)) : DenseConstraintSystem p :=
   { algebraicConstraints := d.algebraicConstraints.map (·.substF df),
     busInteractions := d.busInteractions.map (denseBIsubstF · df) }
-
-/-- Bus-interaction simultaneous substitution commutes with decode. -/
-theorem VarRegistry.decodeBI_substF (reg : VarRegistry)
-    (df : VarId → Option (DenseExpr p)) (sf : Variable → Option (Expression p))
-    (hrel : ∀ i, reg.Valid i → (df i).map reg.decodeExpr = sf (reg.resolve i))
-    (bi : BusInteraction (DenseExpr p)) (hc : denseBICovered reg bi) :
-    reg.decodeBI (denseBIsubstF bi df) = (reg.decodeBI bi).substF sf := by
-  obtain ⟨hm, hp⟩ := hc
-  simp only [denseBIsubstF, VarRegistry.decodeBI, BusInteraction.substF, List.map_map,
-    reg.decodeExpr_substF df sf hrel _ hm]
-  congr 1
-  refine List.map_congr_left (fun e he => ?_)
-  simp only [Function.comp_apply, reg.decodeExpr_substF df sf hrel e (hp e he)]
-
-/-- **System simultaneous substitution commutes with decode** (validity-gated by system coverage,
-    `hrel` relating `df` and `sf`). The identity the Gauss capstone's final `substF` application
-    rides on. -/
-theorem VarRegistry.decodeCS_substF (reg : VarRegistry)
-    (df : VarId → Option (DenseExpr p)) (sf : Variable → Option (Expression p))
-    (hrel : ∀ i, reg.Valid i → (df i).map reg.decodeExpr = sf (reg.resolve i))
-    (d : DenseConstraintSystem p) (hc : d.CoveredBy reg) :
-    reg.decodeCS (d.substF df) = (reg.decodeCS d).substF sf := by
-  obtain ⟨hac, hbi⟩ := hc
-  simp only [DenseConstraintSystem.substF, VarRegistry.decodeCS, ConstraintSystem.substF,
-    List.map_map]
-  congr 1
-  · refine List.map_congr_left (fun e he => ?_)
-    simp only [Function.comp_apply, reg.decodeExpr_substF df sf hrel e (hac e he)]
-  · refine List.map_congr_left (fun bi hbimem => ?_)
-    simp only [Function.comp_apply, reg.decodeBI_substF df sf hrel bi (hbi bi hbimem)]
 
 /-- Bus-interaction coverage is preserved by substitution when every `df`-value (for valid ids) is
     covered. -/
@@ -194,32 +128,5 @@ def DenseExpr.mentions (i : VarId) : DenseExpr p → Bool
   | .var j => j == i
   | .add a b => a.mentions i || b.mentions i
   | .mul a b => a.mentions i || b.mentions i
-
-/-- **`mentions` commutes with decode** (given `i` valid and `e` covered): the dense occurrence test
-    for `i` equals the spec occurrence test for `resolve i` on the decoded expression. A full `Bool`
-    equality — the var case rides on `resolve`'s injectivity on valid ids, so `j == i` and
-    `resolve j == resolve i` agree. -/
-theorem VarRegistry.decodeExpr_mentions (reg : VarRegistry) {i : VarId} (hi : reg.Valid i)
-    (e : DenseExpr p) : e.CoveredBy reg →
-    DenseExpr.mentions i e = Expression.mentions (reg.resolve i) (reg.decodeExpr e) := by
-  induction e with
-  | const n => intro _; rfl
-  | var j =>
-      intro hc
-      have hjv : reg.Valid j := hc j (by simp [DenseExpr.vars])
-      show (j == i) = (reg.resolve j == reg.resolve i)
-      by_cases h : j = i
-      · subst h; simp
-      · rw [beq_eq_false_iff_ne.mpr h,
-            beq_eq_false_iff_ne.mpr
-              (fun he : reg.resolve j = reg.resolve i => h (reg.resolve_inj hjv hi he))]
-  | add a b iha ihb =>
-      intro hc
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_add.mp hc
-      simp only [DenseExpr.mentions, VarRegistry.decodeExpr, Expression.mentions, iha ha, ihb hb]
-  | mul a b iha ihb =>
-      intro hc
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_mul.mp hc
-      simp only [DenseExpr.mentions, VarRegistry.decodeExpr, Expression.mentions, iha ha, ihb hb]
 
 end ApcOptimizer.Dense
