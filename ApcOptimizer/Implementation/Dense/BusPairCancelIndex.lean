@@ -126,7 +126,7 @@ def insertC (I : DenseVarCsIdx p) (x : VarId) (c : DenseExpr p) : DenseVarCsIdx 
 /-- Record `c` under each of its variables. Mirrors `VarCsIdx.addConstraint`
     (`BusPairCancel.lean:1329`). -/
 def addConstraint (I : DenseVarCsIdx p) (c : DenseExpr p) : DenseVarCsIdx p :=
-  c.vars.eraseDups.foldl (fun I x => I.insertC x c) I
+  c.vars.dedup.foldl (fun I x => I.insertC x c) I
 
 /-- Mirrors `VarCsIdx.addAll` (`BusPairCancel.lean:1333`). -/
 def addAll : DenseVarCsIdx p → List (DenseExpr p) → DenseVarCsIdx p

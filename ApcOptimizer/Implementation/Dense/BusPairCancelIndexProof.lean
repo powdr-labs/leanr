@@ -117,7 +117,7 @@ theorem DenseVarCsIdx.foldlInsertC_sound {constraints : List (DenseExpr p)} {c :
 theorem DenseVarCsIdx.addConstraint_sound {constraints : List (DenseExpr p)} {I : DenseVarCsIdx p}
     (hI : I.Sound constraints) {c : DenseExpr p} (hc : c ∈ constraints) :
     (I.addConstraint c).Sound constraints :=
-  DenseVarCsIdx.foldlInsertC_sound hc I c.vars.eraseDups hI
+  DenseVarCsIdx.foldlInsertC_sound hc I c.vars.dedup hI
 
 theorem DenseVarCsIdx.addAll_sound {constraints : List (DenseExpr p)} :
     ∀ (I : DenseVarCsIdx p) (pending : List (DenseExpr p)), (∀ c ∈ pending, c ∈ constraints) →

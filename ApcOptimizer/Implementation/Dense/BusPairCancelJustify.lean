@@ -118,7 +118,7 @@ def densePointByteOk (x : VarId) (c : DenseExpr p) (byteVars : List VarId)
 def denseDeepByteVars (bs : BusSemantics p) (facts : BusFacts p bs)
     (wits : VarId → List (BusInteraction (DenseExpr p))) (x : VarId) (c : DenseExpr p) :
     List VarId :=
-  (c.vars.eraseDups.filter (fun v => v ≠ x)).filter (fun v =>
+  (c.vars.dedup.filter (fun v => v ≠ x)).filter (fun v =>
     match denseFindVarBound bs facts (wits v) v with
     | some b => decide (b ≤ 256)
     | none => false)
@@ -128,7 +128,7 @@ def denseDeepByteVars (bs : BusSemantics p) (facts : BusFacts p bs)
     `deepEnumDoms` (`BusPairCancel.lean:143`). -/
 def denseDeepEnumDoms (domCs : List (DenseExpr p)) (x : VarId) (c : DenseExpr p) :
     List (VarId × List (ZMod p)) :=
-  (c.vars.eraseDups.filter (fun v => v ≠ x)).filterMap (fun v =>
+  (c.vars.dedup.filter (fun v => v ≠ x)).filterMap (fun v =>
     match denseFindDomainAlg domCs v with
     | some d => if d.length ≤ maxDeepDomain then some (v, d) else none
     | none => none)
@@ -140,7 +140,7 @@ def denseDeepBoundOk (domCs : List (DenseExpr p)) (bs : BusSemantics p) (facts :
     (wits : VarId → List (BusInteraction (DenseExpr p))) (x : VarId) (c : DenseExpr p) :
     Bool :=
   let enum := denseDeepEnumDoms domCs x c
-  if (c.vars.eraseDups.filter (fun v => v ≠ x)).length ≤ maxDeepVars &&
+  if (c.vars.dedup.filter (fun v => v ≠ x)).length ≤ maxDeepVars &&
       (enum.map (fun vd => vd.2.length)).prod ≤ maxDeepPoints then
     (denseAssignments enum).all
       (densePointByteOk x c (denseDeepByteVars bs facts wits x c) (enum.map Prod.fst))
