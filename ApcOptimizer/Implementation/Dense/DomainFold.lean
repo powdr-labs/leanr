@@ -337,11 +337,25 @@ structure DenseFoldIdx (p : ℕ) where
   bisIdx : DenseCovIndex
   arrBis : Array (BusInteraction (DenseExpr p))
 
-/-- Build the dense fold index for a system (mirrors `FoldIdx.mk'`). -/
+/-- Per-item variable list with duplicates removed (mirrors `dedupVarsOf`,
+    `OptimizerPasses/DomainFold.lean:711`): the index build otherwise inserts one bucket entry per
+    *occurrence* (and the per-target gathers then re-deduplicate them). Same membership, so bucket
+    completeness is unchanged (`hashedEraseDups_eq` + `mem_eraseDups`). -/
+def denseDedupVarsOf (c : DenseExpr p) : List VarId :=
+  HashedDedup.hashedEraseDups (hash ·) c.vars
+
+/-- `denseDedupVarsOf` for interactions (multiplicity + payload occurrences, mirrors
+    `dedupBiVarsOf`, `OptimizerPasses/DomainFold.lean:715`). -/
+def denseDedupBiVarsOf (bi : BusInteraction (DenseExpr p)) : List VarId :=
+  HashedDedup.hashedEraseDups (hash ·) (denseBIVars bi)
+
+/-- Build the dense fold index for a system (mirrors `FoldIdx.mk'`); buckets by the per-item deduped
+    variable list, one entry per *distinct* variable (mirrors `FoldIdx.mk'`'s `dedupVarsOf`/
+    `dedupBiVarsOf`). -/
 def DenseFoldIdx.mk' (d : DenseConstraintSystem p) : DenseFoldIdx p where
-  idx := denseCovBuild DenseExpr.vars d.algebraicConstraints
+  idx := denseCovBuild denseDedupVarsOf d.algebraicConstraints
   arr := d.algebraicConstraints.toArray
-  bisIdx := denseCovBuild denseBIVars d.busInteractions
+  bisIdx := denseCovBuild denseDedupBiVarsOf d.busInteractions
   arrBis := d.busInteractions.toArray
 
 /-- Refresh the dense fold index after an accepted fold — **no rebuild** (mirrors #165's

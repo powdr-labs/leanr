@@ -236,7 +236,7 @@ def denseScanBoxV (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p))
     (`denseCompileE`, unchanged — compiling doesn't touch points), same hoisted evaluation, only the
     box-check itself (`denseAllBoxV`) is value-only. -/
 def denseConstraintRedundantV (T : DenseDomainTable p) (c : DenseExpr p) : Bool :=
-  match T.doms c.vars.dedup with
+  match T.doms (HashedDedup.hashedDedup (hash ·) c.vars) with
   | none => false
   | some d =>
     (d.map (fun yd => yd.2.size)).prod ≤ maxEnumSize &&
@@ -347,8 +347,8 @@ def denseDomainBatchσV (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFa
   let T : DenseDomainTable p :=
     denseAddBusDoms bs facts d.busInteractions
       (denseAddConstraintDoms d.algebraicConstraints DenseDomainTable.empty)
-  let targets := d.algebraicConstraints.map (fun e => e.vars.dedup) ++
-    d.busInteractions.map (fun bi => (denseBIVars bi).dedup)
+  let targets := d.algebraicConstraints.map (fun e => HashedDedup.hashedDedup (hash ·) e.vars) ++
+    d.busInteractions.map (fun bi => HashedDedup.hashedDedup (hash ·) (denseBIVars bi))
   let activeCs := d.algebraicConstraints.filter (fun c => !denseConstraintRedundantV T c)
   let fidx : DenseForcedIdx p :=
     { csIdx := denseCovBuild DenseExpr.vars d.algebraicConstraints,

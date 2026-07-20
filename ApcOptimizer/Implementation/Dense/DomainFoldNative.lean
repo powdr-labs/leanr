@@ -228,15 +228,18 @@ def DenseExpr.hasFoldableV (xs : List VarId) (survsV : List (List (ZMod p))) : D
       ((DenseExpr.mul a b).varsInF xs && (denseConstOnSurvsV xs survsV (.mul a b)).isSome) ||
         a.hasFoldableV xs survsV || b.hasFoldableV xs survsV
 
-/-- Does the fold change anything in the system? (mirrors `systemHasFoldable`/`denseSystemHasFoldable`,
-    value-only survivors). Used by the direct (unindexed) path. -/
-def denseSystemHasFoldableV (d : DenseConstraintSystem p) (xs : List VarId)
-    (survsV : List (List (ZMod p))) : Bool :=
-  d.algebraicConstraints.any (fun c => !denseCoveredBy xs c && c.hasFoldableV xs survsV) ||
+/-- Does the fold change anything in the system? The no-op gate of the direct (unindexed) path, with
+    the non-covered constraints (`csRest`, the `denseCoveredBy` complement) precomputed by the caller
+    (mirrors `systemHasFoldableW`, `OptimizerPasses/DomainFold.lean:679`, value-only survivors): the
+    direct path partitions the constraint list once per target, so the gate does not re-evaluate
+    `denseCoveredBy` per constraint. Purely an efficiency gate. -/
+def denseSystemHasFoldableWV (d : DenseConstraintSystem p) (xs : List VarId)
+    (survsV : List (List (ZMod p))) (csRest : List (DenseExpr p)) : Bool :=
+  csRest.any (fun c => c.hasFoldableV xs survsV) ||
     d.busInteractions.any (fun bi =>
       bi.multiplicity.hasFoldableV xs survsV || bi.payload.any (fun e => e.hasFoldableV xs survsV))
 
-/-- The index-local form of `denseSystemHasFoldableV` (mirrors #165's `systemHasFoldableIdx`,
+/-- The index-local form of the direct-path gate `denseSystemHasFoldableWV` (mirrors #165's `systemHasFoldableIdx`,
     `OptimizerPasses/DomainFold.lean:817`, value-only survivors): scan only the items sharing a
     variable with `xs` through the prebuilt inverted indexes. #165 dropped the const-foldable-item
     disjuncts (the `cfCs`/`cfBis` caches) this used to carry — purely a two-bucket scan now. Used by
@@ -258,29 +261,35 @@ def denseSystemHasFoldableIdxV (fidx : DenseFoldIdx p) (xs : List VarId)
 
 /-! ## The direct (unindexed) fold loop (mirrors `foldStepWith`/`foldLoopDirect`)
 
-For systems smaller than `domainFoldIndexThreshold`. The covered set is computed once per target and
-threaded in as `es` (mirrors the spec exactly); the survivor list is bound once (`survsV`) — see the
-module header's second restored `let`. -/
+For systems smaller than `domainFoldIndexThreshold`. One `partition` per target computes the covered
+set `es` and its complement `csRest` together and threads both in (mirrors the spec exactly); the
+no-op gate scans `csRest` without a second `denseCoveredBy` sweep, and the survivor list is bound
+once (`survsV`) — see the module header's second restored `let`. -/
 
-/-- One checked fold for a candidate group, given the covered set `es = denseCoveredCsOf d xs`
-    (mirrors `foldStepWith`/`denseFoldStepWith`). -/
-def denseFoldStepWithV (d : DenseConstraintSystem p) (xs : List VarId) (es : List (DenseExpr p)) :
+/-- One checked fold for a candidate group, given the covered set `es = denseCoveredCsOf d xs` and
+    its complement `csRest` (the non-covered constraints, feeding the no-op gate without a second
+    `denseCoveredBy` sweep) (mirrors `foldStepWith`/`denseFoldStepWith`). -/
+def denseFoldStepWithV (d : DenseConstraintSystem p) (xs : List VarId)
+    (es : List (DenseExpr p)) (csRest : List (DenseExpr p)) :
     DenseConstraintSystem p :=
   match denseGroupDoms es xs with
   | none => d
   | some doms =>
     if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
       let survsV := denseGroupSurvivorsEV es xs (doms.map Prod.snd)
-      if 1 ≤ survsV.length && denseSystemHasFoldableV d xs survsV then
+      if 1 ≤ survsV.length && denseSystemHasFoldableWV d xs survsV csRest then
         denseFoldOutV d xs survsV
       else d
     else d
 
-/-- The direct fold loop: recompute `denseCoveredCsOf d xs` per target, no index (mirrors
+/-- The direct fold loop: one `partition` per target computes the covered set `es` and its complement
+    `csRest` together, no index and no second `denseCoveredBy` sweep for the gate (mirrors
     `foldLoopDirect`/`denseFoldLoopDirect`). -/
 def denseFoldLoopDirectV : List (List VarId) → DenseConstraintSystem p → DenseConstraintSystem p
   | [], d => d
-  | xs :: rest, d => denseFoldLoopDirectV rest (denseFoldStepWithV d xs (denseCoveredCsOf d xs))
+  | xs :: rest, d =>
+    match d.algebraicConstraints.partition (denseCoveredBy xs) with
+    | (es, csRest) => denseFoldLoopDirectV rest (denseFoldStepWithV d xs es csRest)
 
 /-! ## The index-preserving indexed-path rewrite (mirrors #165's `foldRewrite`/`foldOut`/`touchedSet`/
 `foldOutIdx`, `OptimizerPasses/DomainFold.lean:121,374-378,887,899`)
@@ -408,7 +417,7 @@ restored `let` (`svSet` bound once, outside the `filterMap`, see the module head
 def denseTargetsV (d : DenseConstraintSystem p) : List (List VarId) :=
   let svSet := denseSvSet d
   dedupHash (d.algebraicConstraints.filterMap (fun c =>
-    let vs := c.vars.dedup
+    let vs := HashedDedup.hashedDedup (hash ·) c.vars
     if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
       some (vs.mergeSort (fun a b => compare a.index b.index != .gt))
     else none))

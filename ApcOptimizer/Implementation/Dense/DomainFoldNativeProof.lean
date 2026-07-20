@@ -539,8 +539,10 @@ theorem denseFoldOutV_covered (reg : VarRegistry) (d : DenseConstraintSystem p)
 /-! ## The direct fold loop -/
 
 theorem denseFoldStepWithV_correct [Fact p.Prime] (bs : BusSemantics p) (isInput : VarId → Bool)
-    (d : DenseConstraintSystem p) (xs : List VarId) :
-    DensePassCorrect isInput d (denseFoldStepWithV d xs (denseCoveredCsOf d xs)) [] bs := by
+    (d : DenseConstraintSystem p) (xs : List VarId) (es csRest : List (DenseExpr p))
+    (hes : es = denseCoveredCsOf d xs) :
+    DensePassCorrect isInput d (denseFoldStepWithV d xs es csRest) [] bs := by
+  subst hes
   unfold denseFoldStepWithV
   split
   · exact DensePassCorrect_refl isInput d bs
@@ -548,15 +550,15 @@ theorem denseFoldStepWithV_correct [Fact p.Prime] (bs : BusSemantics p) (isInput
     by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
     · rw [if_pos hp]
       by_cases hgate : (1 ≤ (denseGroupSurvivorsEV (denseCoveredCsOf d xs) xs (doms.map Prod.snd)).length
-          && denseSystemHasFoldableV d xs (denseGroupSurvivorsEV (denseCoveredCsOf d xs) xs (doms.map Prod.snd))) = true
+          && denseSystemHasFoldableWV d xs (denseGroupSurvivorsEV (denseCoveredCsOf d xs) xs (doms.map Prod.snd)) csRest) = true
       · rw [if_pos hgate]
         exact denseFoldOutV_correct bs d xs doms hgd isInput
       · rw [if_neg (by simpa using hgate)]; exact DensePassCorrect_refl isInput d bs
     · rw [if_neg hp]; exact DensePassCorrect_refl isInput d bs
 
 theorem denseFoldStepWithV_covered (reg : VarRegistry) (d : DenseConstraintSystem p)
-    (hcov : d.CoveredBy reg) (xs : List VarId) (es : List (DenseExpr p)) :
-    (denseFoldStepWithV d xs es).CoveredBy reg := by
+    (hcov : d.CoveredBy reg) (xs : List VarId) (es csRest : List (DenseExpr p)) :
+    (denseFoldStepWithV d xs es csRest).CoveredBy reg := by
   unfold denseFoldStepWithV
   split
   · exact hcov
@@ -564,7 +566,7 @@ theorem denseFoldStepWithV_covered (reg : VarRegistry) (d : DenseConstraintSyste
     by_cases hp : (doms.map (fun yd => yd.2.length)).prod ≤ 256
     · rw [if_pos hp]
       by_cases hgate : (1 ≤ (denseGroupSurvivorsEV es xs (doms.map Prod.snd)).length
-          && denseSystemHasFoldableV d xs (denseGroupSurvivorsEV es xs (doms.map Prod.snd))) = true
+          && denseSystemHasFoldableWV d xs (denseGroupSurvivorsEV es xs (doms.map Prod.snd)) csRest) = true
       · rw [if_pos hgate]; exact denseFoldOutV_covered reg d hcov xs _
       · rw [if_neg (by simpa using hgate)]; exact hcov
     · rw [if_neg hp]; exact hcov
@@ -577,9 +579,9 @@ theorem denseFoldLoopDirectV_correct [Fact p.Prime] (bs : BusSemantics p) (isInp
   | nil => intro d; exact DensePassCorrect_refl isInput d bs
   | cons xs rest ih =>
       intro d
-      show DensePassCorrect isInput d
-        (denseFoldLoopDirectV rest (denseFoldStepWithV d xs (denseCoveredCsOf d xs))) [] bs
-      exact DensePassCorrect.trans (denseFoldStepWithV_correct bs isInput d xs) (ih _)
+      simp only [denseFoldLoopDirectV, List.partition_eq_filter_filter]
+      exact DensePassCorrect.trans
+        (denseFoldStepWithV_correct bs isInput d xs _ _ rfl) (ih _)
 
 theorem denseFoldLoopDirectV_covered (reg : VarRegistry) :
     ∀ (targets : List (List VarId)) (d : DenseConstraintSystem p),
@@ -589,7 +591,8 @@ theorem denseFoldLoopDirectV_covered (reg : VarRegistry) :
   | nil => intro d hcov; exact hcov
   | cons xs rest ih =>
       intro d hcov
-      exact ih _ (denseFoldStepWithV_covered reg d hcov xs (denseCoveredCsOf d xs))
+      simp only [denseFoldLoopDirectV, List.partition_eq_filter_filter]
+      exact ih _ (denseFoldStepWithV_covered reg d hcov xs _ _)
 
 /-! ## The indexed fold loop -/
 
@@ -1309,8 +1312,12 @@ theorem denseDomainFoldFV_correct (pw : PrimeWitness p) (bs : BusSemantics p) (i
     by_cases hthr : domainFoldIndexThreshold ≤ d.algebraicConstraints.length
     · rw [if_pos hthr]
       exact denseFoldLoopV_correct bs isInput (denseTargetsV d) d (DenseFoldIdx.mk' d)
-        (fun i hi v hv => denseBuild_complete DenseExpr.vars d.algebraicConstraints i hi v hv)
-        (fun i hi v hv => denseBuild_complete denseBIVars d.busInteractions i hi v hv)
+        (fun i hi v hv => denseBuild_complete denseDedupVarsOf d.algebraicConstraints i hi v (by
+          rw [denseDedupVarsOf, HashedDedup.hashedEraseDups_eq]
+          exact List.mem_eraseDups.2 hv))
+        (fun i hi v hv => denseBuild_complete denseDedupBiVarsOf d.busInteractions i hi v (by
+          rw [denseDedupBiVarsOf, HashedDedup.hashedEraseDups_eq]
+          exact List.mem_eraseDups.2 hv))
         rfl
     · rw [if_neg hthr]
       exact denseFoldLoopDirectV_correct bs isInput (denseTargetsV d) d

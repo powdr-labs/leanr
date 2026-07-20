@@ -1177,8 +1177,8 @@ def dbActiveCs (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstrain
 
 /-- The target list built by `denseDomainBatchσV`. -/
 def dbTargets (d : DenseConstraintSystem p) : List (List VarId) :=
-  d.algebraicConstraints.map (fun e => e.vars.dedup) ++
-    d.busInteractions.map (fun bi => (denseBIVars bi).dedup)
+  d.algebraicConstraints.map (fun e => HashedDedup.hashedDedup (hash ·) e.vars) ++
+    d.busInteractions.map (fun bi => HashedDedup.hashedDedup (hash ·) (denseBIVars bi))
 
 /-- The inverted index built by `denseDomainBatchσV`. -/
 def dbFidx (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
