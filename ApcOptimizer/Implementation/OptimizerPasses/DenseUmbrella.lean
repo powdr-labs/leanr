@@ -55,6 +55,8 @@ import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPackProof
 import ApcOptimizer.Implementation.OptimizerPasses.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.ReencodeProof
+import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.HintCollapseProof
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 
