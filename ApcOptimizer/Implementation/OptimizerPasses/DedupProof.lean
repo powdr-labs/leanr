@@ -59,27 +59,6 @@ theorem denseDedupStateless_evalFilter (bs : BusSemantics p) (denv : VarId → Z
           have hf : bs.isStateful (denseBIEval b denv).busId = false := (by simpa using h1)
           simp [hf]), ih]
 
-/-- The env'=env native correctness shape (mirrors `PassCorrect.ofEnvEq`): the pass's completeness
-    witness is the input assignment and it introduces no variable. File-local re-derivation from
-    `Bridge`'s `DensePassCorrect` (the `dpcRefl`-style duplication precedent), avoiding a heavy
-    import of `DomainFoldNativeProof` just for its copy. -/
-private theorem dpcOfEnvEq {isInput : VarId → Bool} {d out : DenseConstraintSystem p}
-    {bs : BusSemantics p}
-    (hsound : out.implies d bs)
-    (hinv : d.guaranteesInvariants bs → out.guaranteesInvariants bs)
-    (hsub : ∀ i ∈ out.occ, i ∈ d.occ)
-    (hcomp : ∀ denv, d.admissible bs denv → d.satisfies bs denv →
-      out.satisfies bs denv ∧ out.admissible bs denv ∧
-        d.sideEffects bs denv ≈ out.sideEffects bs denv) :
-    DensePassCorrect isInput d out [] bs := by
-  refine ⟨hsound, hinv, fun i hi _ => hsub i hi, ?_⟩
-  intro denv hadm hsat
-  obtain ⟨ho1, ho2, ho3⟩ := hcomp denv hadm hsat
-  refine ⟨denv, ho1, ho2, ho3, fun _ _ => rfl, ?_⟩
-  intro inputVarIds _ i hi _
-  show i ∈ d.occ ∧ denv i = denv i
-  exact ⟨hsub i hi, rfl⟩
-
 /-- **Native dense correctness of dedup.** Mirrors `ConstraintSystem.dedup_correct` over the native
     dense semantics: satisfaction, side effects and admissibility are all preserved, so `env' = env`
     witnesses completeness and no derivations arise. -/
@@ -118,7 +97,7 @@ theorem DenseConstraintSystem.dedup_denseCorrect {isInput : VarId → Bool}
     rcases hi with ⟨c, hc, hic⟩ | ⟨bi, hbi, hib⟩
     · exact Or.inl ⟨c, List.mem_dedup.1 hc, hic⟩
     · exact Or.inr ⟨bi, denseDedupStateless_subset bs [] d.busInteractions bi hbi, hib⟩
-  refine dpcOfEnvEq ?_ ?_ hsub ?_
+  refine DensePassCorrect.ofEnvEq ?_ ?_ hsub ?_
   · -- soundness (`out.implies d`): same env, side effects equal
     intro denv hsat
     exact ⟨denv, (hiff denv).1 hsat, by rw [hside]; exact BusState.equiv_refl _⟩

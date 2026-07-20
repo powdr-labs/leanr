@@ -613,6 +613,54 @@ theorem DensePassCorrect.andThen {isInput : VarId → Bool} {d mid out : DenseCo
               obtain ⟨hiD, he1denv⟩ := B12
               exact ⟨hiD, by rw [he2e1, he1denv]⟩
 
+/-! ## Native `DensePassCorrect` shortcuts (env'=env, and composition) -/
+
+/-- The env'=env native correctness shape (mirrors `PassCorrect.ofEnvEq`): the fold's completeness
+    witness is the input assignment and it introduces no variable. -/
+theorem DensePassCorrect.ofEnvEq {isInput : VarId → Bool} {d out : DenseConstraintSystem p}
+    {bs : BusSemantics p}
+    (hsound : out.implies d bs)
+    (hinv : d.guaranteesInvariants bs → out.guaranteesInvariants bs)
+    (hsub : ∀ i ∈ out.occ, i ∈ d.occ)
+    (hcomp : ∀ denv, d.admissible bs denv → d.satisfies bs denv →
+      out.satisfies bs denv ∧ out.admissible bs denv ∧
+        d.sideEffects bs denv ≈ out.sideEffects bs denv) :
+    DensePassCorrect isInput d out [] bs := by
+  refine ⟨hsound, hinv, fun i hi _ => hsub i hi, ?_⟩
+  intro denv hadm hsat
+  obtain ⟨ho1, ho2, ho3⟩ := hcomp denv hadm hsat
+  refine ⟨denv, ho1, ho2, ho3, fun _ _ => rfl, ?_⟩
+  intro inputVarIds _ i hi _
+  show i ∈ d.occ ∧ denv i = denv i
+  exact ⟨hsub i hi, rfl⟩
+
+/-- `DensePassCorrect` composes (derivations empty on both sides). Mirrors `PassCorrect.andThen`
+    specialised to no derivations. -/
+theorem DensePassCorrect.trans {isInput : VarId → Bool} {d1 d2 d3 : DenseConstraintSystem p}
+    {bs : BusSemantics p} (h12 : DensePassCorrect isInput d1 d2 [] bs)
+    (h23 : DensePassCorrect isInput d2 d3 [] bs) : DensePassCorrect isInput d1 d3 [] bs := by
+  obtain ⟨hs12, hi12, hv12, hc12⟩ := h12
+  obtain ⟨hs23, hi23, hv23, hc23⟩ := h23
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · intro denv hsat3
+    obtain ⟨e1, hsat2, hse23⟩ := hs23 denv hsat3
+    obtain ⟨e0, hsat1, hse12⟩ := hs12 e1 hsat2
+    exact ⟨e0, hsat1, BusState.equiv_trans hse23 hse12⟩
+  · intro h; exact hi23 (hi12 h)
+  · intro i hi3 hii; exact hv12 i (hv23 i hi3 hii) hii
+  · intro denv hadm1 hsat1
+    obtain ⟨e1, hsat2, hadm2, hse12, hii12, hrec12⟩ := hc12 denv hadm1 hsat1
+    obtain ⟨e2, hsat3, hadm3, hse23, hii23, hrec23⟩ := hc23 e1 hadm2 hsat2
+    refine ⟨e2, hsat3, hadm3, BusState.equiv_trans hse12 hse23, ?_, ?_⟩
+    · intro i hii; rw [hii23 i hii, hii12 i hii]
+    · intro inputVarIds hcov1 i hi3 hisF
+      have H23 := hrec23 d2.occ (fun j hj _ => hj) i hi3 hisF
+      have b23 : i ∈ d2.occ ∧ e2 i = e1 i := H23
+      have H12 := hrec12 inputVarIds hcov1 i b23.1 hisF
+      have b12 : i ∈ d1.occ ∧ e1 i = denv i := H12
+      show i ∈ d1.occ ∧ e2 i = denv i
+      exact ⟨b12.1, by rw [b23.2, b12.2]⟩
+
 /-! ### Sanity check: the new lemmas compose
 
 A drop-shaped step (a trivial bus filter that keeps everything) chained after `refl` through
