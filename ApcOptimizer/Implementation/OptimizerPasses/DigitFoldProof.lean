@@ -277,4 +277,408 @@ theorem denseBuild_sound (bs : BusSemantics p) (facts : BusFacts p bs)
   unfold denseBuild at hlk
   exact denseAddAll_soundAt bs facts denv bis hbus ∅ (DenseBMSoundAt.empty denv) i b hlk
 
+/-! # Native correctness of the dense digit-fold pass (Task 3)
+
+Native `VarId`-level correctness for `denseDigitFoldPass` (`DigitFold.lean`), proved over dense
+environments `VarId → ZMod p` with no decode and no dependency on the reference `Variable` pass. The
+spec `OldVariableBased/DigitFold.lean` is the roadmap only: the recognizer soundness
+(`pairByteOps?_bytes`), the ladder soundness chain (`isLadder_sum` / `env_forced` / `tryLadder_spec`
+/ `lookupBounds_spec` / `attemptLadder_sound` / `solveOperand_sound`) and the scan (`findFold`'s
+`Fold.sound`) are transliterated here over the dense defs. The representation-independent ℕ-side layer
+(`ladderVal` / `unpack?` / `solutions` / `solutions_complete` / `solutions_forced` / `coeffNat` /
+`tval` / `signum` / `ladderVal_le_box`) is reused unqualified via `open DigitFold`. The fact-derived
+value bounds are consumed through the native `denseBuild_sound` (above); the byte recognizer's
+operand bounds through `BusFacts.byteXorSpec_sound`/`ByteXorSpec.decode_map` applied value-level to
+`denseBIEval` (inlined below — the dense mirror of `byteXorSpec_decode_iff`, kept off the
+`ByteCheckPackProof` import path so `HintCollapseProof`, which imports this file, is unaffected). The
+pass correctness reduces the forced substitution to `DenseConstraintSystem.substF_denseCorrect`
+(`DomainBatchProof.lean`). -/
+
+/-! ## Native byte-pair recognizer soundness (dense twin of `pairByteOps?_bytes`) -/
+
+/-- Acceptance of a recognized pair check bounds both operands below 256. Dense twin of
+    `pairByteOps?_bytes` (`OldVariableBased/DigitFold.lean:246`); the acceptance characterization is
+    the value-level `BusFacts.byteXorSpec_sound` applied to the decoded payload (the inline dense
+    mirror of `byteXorSpec_decode_iff`'s `pairOp` half). -/
+theorem densePairByteOps?_bytes (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (DenseExpr p)) (x y : DenseExpr p)
+    (h : densePairByteOps? bs facts bi = some (x, y))
+    (h1 : (1 : ZMod p) ≠ 0) (denv : VarId → ZMod p)
+    (hacc : (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false) :
+    (x.eval denv).val < 256 ∧ (y.eval denv).val < 256 := by
+  unfold densePairByteOps? at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i spec hspec
+    split at h
+    · rename_i op o1 o2 r hdec
+      split_ifs at h with hcond
+      obtain ⟨hbound, hop, _, hm⟩ := hcond
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      have hmv : (denseBIEval bi denv).multiplicity = 1 := by
+        show bi.multiplicity.eval denv = 1; rw [hm]; rfl
+      have hviol : bs.violatesConstraint (denseBIEval bi denv) = false :=
+        hacc (by rw [hmv]; simpa using h1)
+      have hopEv : op.eval denv = spec.pairOp := by rw [hop]; rfl
+      have hdecEv : spec.decode (denseBIEval bi denv).payload
+          = some (op.eval denv, o1.eval denv, o2.eval denv, r.eval denv) := by
+        show spec.decode (bi.payload.map (fun e => e.eval denv)) = _
+        rw [spec.decode_map, hdec]; rfl
+      obtain ⟨_, _, hsound⟩ := facts.byteXorSpec_sound bi.busId spec hspec
+      obtain ⟨hb1, hb2, _⟩ :=
+        ((hsound (denseBIEval bi denv).payload (op.eval denv) (o1.eval denv) (o2.eval denv)
+          (r.eval denv) (denseBIEval bi denv).multiplicity hdecEv).2 hopEv).mp hviol
+      rw [hbound] at hb1 hb2
+      exact ⟨hb1, hb2⟩
+    · exact absurd h (by simp)
+
+/-! ## Native ladder soundness chain -/
+
+/-- A dense ladder's ZMod sum is the cast of its ℕ positional value (up to sign). Dense twin of
+    `isLadder_sum` (`OldVariableBased/DigitFold.lean:147`). -/
+theorem denseIsLadder_sum [NeZero p] (pos : Bool) :
+    ∀ (g : ℕ) (l : List (VarId × ZMod p)), denseIsLadder pos g l = true →
+    ∀ (denv : VarId → ZMod p),
+    (l.map (fun t => t.2 * denv t.1)).sum =
+      signum pos * ((g * ladderVal (l.map (fun t => (denv t.1).val)) : ℕ) : ZMod p) := by
+  intro g l
+  induction l generalizing g with
+  | nil => intro _ denv; simp [ladderVal]
+  | cons t rest ih =>
+    intro h denv
+    obtain ⟨v, c⟩ := t
+    simp only [denseIsLadder, Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨hc, hrest⟩ := h
+    have hsum := ih (256 * g) hrest denv
+    simp only [List.map_cons, List.sum_cons, hsum, ladderVal]
+    have henv : denv v = (((denv v).val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse (denv v)).symm
+    cases pos with
+    | true =>
+      have hcv : c = ((g : ℕ) : ZMod p) := by
+        rw [← hc]; exact (ZMod.natCast_rightInverse c).symm
+      rw [hcv, signum_true]
+      conv_lhs => rw [henv]
+      push_cast
+      ring
+    | false =>
+      have hcv : -c = ((g : ℕ) : ZMod p) := by
+        rw [← hc]; exact (ZMod.natCast_rightInverse (-c)).symm
+      have hcv' : c = -((g : ℕ) : ZMod p) := by rw [← hcv]; ring
+      rw [hcv', signum_false]
+      conv_lhs => rw [henv]
+      push_cast
+      ring
+
+/-- The env-side forcing theorem: if the solution grid for a byte-checked dense ladder is the
+    singleton `[ds]`, any satisfying assignment's digit vector is exactly `ds`. Dense twin of
+    `env_forced` (`OldVariableBased/DigitFold.lean:188`). -/
+theorem denseEnv_forced [NeZero p] (hp : 256 < p) (pos : Bool) (g : ℕ) (hg : 0 < g) (K : ZMod p)
+    (l : List (VarId × ZMod p)) (hlad : denseIsLadder pos g l = true)
+    (Bs : List ℕ) (hB : ∀ B ∈ Bs, B ≤ 256)
+    (denv : VarId → ZMod p)
+    (hbound : List.Forall₂ (fun (t : VarId × ZMod p) B => (denv t.1).val < B) l Bs)
+    (hbyte : ((K + (l.map (fun t => t.2 * denv t.1)).sum).val) < 256)
+    (ds : List ℕ)
+    (hsol : solutions p (tval pos K) g Bs (g * ladderVal (Bs.map (· - 1))) = [ds]) :
+    l.map (fun t => (denv t.1).val) = ds := by
+  have hp0 : 0 < p := by omega
+  have hxB : List.Forall₂ (· < ·) (l.map (fun t => (denv t.1).val)) Bs := by
+    rw [List.forall₂_map_left_iff]
+    exact hbound
+  have hsum := denseIsLadder_sum pos g l hlad denv
+  have hEvcast : (((K + (l.map (fun t => t.2 * denv t.1)).sum).val : ℕ) : ZMod p)
+      = K + (l.map (fun t => t.2 * denv t.1)).sum :=
+    ZMod.natCast_rightInverse _
+  have hmod : (g * ladderVal (l.map (fun t => (denv t.1).val))) % p
+      = tval pos K ((K + (l.map (fun t => t.2 * denv t.1)).sum).val) := by
+    have hvalS : (((g * ladderVal (l.map (fun t => (denv t.1).val)) : ℕ)) : ZMod p).val
+        = g * ladderVal (l.map (fun t => (denv t.1).val)) % p := by
+      rw [ZMod.val_natCast]
+    rw [← hvalS]
+    unfold tval
+    congr 1
+    rw [hEvcast]
+    cases pos with
+    | true =>
+      rw [hsum, signum_true, one_mul]
+      simp
+    | false =>
+      rw [hsum, signum_false]
+      simp only [Bool.false_eq_true, if_false]
+      ring
+  have hle : g * ladderVal (l.map (fun t => (denv t.1).val))
+      ≤ g * ladderVal (Bs.map (· - 1)) :=
+    Nat.mul_le_mul_left g (ladderVal_le_box _ Bs hxB)
+  exact solutions_forced p (tval pos K) g Bs _ hp0 hg ds hsol _ hxB hB
+    ((K + (l.map (fun t => t.2 * denv t.1)).sum).val) hbyte hmod hle
+
+/-- Recognizing a dense ladder yields a permutation of the input terms with the leading coefficient
+    positive and the ladder shape confirmed. Dense twin of `tryLadder_spec`
+    (`OldVariableBased/DigitFold.lean:282`). -/
+theorem denseTryLadder_spec (pos : Bool) (terms : List (VarId × ZMod p))
+    (g : ℕ) (sorted : List (VarId × ZMod p))
+    (h : denseTryLadder pos terms = some (g, sorted)) :
+    terms.Perm sorted ∧ 0 < g ∧ denseIsLadder pos g sorted = true := by
+  unfold denseTryLadder at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i t rest hms
+    split_ifs at h with hcond
+    simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    have hperm : (terms.mergeSort (fun a b => coeffNat pos a.2 ≤ coeffNat pos b.2)).Perm terms :=
+      List.mergeSort_perm terms _
+    rw [hms] at hperm
+    exact ⟨hperm.symm, hcond.1, hcond.2⟩
+
+/-- Bound lookup returns byte-sized (`≤ 256`) bounds paired to the terms in order. Dense twin of
+    `lookupBounds_spec` (`OldVariableBased/DigitFold.lean:307`). -/
+theorem denseLookupBounds_spec (bounds : Std.HashMap VarId Nat) :
+    ∀ (l : List (VarId × ZMod p)) (Bs : List ℕ), denseLookupBounds bounds l = some Bs →
+    (∀ B ∈ Bs, B ≤ 256) ∧
+      List.Forall₂ (fun (t : VarId × ZMod p) B => bounds[t.1]? = some B) l Bs := by
+  intro l
+  induction l with
+  | nil =>
+    intro Bs h
+    simp only [denseLookupBounds, Option.some.injEq] at h
+    subst h
+    exact ⟨by simp, List.Forall₂.nil⟩
+  | cons t rest ih =>
+    intro Bs h
+    obtain ⟨v, c⟩ := t
+    simp only [denseLookupBounds] at h
+    split at h
+    · rename_i B hB
+      split_ifs at h with hle
+      obtain ⟨Bs', hBs', rfl⟩ := Option.map_eq_some_iff.1 h
+      obtain ⟨h256, hall⟩ := ih Bs' hBs'
+      refine ⟨?_, List.Forall₂.cons hB hall⟩
+      intro B' hB'
+      rcases List.mem_cons.1 hB' with rfl | hB'
+      · exact hle
+      · exact h256 B' hB'
+    · exact absurd h (by simp)
+
+/-- One sign interpretation forces the lowest-coefficient variable's value, using fact bounds valid
+    at the assignment. Dense twin of `attemptLadder_sound` (`OldVariableBased/DigitFold.lean:351`). -/
+theorem denseAttemptLadder_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap VarId Nat)
+    (pos : Bool) (l : DenseLinExpr p) (v : VarId) (d : ℕ)
+    (h : denseAttemptLadder pos bounds l = some (v, d))
+    (denv : VarId → ZMod p)
+    (hB : ∀ w bnd, bounds[w]? = some bnd → (denv w).val < bnd)
+    (hbyte : (l.eval denv).val < 256) :
+    denv v = (d : ZMod p) := by
+  unfold denseAttemptLadder at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i gs hladder
+    split at h
+    · exact absurd h (by simp)
+    · rename_i Bs hbounds
+      split at h
+      · rename_i hsol'
+        split at h
+        · rename_i t htail d' dtail hsorted
+          simp only [Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          obtain ⟨hperm, hg, hlad⟩ := denseTryLadder_spec pos l.terms gs.1 gs.2 hladder
+          obtain ⟨h256, hbmap⟩ := denseLookupBounds_spec bounds gs.2 Bs hbounds
+          have hbound : List.Forall₂ (fun (t : VarId × ZMod p) B => (denv t.1).val < B)
+              gs.2 Bs :=
+            hbmap.imp (fun {t} {B} hlk => hB t.1 B hlk)
+          have hsumeq : (l.terms.map (fun t => t.2 * denv t.1)).sum
+              = (gs.2.map (fun t => t.2 * denv t.1)).sum :=
+            (hperm.map (fun t => t.2 * denv t.1)).sum_eq
+          have hbyte' : ((l.const + (gs.2.map (fun t => t.2 * denv t.1)).sum).val) < 256 := by
+            have hev : l.eval denv = l.const + (gs.2.map (fun t => t.2 * denv t.1)).sum := by
+              rw [DenseLinExpr.eval, hsumeq]
+            rwa [hev] at hbyte
+          have hforced := denseEnv_forced hp pos gs.1 hg l.const gs.2 hlad Bs h256 denv hbound
+            hbyte' (d' :: dtail) hsol'
+          rw [hsorted] at hforced
+          simp only [List.map_cons, List.cons.injEq] at hforced
+          have hv : (denv t.1).val = d' := hforced.1
+          rw [← hv]
+          exact (ZMod.natCast_rightInverse (denv t.1)).symm
+        · exact absurd h (by simp)
+      · exact absurd h (by simp)
+
+/-- Solving one byte-checked operand forces the returned variable's value. Dense twin of
+    `solveOperand_sound` (`OldVariableBased/DigitFold.lean:412`). -/
+theorem denseSolveOperand_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap VarId Nat)
+    (E : DenseExpr p) (v : VarId) (d : ℕ)
+    (h : denseSolveOperand bounds E = some (v, d))
+    (denv : VarId → ZMod p)
+    (hB : ∀ w bnd, bounds[w]? = some bnd → (denv w).val < bnd)
+    (hbyte : (E.eval denv).val < 256) :
+    denv v = (d : ZMod p) := by
+  unfold denseSolveOperand at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i l hlin
+    have hEl : E.eval denv = l.eval denv := denseLinearize_eval E l hlin denv
+    rw [hEl] at hbyte
+    split_ifs at h
+    split at h
+    · rename_i r hr
+      simp only [Option.some.injEq] at h
+      subst h
+      exact denseAttemptLadder_sound hp bounds true l v d hr denv hB hbyte
+    · exact denseAttemptLadder_sound hp bounds false l v d h denv hB hbyte
+
+/-! ## The scan entailment (dense twin of `findFold`'s `Fold.sound`) -/
+
+/-- Scanning the dense interactions for a byte-checked ladder operand with a forced digit: on a hit
+    `(i, dd)`, every satisfying assignment forces `denv i = dd`. The value bounds are threaded as a
+    fixed-`denv` hypothesis; the per-interaction obligations come from dense satisfaction. -/
+theorem denseFindFold_sound [NeZero p] (hp : 256 < p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bounds : Std.HashMap VarId Nat) (denv : VarId → ZMod p)
+    (hB : ∀ w bnd, bounds[w]? = some bnd → (denv w).val < bnd) :
+    ∀ (pending : List (BusInteraction (DenseExpr p))),
+      (∀ bi ∈ pending, (denseBIEval bi denv).multiplicity ≠ 0 →
+        bs.violatesConstraint (denseBIEval bi denv) = false) →
+      ∀ i dd, denseFindFold bs facts bounds pending = some (i, dd) → denv i = (dd : ZMod p) := by
+  intro pending
+  induction pending with
+  | nil => intro _ i dd h; simp [denseFindFold] at h
+  | cons bi rest ih =>
+      intro hpend i dd h
+      have hacc := hpend bi (List.mem_cons_self ..)
+      have hrest : ∀ b ∈ rest, (denseBIEval b denv).multiplicity ≠ 0 →
+          bs.violatesConstraint (denseBIEval b denv) = false :=
+        fun b hb => hpend b (List.mem_cons_of_mem _ hb)
+      have h1 : (1 : ZMod p) ≠ 0 := by
+        haveI : Fact (1 < p) := ⟨by omega⟩
+        exact one_ne_zero
+      unfold denseFindFold at h
+      cases hdp : densePairByteOps? bs facts bi with
+      | none => rw [hdp] at h; dsimp only at h; exact ih hrest i dd h
+      | some xy =>
+          obtain ⟨x, y⟩ := xy
+          rw [hdp] at h; dsimp only at h
+          obtain ⟨hbx, hby⟩ := densePairByteOps?_bytes bs facts bi x y hdp h1 denv hacc
+          cases hsx : denseSolveOperand bounds x with
+          | some r =>
+              rw [hsx] at h; dsimp only at h; simp only [Option.some.injEq] at h
+              subst h
+              exact denseSolveOperand_sound hp bounds x i dd hsx denv hB hbx
+          | none =>
+              rw [hsx] at h; dsimp only at h
+              cases hsy : denseSolveOperand bounds y with
+              | some r =>
+                  rw [hsy] at h; dsimp only at h; simp only [Option.some.injEq] at h
+                  subst h
+                  exact denseSolveOperand_sound hp bounds y i dd hsy denv hB hby
+              | none => rw [hsy] at h; dsimp only at h; exact ih hrest i dd h
+
+/-- The forced substitution entailment: if `denseFindFold` over the fact-built bounds map fires
+    `(i, dd)`, every satisfying assignment of `d` has `denv i = dd`. Bounds validity is discharged by
+    `denseBuild_sound` from the bus-obligation half of dense satisfaction. -/
+theorem denseDigitFoldFindFold_entails [NeZero p] (hp : 256 < p) (bs : BusSemantics p)
+    (facts : BusFacts p bs) (d : DenseConstraintSystem p) (i : VarId) (dd : ℕ)
+    (h : denseFindFold bs facts (denseBuild bs facts d.busInteractions) d.busInteractions
+      = some (i, dd)) :
+    ∀ denv, d.satisfies bs denv → denv i = (dd : ZMod p) := by
+  intro denv hsat
+  have hbus := hsat.2
+  have hB : ∀ w bnd, (denseBuild bs facts d.busInteractions)[w]? = some bnd → (denv w).val < bnd :=
+    fun w bnd hlk => denseBuild_sound bs facts d.busInteractions w bnd hlk denv hbus
+  exact denseFindFold_sound hp bs facts _ denv hB d.busInteractions hbus i dd h
+
+/-! ## Reducing the point substitution to `substF` -/
+
+/-- `DenseExpr.subst i t` is the simultaneous substitution of the singleton map `i ↦ t`. -/
+theorem DenseExpr.subst_eq_substF (e : DenseExpr p) (i : VarId) (t : DenseExpr p) :
+    e.subst i t = e.substF (fun j => if j = i then some t else none) := by
+  induction e with
+  | const n => rfl
+  | var j =>
+      simp only [DenseExpr.subst, DenseExpr.substF]
+      by_cases h : j = i
+      · rw [if_pos h, if_pos h]
+      · rw [if_neg h, if_neg h]
+  | add a b iha ihb => simp only [DenseExpr.subst, DenseExpr.substF, iha, ihb]
+  | mul a b iha ihb => simp only [DenseExpr.subst, DenseExpr.substF, iha, ihb]
+
+/-- Bus-interaction point substitution is the singleton simultaneous substitution. -/
+theorem denseBIsubst_eq_substF (bi : BusInteraction (DenseExpr p)) (i : VarId) (t : DenseExpr p) :
+    denseBIsubst bi i t = denseBIsubstF bi (fun j => if j = i then some t else none) := by
+  simp only [denseBIsubst, denseBIsubstF, DenseExpr.subst_eq_substF]
+
+/-- System point substitution is the singleton simultaneous substitution. -/
+theorem denseSubst_eq_substF (d : DenseConstraintSystem p) (i : VarId) (t : DenseExpr p) :
+    d.subst i t = d.substF (fun j => if j = i then some t else none) := by
+  simp only [DenseConstraintSystem.subst, DenseConstraintSystem.substF, DenseExpr.subst_eq_substF,
+    denseBIsubst_eq_substF]
+
+/-! ## The native pass -/
+
+/-- Coverage preservation of the dense digit-fold transform (extracted from the pass's `covered`
+    field): a constant substitution keeps every mentioned variable registered. -/
+theorem denseDigitFoldF_covered (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
+    (denseDigitFoldF bs facts d).CoveredBy reg := by
+  unfold denseDigitFoldF
+  by_cases hp : 256 < p
+  · rw [if_pos hp]
+    cases denseFindFold bs facts (denseBuild bs facts d.busInteractions) d.busInteractions with
+    | none => exact hcov
+    | some idd =>
+        obtain ⟨i, dd⟩ := idd
+        exact DenseConstraintSystem.subst_covered hcov (DenseExpr.coveredBy_const reg _)
+  · rw [if_neg hp]; exact hcov
+
+/-- **Native digit-fold correctness.** When `256 < p`, the fired constant substitution preserves the
+    satisfying set (the forced digit holds for every satisfying assignment via
+    `denseDigitFoldFindFold_entails`), so it is `DensePassCorrect` through
+    `DenseConstraintSystem.substF_denseCorrect`; the no-fire and small-`p` branches are the identity
+    (`DensePassCorrect.refl`). Native over `VarId`, no decode. -/
+theorem denseDigitFoldF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (d : DenseConstraintSystem p) :
+    DensePassCorrect reg.isInput d (denseDigitFoldF bs facts d) [] bs := by
+  unfold denseDigitFoldF
+  by_cases hp : 256 < p
+  · rw [if_pos hp]
+    haveI : NeZero p := ⟨by omega⟩
+    cases hff : denseFindFold bs facts (denseBuild bs facts d.busInteractions)
+        d.busInteractions with
+    | none => exact DensePassCorrect.refl reg.isInput d bs
+    | some idd =>
+        obtain ⟨i, dd⟩ := idd
+        show DensePassCorrect reg.isInput d (d.subst i (DenseExpr.const (dd : ZMod p))) [] bs
+        rw [denseSubst_eq_substF d i (DenseExpr.const (dd : ZMod p))]
+        refine DenseConstraintSystem.substF_denseCorrect d
+          (fun j => if j = i then some (DenseExpr.const (dd : ZMod p)) else none) bs reg.isInput
+          ?_ ?_
+        · intro denv hsat j t hjt
+          dsimp only at hjt
+          by_cases hji : j = i
+          · rw [if_pos hji] at hjt
+            simp only [Option.some.injEq] at hjt
+            rw [← hjt, hji]
+            exact denseDigitFoldFindFold_entails hp bs facts d i dd hff denv hsat
+          · rw [if_neg hji] at hjt; exact absurd hjt (by simp)
+        · intro j t hjt z hz
+          dsimp only at hjt
+          by_cases hji : j = i
+          · rw [if_pos hji] at hjt
+            simp only [Option.some.injEq] at hjt
+            rw [← hjt] at hz; simp [DenseExpr.vars] at hz
+          · rw [if_neg hji] at hjt; exact absurd hjt (by simp)
+  · rw [if_neg hp]; exact DensePassCorrect.refl reg.isInput d bs
+
+/-- The dense bounded-payload digit fold pass. Substitutes one fact-forced witness limb per
+    invocation (the cleanup fixpoint re-solves the shrunken ladder on the next iteration). Native
+    correctness over `VarId` via `denseDigitFoldF_correct`; no dependency on the reference pass. -/
+def denseDigitFoldPass : DenseVerifiedPassW p :=
+  DenseVerifiedPassW.ofNative
+    denseDigitFoldF
+    (fun _ _ _ => [])
+    (fun reg bs facts d hcov => denseDigitFoldF_covered reg bs facts d hcov)
+    (fun _ _ _ _ _ => by intro x hx; simp at hx)
+    (fun reg bs facts d _ => denseDigitFoldF_correct reg bs facts d)
+
 end ApcOptimizer.Dense
