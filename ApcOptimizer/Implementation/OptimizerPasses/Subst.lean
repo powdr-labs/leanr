@@ -6,11 +6,10 @@ set_option autoImplicit false
 /-! # Dense substitution (Task 3, WP-E)
 
 The dense mirror of `Expression.subst`/`ConstraintSystem.subst` — the core variable-elimination
-machinery Gauss and the domain passes build on. Unlike the eval-preserving maps (constant folding),
-substitution *compares variables* (`if j = i`), so its decode-commutation needs validity: `resolve`
-is injective only on valid IDs, so `j = i ↔ resolve j = resolve i` requires `i` and `j` valid. The
-commutation lemma `decodeCS_subst` therefore carries coverage/validity hypotheses, and downstream
-passes discharge them from the threaded coverage invariant. -/
+machinery Gauss and the domain passes build on. The runtime cores (`DenseExpr.subst`,
+`denseBIsubst`, `DenseConstraintSystem.subst`) and their variable-bound / coverage-preservation
+lemmas (`subst_vars`, `subst_covered`) are `VarId`-native; the decode-commutation lemmas the
+commutation-era ports used have been removed (their consumers converted to native proofs). -/
 
 namespace ApcOptimizer.Dense
 
@@ -50,30 +49,6 @@ theorem DenseExpr.subst_vars (e : DenseExpr p) (i : VarId) (t : DenseExpr p) :
       · exact (iha k hk).imp (List.mem_append.2 <| Or.inl ·) id
       · exact (ihb k hk).imp (List.mem_append.2 <| Or.inr ·) id
 
-/-- **Substitution commutes with decode** (given `i` valid and `e` covered): decoding a dense
-    substitution is the spec substitution of the decoded pieces. -/
-theorem VarRegistry.decodeExpr_subst (reg : VarRegistry) {i : VarId} (hi : reg.Valid i)
-    (t : DenseExpr p) (e : DenseExpr p) : e.CoveredBy reg →
-    reg.decodeExpr (e.subst i t)
-      = (reg.decodeExpr e).subst (reg.resolve i) (reg.decodeExpr t) := by
-  induction e with
-  | const n => intro _; rfl
-  | var j =>
-      intro hc
-      have hjv : reg.Valid j := hc j (by simp [DenseExpr.vars])
-      by_cases h : j = i
-      · subst h; simp [DenseExpr.subst, VarRegistry.decodeExpr, Expression.subst]
-      · simp only [DenseExpr.subst, if_neg h, VarRegistry.decodeExpr, Expression.subst]
-        rw [if_neg (fun he => h (reg.resolve_inj hjv hi he))]
-  | add a b iha ihb =>
-      intro hc
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_add.mp hc
-      simp only [DenseExpr.subst, VarRegistry.decodeExpr, Expression.subst, iha ha, ihb hb]
-  | mul a b iha ihb =>
-      intro hc
-      obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_mul.mp hc
-      simp only [DenseExpr.subst, VarRegistry.decodeExpr, Expression.subst, iha ha, ihb hb]
-
 /-- Substitution preserves coverage when the substituted expression is covered. -/
 theorem DenseExpr.subst_covered {reg : VarRegistry} {e t : DenseExpr p} {i : VarId}
     (he : e.CoveredBy reg) (ht : t.CoveredBy reg) : (e.subst i t).CoveredBy reg := by
@@ -96,32 +71,6 @@ def DenseConstraintSystem.subst (d : DenseConstraintSystem p) (i : VarId) (t : D
     DenseConstraintSystem p :=
   { algebraicConstraints := d.algebraicConstraints.map (·.subst i t),
     busInteractions := d.busInteractions.map (denseBIsubst · i t) }
-
-/-- Bus-interaction substitution commutes with decode. -/
-theorem VarRegistry.decodeBI_subst (reg : VarRegistry) {i : VarId} (hi : reg.Valid i)
-    (t : DenseExpr p) (bi : BusInteraction (DenseExpr p)) (hc : denseBICovered reg bi) :
-    reg.decodeBI (denseBIsubst bi i t)
-      = (reg.decodeBI bi).subst (reg.resolve i) (reg.decodeExpr t) := by
-  obtain ⟨hm, hp⟩ := hc
-  simp only [denseBIsubst, VarRegistry.decodeBI, BusInteraction.subst, List.map_map,
-    reg.decodeExpr_subst hi t _ hm]
-  congr 1
-  refine List.map_congr_left (fun e he => ?_)
-  simp only [Function.comp_apply, reg.decodeExpr_subst hi t e (hp e he)]
-
-/-- **System substitution commutes with decode** (given `i` valid and the system covered). -/
-theorem VarRegistry.decodeCS_subst (reg : VarRegistry) {i : VarId} (hi : reg.Valid i)
-    (t : DenseExpr p) (d : DenseConstraintSystem p) (hc : d.CoveredBy reg) :
-    reg.decodeCS (d.subst i t)
-      = (reg.decodeCS d).subst (reg.resolve i) (reg.decodeExpr t) := by
-  obtain ⟨hac, hbi⟩ := hc
-  simp only [DenseConstraintSystem.subst, VarRegistry.decodeCS, ConstraintSystem.subst,
-    List.map_map]
-  congr 1
-  · refine List.map_congr_left (fun e he => ?_)
-    simp only [Function.comp_apply, reg.decodeExpr_subst hi t e (hac e he)]
-  · refine List.map_congr_left (fun bi hbimem => ?_)
-    simp only [Function.comp_apply, reg.decodeBI_subst hi t bi (hbi bi hbimem)]
 
 /-- Substitution preserves system coverage when `t` is covered. -/
 theorem DenseConstraintSystem.subst_covered {reg : VarRegistry} {d : DenseConstraintSystem p}

@@ -116,15 +116,13 @@ theorem VarRegistry.decodeLin_toExpr (reg : VarRegistry) (l : DenseLinExpr p) :
 /-! # Dense affine solver (Task 3, WP-E — Gauss foundation, part 2)
 
 The dense mirror of the affine *solver* layer of `OptimizerPasses/Affine.lean` — `coeff`/`others`,
-`trySolve`/`trySolveUnit`, `solveAffineLin`/`solveAffine`, and the occurrence-aware pivot enumerators
-`pm1PivotsOf`/`unitPivotsOf`/`solvableFrom`. Unlike `linearize`, these *compare variables* (they
-filter a term list on `t.1 = x`), so their decode-commutation is **validity-gated** exactly like
-`Dense/Subst.lean` and `Dense/Normalize.lean`: `resolve` is injective only on registered ids, so the
-`VarId` comparison decodes to the `Variable` comparison only when the compared ids are valid.
-
-Each dense definition comes with a commutation lemma proving it *decodes to* its spec counterpart
-under `decodeLin`/`resolve` (`decodePivot` for pivot results). A later chunk consumes these to port
-the Gauss elimination pass, inheriting the spec pass's `PassCorrect` unchanged. -/
+`trySolve`/`trySolveUnit`, and the occurrence-aware pivot enumerators `pm1PivotsOf`/`unitPivotsOf`.
+These *compare variables* (they filter a term list on `t.1 = x`) and are `VarId`-native; the native
+Gauss proof (`GaussProof.lean`) consumes them directly (`densePm1PivotsOf`/`denseUnitPivotsOf` and
+their `_sound`/`_vars` lemmas). The commutation-era decode lemmas and the unused `solveAffineLin`/
+`solveAffine`/`solvableFrom` solver defs the old Gauss port relied on have been removed; the
+`decodeLin_*`/`denseLinearize_covered_terms` lemmas that other passes (AddrDiseqProof/Normalize/
+DomainBatch) still consume are kept. -/
 
 /-! ## Membership-congruence helpers for `find?`/`filterMap`/`flatMap` -/
 
@@ -218,22 +216,6 @@ theorem VarRegistry.denseLinearize_covered_terms (reg : VarRegistry) {c : DenseE
 
 /-! ## Decoding a dense pivot -/
 
-/-- Decode a dense pivot `(VarId, DenseExpr)` to a spec pivot `(Variable, Expression)`. -/
-def VarRegistry.decodePivot (reg : VarRegistry) (it : VarId × DenseExpr p) : Variable × Expression p :=
-  (reg.resolve it.1, reg.decodeExpr it.2)
-
-/-- `filterMap`-over-`resolve` commutation for pivot enumeration: given a per-id correspondence
-    `(f v).map decodePivot = g (resolve v)` on all (valid) ids, the dense `filterMap` decodes to the
-    spec `filterMap` over the resolved ids. `ids` stays abstract so `filterMap_map` peels only the
-    resolved (right) list. -/
-theorem VarRegistry.filterMap_pivots (reg : VarRegistry) (ids : List VarId)
-    (f : VarId → Option (VarId × DenseExpr p)) (g : Variable → Option (Variable × Expression p))
-    (hfg : ∀ v ∈ ids, (f v).map reg.decodePivot = g (reg.resolve v)) :
-    (ids.filterMap f).map reg.decodePivot = (ids.map reg.resolve).filterMap g := by
-  rw [List.map_filterMap, List.filterMap_map]
-  refine filterMap_congr_mem _ (fun v hvm => ?_)
-  simpa using hfg v hvm
-
 /-! ## Resolving a filtered-by-variable term list (validity-gated) -/
 
 /-- Filtering a term list on `t.1 = x` commutes with `resolve`-decoding, given all compared ids
@@ -313,11 +295,6 @@ theorem DenseLinExpr.eval_split (l : DenseLinExpr p) (x : VarId) (denv : VarId �
 
 /-! ## Coefficient / remainder / term-vars commutation -/
 
-/-- The term variables of a decoded dense linear form are the resolved dense term variables. -/
-theorem VarRegistry.decodeLin_terms_fst (reg : VarRegistry) (l : DenseLinExpr p) :
-    (reg.decodeLin l).terms.map Prod.fst = (l.terms.map Prod.fst).map reg.resolve := by
-  simp [VarRegistry.decodeLin, List.map_map, Function.comp_def]
-
 /-- **`coeff` commutes with decode** (validity-gated). -/
 theorem VarRegistry.decodeLin_coeff (reg : VarRegistry) (l : DenseLinExpr p) {x : VarId}
     (hx : reg.Valid x) (hterms : ∀ i ∈ l.terms.map Prod.fst, reg.Valid i) :
@@ -342,18 +319,6 @@ def DenseLinExpr.trySolve (l : DenseLinExpr p) (v : VarId) : Option (VarId × De
   else if l.coeff v = -1 then some (v, (l.others v).toExpr)
   else none
 
-/-- **`trySolve` commutes with decode** (validity-gated). -/
-theorem VarRegistry.denseTrySolve_decode (reg : VarRegistry) (l : DenseLinExpr p) {v : VarId}
-    (hvv : reg.Valid v) (hterms : ∀ i ∈ l.terms.map Prod.fst, reg.Valid i) :
-    (l.trySolve v).map reg.decodePivot = (reg.decodeLin l).trySolve (reg.resolve v) := by
-  simp only [DenseLinExpr.trySolve, LinExpr.trySolve, reg.decodeLin_coeff l hvv hterms]
-  split_ifs with h1 h2
-  · simp only [Option.map_some, VarRegistry.decodePivot]
-    rw [reg.decodeLin_toExpr, reg.decodeLin_scale, reg.decodeLin_others l hvv hterms]
-  · simp only [Option.map_some, VarRegistry.decodePivot]
-    rw [reg.decodeLin_toExpr, reg.decodeLin_others l hvv hterms]
-  · rfl
-
 /-- Try to solve the dense linear form `= 0` for `v` when `v`'s coefficient is a *unit*
     (mirrors `LinExpr.trySolveUnit`). -/
 def DenseLinExpr.trySolveUnit (l : DenseLinExpr p) (v : VarId) : Option (VarId × DenseExpr p) :=
@@ -361,81 +326,7 @@ def DenseLinExpr.trySolveUnit (l : DenseLinExpr p) (v : VarId) : Option (VarId �
     some (v, ((l.others v).scale (-(l.coeff v)⁻¹)).toExpr)
   else none
 
-/-- **`trySolveUnit` commutes with decode** (validity-gated). -/
-theorem VarRegistry.denseTrySolveUnit_decode (reg : VarRegistry) (l : DenseLinExpr p) {v : VarId}
-    (hvv : reg.Valid v) (hterms : ∀ i ∈ l.terms.map Prod.fst, reg.Valid i) :
-    (l.trySolveUnit v).map reg.decodePivot = (reg.decodeLin l).trySolveUnit (reg.resolve v) := by
-  simp only [DenseLinExpr.trySolveUnit, LinExpr.trySolveUnit, reg.decodeLin_coeff l hvv hterms]
-  split_ifs with h1
-  · simp only [Option.map_some, VarRegistry.decodePivot]
-    rw [reg.decodeLin_toExpr, reg.decodeLin_scale, reg.decodeLin_others l hvv hterms]
-  · rfl
-
 /-! ## The affine solver -/
-
-/-- Solve for the first `±1`-coefficient variable, else the first unit-coefficient variable
-    (mirrors `solveAffineLin`). -/
-def denseSolveAffineLin (l : DenseLinExpr p) : Option (VarId × DenseExpr p) :=
-  match (l.terms.map Prod.fst).find? (fun v => (l.trySolve v).isSome) with
-  | some v => l.trySolve v
-  | none =>
-    match (l.terms.map Prod.fst).find? (fun v => (l.trySolveUnit v).isSome) with
-    | some v => l.trySolveUnit v
-    | none => none
-
-/-- **`solveAffineLin` commutes with decode** (validity-gated). -/
-theorem VarRegistry.denseSolveAffineLin_decode (reg : VarRegistry) (l : DenseLinExpr p)
-    (hv : ∀ i ∈ l.terms.map Prod.fst, reg.Valid i) :
-    (denseSolveAffineLin l).map reg.decodePivot = solveAffineLin (reg.decodeLin l) := by
-  have hfind1 :
-      ((reg.decodeLin l).terms.map Prod.fst).find? (fun v => ((reg.decodeLin l).trySolve v).isSome)
-        = ((l.terms.map Prod.fst).find? (fun v => (l.trySolve v).isSome)).map reg.resolve := by
-    rw [reg.decodeLin_terms_fst, List.find?_map]
-    refine congrArg (·.map reg.resolve) (find?_congr_mem _ (fun v hvm => ?_))
-    simp only [Function.comp_apply]
-    rw [← reg.denseTrySolve_decode l (hv v hvm) hv, Option.isSome_map]
-  have hfind2 :
-      ((reg.decodeLin l).terms.map Prod.fst).find? (fun v => ((reg.decodeLin l).trySolveUnit v).isSome)
-        = ((l.terms.map Prod.fst).find? (fun v => (l.trySolveUnit v).isSome)).map reg.resolve := by
-    rw [reg.decodeLin_terms_fst, List.find?_map]
-    refine congrArg (·.map reg.resolve) (find?_congr_mem _ (fun v hvm => ?_))
-    simp only [Function.comp_apply]
-    rw [← reg.denseTrySolveUnit_decode l (hv v hvm) hv, Option.isSome_map]
-  unfold denseSolveAffineLin solveAffineLin
-  rw [hfind1, hfind2]
-  cases hf1 : (l.terms.map Prod.fst).find? (fun v => (l.trySolve v).isSome) with
-  | some v =>
-      simp only [Option.map_some]
-      exact reg.denseTrySolve_decode l (hv v (List.mem_of_find?_eq_some hf1)) hv
-  | none =>
-      simp only [Option.map_none]
-      cases hf2 : (l.terms.map Prod.fst).find? (fun v => (l.trySolveUnit v).isSome) with
-      | some v =>
-          simp only [Option.map_some]
-          exact reg.denseTrySolveUnit_decode l (hv v (List.mem_of_find?_eq_some hf2)) hv
-      | none => simp only [Option.map_none]
-
-/-- Solve a dense constraint expression for a unit-coefficient variable (mirrors `solveAffine`). -/
-def denseSolveAffine (c : DenseExpr p) : Option (VarId × DenseExpr p) :=
-  (denseLinearize c).bind denseSolveAffineLin
-
-/-- **`solveAffine` commutes with decode** for covered expressions. -/
-theorem VarRegistry.denseSolveAffine_decode (reg : VarRegistry) (c : DenseExpr p)
-    (hc : c.CoveredBy reg) :
-    (denseSolveAffine c).map reg.decodePivot = solveAffine (reg.decodeExpr c) := by
-  have hkey := reg.denseLinearize_decode c
-  cases hL : denseLinearize c with
-  | none =>
-      have hRHS : linearize (reg.decodeExpr c) = none := by rw [← hkey, hL, Option.map_none]
-      simp [denseSolveAffine, solveAffine, hL, hRHS]
-  | some l =>
-      have hRHS : linearize (reg.decodeExpr c) = some (reg.decodeLin l) := by
-        rw [← hkey, hL, Option.map_some]
-      have hLHS : denseSolveAffine c = denseSolveAffineLin l := by simp [denseSolveAffine, hL]
-      have hsa : solveAffine (reg.decodeExpr c) = solveAffineLin (reg.decodeLin l) := by
-        simp [solveAffine, hRHS]
-      rw [hLHS, hsa]
-      exact reg.denseSolveAffineLin_decode l (reg.denseLinearize_covered_terms hc hL)
 
 /-! ## Occurrence-aware pivot enumeration -/
 
@@ -455,10 +346,6 @@ def denseUnitPivotsOf (c : DenseExpr p) : List (VarId × DenseExpr p) :=
       match l.trySolve v with
       | some _ => none
       | none => l.trySolveUnit v)
-
-/-- All solvable pivots across a dense constraint list, `±1` pivots first (mirrors `solvableFrom`). -/
-def denseSolvableFrom (all : List (DenseExpr p)) : List (VarId × DenseExpr p) :=
-  all.flatMap densePm1PivotsOf ++ all.flatMap denseUnitPivotsOf
 
 /-! ## Native affine-form evaluation (mirrors `LinExpr.add_eval`/`scale_eval`/`linearize_eval`)
 
