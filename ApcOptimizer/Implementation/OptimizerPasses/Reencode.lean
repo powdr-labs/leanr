@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatch
+import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
 
 set_option autoImplicit false
 
@@ -28,40 +29,17 @@ candidate-group list and dispatching indexed vs direct covered-set gathering). T
 until a later chunk flips it, and the prover's native proof may cite the spec's own transport
 lemmas while it is under construction.
 
-## ⚠️ Forced deviation: a circular import blocks reuse of `DomainFold.lean`'s primitives
+## Import-graph note (cycle resolved at the coordinator level)
 
-The reuse table for this chunk points at several primitives living in the dense
-`OptimizerPasses/DomainFold.lean`/`DomainFoldRuntime.lean` (`denseFindDomainAlg`, `denseCoveredBy`,
-`denseCoveredCsOf`, `denseGroupDoms`, `denseAssignments`, `DenseExpr.hasVar`, and the value-only
-survivor engine `denseGroupSurvivorsEV`/`denseAssignmentsV`). **These cannot be imported from this
-file**: `OldVariableBased/DomainFold.lean` (the spec pass, unrelated to the dense one) imports the
-*canonical* `OptimizerPasses/Reencode.lean` — i.e. *this file* — for the spec's own `coveredBy`/
-`groupDoms` (defined in spec `Reencode.lean`, not spec `DomainFold.lean`). Before this chunk, the
-canonical `Reencode.lean` was an empty wrapper, so that import was harmless; now that it carries
-real dense content needing `DomainFold.lean`'s primitives, importing dense `DomainFold.lean` (or
-`DomainFoldRuntime.lean`, which imports it) would close the cycle
-`Reencode(canonical) → DomainFold(dense) → DomainFold(spec) → Reencode(canonical)`, which Lean
-rejects outright (`bad import`).
-
-Neither available fix is in scope here: redirecting `OldVariableBased/DomainFold.lean`'s (and
-`OldVariableBased/HintCollapse.lean`'s, which has the same import for the same reason) import
-target to `OptimizerPasses.OldVariableBased.Reencode` directly would be a purely import-graph,
-zero-semantic-change edit, but it edits a spec pass file, which this chunk's hard rules forbid
-without explicit sign-off; relocating the shared primitives out of `DomainFold.lean` into a common
-lower module both files could import is a wider refactor touching every already-landed, natively-
-proven pass built on `DomainFold.lean` (the whole addr-diseq/busPairCancel cluster:
-`RootPairUnify`/`FlagUnify`/`FlagFoldDrops`/`FxSubst`/`BoxRewrite`/`FlagFold`/`BusPairCancel*`/
-`DomainFoldProof`), well beyond this chunk's assigned scope and risk budget.
-
-**Flagged for the orchestrator/prover:** this file therefore carries `private` copies — body-
-identical to their `DomainFold.lean` twins, cited by name below — of the handful of small,
-self-contained primitives it needs (`DenseExpr.hasVar`, `denseCoveredBy`, `denseCoveredCsOf`,
-`denseFindDomainAlg`, `denseGroupDoms`, `denseAssignments`). `private` mangles each declaration's
-real name per defining module, so these cannot collide with the public originals when both files
-are eventually loaded together (e.g. via `DenseUmbrella.lean`); this was verified by a clean
-`lake build`. **R2/R3 will hit the identical blocker** for `denseSvSet`/`denseCoveredIdx`/
-`DenseFoldIdx` (needed by `buildReencode`/`reencodePass`'s indexed covered-set gathering) — a
-permanent fix should be decided before those chunks land, not re-patched ad hoc per chunk.
+`OldVariableBased/` spec files used to import sibling spec passes through the canonical wrapper
+paths (e.g. `OldVariableBased/DomainFold.lean` importing `OptimizerPasses.Reencode` for the spec's
+own `coveredBy`/`groupDoms`), which would close an import cycle the moment a canonical file — this
+one — gains dense content that imports dense `DomainFold.lean`. All such spec→spec edges have been
+repointed to stay inside `OldVariableBased/` (a pure import-respelling, no semantic change), so
+this file imports the dense `DomainFold.lean` primitives (`denseFindDomainAlg`, `denseCoveredBy`,
+`denseCoveredCsOf`, `denseGroupDoms`, `denseAssignments`, `DenseExpr.hasVar`) normally — no local
+copies. Later chunks may likewise import `DomainFoldRuntime.lean` (`denseSvSet`,
+`denseCoveredIdx`, `DenseFoldIdx`) without obstruction.
 
 The group-survivor enumeration (`denseSurvZeroCW`/`denseGroupSurvivorsE` below) needs **no**
 workaround: spec `Reencode.lean` itself defines `survZeroCW`/`groupSurvivorsE` (not
@@ -136,58 +114,6 @@ def DenseExpr.evalFast (e : DenseExpr p) (denv : VarId → ZMod p) : ZMod p :=
 /-- `b · (b − 1)`. Mirrors `boolConstraint`. -/
 def denseBoolConstraint (b : VarId) : DenseExpr p :=
   .mul (.var b) (.add (.var b) (.const (-1)))
-
-/-! ## Locally re-derived `DomainFold.lean` primitives (circular-import workaround)
-
-See the module header's forced-deviation note: these six are `private`, body-identical to their
-public `DomainFold.lean` twins, needed here only because that file cannot be imported from this
-one. -/
-
-/-- Dense `Expression.hasVar`. Private local copy of `DomainFold.lean`'s `DenseExpr.hasVar`. -/
-private def DenseExpr.hasVar : DenseExpr p → Bool
-  | .const _ => false
-  | .var _ => true
-  | .add a b => a.hasVar || b.hasVar
-  | .mul a b => a.hasVar || b.hasVar
-
-/-- Constraints whose (nonempty) variable set lies inside the group. Private local copy of
-    `DomainFold.lean`'s `denseCoveredBy`. -/
-private def denseCoveredBy (xs : List VarId) (c : DenseExpr p) : Bool :=
-  c.hasVar && c.varsInF xs
-
-/-- The group's covered constraints. Private local copy of `DomainFold.lean`'s
-    `denseCoveredCsOf`. -/
-private def denseCoveredCsOf (d : DenseConstraintSystem p) (xs : List VarId) : List (DenseExpr p) :=
-  d.algebraicConstraints.filter (denseCoveredBy xs)
-
-/-- Domain (root set) of `i` from the first covered constraint that determines one. Private local
-    copy of `DomainFold.lean`'s `denseFindDomainAlg`, reusing `denseRootsIn` (`DomainBatch.lean`,
-    safely importable). -/
-private def denseFindDomainAlg (all : List (DenseExpr p)) (i : VarId) : Option (List (ZMod p)) :=
-  match all with
-  | [] => none
-  | c :: rest =>
-    if c.mentions i then
-      match denseRootsIn i c with
-      | some d => some d
-      | none => denseFindDomainAlg rest i
-    else denseFindDomainAlg rest i
-
-/-- Domains for the group's variables, from the covered constraints only. Private local copy of
-    `DomainFold.lean`'s `denseGroupDoms`. -/
-private def denseGroupDoms (es : List (DenseExpr p)) :
-    List VarId → Option (List (VarId × List (ZMod p)))
-  | [] => some []
-  | i :: rest =>
-    match denseFindDomainAlg es i, denseGroupDoms es rest with
-    | some d, some ds => some ((i, d) :: ds)
-    | _, _ => none
-
-/-- The Cartesian product of the group's per-variable domains, keyed. Private local copy of
-    `DomainFold.lean`'s `denseAssignments`. -/
-private def denseAssignments : List (VarId × List (ZMod p)) → List (List (VarId × ZMod p))
-  | [] => [[]]
-  | (i, d) :: rest => (denseAssignments rest).flatMap (fun a => d.map (fun v => (i, v) :: a))
 
 /-! ## The group substitution and the fresh bits' domain box -/
 

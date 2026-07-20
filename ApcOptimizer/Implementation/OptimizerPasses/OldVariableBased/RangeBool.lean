@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.ZeroWidthRange
-import ApcOptimizer.Implementation.OptimizerPasses.SubsumedCheck
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubsumedCheck
 
 set_option autoImplicit false
 

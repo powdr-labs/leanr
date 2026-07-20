@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.SubsumedCheck
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubsumedCheck
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
 
 set_option autoImplicit false

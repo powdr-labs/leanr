@@ -1,6 +1,6 @@
-import ApcOptimizer.Implementation.OptimizerPasses.Reencode
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
-import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.TautoBus
 
 set_option autoImplicit false
 

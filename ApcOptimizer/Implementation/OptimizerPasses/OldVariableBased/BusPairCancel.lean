@@ -3,7 +3,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.BytePack
-import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.IntervalForce
 import ApcOptimizer.Implementation.MemoryBusDrop
 
 set_option autoImplicit false

@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.Reencode
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Reencode
 
 set_option autoImplicit false
 

@@ -1,6 +1,6 @@
-import ApcOptimizer.Implementation.OptimizerPasses.TupleRange
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.TupleRange
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Normalize
-import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.TautoBus
 
 set_option autoImplicit false
 

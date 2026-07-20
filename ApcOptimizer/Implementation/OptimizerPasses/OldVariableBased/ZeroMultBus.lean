@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.TrivialConstraint
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.TrivialConstraint
 
 set_option autoImplicit false
 

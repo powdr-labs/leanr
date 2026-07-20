@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubstMap
-import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.XorEqExtract
 
 set_option autoImplicit false
 

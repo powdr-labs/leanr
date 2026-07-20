@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.ConstantFold
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.ConstantFold
 
 set_option autoImplicit false
 

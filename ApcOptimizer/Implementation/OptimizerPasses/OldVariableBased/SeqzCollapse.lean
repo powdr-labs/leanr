@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.HintCollapse
 
 set_option autoImplicit false
 set_option linter.unusedSimpArgs false
