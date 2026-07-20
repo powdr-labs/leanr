@@ -40,7 +40,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZero
 import ApcOptimizer.Implementation.OptimizerPasses.RangeBool
 import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubst
-import ApcOptimizer.Implementation.Dense
+import ApcOptimizer.Implementation.OptimizerPasses.DenseUmbrella
 
 set_option autoImplicit false
 
