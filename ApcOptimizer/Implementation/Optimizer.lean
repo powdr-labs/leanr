@@ -258,6 +258,8 @@ def denseImpl (b : DegreeBound) (pw : PrimeWitness p) (name : String) (fallback 
     DenseVerifiedPassW.guardDegree b denseByteCheckPackPass
   else if name == "hintCollapse" then
     DenseVerifiedPassW.guardDegree b (denseHintCollapsePass pw)
+  else if name == "disconnected" then
+    DenseVerifiedPassW.guardDegree b denseDisconnectedPass
   else if name == "reencode" then
     DenseVerifiedPassW.guardDegree b (denseReencodePass pw b)
   else DenseVerifiedPassW.ofSpec fallback
