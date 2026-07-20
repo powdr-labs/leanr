@@ -56,6 +56,79 @@ def DenseExpr.normalize : DenseExpr p → DenseExpr p
       | some l => l.norm.toExpr
       | none => .mul a.normalize b.normalize
 
+/-! ## Native eval-preservation of the merge / normal form (mirrors `mergeTerms_eval`/
+    `LinExpr.norm_eval`/`Expression.normalize_eval`)
+
+Proved natively over `VarId → ZMod p` environments (no `decode`, no prime hypothesis). Consolidated
+here at their definitions' home so every downstream native proof shares one copy; the affine-form
+eval lemmas (`denseLinearize_eval`, `DenseLinExpr.norm_eval`'s `add`/`scale`/`toExpr` pieces) live in
+`Dense/Affine.lean`. -/
+
+theorem denseAddCoeff_eval (v : VarId) (c : ZMod p) (ts : List (VarId × ZMod p))
+    (denv : VarId → ZMod p) :
+    ((denseAddCoeff v c ts).map (fun t => t.2 * denv t.1)).sum
+      = c * denv v + (ts.map (fun t => t.2 * denv t.1)).sum := by
+  induction ts with
+  | nil => simp [denseAddCoeff]
+  | cons t rest ih =>
+      simp only [denseAddCoeff]
+      split
+      · next h => subst h; simp only [List.map_cons, List.sum_cons]; ring
+      · simp only [List.map_cons, List.sum_cons, ih]; ring
+
+theorem denseFoldAddCoeff_eval (denv : VarId → ZMod p) (ts acc : List (VarId × ZMod p)) :
+    ((ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) acc).map (fun t => t.2 * denv t.1)).sum
+      = (acc.map (fun t => t.2 * denv t.1)).sum + (ts.map (fun t => t.2 * denv t.1)).sum := by
+  induction ts generalizing acc with
+  | nil => simp
+  | cons t rest ih =>
+      simp only [List.foldl_cons, List.map_cons, List.sum_cons, ih, denseAddCoeff_eval]
+      ring
+
+theorem denseMergeTerms_eval (ts : List (VarId × ZMod p)) (denv : VarId → ZMod p) :
+    ((denseMergeTerms ts).map (fun t => t.2 * denv t.1)).sum
+      = (ts.map (fun t => t.2 * denv t.1)).sum := by
+  simp [denseMergeTerms, denseFoldAddCoeff_eval]
+
+theorem denseDropZero_eval (ts : List (VarId × ZMod p)) (denv : VarId → ZMod p) :
+    ((ts.filter (fun t => t.2 ≠ 0)).map (fun t => t.2 * denv t.1)).sum
+      = (ts.map (fun t => t.2 * denv t.1)).sum := by
+  induction ts with
+  | nil => rfl
+  | cons t rest ih =>
+      by_cases h : t.2 = 0
+      · rw [List.filter_cons_of_neg (by simpa using h), ih, List.map_cons, List.sum_cons, h]
+        simp
+      · rw [List.filter_cons_of_pos (by simpa using h), List.map_cons, List.sum_cons, ih,
+            List.map_cons, List.sum_cons]
+
+/-- **The dense normal form is eval-preserving.** Dense mirror of `LinExpr.norm_eval`. -/
+theorem DenseLinExpr.norm_eval (l : DenseLinExpr p) (denv : VarId → ZMod p) :
+    l.norm.eval denv = l.eval denv := by
+  simp only [DenseLinExpr.norm, DenseLinExpr.eval, denseDropZero_eval, denseMergeTerms_eval]
+
+/-- **`DenseExpr.normalize` is eval-preserving.** Dense mirror of `Expression.normalize_eval`
+    (`OptimizerPasses/Normalize.lean:318`); no prime hypothesis needed. -/
+theorem DenseExpr.normalize_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
+    e.normalize.eval denv = e.eval denv := by
+  induction e with
+  | const n => rfl
+  | var x => rfl
+  | add a b iha ihb =>
+      rw [DenseExpr.normalize]
+      cases hl : denseLinearize (DenseExpr.add a b) with
+      | some l =>
+          rw [DenseLinExpr.toExpr_eval, DenseLinExpr.norm_eval, ← denseLinearize_eval _ l hl]
+      | none =>
+          simp only [DenseExpr.eval, iha, ihb]
+  | mul a b iha ihb =>
+      rw [DenseExpr.normalize]
+      cases hl : denseLinearize (DenseExpr.mul a b) with
+      | some l =>
+          rw [DenseLinExpr.toExpr_eval, DenseLinExpr.norm_eval, ← denseLinearize_eval _ l hl]
+      | none =>
+          simp only [DenseExpr.eval, iha, ihb]
+
 /-! ## Variable bounds (`normalize` introduces no new variable) -/
 
 /-- Every variable of `denseAddCoeff v c ts` is `v` or one of `ts`'s. -/
@@ -195,6 +268,119 @@ theorem DenseExpr.normalize_vars (e : DenseExpr p) : ∀ i ∈ e.normalize.vars,
         exact denseLinearize_vars _ l hl i (l.norm_terms_fst i (DenseLinExpr.toExpr_vars _ i hi))
       · simp only [DenseExpr.vars, List.mem_append] at hi ⊢
         exact hi.imp (iha i) (ihb i)
+
+/-! ## Fused normalization walk (mirrors `normalizeFused`, `OptimizerPasses/Normalize.lean:406`)
+
+One bottom-up pass returning the normalized expression *and* the node's dense linear form
+(`denseLinearize`'s value). `DenseExpr.normalize` re-runs `denseLinearize` — a full subtree walk — at
+every `add`/`mul` node along non-affine paths (O(size × depth)); threading the linear form up removes
+the re-walks. `denseNormalizeFused_eq` pins both components to the original functions. -/
+
+def denseNormalizeFused : DenseExpr p → DenseExpr p × Option (DenseLinExpr p)
+  | .const n => (.const n, some ⟨n, []⟩)
+  | .var x => (.var x, some ⟨0, [(x, 1)]⟩)
+  | .add a b =>
+      let ra := denseNormalizeFused a
+      let rb := denseNormalizeFused b
+      match ra.2, rb.2 with
+      | some la, some lb =>
+          let l := la.add lb
+          (l.norm.toExpr, some l)
+      | _, _ => (.add ra.1 rb.1, none)
+  | .mul a b =>
+      let ra := denseNormalizeFused a
+      let rb := denseNormalizeFused b
+      match ra.2, rb.2 with
+      | some la, some lb =>
+          if la.terms.isEmpty then
+            let l := lb.scale la.const
+            (l.norm.toExpr, some l)
+          else if lb.terms.isEmpty then
+            let l := la.scale lb.const
+            (l.norm.toExpr, some l)
+          else (.mul ra.1 rb.1, none)
+      | _, _ => (.mul ra.1 rb.1, none)
+
+/-- The fused pass computes exactly (`normalize`, `denseLinearize`). Mirrors `normalizeFused_eq`. -/
+theorem denseNormalizeFused_eq (e : DenseExpr p) :
+    denseNormalizeFused e = (e.normalize, denseLinearize e) := by
+  induction e with
+  | const n => rfl
+  | var x => rfl
+  | add a b iha ihb =>
+      simp only [denseNormalizeFused, iha, ihb]
+      cases hla : denseLinearize a with
+      | none => simp [DenseExpr.normalize, denseLinearize, hla]
+      | some la =>
+        cases hlb : denseLinearize b with
+        | none => simp [DenseExpr.normalize, denseLinearize, hla, hlb]
+        | some lb => simp [DenseExpr.normalize, denseLinearize, hla, hlb]
+  | mul a b iha ihb =>
+      simp only [denseNormalizeFused, iha, ihb]
+      cases hla : denseLinearize a with
+      | none => simp [DenseExpr.normalize, denseLinearize, hla]
+      | some la =>
+        cases hlb : denseLinearize b with
+        | none => simp [DenseExpr.normalize, denseLinearize, hla, hlb]
+        | some lb =>
+          by_cases h1 : la.terms.isEmpty
+          · simp [DenseExpr.normalize, denseLinearize, hla, hlb, h1]
+          · by_cases h2 : lb.terms.isEmpty
+            · simp [DenseExpr.normalize, denseLinearize, hla, hlb, h1, h2]
+            · simp [DenseExpr.normalize, denseLinearize, hla, hlb, h1, h2]
+
+theorem denseNormalizeFused_fst (e : DenseExpr p) : (denseNormalizeFused e).1 = e.normalize := by
+  rw [denseNormalizeFused_eq]
+
+/-- The fused walk is eval-preserving (transported from `DenseExpr.normalize_eval`). -/
+theorem denseNormalizeFused_fst_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
+    ((denseNormalizeFused e).1).eval denv = e.eval denv := by
+  rw [denseNormalizeFused_fst]; exact DenseExpr.normalize_eval e denv
+
+/-- The fused walk introduces no new variables (transported from `DenseExpr.normalize_vars`). -/
+theorem denseNormalizeFused_fst_vars (e : DenseExpr p) :
+    ∀ i ∈ ((denseNormalizeFused e).1).vars, i ∈ e.vars := by
+  rw [denseNormalizeFused_fst]; exact DenseExpr.normalize_vars e
+
+/-! ## The dense normalization pass (native proof)
+
+The affine-normalization pass, computing through the fused walk. Its correctness is proved
+**natively** as a `DensePassCorrect` (the fused walk is eval-preserving and introduces no variables)
+and lifted to the spec `PassCorrect` by `DenseVerifiedPassW.ofNative` — no dependency on the spec
+`normalizePass`. Mirrors `denseConstantFoldPass` (`Dense/ExprOps.lean`), the closest native mapExpr
+precedent. -/
+
+/-- The dense affine-normalization pass, native proof. (Wired in as `denseNormalizePass` in N2.) -/
+def denseNormalizePassN : DenseVerifiedPassW p :=
+  DenseVerifiedPassW.ofNative
+    (fun _ _ d => d.mapExpr (fun e => (denseNormalizeFused e).1))
+    (fun _ _ _ => [])
+    (fun _ _ _ _ hcov =>
+      DenseConstraintSystem.mapExpr_covered denseNormalizeFused_fst_vars hcov)
+    (fun _ _ _ _ _ => by intro x hx; simp at hx)
+    (fun reg bs _ d _ => by
+      have hfe : ∀ (e : DenseExpr p) (denv : VarId → ZMod p),
+          ((denseNormalizeFused e).1).eval denv = e.eval denv :=
+        fun e denv => denseNormalizeFused_fst_eval e denv
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · -- soundness: `(mapExpr fused).implies d`
+        intro denv hsat
+        refine ⟨denv, (DenseConstraintSystem.mapExpr_satisfies hfe d bs denv).mp hsat, ?_⟩
+        rw [DenseConstraintSystem.mapExpr_sideEffects hfe]
+        exact BusState.equiv_refl _
+      · -- invariants
+        exact fun h => DenseConstraintSystem.mapExpr_guaranteesInvariants hfe h
+      · -- no new powdr column
+        exact fun i hi _ =>
+          DenseConstraintSystem.mapExpr_occ_subset denseNormalizeFused_fst_vars d i hi
+      · -- completeness (witness = input env; no derivations)
+        intro denv hadm hsat
+        refine ⟨denv, (DenseConstraintSystem.mapExpr_satisfies hfe d bs denv).mpr hsat,
+          (DenseConstraintSystem.mapExpr_admissible hfe d bs denv).mpr hadm, ?_, fun _ _ => rfl, ?_⟩
+        · rw [DenseConstraintSystem.mapExpr_sideEffects hfe]
+          exact BusState.equiv_refl _
+        · intro _ _ i hi _
+          exact ⟨DenseConstraintSystem.mapExpr_occ_subset denseNormalizeFused_fst_vars d i hi, rfl⟩)
 
 /-! ## Decode-commutation of the merge (validity-gated) -/
 

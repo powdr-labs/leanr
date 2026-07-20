@@ -168,112 +168,12 @@ theorem DenseConstraintSystem.substF_denseCorrect (d : DenseConstraintSystem p)
       show i ∈ d.occ ∧ denv i = denv i
       exact ⟨d.substF_occ_subset df hfv i hi, rfl⟩
 
-/-! ## Native affine-form evaluation (mirrors `LinExpr.add_eval`/`scale_eval`/`linearize_eval`) -/
+/-! ## Native root soundness (mirrors `rootsOfTerms_sound`/`affineRootsIn_sound`/`rootsIn_sound`)
 
-theorem DenseLinExpr.add_eval (a b : DenseLinExpr p) (denv : VarId → ZMod p) :
-    (a.add b).eval denv = a.eval denv + b.eval denv := by
-  simp only [DenseLinExpr.add, DenseLinExpr.eval, List.map_append, List.sum_append]
-  ring
-
-theorem DenseLinExpr.scale_eval (k : ZMod p) (a : DenseLinExpr p) (denv : VarId → ZMod p) :
-    (a.scale k).eval denv = k * a.eval denv := by
-  simp only [DenseLinExpr.scale, DenseLinExpr.eval, List.map_map, mul_add]
-  congr 1
-  induction a.terms with
-  | nil => simp
-  | cons t rest ih => simp only [List.map_cons, List.sum_cons, ih, Function.comp_apply]; ring
-
-theorem denseLinearize_eval (e : DenseExpr p) (l : DenseLinExpr p) (h : denseLinearize e = some l)
-    (denv : VarId → ZMod p) : e.eval denv = l.eval denv := by
-  induction e generalizing l with
-  | const n =>
-      simp only [denseLinearize, Option.some.injEq] at h; subst h
-      simp [DenseLinExpr.eval, DenseExpr.eval]
-  | var i =>
-      simp only [denseLinearize, Option.some.injEq] at h; subst h
-      simp [DenseLinExpr.eval, DenseExpr.eval]
-  | add a b iha ihb =>
-      cases hla : denseLinearize a with
-      | none => simp [denseLinearize, hla] at h
-      | some la =>
-        cases hlb : denseLinearize b with
-        | none => simp [denseLinearize, hla, hlb] at h
-        | some lb =>
-          simp only [denseLinearize, hla, hlb, Option.some.injEq] at h
-          subst h
-          rw [DenseExpr.eval, iha la hla, ihb lb hlb, DenseLinExpr.add_eval]
-  | mul a b iha ihb =>
-      cases hla : denseLinearize a with
-      | none => simp [denseLinearize, hla] at h
-      | some la =>
-        cases hlb : denseLinearize b with
-        | none => simp [denseLinearize, hla, hlb] at h
-        | some lb =>
-          have hae : a.eval denv = la.eval denv := iha la hla
-          have hbe : b.eval denv = lb.eval denv := ihb lb hlb
-          by_cases h1 : la.terms.isEmpty = true
-          · simp only [denseLinearize, hla, hlb, if_pos h1, Option.some.injEq] at h
-            subst h
-            have hc : la.eval denv = la.const := by
-              simp only [DenseLinExpr.eval, List.isEmpty_iff.1 h1, List.map_nil, List.sum_nil,
-                add_zero]
-            rw [DenseExpr.eval, hae, hbe, DenseLinExpr.scale_eval, hc]
-          · by_cases h2 : lb.terms.isEmpty = true
-            · simp only [denseLinearize, hla, hlb, if_neg h1, if_pos h2, Option.some.injEq] at h
-              subst h
-              have hc : lb.eval denv = lb.const := by
-                simp only [DenseLinExpr.eval, List.isEmpty_iff.1 h2, List.map_nil, List.sum_nil,
-                  add_zero]
-              rw [DenseExpr.eval, hae, hbe, DenseLinExpr.scale_eval, hc, mul_comm]
-            · simp only [denseLinearize, hla, hlb] at h
-              rw [if_neg h1, if_neg h2] at h
-              exact absurd h (by simp)
-
-/-! ## Native term-merge / normalize evaluation (mirrors `mergeTerms_eval`/`LinExpr.norm_eval`) -/
-
-theorem denseAddCoeff_eval (v : VarId) (c : ZMod p) (ts : List (VarId × ZMod p))
-    (denv : VarId → ZMod p) :
-    ((denseAddCoeff v c ts).map (fun t => t.2 * denv t.1)).sum
-      = c * denv v + (ts.map (fun t => t.2 * denv t.1)).sum := by
-  induction ts with
-  | nil => simp [denseAddCoeff]
-  | cons t rest ih =>
-      simp only [denseAddCoeff]
-      split
-      · next h => subst h; simp only [List.map_cons, List.sum_cons]; ring
-      · simp only [List.map_cons, List.sum_cons, ih]; ring
-
-theorem denseFoldAddCoeff_eval (denv : VarId → ZMod p) (ts acc : List (VarId × ZMod p)) :
-    ((ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) acc).map (fun t => t.2 * denv t.1)).sum
-      = (acc.map (fun t => t.2 * denv t.1)).sum + (ts.map (fun t => t.2 * denv t.1)).sum := by
-  induction ts generalizing acc with
-  | nil => simp
-  | cons t rest ih =>
-      simp only [List.foldl_cons, List.map_cons, List.sum_cons, ih, denseAddCoeff_eval]
-      ring
-
-theorem denseMergeTerms_eval (ts : List (VarId × ZMod p)) (denv : VarId → ZMod p) :
-    ((denseMergeTerms ts).map (fun t => t.2 * denv t.1)).sum
-      = (ts.map (fun t => t.2 * denv t.1)).sum := by
-  simp [denseMergeTerms, denseFoldAddCoeff_eval]
-
-theorem denseDropZero_eval (ts : List (VarId × ZMod p)) (denv : VarId → ZMod p) :
-    ((ts.filter (fun t => t.2 ≠ 0)).map (fun t => t.2 * denv t.1)).sum
-      = (ts.map (fun t => t.2 * denv t.1)).sum := by
-  induction ts with
-  | nil => rfl
-  | cons t rest ih =>
-      by_cases h : t.2 = 0
-      · rw [List.filter_cons_of_neg (by simpa using h), ih, List.map_cons, List.sum_cons, h]
-        simp
-      · rw [List.filter_cons_of_pos (by simpa using h), List.map_cons, List.sum_cons, ih,
-            List.map_cons, List.sum_cons]
-
-theorem DenseLinExpr.norm_eval (l : DenseLinExpr p) (denv : VarId → ZMod p) :
-    l.norm.eval denv = l.eval denv := by
-  simp only [DenseLinExpr.norm, DenseLinExpr.eval, denseDropZero_eval, denseMergeTerms_eval]
-
-/-! ## Native root soundness (mirrors `rootsOfTerms_sound`/`affineRootsIn_sound`/`rootsIn_sound`) -/
+The affine-form / term-merge / normalize eval-preservation lemmas this section builds on
+(`DenseLinExpr.add_eval`/`scale_eval`/`toExpr_eval`/`norm_eval`, `denseLinearize_eval`,
+`denseMergeTerms_eval`, `denseDropZero_eval`, `DenseExpr.normalize_eval`) now live at their
+definitions' home in `Dense/Affine.lean` and `Dense/Normalize.lean` (shared, proved once). -/
 
 theorem denseRootsOfTerms_sound [Fact p.Prime] (i : VarId) (c : ZMod p)
     (ts : List (VarId × ZMod p)) (roots : List (ZMod p))

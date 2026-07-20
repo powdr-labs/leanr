@@ -517,4 +517,90 @@ theorem VarRegistry.denseSolvableFrom_decode (reg : VarRegistry) (all : List (De
   · rw [List.map_flatMap, List.flatMap_map]
     exact flatMap_congr_mem _ (fun c hcm => reg.denseUnitPivotsOf_decode c (hc c hcm))
 
+/-! ## Native affine-form evaluation (mirrors `LinExpr.add_eval`/`scale_eval`/`linearize_eval`)
+
+The eval-preservation identities for the dense affine layer, proved natively over `VarId → ZMod p`
+environments (no `decode`, no prime hypothesis — pure algebra). Consolidated here at their
+definitions' home so every downstream native proof (normalization, domain passes, busPairCancel)
+shares one copy. -/
+
+theorem DenseLinExpr.add_eval (a b : DenseLinExpr p) (denv : VarId → ZMod p) :
+    (a.add b).eval denv = a.eval denv + b.eval denv := by
+  simp only [DenseLinExpr.add, DenseLinExpr.eval, List.map_append, List.sum_append]
+  ring
+
+theorem DenseLinExpr.scale_eval (k : ZMod p) (a : DenseLinExpr p) (denv : VarId → ZMod p) :
+    (a.scale k).eval denv = k * a.eval denv := by
+  simp only [DenseLinExpr.scale, DenseLinExpr.eval, List.map_map, mul_add]
+  congr 1
+  induction a.terms with
+  | nil => simp
+  | cons t rest ih => simp only [List.map_cons, List.sum_cons, ih, Function.comp_apply]; ring
+
+theorem denseLinearize_eval (e : DenseExpr p) (l : DenseLinExpr p) (h : denseLinearize e = some l)
+    (denv : VarId → ZMod p) : e.eval denv = l.eval denv := by
+  induction e generalizing l with
+  | const n =>
+      simp only [denseLinearize, Option.some.injEq] at h; subst h
+      simp [DenseLinExpr.eval, DenseExpr.eval]
+  | var i =>
+      simp only [denseLinearize, Option.some.injEq] at h; subst h
+      simp [DenseLinExpr.eval, DenseExpr.eval]
+  | add a b iha ihb =>
+      cases hla : denseLinearize a with
+      | none => simp [denseLinearize, hla] at h
+      | some la =>
+        cases hlb : denseLinearize b with
+        | none => simp [denseLinearize, hla, hlb] at h
+        | some lb =>
+          simp only [denseLinearize, hla, hlb, Option.some.injEq] at h
+          subst h
+          rw [DenseExpr.eval, iha la hla, ihb lb hlb, DenseLinExpr.add_eval]
+  | mul a b iha ihb =>
+      cases hla : denseLinearize a with
+      | none => simp [denseLinearize, hla] at h
+      | some la =>
+        cases hlb : denseLinearize b with
+        | none => simp [denseLinearize, hla, hlb] at h
+        | some lb =>
+          have hae : a.eval denv = la.eval denv := iha la hla
+          have hbe : b.eval denv = lb.eval denv := ihb lb hlb
+          by_cases h1 : la.terms.isEmpty = true
+          · simp only [denseLinearize, hla, hlb, if_pos h1, Option.some.injEq] at h
+            subst h
+            have hc : la.eval denv = la.const := by
+              simp only [DenseLinExpr.eval, List.isEmpty_iff.1 h1, List.map_nil, List.sum_nil,
+                add_zero]
+            rw [DenseExpr.eval, hae, hbe, DenseLinExpr.scale_eval, hc]
+          · by_cases h2 : lb.terms.isEmpty = true
+            · simp only [denseLinearize, hla, hlb, if_neg h1, if_pos h2, Option.some.injEq] at h
+              subst h
+              have hc : lb.eval denv = lb.const := by
+                simp only [DenseLinExpr.eval, List.isEmpty_iff.1 h2, List.map_nil, List.sum_nil,
+                  add_zero]
+              rw [DenseExpr.eval, hae, hbe, DenseLinExpr.scale_eval, hc, mul_comm]
+            · simp only [denseLinearize, hla, hlb] at h
+              rw [if_neg h1, if_neg h2] at h
+              exact absurd h (by simp)
+
+/-- Evaluating the linear-form-rebuilt expression folds back to the affine sum. Dense mirror of
+    `toExpr_foldl_eval` (`OptimizerPasses/Affine.lean:148`). -/
+theorem denseToExpr_foldl_eval (denv : VarId → ZMod p) (terms : List (VarId × ZMod p)) :
+    ∀ init : DenseExpr p,
+      (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init).eval denv
+      = init.eval denv + (terms.map (fun t => t.2 * denv t.1)).sum := by
+  induction terms with
+  | nil => intro init; simp
+  | cons t rest ih =>
+      intro init
+      simp only [List.foldl_cons, List.map_cons, List.sum_cons, ih]
+      simp only [DenseExpr.eval]
+      ring
+
+/-- `DenseLinExpr.toExpr` is eval-preserving. Dense mirror of `LinExpr.toExpr_eval`
+    (`OptimizerPasses/Affine.lean:160`). -/
+theorem DenseLinExpr.toExpr_eval (l : DenseLinExpr p) (denv : VarId → ZMod p) :
+    l.toExpr.eval denv = l.eval denv := by
+  simp only [DenseLinExpr.toExpr, DenseLinExpr.eval, denseToExpr_foldl_eval, DenseExpr.eval]
+
 end ApcOptimizer.Dense

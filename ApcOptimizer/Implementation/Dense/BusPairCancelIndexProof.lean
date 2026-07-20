@@ -56,51 +56,11 @@ namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Native affine-normalization evaluation (mirrors `Expression.normalize_eval`) -/
+/-! ## The per-variable candidate-constraint index: `DenseVarCsIdx.Sound`
 
-/-- Evaluating the linear-form-rebuilt expression folds back to the affine sum. Dense mirror of
-    `toExpr_foldl_eval` (`OptimizerPasses/Affine.lean:148`). -/
-theorem denseToExpr_foldl_eval (denv : VarId → ZMod p) (terms : List (VarId × ZMod p)) :
-    ∀ init : DenseExpr p,
-      (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init).eval denv
-      = init.eval denv + (terms.map (fun t => t.2 * denv t.1)).sum := by
-  induction terms with
-  | nil => intro init; simp
-  | cons t rest ih =>
-      intro init
-      simp only [List.foldl_cons, List.map_cons, List.sum_cons, ih]
-      simp only [DenseExpr.eval]
-      ring
-
-/-- `DenseLinExpr.toExpr` is eval-preserving. Dense mirror of `LinExpr.toExpr_eval`
-    (`OptimizerPasses/Affine.lean:160`). -/
-theorem DenseLinExpr.toExpr_eval (l : DenseLinExpr p) (denv : VarId → ZMod p) :
-    l.toExpr.eval denv = l.eval denv := by
-  simp only [DenseLinExpr.toExpr, DenseLinExpr.eval, denseToExpr_foldl_eval, DenseExpr.eval]
-
-/-- **`DenseExpr.normalize` is eval-preserving.** Dense mirror of `Expression.normalize_eval`
-    (`OptimizerPasses/Normalize.lean:318`); no prime hypothesis needed. -/
-theorem DenseExpr.normalize_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
-    e.normalize.eval denv = e.eval denv := by
-  induction e with
-  | const n => rfl
-  | var x => rfl
-  | add a b iha ihb =>
-      rw [DenseExpr.normalize]
-      cases hl : denseLinearize (DenseExpr.add a b) with
-      | some l =>
-          rw [DenseLinExpr.toExpr_eval, DenseLinExpr.norm_eval, ← denseLinearize_eval _ l hl]
-      | none =>
-          simp only [DenseExpr.eval, iha, ihb]
-  | mul a b iha ihb =>
-      rw [DenseExpr.normalize]
-      cases hl : denseLinearize (DenseExpr.mul a b) with
-      | some l =>
-          rw [DenseLinExpr.toExpr_eval, DenseLinExpr.norm_eval, ← denseLinearize_eval _ l hl]
-      | none =>
-          simp only [DenseExpr.eval, iha, ihb]
-
-/-! ## The per-variable candidate-constraint index: `DenseVarCsIdx.Sound` -/
+The native affine-normalization eval lemmas this file consumes (`DenseLinExpr.toExpr_eval`,
+`DenseExpr.normalize_eval`) now live at their definitions' home in `Dense/Affine.lean` and
+`Dense/Normalize.lean` (shared, proved once). -/
 
 /-- The dense mirror of `VarCsIdx.sound` (`OptimizerPasses/BusPairCancel.lean:1280`): every entry of
     every successfully-looked-up bucket is one of the indexed `constraints`. Proved lookup-wise by
