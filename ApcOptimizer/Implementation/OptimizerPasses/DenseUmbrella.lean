@@ -24,6 +24,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilateProof
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroRegister
+import ApcOptimizer.Implementation.OptimizerPasses.ZeroRegisterProof
 import ApcOptimizer.Implementation.OptimizerPasses.CarryBranch
 import ApcOptimizer.Implementation.OptimizerPasses.CarryBranchProof
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
