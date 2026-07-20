@@ -60,6 +60,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.HintCollapseProof
 import ApcOptimizer.Implementation.OptimizerPasses.DisconnectedComponentProof
 import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZeroProof
 import ApcOptimizer.Implementation.OptimizerPasses.RangeBoolProof
+import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtractProof
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 

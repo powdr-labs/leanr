@@ -266,6 +266,8 @@ def denseImpl (b : DegreeBound) (pw : PrimeWitness p) (name : String) (fallback 
     DenseVerifiedPassW.guardDegree b denseRangeForceZeroPass
   else if name == "rangeBool" then
     DenseVerifiedPassW.guardDegree b (denseRangeBoolPass pw)
+  else if name == "xorEqExtract" then
+    DenseVerifiedPassW.guardDegree b denseXorEqExtractPass
   else DenseVerifiedPassW.ofSpec fallback
 
 /-- `DenseRespectsDeg` is preserved by an `if`-`then`-`else` whose branches both respect the bound. -/
