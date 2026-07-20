@@ -158,6 +158,16 @@ def denseMkByteCheck (spec : ByteXorSpec p) (busId : Nat) (e : DenseExpr p) :
   { busId := busId, multiplicity := .const 1,
     payload := spec.encode (.const spec.xorOp) e e (.const 0) }
 
+/-- Packed pair byte check on `(e₁, e₂)`, emitted through `spec` (multiplicity `1`). Fresh
+    transliteration of `mkBytePair` (`OptimizerPasses/BytePack.lean:23`), placed next to
+    `denseMkByteCheck` above for the same reason (no existing dense port; see the module header) —
+    this is the builder the `bytePack` port (`OptimizerPasses/ByteCheckPack.lean`) reuses to emit its
+    packed pair check, rather than re-deriving it there. -/
+def denseMkBytePair (spec : ByteXorSpec p) (busId : Nat) (e₁ e₂ : DenseExpr p) :
+    BusInteraction (DenseExpr p) :=
+  { busId := busId, multiplicity := .const 1,
+    payload := spec.encode (.const spec.pairOp) e₁ e₂ (.const 0) }
+
 /-- Certificate that an emitted check is a faithful carrier of `R`'s byte obligation: it sits on
     a `byteXorSpec` bus (byte bound `256`), has multiplicity 1 and a self-check payload decoding to
     `(xorOp, e, e, 0)` where `e` is one of `R`'s declared byte-slot entries whose byte-ness `R`'s
