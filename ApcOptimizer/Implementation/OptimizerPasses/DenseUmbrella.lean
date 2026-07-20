@@ -53,7 +53,8 @@ import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancel
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 
-Imports every implementation-only dense module so that a plain `lake build` compiles them all,
-even those not yet wired into a scheduled pass (e.g. shared expression ops awaiting their consumer).
-`Implementation/Optimizer.lean` imports this, keeping the whole dense layer in the default build
-graph. -/
+Imports every dense `VarId` module now living flat under `OptimizerPasses/`, so that a plain
+`lake build` compiles them all — even those not yet reachable from a scheduled pass (e.g. shared
+expression ops awaiting their consumer). The Variable-based reference implementations they supersede
+live under `OptimizerPasses/OldVariableBased/`. `Implementation/Optimizer.lean` imports this
+umbrella, keeping the whole dense layer in the default build graph. -/
