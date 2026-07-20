@@ -28,7 +28,16 @@ runtime pipeline.
 `DenseVerifiedPassW.ofNative` packages the whole thing: given a dense transform, coverage
 preservation, and a `DensePassCorrect` proof, it yields the existing `DensePassResult` by applying
 the lift — so a native pass slots into the current `denseChain`/selector with no change to
-composition, the fixpoint, or the other passes. -/
+composition, the fixpoint, or the other passes.
+
+## Proof-architecture defaults
+
+New dense ports mirror the spec's proof-carrying structures with **native-`Prop`-carrying dense
+twins** — `Prop` fields about dense data only, which erase (precedent: `DenseDropResult`, and the
+`DenseNativeStep` of `BridgeSteps.lean`) — instead of externalising invariants into threaded
+inductions. Data-only dense records remain correct only where a carried proof would force
+representation correspondence. Internal loops compose via the `DenseNativeStep` combinators
+(`BridgeSteps.lean`); each pass lifts once, here, to the audited spec. -/
 
 namespace ApcOptimizer.Dense
 
@@ -817,11 +826,11 @@ dense derivations. `ofNativeExtending` is their builder — the sibling of `ofNa
 naming, but with a transform that returns the extended registry alongside the output and
 derivations, and a `DensePassCorrect` obligation stated at the **extended** registry's `isInput`. -/
 
-/-- Constraint-system coverage is preserved by a registry extension. (File-local: `Adapter.lean`
-    carries the public copy, but that module is dev scaffolding and is not on the native bridge's
-    import path; the extending builder needs the fact to re-cover the input at the extended
-    registry.) -/
-private theorem denseCS_coveredBy_mono {r r' : VarRegistry} (h : r.Extends r')
+/-- Constraint-system coverage is preserved by a registry extension. (`Adapter.lean` carries a
+    public copy, but that module is dev scaffolding and is not on the native bridge's import path;
+    the extending builder needs the fact to re-cover the input at the extended registry.
+    Public — `BridgeSteps.lean`'s certified-step glue reuses it, per the proof-architecture note.) -/
+theorem denseCS_coveredBy_mono {r r' : VarRegistry} (h : r.Extends r')
     {d : DenseConstraintSystem p} (hc : d.CoveredBy r) : d.CoveredBy r' := by
   obtain ⟨hac, hbi⟩ := hc
   refine ⟨fun e he => (hac e he).mono h, fun bi hbimem => ?_⟩

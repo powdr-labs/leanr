@@ -5,6 +5,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Pass
 import ApcOptimizer.Implementation.OptimizerPasses.ExprOps
 import ApcOptimizer.Implementation.OptimizerPasses.Adapter
 import ApcOptimizer.Implementation.OptimizerPasses.Bridge
+import ApcOptimizer.Implementation.OptimizerPasses.BridgeSteps
 import ApcOptimizer.Implementation.OptimizerPasses.Subst
 import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.Affine
