@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.DigitFoldProof
 
 set_option autoImplicit false
 
@@ -19,9 +20,9 @@ of `inv` on the completeness side reads only the (input-column) coefficient/rema
 
 The **field-level** wrap-free-sum lemmas (`sum_val_eq` / `sum_zero_all_zero` / `sq_diff_val_lt`) are
 representation-independent and reused verbatim from the spec file. The **bounds map**
-(`denseBuild`, `DigitFold.lean`) carries only decode-correspondence lemmas; `denseBuild_bound_sound`
-below wraps them once into a native-statement value bound (an erased decode bridge in the proof
-only — no `decode` in the statement). Everything else — peel / `extractLinear` / `sumExpr` eval
+(`denseBuild`, `DigitFold.lean`) is consumed through its native value-level soundness
+`denseBuild_sound` (`DigitFoldProof.lean`) — no `decode`, no reference-pass dependency. Everything
+else — peel / `extractLinear` / `sumExpr` eval
 structure, the coefficient recognizers, `occursOnlyInTarget` soundness, the reassignment frames — is
 reproved natively over `DenseExpr`. -/
 
@@ -432,40 +433,6 @@ theorem denseOccursOnlyInTarget_bus {d : DenseConstraintSystem p} {E : DenseExpr
   obtain ⟨hm, hp⟩ := h.2 bi hbi
   exact ⟨denseMentions_false_not_mem v bi.multiplicity hm,
     fun e he => denseMentions_false_not_mem v e (hp e he)⟩
-
-/-! ## Native bounds-map soundness (erased decode bridge in the proof; native statement) -/
-
-/-- A value bound from `denseBuild` at a valid `VarId`, native in statement: any assignment whose
-    stateful bus interactions are non-violating (the second conjunct of dense satisfaction) keeps a
-    bounded variable below its bound. The proof bridges to the spec `BoundsMap.build`'s carried
-    soundness via `denseAddAll_decode` — `decode` appears only here, never in a runtime path. -/
-theorem denseBuild_bound_sound {bs : BusSemantics p} (facts : BusFacts p bs) (reg : VarRegistry)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (denv : VarId → ZMod p)
-    (hbus : ∀ bi ∈ d.busInteractions,
-      (denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false)
-    (i : VarId) (hi : reg.Valid i) (b : Nat)
-    (hlk : (denseBuild bs facts d.busInteractions)[i]? = some b) : (denv i).val < b := by
-  have hbm : (denseBuild bs facts d.busInteractions)[i]?
-      = (BoundsMap.build facts (cs := reg.decodeCS d) (bs := bs)).map[reg.resolve i]? := by
-    unfold denseBuild BoundsMap.build
-    exact denseAddAll_decode facts reg d.busInteractions BoundsMap.empty ∅ hcov.2
-      (fun _ h => h) (fun kk _ => by simp [BoundsMap.empty]) i hi
-  rw [hbm] at hlk
-  have hbusE : ∀ bi ∈ (reg.decodeCS d).busInteractions,
-      (bi.eval (reg.extendEnv denv (fun _ => 0))).multiplicity ≠ 0 →
-      bs.violatesConstraint (bi.eval (reg.extendEnv denv (fun _ => 0))) = false := by
-    intro bi hbi
-    simp only [VarRegistry.decodeCS, List.mem_map] at hbi
-    obtain ⟨bi0, hbi0, rfl⟩ := hbi
-    have hcongr : denseBIEval bi0 (fun j => reg.extendEnv denv (fun _ => 0) (reg.resolve j))
-        = denseBIEval bi0 denv :=
-      denseBIEval_congr bi0 _ _ (fun j hj => reg.extendEnv_resolve denv (fun _ => 0)
-        (DenseConstraintSystem.occ_valid hcov j (DenseConstraintSystem.mem_occ_of_bi hbi0 hj)))
-    rw [reg.decodeBI_eval, hcongr]
-    exact hbus bi0 hbi0
-  have hsound := (BoundsMap.build facts (cs := reg.decodeCS d) (bs := bs)).sound
-    (reg.extendEnv denv (fun _ => 0)) hbusE (reg.resolve i) b hlk
-  rwa [reg.extendEnv_resolve denv (fun _ => 0) hi] at hsound
 
 /-! ## `occ` membership, registry/freshness helpers -/
 
@@ -890,11 +857,9 @@ theorem denseTryOne_correct [Fact p.Prime] {bs : BusSemantics p} (facts : BusFac
     have hE0 : E.eval denv = 0 := hsat.1 E hE
     have hbytes : ∀ c ∈ (densePeel D E).1, (c.eval denv).val < 256 := by
       intro c hc
-      obtain ⟨a, heval, _, _, hamem, b, hlk, hb256⟩ :=
+      obtain ⟨a, heval, _, _, _, b, hlk, hb256⟩ :=
         denseCoeffsByteOK_sound reg (denseBuild bs facts d.busInteractions) D (densePeel D E).1 hbyteOK c hc
-      have havalid : reg.Valid a := DenseConstraintSystem.occ_valid hcov a
-        (DenseConstraintSystem.mem_occ_of_constraint hE (densePeel_fst_vars D E c hc a hamem))
-      have hlt := denseBuild_bound_sound facts reg d hcov denv hsat.2 a havalid b hlk
+      have hlt := denseBuild_sound bs facts d.busInteractions a b hlk denv hsat.2
       rw [heval denv]; omega
     have hsum0 : ((densePeel D E).1.map (fun c => c.eval denv)).sum = 0 := by
       rw [← denseSumExpr_eval]; exact hden0
@@ -976,14 +941,10 @@ theorem denseTryOneSq_correct [Fact p.Prime] {bs : BusSemantics p} (facts : BusF
     have hE0 : E.eval denv = 0 := hsat.1 E hE
     have hbytes : ∀ c ∈ (densePeel D E).1, ((c.eval denv) * (c.eval denv)).val < 65536 := by
       intro c hc
-      obtain ⟨a, b, heval, _, _, hamem, hbmem, ⟨ba, hlka, hba⟩, ⟨bb, hlkb, hbb⟩⟩ :=
+      obtain ⟨a, b, heval, _, _, _, _, ⟨ba, hlka, hba⟩, ⟨bb, hlkb, hbb⟩⟩ :=
         denseSqCoeffsOK_sound reg (denseBuild bs facts d.busInteractions) D (densePeel D E).1 hsqOK c hc
-      have havalid : reg.Valid a := DenseConstraintSystem.occ_valid hcov a
-        (DenseConstraintSystem.mem_occ_of_constraint hE (densePeel_fst_vars D E c hc a hamem))
-      have hbvalid : reg.Valid b := DenseConstraintSystem.occ_valid hcov b
-        (DenseConstraintSystem.mem_occ_of_constraint hE (densePeel_fst_vars D E c hc b hbmem))
-      have hlta := denseBuild_bound_sound facts reg d hcov denv hsat.2 a havalid ba hlka
-      have hltb := denseBuild_bound_sound facts reg d hcov denv hsat.2 b hbvalid bb hlkb
+      have hlta := denseBuild_sound bs facts d.busInteractions a ba hlka denv hsat.2
+      have hltb := denseBuild_sound bs facts d.busInteractions b bb hlkb denv hsat.2
       haveI : NeZero p := ⟨hp0.ne'⟩
       rw [heval denv]
       exact sq_diff_val_lt (by omega) (denv a) (denv b) (by omega) (by omega)
