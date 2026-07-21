@@ -44,13 +44,4 @@ def denseIsTautoLookup (bs : BusSemantics p) (bi : BusInteraction (DenseExpr p))
      | some msg => !bs.violatesConstraint msg
      | none => false)
 
-theorem VarRegistry.decodeExpr_constValue? (reg : VarRegistry) (e : DenseExpr p) :
-    (reg.decodeExpr e).constValue? = e.constValue? := by
-  have h := reg.decodeExpr_fold e
-  simp only [Expression.constValue?, DenseExpr.constValue?, ← h]
-  cases e.fold <;> rfl
-
-@[simp] theorem VarRegistry.decodeBI_busId (reg : VarRegistry) (bi : BusInteraction (DenseExpr p)) :
-    (reg.decodeBI bi).busId = bi.busId := rfl
-
 end ApcOptimizer.Dense

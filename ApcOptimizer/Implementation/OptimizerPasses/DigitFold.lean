@@ -35,37 +35,6 @@ def denseVarSlot (i : VarId) : List (DenseExpr p) → Option Nat
   | [] => none
   | e :: rest => if denseIsVarOf i e then some 0 else (denseVarSlot i rest).map (· + 1)
 
-/-- `denseIsVarOf` commutes with decode (needs `i` and the leaf valid). -/
-theorem denseIsVarOf_decode (reg : VarRegistry) {i : VarId} (hi : reg.Valid i) (e : DenseExpr p)
-    (he : e.CoveredBy reg) : isVarOf (reg.resolve i) (reg.decodeExpr e) = denseIsVarOf i e := by
-  cases e with
-  | var j =>
-      have hjv : reg.Valid j := he j (by simp [DenseExpr.vars])
-      simp only [denseIsVarOf, VarRegistry.decodeExpr, isVarOf, decide_eq_decide]
-      constructor
-      · intro h; exact reg.resolve_inj hjv hi h
-      · intro h; exact h ▸ rfl
-  | const n => rfl
-  | add a b => rfl
-  | mul a b => rfl
-
-/-- `denseVarSlot` commutes with decode. -/
-theorem denseVarSlot_decode (reg : VarRegistry) {i : VarId} (hi : reg.Valid i)
-    (pl : List (DenseExpr p)) (hpl : ∀ e ∈ pl, e.CoveredBy reg) :
-    varSlot (reg.resolve i) (pl.map reg.decodeExpr) = denseVarSlot i pl := by
-  induction pl with
-  | nil => rfl
-  | cons e rest ih =>
-      simp only [List.map_cons, varSlot, denseVarSlot,
-        denseIsVarOf_decode reg hi e (hpl e (List.mem_cons_self ..))]
-      rw [ih (fun e' he' => hpl e' (List.mem_cons_of_mem _ he'))]
-
-/-- The dense payload's constant-value pattern equals the decoded payload's. -/
-theorem densePayload_constValue?_decode (reg : VarRegistry) (pl : List (DenseExpr p)) :
-    (pl.map reg.decodeExpr).map Expression.constValue? = pl.map DenseExpr.constValue? := by
-  rw [List.map_map]
-  exact List.map_congr_left (fun e _ => reg.decodeExpr_constValue? e)
-
 /-- Dense `interactionBound`: one value bound for `i` from a constant-nonzero-multiplicity
     interaction carrying `.var i` in a fact-bounded raw payload slot. -/
 def denseInteractionBound (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -78,29 +47,6 @@ def denseInteractionBound (bs : BusSemantics p) (facts : BusFacts p bs)
       match denseVarSlot i bi.payload with
       | none => none
       | some slot => facts.slotBound bi.busId mval (bi.payload.map DenseExpr.constValue?) slot
-
-theorem denseInteractionBound_decode (bs : BusSemantics p) (facts : BusFacts p bs)
-    (reg : VarRegistry) {i : VarId} (hi : reg.Valid i) (bi : BusInteraction (DenseExpr p))
-    (hc : denseBICovered reg bi) :
-    interactionBound bs facts (reg.decodeBI bi) (reg.resolve i) = denseInteractionBound bs facts bi i := by
-  unfold interactionBound denseInteractionBound
-  rw [show (reg.decodeBI bi).multiplicity = reg.decodeExpr bi.multiplicity from rfl,
-    reg.decodeExpr_constValue? bi.multiplicity]
-  cases bi.multiplicity.constValue? with
-  | none => rfl
-  | some mval =>
-    dsimp only
-    by_cases hmz : mval = 0
-    · simp only [hmz, if_pos]
-    · rw [if_neg hmz, if_neg hmz,
-        show (reg.decodeBI bi).payload = bi.payload.map reg.decodeExpr from rfl,
-        denseVarSlot_decode reg hi bi.payload hc.2]
-      cases denseVarSlot i bi.payload with
-      | none => rfl
-      | some slot =>
-        dsimp only
-        rw [densePayload_constValue?_decode reg bi.payload]
-        rfl
 
 /-- Dense probe payload: constant slots at their constants, slot `i` at the candidate, others `0`. -/
 def denseProbeBase (payload : List (DenseExpr p)) (i : Nat) (v : ZMod p) : List (ZMod p) :=

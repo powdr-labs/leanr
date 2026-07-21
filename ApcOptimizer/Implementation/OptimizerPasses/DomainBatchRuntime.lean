@@ -4,9 +4,9 @@ set_option autoImplicit false
 
 /-! # Dense `domainBatch`, rebuilt with value-only box points (Task 3 — perf fix)
 
-The committed `Dense/DomainBatch.lean` port is byte-identical to the spec pass but **+35% slower**
-on `apc_037`, entirely inside the box-scan hot loop (`denseScanBox` / `denseCompiledSurv` /
-`denseBoxFold`). The root cause: that port carries a full `List (VarId × ZMod p)` at every enumerated
+A committed keyed-point dense port (since removed) was byte-identical to the spec pass but
+**+35% slower** on `apc_037`, entirely inside its box-scan hot loop. The root cause: that port
+carried a full `List (VarId × ZMod p)` at every enumerated
 box point, even though **nothing on the enumeration path ever reads a key from a point** — the
 compiled predicates (`IExpr`/`CBi`, `lookupIx`) are already positional, and the box is always built
 and scanned in one fixed key order (`keys := fdoms.map Prod.fst`). Carrying `VarId` in the hot
@@ -109,7 +109,7 @@ def denseSurvivesAllCWV (add mul : ZMod p → ZMod p → ZMod p) (isZero : ZMod 
 
 Reached only if compilation fails — never, for the covered items this pass ever compiles (every
 variable leaf of a covered item lies in the target's own `keys`), so this is dead code kept for
-totality, exactly as `compiledSurv`/`denseCompiledSurv` keep an uncompiled fallback arm. Since a
+totality, exactly as `compiledSurv` keeps an uncompiled fallback arm. Since a
 value-only point carries no keys to compare against, the fallback lookup walks the (compile-time)
 `keys` list and the point in lockstep instead of scanning a keyed point — the natural value-only
 analogue of `envOfFast`'s role here, forced by the representation, not a behavior change (the fallback
@@ -123,7 +123,7 @@ def denseEnvOfKeysV (keys : List VarId) (pt : List (ZMod p)) (y : VarId) : ZMod 
   | x :: ks, v :: vs => if y == x then v else denseEnvOfKeysV ks vs y
 
 /-- Fallback survivor predicate over dense items and a value-only point, given its key list (mirrors
-    `survivesAllM`/`denseSurvivesAllM`; see the fallback note above). -/
+    `survivesAllM`; see the fallback note above). -/
 def denseSurvivesAllMV (bs : BusSemantics p) (es : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId) (pt : List (ZMod p)) : Bool :=
   es.all (fun e => decide (e.eval (denseEnvOfKeysV keys pt) = 0)) &&
@@ -146,7 +146,7 @@ structure DenseSurvV (p : ℕ) where
   run : List (ZMod p) → Bool
 
 /-- The per-point survivor predicate for a target, over value-only points (mirrors
-    `compiledSurv`/`denseCompiledSurv`, boxed in `DenseSurvV` — no carried property; the prover states
+    `compiledSurv`, boxed in `DenseSurvV` — no carried property; the prover states
     its correspondence). Compiles the covered items against `keys` once, hoists the ring operations and
     the zero test out of the per-point evaluation exactly as the spec does, and falls back to the
     uncompiled predicate only if compilation fails (dead for covered items). The `DenseSurvV` box (a
@@ -173,16 +173,16 @@ unchanged from the spec, no port needed at all); only the box *point* built whil
 changes shape, from `List (VarId × FiniteDomain p)` producing `List (VarId × ZMod p)` points, to
 `List (FiniteDomain p)` (unkeyed — the domains in `keys` order) producing `List (ZMod p)` points. -/
 
-/-- Stream the Cartesian product of the domains into `f`, value-only (mirrors `boxFold`/
-    `denseBoxFold`; the point never carries a key, only its position in the (compile-time) `keys`
-    order determines what it means). -/
+/-- Stream the Cartesian product of the domains into `f`, value-only (mirrors `boxFold`; the point
+    never carries a key, only its position in the (compile-time) `keys` order determines what it
+    means). -/
 def denseBoxFoldV {β : Type} (f : β → List (ZMod p) → β) (stop : β → Bool) :
     List (FiniteDomain p) → β → β
   | [], acc => if stop acc then acc else f acc []
   | d :: rest, acc =>
     denseBoxFoldV (fun acc' a => d.foldElts (fun acc'' v => f acc'' (v :: a)) stop acc') stop rest acc
 
-/-- `(assignments (matList doms)).all pred`, value-only (mirrors `allBox`/`denseAllBox`), for
+/-- `(assignments (matList doms)).all pred`, value-only (mirrors `allBox`), for
     `denseConstraintRedundantV`'s per-constraint redundancy box-check. -/
 def denseAllBoxV (pred : List (ZMod p) → Bool) (doms : List (FiniteDomain p)) : Bool :=
   denseBoxFoldV (fun acc pt => acc && pred pt) (fun acc => !acc) doms true
@@ -202,7 +202,7 @@ out), checked over the same fixed-length mask. -/
     `keys`. -/
 abbrev DenseCandsV (p : ℕ) := List (Option (ZMod p))
 
-/-- One dense scan step, value-only (mirrors `scanStep`/`denseScanStep`): `none` while hunting the
+/-- One dense scan step, value-only (mirrors `scanStep`): `none` while hunting the
     first survivor (initializes the mask directly from that survivor's point — no reprojection,
     since a value-only point already *is* positionally what the mask needs); `some cands` intersects
     the mask against the current point when it survives, unchanged otherwise. -/
@@ -215,14 +215,13 @@ def denseScanStepV (surv : List (ZMod p) → Bool) :
         (fun c v => match c with | some cv => if cv = v then some cv else none | none => none) pt)
     else some cands
 
-/-- The dense scan aborts once every tracked candidate has been ruled out (mirrors `scanStop`/
-    `denseScanStop`). -/
+/-- The dense scan aborts once every tracked candidate has been ruled out (mirrors `scanStop`). -/
 def denseScanStopV : Option (DenseCandsV p) → Bool
   | none => false
   | some cands => cands.all Option.isNone
 
-/-- The value-only box scan, streamed lazily over the symbolic domains (mirrors `scanBox`/
-    `denseScanBox`). No `keys` are threaded through the fold itself — the candidate mask is built and
+/-- The value-only box scan, streamed lazily over the symbolic domains (mirrors `scanBox`). No
+    `keys` are threaded through the fold itself — the candidate mask is built and
     intersected purely positionally; the caller (`denseForcedOverV`) zips the final mask with `keys`
     exactly once, after the scan finishes. -/
 def denseScanBoxV (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p)) :

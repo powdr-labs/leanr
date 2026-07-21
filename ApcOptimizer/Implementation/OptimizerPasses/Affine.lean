@@ -124,28 +124,7 @@ their `_sound`/`_vars` lemmas). The commutation-era decode lemmas and the unused
 `decodeLin_*`/`denseLinearize_covered_terms` lemmas that other passes (AddrDiseqProof/Normalize/
 DomainBatch) still consume are kept. -/
 
-/-! ## Membership-congruence helpers for `find?`/`filterMap`/`flatMap` -/
-
-/-- `find?` depends only on its predicate's values on list members. -/
-theorem find?_congr_mem {α : Type _} {p q : α → Bool} (l : List α)
-    (h : ∀ a ∈ l, p a = q a) : l.find? p = l.find? q := by
-  induction l with
-  | nil => rfl
-  | cons a rest ih =>
-      have ha : p a = q a := h a (by simp)
-      have hrest := ih (fun b hb => h b (List.mem_cons_of_mem _ hb))
-      by_cases hp : p a = true
-      · rw [List.find?_cons_of_pos hp, List.find?_cons_of_pos (ha ▸ hp)]
-      · rw [List.find?_cons_of_neg hp, List.find?_cons_of_neg (ha ▸ hp), hrest]
-
-/-- `filterMap` depends only on its map's values on list members. -/
-theorem filterMap_congr_mem {α β : Type _} {f g : α → Option β} (l : List α)
-    (h : ∀ a ∈ l, f a = g a) : l.filterMap f = l.filterMap g := by
-  induction l with
-  | nil => rfl
-  | cons a rest ih =>
-      rw [List.filterMap_cons, List.filterMap_cons, h a (by simp),
-          ih (fun b hb => h b (List.mem_cons_of_mem _ hb))]
+/-! ## Membership-congruence helper for `flatMap` -/
 
 /-- `flatMap` depends only on its map's values on list members. -/
 theorem flatMap_congr_mem {α β : Type _} {f g : α → List β} (l : List α)

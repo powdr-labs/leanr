@@ -73,31 +73,6 @@ def DenseExpr.fold : DenseExpr p → DenseExpr p
   | .add a b => a.fold.foldAdd b.fold
   | .mul a b => a.fold.foldMul b.fold
 
-/-- Dense `foldAdd` decodes to spec `foldAdd`. -/
-theorem VarRegistry.decodeExpr_foldAdd (reg : VarRegistry) (a b : DenseExpr p) :
-    reg.decodeExpr (a.foldAdd b) = (reg.decodeExpr a).foldAdd (reg.decodeExpr b) := by
-  cases a <;> cases b <;>
-    simp only [DenseExpr.foldAdd, Expression.foldAdd, VarRegistry.decodeExpr] <;>
-    split_ifs <;> simp [VarRegistry.decodeExpr]
-
-/-- Dense `foldMul` decodes to spec `foldMul`. -/
-theorem VarRegistry.decodeExpr_foldMul (reg : VarRegistry) (a b : DenseExpr p) :
-    reg.decodeExpr (a.foldMul b) = (reg.decodeExpr a).foldMul (reg.decodeExpr b) := by
-  cases a <;> cases b <;>
-    simp only [DenseExpr.foldMul, Expression.foldMul, VarRegistry.decodeExpr] <;>
-    split_ifs <;> simp [VarRegistry.decodeExpr]
-
-/-- **Dense `fold` decodes to spec `fold`.** -/
-theorem VarRegistry.decodeExpr_fold (reg : VarRegistry) (e : DenseExpr p) :
-    reg.decodeExpr e.fold = (reg.decodeExpr e).fold := by
-  induction e with
-  | const n => rfl
-  | var i => rfl
-  | add a b iha ihb =>
-      rw [DenseExpr.fold, reg.decodeExpr_foldAdd, iha, ihb, VarRegistry.decodeExpr, Expression.fold]
-  | mul a b iha ihb =>
-      rw [DenseExpr.fold, reg.decodeExpr_foldMul, iha, ihb, VarRegistry.decodeExpr, Expression.fold]
-
 /-- Dense `foldAdd` introduces no new variables. -/
 theorem DenseExpr.foldAdd_vars (a b : DenseExpr p) :
     ∀ i ∈ (a.foldAdd b).vars, i ∈ a.vars ++ b.vars := by
