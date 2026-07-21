@@ -303,8 +303,9 @@ def applyTimed {p : ℕ} (pass : VerifiedPassW p) (cs : ConstraintSystem p)
   let t1 ← IO.monoMsNow
   pure (out, t1 - t0)
 
-/-- Run one cleanup cycle's passes in order, accumulating per-pass elapsed time. -/
-partial def runCycleTimed {p : ℕ} (passes : List (String × VerifiedPassW p))
+/-- Run one stage's passes in order (prelude/coda; the cleanup stage steps densely below),
+    accumulating per-pass elapsed time. -/
+def runCycleTimed {p : ℕ} (passes : List (String × VerifiedPassW p))
     (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (acc : Std.HashMap String Nat) : IO (ConstraintSystem p × Std.HashMap String Nat) := do
   let mut c := cs
@@ -314,24 +315,6 @@ partial def runCycleTimed {p : ℕ} (passes : List (String × VerifiedPassW p))
     c := c'
     a := a.insert name (a.getD name 0 + dt)
   pure (c, a)
-
-/-- Iterate the cleanup cycle to a fixpoint (mirroring `iterateToFixpoint`), accumulating per-pass
-    time and counting iterations. Reports each iteration's resulting sizes and wall time, so the
-    fixpoint's convergence tail (how little the late cycles shrink) is visible. -/
-partial def profileLoop {p : ℕ} (passes : List (String × VerifiedPassW p))
-    (cs : ConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (acc : Std.HashMap String Nat) (iter : Nat) :
-    IO (ConstraintSystem p × Std.HashMap String Nat × Nat) := do
-  let t0 ← IO.monoMsNow
-  let (cs', acc') ← runCycleTimed passes cs bs facts acc
-  let t1 ← IO.monoMsNow
-  let st := statsOf cs'
-  IO.println s!"  cycle {iter}: {st.vars} vars, {st.busInteractions} bus, \
-    {st.constraints} constraints ({t1 - t0} ms)"
-  if cs'.sizeKey < cs.sizeKey then
-    profileLoop passes cs' bs facts acc' (iter + 1)
-  else
-    pure (cs, acc', iter)
 
 /-! ## Dense cleanup-stage profiling (WP-G)
 
