@@ -12,11 +12,10 @@ The proof is a direct native re-derivation of the spec's `dropComponent_correct`
 (`OldVariableBased/DisconnectedComponent.lean`) over `VarId → ZMod p` environments — **it does not
 depend on the spec pass**. Exactly as in the spec, correctness is *generic in the removable set*
 (`DensePassCorrect.denseDropComponent`, stated for an arbitrary `remV`/`keepCon`/`keepBi`), so the
-`partial`/fuel-driven connectivity search (`denseBfsClosure`/`denseComputeRemV`) is never reasoned
-about: the pass re-checks the induced partition at run time (`denseDropCheck`) and the seven
-hypotheses of `denseDropComponent` are read off that check. This is the mandated route for a
-`partial def` spec helper (no equational lemmas): prove correctness over the checked property, not
-over the search.
+well-founded connectivity search (`denseBfsClosure`/`denseConnBad`) is never reasoned about: the
+pass re-checks the induced partition at run time (`denseDropCheck`) and the seven hypotheses of
+`denseDropComponent` are read off that check. This is the mandated route for a `partial def` spec
+helper (no equational lemmas): prove correctness over the checked property, not over the search.
 
 ## The argument (mirrors `dropComponent_correct`)
 
