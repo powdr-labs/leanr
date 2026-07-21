@@ -71,6 +71,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.RangeBoolProof
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtractProof
 import ApcOptimizer.Implementation.OptimizerPasses.IntervalForceProof
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapseProof
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 

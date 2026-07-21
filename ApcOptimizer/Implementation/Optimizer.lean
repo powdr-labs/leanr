@@ -42,6 +42,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePairProof
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapseProof
 import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZero
 import ApcOptimizer.Implementation.OptimizerPasses.RangeBool
@@ -173,7 +174,7 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     -- Collapse recognised `sltu x, 1` (seqz) LessThan gadgets to the two-line is-zero gadget,
     -- dropping the four `diff_marker`s + `diff_val`. Runs after `monicScale`, where the cluster
     -- has reached the recognised form.
-    ("seqzCollapse", DenseVerifiedPassW.ofSpec (VerifiedPassW.guardDegree b (iterateToFixpoint SeqzCollapse.seqzCollapsePass))) ]
+    ("seqzCollapse", DenseVerifiedPassW.guardDegree b denseSeqzCollapsePass) ]
 
 /-! ## The dense pipeline
 
@@ -201,17 +202,14 @@ theorem densePreludeChain_respectsDeg (b : DegreeBound) :
   fin_cases hf
   exact DenseVerifiedPassW.guardDegree_respectsDeg _
 
-/-- The dense coda chain respects the degree bound (each entry is a degree-guarded pass — either a
-    native `guardDegree`-wrapped dense pass or an `ofSpec`-wrapped degree-guarded spec pass). -/
+/-- The dense coda chain respects the degree bound (each entry is a `guardDegree`-wrapped dense
+    pass). -/
 theorem denseCodaChain_respectsDeg (b : DegreeBound) :
     DenseRespectsDeg b (denseChain ((codaPasses (p := p) b).map (·.2))) := by
   apply denseChain_respectsDeg
   intro f hf
   simp only [codaPasses, List.map_cons, List.map_nil] at hf
-  fin_cases hf <;>
-    first
-      | exact DenseVerifiedPassW.guardDegree_respectsDeg _
-      | exact DenseVerifiedPassW.ofSpec_respectsDeg (VerifiedPassW.guardDegree_respectsDeg _)
+  fin_cases hf <;> exact DenseVerifiedPassW.guardDegree_respectsDeg _
 
 /-- The all-dense pipeline body over the `VarId` representation: fold the prelude chain, iterate the
     cleanup cycle to a fixpoint (`denseIterateToFixpoint`, no budget — it runs until the lexicographic
