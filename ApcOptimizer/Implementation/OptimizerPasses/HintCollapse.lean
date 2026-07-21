@@ -1,4 +1,3 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.HintCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.ExprOps
 import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
@@ -106,6 +105,67 @@ below reproduces the identical inline folds over `DenseExpr.vars`. `busVars`/`cn
 `hE`/`hD`) only to *type* the proof hypothesis `hD : D = witnessesOf cs busVars cnt E` — they are
 never read by the runtime body, so there is nothing to transliterate for them at that level; they
 stay exactly where they're actually used, in `witnessesOf`/`tryList`. -/
+
+/-! ## Re-homed representation-independent field-sum lemmas
+
+`sum_val_eq` / `sum_zero_all_zero` / `sq_diff_val_lt` are `Nat`/`ZMod`-only wrap-free-sum lemmas,
+re-homed here from `OldVariableBased/HintCollapse.lean` so the dense proof (`HintCollapseProof.lean`)
+consumes them without importing the reference pass; the reference pass imports them back. -/
+
+section RehomedHintCollapse
+variable {p : ℕ}
+
+/-- If a list of field elements each has `.val < p` and their `.val`s sum to `< p`, the field sum's
+    `.val` equals the natural-number sum (no wraparound). -/
+theorem sum_val_eq (hp : 0 < p) :
+    ∀ (L : List (ZMod p)), (L.map (fun x => x.val)).sum < p →
+      L.sum.val = (L.map (fun x => x.val)).sum
+  | [], _ => by simp
+  | x :: rest, hfit => by
+      haveI : NeZero p := ⟨hp.ne'⟩
+      simp only [List.map_cons, List.sum_cons] at hfit ⊢
+      have hrest : (rest.map (fun x => x.val)).sum < p := by omega
+      have ih := sum_val_eq hp rest hrest
+      have hadd : (x + rest.sum).val = x.val + rest.sum.val :=
+        ZMod.val_add_of_lt (by rw [ih]; omega)
+      rw [hadd, ih]
+
+/-- Byte-bounded field elements summing (in the field) to `0`, with the value-sum below `p`, are all
+    `0`. Used for the `Σ aᵢ = 0` completeness branch. -/
+theorem sum_zero_all_zero (hp : 0 < p) (L : List (ZMod p))
+    (hfit : (L.map (fun x => x.val)).sum < p) (h0 : L.sum = 0) :
+    ∀ x ∈ L, x = 0 := by
+  haveI : NeZero p := ⟨hp.ne'⟩
+  have hval : (L.map (fun x => x.val)).sum = 0 := by
+    have := sum_val_eq hp L hfit
+    rw [h0] at this; simpa using this.symm
+  intro x hx
+  have hxval : x.val = 0 := by
+    have : x.val ≤ (L.map (fun y => y.val)).sum :=
+      List.single_le_sum (by intro _ _; exact Nat.zero_le _) _ (List.mem_map.2 ⟨x, hx, rfl⟩)
+    omega
+  exact (ZMod.val_eq_zero x).1 hxval
+
+/-- The value of a squared difference of two byte-bounded field elements is `< 256²`. -/
+theorem sq_diff_val_lt [NeZero p] (hp : 65536 ≤ p) (x y : ZMod p)
+    (hx : x.val < 256) (hy : y.val < 256) : ((x - y) * (x - y)).val < 65536 := by
+  rcases Nat.lt_or_ge x.val y.val with hlt | hge
+  · -- x < y: x - y = -↑(y.val - x.val), squares to the same value
+    have hd : x - y = -((y.val - x.val : ℕ) : ZMod p) := by
+      have hcast : ((y.val - x.val : ℕ) : ZMod p) = y - x := by
+        rw [Nat.cast_sub (le_of_lt hlt), ZMod.natCast_zmod_val, ZMod.natCast_zmod_val]
+      rw [hcast]; ring
+    have hb : y.val - x.val ≤ 255 := by omega
+    have hsq : (y.val - x.val) * (y.val - x.val) ≤ 255 * 255 := Nat.mul_le_mul hb hb
+    rw [hd, neg_mul_neg, ← Nat.cast_mul, ZMod.val_natCast_of_lt (by omega)]; omega
+  · -- x ≥ y: x - y = ↑(x.val - y.val)
+    have hd : x - y = ((x.val - y.val : ℕ) : ZMod p) := by
+      rw [Nat.cast_sub hge, ZMod.natCast_zmod_val, ZMod.natCast_zmod_val]
+    have hb : x.val - y.val ≤ 255 := by omega
+    have hsq : (x.val - y.val) * (x.val - y.val) ≤ 255 * 255 := Nat.mul_le_mul hb hb
+    rw [hd, ← Nat.cast_mul, ZMod.val_natCast_of_lt (by omega)]; omega
+
+end RehomedHintCollapse
 
 namespace ApcOptimizer.Dense
 

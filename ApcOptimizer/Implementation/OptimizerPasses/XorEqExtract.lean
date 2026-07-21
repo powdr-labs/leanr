@@ -1,4 +1,3 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 

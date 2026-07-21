@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.FlagFold
+import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
 
 set_option autoImplicit false
 
@@ -50,25 +51,6 @@ theorem boolC_vars (v : Expression p) : ∀ x ∈ (boolC v).vars, x ∈ v.vars :
   intro x hx
   simp only [boolC, Expression.vars, List.mem_append, List.not_mem_nil, or_false] at hx
   tauto
-
-/-- On a prime field, `x < 2` (as a value) is exactly booleanity. -/
-theorem val_lt_two_iff (hp : Nat.Prime p) (x : ZMod p) :
-    x.val < 2 ↔ x * (x - 1) = 0 := by
-  haveI : Fact p.Prime := ⟨hp⟩
-  constructor
-  · intro hlt
-    have : x.val = 0 ∨ x.val = 1 := by omega
-    rcases this with h0 | h1
-    · rw [ZMod.val_eq_zero] at h0; rw [h0]; ring
-    · have hx1 : x = 1 := by
-        have := (ZMod.natCast_rightInverse x).symm
-        rw [this, h1]; norm_cast
-      rw [hx1]; ring
-  · intro hprod
-    rcases mul_eq_zero.1 hprod with h0 | h1
-    · rw [h0, ZMod.val_zero]; omega
-    · have hx1 : x = 1 := by linear_combination h1
-      rw [hx1, ZMod.val_one_eq_one_mod, Nat.mod_eq_of_lt hp.one_lt]; omega
 
 /-- Recognize a degenerate range check (multiplicity `1`) and return the equivalent algebraic
     constraint: the value itself for width-0 (`zeroRangeEq` bus), its booleanity `boolC` for

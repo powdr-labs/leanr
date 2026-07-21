@@ -2,6 +2,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Dedup
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
+import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 
 set_option autoImplicit false
 
@@ -43,19 +44,6 @@ namespace IntervalForce
 variable {p : ℕ}
 
 /-! ## Signed representatives and processed terms -/
-
-/-- Signed minimal-magnitude integer representative of a field element: `c.val` when
-    `c.val ≤ (p−1)/2`, else `c.val − p`. Scaled differences like `256·a − 256·b` thus get the
-    small-magnitude coefficients `(256, −256)` rather than `(256, p−256)`. -/
-def srep (c : ZMod p) : Int :=
-  if c.val ≤ (p - 1) / 2 then (c.val : Int) else (c.val : Int) - (p : Int)
-
-theorem srep_cast [NeZero p] (c : ZMod p) : ((srep c : Int) : ZMod p) = c := by
-  unfold srep
-  split_ifs
-  · rw [Int.cast_natCast, ZMod.natCast_val, ZMod.cast_id]
-  · push_cast
-    rw [ZMod.natCast_val, ZMod.cast_id, ZMod.natCast_self, sub_zero]
 
 /-- A processed affine term: signed integer coefficient, a proven strict bound for the variable's
     value, and the variable itself. -/
@@ -138,19 +126,6 @@ theorem procTerms_bounds (bnd : Variable → Option Nat)
         · exact_mod_cast hbnd v B hb
         · exact ih pts' hr t ht'
 
-/-- Per-term window: `0 ≤ d < B` confines `sc·d` between `min (sc·(B−1)) 0` and
-    `max (sc·(B−1)) 0`. -/
-theorem term_window (sc d B : Int) (h0 : 0 ≤ d) (hd : d < B) :
-    min (sc * (B - 1)) 0 ≤ sc * d ∧ sc * d ≤ max (sc * (B - 1)) 0 := by
-  rcases le_or_gt 0 sc with hsc | hsc
-  · exact ⟨le_trans (min_le_right _ _) (mul_nonneg hsc h0),
-      le_trans (mul_le_mul_of_nonneg_left (by omega) hsc) (le_max_left _ _)⟩
-  · refine ⟨le_trans (min_le_left _ _)
-      (mul_le_mul_of_nonpos_left (by omega) (le_of_lt hsc)), ?_⟩
-    have h1 : sc * d ≤ sc * 0 := mul_le_mul_of_nonpos_left h0 (le_of_lt hsc)
-    rw [mul_zero] at h1
-    exact le_trans h1 (le_max_right _ _)
-
 theorem intEval_window (env : Variable → ZMod p) (pts : List PTerm)
     (hb : ∀ t ∈ pts, ((env t.v).val : Int) < (t.bnd : Int)) :
     minSum pts ≤ intEval env pts ∧ intEval env pts ≤ maxSum pts := by
@@ -164,38 +139,6 @@ theorem intEval_window (env : Variable → ZMod p) (pts : List PTerm)
     omega
 
 /-! ## The integer window argument -/
-
-/-- If the signed-representative integer value `S` reduces to a field element `x` with
-    `x.val < B`, and the window `[lo, hi] ∋ S` satisfies `hi ≤ p − 1` and `lo ≥ B − p`, then
-    `S = x.val` holds over ℤ — in particular `0 ≤ S < B`. -/
-theorem int_window [NeZero p] (S : Int) (B : Nat) (x : ZMod p)
-    (hcast : ((S : Int) : ZMod p) = x) (hx : x.val < B)
-    (hlo : (B : Int) - (p : Int) ≤ S) (hhi : S ≤ (p : Int) - 1) : S = (x.val : Int) := by
-  have hdvd : (p : Int) ∣ (S - (x.val : Int)) := by
-    have hz : ((S - (x.val : Int) : Int) : ZMod p) = 0 := by
-      push_cast
-      rw [hcast, ZMod.natCast_val, ZMod.cast_id, sub_self]
-    exact (ZMod.intCast_zmod_eq_zero_iff_dvd _ p).mp hz
-  obtain ⟨k, hk⟩ := hdvd
-  have hxv : (0 : Int) ≤ (x.val : Int) := Int.natCast_nonneg _
-  have hxvB : ((x.val : Int)) < (B : Int) := by exact_mod_cast hx
-  have hp : (0 : Int) < (p : Int) := by
-    exact_mod_cast Nat.pos_of_ne_zero (NeZero.ne p)
-  -- `S − x.val = p·k` with `S − x.val ∈ (−p, p)` forces `k = 0`.
-  rcases lt_trichotomy k 0 with hkn | rfl | hkp
-  · exfalso
-    have h2 : (p : Int) * k ≤ (p : Int) * (-1) :=
-      mul_le_mul_of_nonneg_left (by omega) (le_of_lt hp)
-    rw [mul_neg_one] at h2
-    generalize hX : (p : Int) * k = X at hk h2
-    omega
-  · omega
-  · exfalso
-    have h2 : (p : Int) * 1 ≤ (p : Int) * k :=
-      mul_le_mul_of_nonneg_left (by omega) (le_of_lt hp)
-    rw [mul_one] at h2
-    generalize hX : (p : Int) * k = X at hk h2
-    omega
 
 /-! ## Seed extraction -/
 
@@ -376,9 +319,6 @@ theorem walk_sound [NeZero p] (B : Nat) (c0 : Int) (env : Variable → ZMod p)
       exact ih (t :: seen) (by simpa using hperm') e hrec
 
 /-! ## Per-slot seeds -/
-
-/-- Cap on the number of affine terms analyzed per slot (the walk is quadratic). -/
-def maxTerms : Nat := 32
 
 /-- All seeds forced by one bounded slot: linearize, merge like terms, pair each variable with
     its proven bound, check the integer window, and extract the pair/zero arms. -/

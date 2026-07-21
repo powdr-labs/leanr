@@ -1,6 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
 import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnifyProof
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.FlagUnify
 
 set_option autoImplicit false
 

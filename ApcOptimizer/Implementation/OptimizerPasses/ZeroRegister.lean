@@ -1,6 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.ZeroRegister
 
 set_option autoImplicit false
 

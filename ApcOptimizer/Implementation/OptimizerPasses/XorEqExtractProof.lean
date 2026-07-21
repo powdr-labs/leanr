@@ -19,8 +19,6 @@ soundness (`facts.byteXorSpec_sound`/`facts.byteBoolSound`) and `ByteXorSpec.dec
 
 namespace ApcOptimizer.Dense
 
-open XorEqExtract
-
 variable {p : ℕ}
 
 /-! ## Small reused arithmetic facts (file-local mirrors of the spec's `private` lemmas) -/

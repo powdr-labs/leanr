@@ -1,6 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Dedup
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.OneHotAnnihilate
 
 set_option autoImplicit false
 
@@ -14,8 +13,6 @@ It is **fact-free**. The native `DensePassCorrect` proof and the pass wiring liv
 `OneHotAnnihilateProof.lean`. -/
 
 namespace ApcOptimizer.Dense
-
-open OneHotAnnihilate
 
 variable {p : ℕ}
 

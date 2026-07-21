@@ -1,4 +1,3 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.IntervalForce
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
@@ -24,8 +23,10 @@ never calls it; it exists only to state the proof-side window lemmas, which the 
 
 ## Representation-independent reuse (per the standing convention)
 
-`IntervalForce.srep : ZMod p → Int` and `IntervalForce.maxTerms : Nat` touch neither `Variable` nor
-`Expression` — they are reused **unqualified**, exactly as `open`ed spec constants/helpers are
+`IntervalForce.srep : ZMod p → Int` / `srep_cast` / `term_window` / `int_window` and
+`IntervalForce.maxTerms : Nat` touch neither `Variable` nor `Expression`; they are
+**re-homed here** from `OldVariableBased/IntervalForce.lean` (the reference pass imports them back)
+and reused **unqualified** via `open IntervalForce`, exactly as `open`ed spec constants/helpers are
 reused elsewhere (`IntervalForce.srep.eval`, `denseSlotSeeds` below). `PTerm` itself is *not*
 reusable as-is: its `v` field is typed `Variable`, so a dense `DensePTerm` (`v : VarId`) is a new
 structure, and every function over `List PTerm` (`procTerms`/`maxSum`/`minSum`/`findPartner`/`walk`)
@@ -55,6 +56,79 @@ insert-keep-smaller/per-interaction/whole-list recursion structure as `BoundIdx.
 `.addAll`/`.build`. Named with a `BoundIdx`-specific prefix (`denseBoundIdx*`) to avoid colliding
 with `DigitFold.lean`'s *different* `BoundsMap`-derived `denseInsertEntry`/`denseAddVars`/
 `denseAddAll`/`denseBuild` (a different fact-derived map, same general shape, unrelated pass). -/
+
+namespace IntervalForce
+
+variable {p : ℕ}
+
+/-! ## Re-homed representation-independent signed-representative + window arithmetic
+
+`srep`/`srep_cast`/`term_window`/`int_window`/`maxTerms` touch only `Nat`/`Int`/`ZMod` — re-homed
+here from `OldVariableBased/IntervalForce.lean` so the dense pass + proof (and
+`BusPairCancelJustify.lean`, which reuses `srep`) consume them without importing the reference pass;
+the reference pass imports them back. -/
+
+/-- Signed minimal-magnitude integer representative of a field element: `c.val` when
+    `c.val ≤ (p−1)/2`, else `c.val − p`. Scaled differences like `256·a − 256·b` thus get the
+    small-magnitude coefficients `(256, −256)` rather than `(256, p−256)`. -/
+def srep (c : ZMod p) : Int :=
+  if c.val ≤ (p - 1) / 2 then (c.val : Int) else (c.val : Int) - (p : Int)
+
+theorem srep_cast [NeZero p] (c : ZMod p) : ((srep c : Int) : ZMod p) = c := by
+  unfold srep
+  split_ifs
+  · rw [Int.cast_natCast, ZMod.natCast_val, ZMod.cast_id]
+  · push_cast
+    rw [ZMod.natCast_val, ZMod.cast_id, ZMod.natCast_self, sub_zero]
+
+/-- Each term's signed value lies in the window `[min (sc·(B−1)) 0, max (sc·(B−1)) 0]`. -/
+theorem term_window (sc d B : Int) (h0 : 0 ≤ d) (hd : d < B) :
+    min (sc * (B - 1)) 0 ≤ sc * d ∧ sc * d ≤ max (sc * (B - 1)) 0 := by
+  rcases le_or_gt 0 sc with hsc | hsc
+  · exact ⟨le_trans (min_le_right _ _) (mul_nonneg hsc h0),
+      le_trans (mul_le_mul_of_nonneg_left (by omega) hsc) (le_max_left _ _)⟩
+  · refine ⟨le_trans (min_le_left _ _)
+      (mul_le_mul_of_nonpos_left (by omega) (le_of_lt hsc)), ?_⟩
+    have h1 : sc * d ≤ sc * 0 := mul_le_mul_of_nonpos_left h0 (le_of_lt hsc)
+    rw [mul_zero] at h1
+    exact le_trans h1 (le_max_right _ _)
+
+/-- If the signed-representative integer value `S` reduces to a field element `x` with
+    `x.val < B`, and the window `[lo, hi] ∋ S` satisfies `hi ≤ p − 1` and `lo ≥ B − p`, then
+    `S = x.val` holds over ℤ — in particular `0 ≤ S < B`. -/
+theorem int_window [NeZero p] (S : Int) (B : Nat) (x : ZMod p)
+    (hcast : ((S : Int) : ZMod p) = x) (hx : x.val < B)
+    (hlo : (B : Int) - (p : Int) ≤ S) (hhi : S ≤ (p : Int) - 1) : S = (x.val : Int) := by
+  have hdvd : (p : Int) ∣ (S - (x.val : Int)) := by
+    have hz : ((S - (x.val : Int) : Int) : ZMod p) = 0 := by
+      push_cast
+      rw [hcast, ZMod.natCast_val, ZMod.cast_id, sub_self]
+    exact (ZMod.intCast_zmod_eq_zero_iff_dvd _ p).mp hz
+  obtain ⟨k, hk⟩ := hdvd
+  have hxv : (0 : Int) ≤ (x.val : Int) := Int.natCast_nonneg _
+  have hxvB : ((x.val : Int)) < (B : Int) := by exact_mod_cast hx
+  have hp : (0 : Int) < (p : Int) := by
+    exact_mod_cast Nat.pos_of_ne_zero (NeZero.ne p)
+  -- `S − x.val = p·k` with `S − x.val ∈ (−p, p)` forces `k = 0`.
+  rcases lt_trichotomy k 0 with hkn | rfl | hkp
+  · exfalso
+    have h2 : (p : Int) * k ≤ (p : Int) * (-1) :=
+      mul_le_mul_of_nonneg_left (by omega) (le_of_lt hp)
+    rw [mul_neg_one] at h2
+    generalize hX : (p : Int) * k = X at hk h2
+    omega
+  · omega
+  · exfalso
+    have h2 : (p : Int) * 1 ≤ (p : Int) * k :=
+      mul_le_mul_of_nonneg_left (by omega) (le_of_lt hp)
+    rw [mul_one] at h2
+    generalize hX : (p : Int) * k = X at hk h2
+    omega
+
+/-- Cap on the number of affine terms analyzed per slot (the walk is quadratic). -/
+def maxTerms : Nat := 32
+
+end IntervalForce
 
 namespace ApcOptimizer.Dense
 

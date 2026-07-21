@@ -1,7 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.Rewrite
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.ZeroWidthRange
 
 set_option autoImplicit false
 
@@ -16,6 +15,36 @@ Gated on `(1 : ZMod p) ≠ 0`, the transform appends the equivalent algebraic co
 degenerate range check (`value = 0` for width-0, its booleanity `value·(value−1) = 0` for width-1
 when `p` is prime — decided per-arm through the recognizer's `one` parameter) and then drops the
 now-entailed interactions. It is **fact-consuming** (`zeroRangeEq`/`varRangeBus`). -/
+
+namespace ZeroWidthRange
+
+variable {p : ℕ}
+
+/-- On a prime field, `x < 2` (as a value) is exactly booleanity.
+
+    Representation-independent (`Nat`/`ZMod`) lemma re-homed here from
+    `OldVariableBased/ZeroWidthRange.lean` so the dense proof tree (`ZeroWidthRangeProof.lean` /
+    `RangeBoolProof.lean`) can consume it without importing the reference pass; the reference pass
+    imports it back. -/
+theorem val_lt_two_iff (hp : Nat.Prime p) (x : ZMod p) :
+    x.val < 2 ↔ x * (x - 1) = 0 := by
+  haveI : Fact p.Prime := ⟨hp⟩
+  constructor
+  · intro hlt
+    have : x.val = 0 ∨ x.val = 1 := by omega
+    rcases this with h0 | h1
+    · rw [ZMod.val_eq_zero] at h0; rw [h0]; ring
+    · have hx1 : x = 1 := by
+        have := (ZMod.natCast_rightInverse x).symm
+        rw [this, h1]; norm_cast
+      rw [hx1]; ring
+  · intro hprod
+    rcases mul_eq_zero.1 hprod with h0 | h1
+    · rw [h0, ZMod.val_zero]; omega
+    · have hx1 : x = 1 := by linear_combination h1
+      rw [hx1, ZMod.val_one_eq_one_mod, Nat.mod_eq_of_lt hp.one_lt]; omega
+
+end ZeroWidthRange
 
 namespace ApcOptimizer.Dense
 

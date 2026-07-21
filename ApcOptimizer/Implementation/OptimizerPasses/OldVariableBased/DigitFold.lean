@@ -3,6 +3,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
 import ApcOptimizer.Implementation.OptimizerPasses.BytePack
+import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 
 set_option autoImplicit false
 
@@ -36,112 +37,18 @@ vector appears in the enumerated set; with the singleton check this forces `env 
 
 namespace DigitFold
 
-/-! ## ℕ-side ladder arithmetic -/
-
-/-- Little-endian base-256 positional value of a digit list. -/
-def ladderVal : List ℕ → ℕ
-  | [] => 0
-  | x :: xs => x + 256 * ladderVal xs
-
-/-- Decode `T` as `Bs.length` base-256 digits (little-endian) with exclusive digit bounds `Bs`,
-    requiring the final quotient to vanish; `none` if any digit breaches its bound. -/
-def unpack? : List ℕ → ℕ → Option (List ℕ)
-  | [], T => if T = 0 then some [] else none
-  | B :: Bs, T =>
-    if T % 256 < B then (unpack? Bs (T / 256)).map (T % 256 :: ·) else none
-
-/-- Decoding is a retraction of the positional value on bounded digit lists. -/
-theorem unpack?_ladderVal : ∀ (xs Bs : List ℕ), List.Forall₂ (· < ·) xs Bs →
-    (∀ B ∈ Bs, B ≤ 256) → unpack? Bs (ladderVal xs) = some xs := by
-  intro xs Bs h
-  induction h with
-  | nil => intro _; rfl
-  | @cons x B xs Bs hxB _ ih =>
-    intro hB
-    have hx256 : x < 256 := lt_of_lt_of_le hxB (hB B (by simp))
-    have hmod : (x + 256 * ladderVal xs) % 256 = x := by
-      rw [Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt hx256]
-    have hdiv : (x + 256 * ladderVal xs) / 256 = ladderVal xs := by
-      rw [Nat.add_mul_div_left _ _ (by norm_num : 0 < 256), Nat.div_eq_of_lt hx256, Nat.zero_add]
-    simp only [ladderVal, unpack?, hmod, hdiv, if_pos hxB,
-      ih (fun B hBmem => hB B (by simp [hBmem]))]
-    rfl
-
-/-- Positional value is monotone into the bound box. -/
-theorem ladderVal_le_box : ∀ (xs Bs : List ℕ), List.Forall₂ (· < ·) xs Bs →
-    ladderVal xs ≤ ladderVal (Bs.map (· - 1)) := by
-  intro xs Bs h
-  induction h with
-  | nil => exact le_refl _
-  | @cons x B xs Bs hxB _ ih =>
-    simp only [ladderVal, List.map_cons]
-    have hx : x ≤ B - 1 := Nat.le_sub_one_of_lt hxB
-    exact Nat.add_le_add hx (Nat.mul_le_mul_left _ ih)
-
-/-! ## The (byte, wrap) solution grid -/
-
-/-- All digit vectors compatible with "the checked value is a byte": for each possible byte `b`
-    and wrap count `m`, decode `tval b + m·p` as a `g`-scaled bounded ladder. `tval b` is the
-    ℕ-residue the ladder sum must have when the byte reads `b` (supplied by the caller from the
-    ZMod arithmetic). -/
-def solutions (p : ℕ) (tval : ℕ → ℕ) (g : ℕ) (Bs : List ℕ) (maxM : ℕ) : List (List ℕ) :=
-  (List.range 256).flatMap fun b =>
-    (List.range (maxM / p + 1)).filterMap fun m =>
-      let M := tval b + m * p
-      if M % g = 0 ∧ M ≤ maxM then unpack? Bs (M / g) else none
-
-/-- Completeness of the grid: the digit vector of any assignment whose ladder sum `g·ladderVal xs`
-    has residue `tval b` (for its byte value `b < 256`) and fits under `maxM` is enumerated. -/
-theorem solutions_complete (p : ℕ) (tval : ℕ → ℕ) (g : ℕ) (Bs : List ℕ) (maxM : ℕ)
-    (_hp : 0 < p) (hg : 0 < g)
-    (xs : List ℕ) (hxB : List.Forall₂ (· < ·) xs Bs) (hB : ∀ B ∈ Bs, B ≤ 256)
-    (b : ℕ) (hb : b < 256)
-    (hmod : (g * ladderVal xs) % p = tval b) (hle : g * ladderVal xs ≤ maxM) :
-    xs ∈ solutions p tval g Bs maxM := by
-  set S := g * ladderVal xs with hS
-  have hSsplit : tval b + S / p * p = S := by
-    rw [← hmod, Nat.mod_add_div' S p]
-  have hm : S / p < maxM / p + 1 :=
-    Nat.lt_succ_of_le (Nat.div_le_div_right hle)
-  refine List.mem_flatMap.2 ⟨b, List.mem_range.2 hb, ?_⟩
-  refine List.mem_filterMap.2 ⟨S / p, List.mem_range.2 hm, ?_⟩
-  have hMg : S % g = 0 := by
-    rw [hS]; exact Nat.mul_mod_right g _
-  have hMdiv : S / g = ladderVal xs := by
-    rw [hS]; exact Nat.mul_div_cancel_left _ hg
-  rw [hSsplit, if_pos ⟨hMg, hle⟩, hMdiv]
-  exact unpack?_ladderVal xs Bs hxB hB
-
-/-- The payoff: a singleton grid forces the digit vector. -/
-theorem solutions_forced (p : ℕ) (tval : ℕ → ℕ) (g : ℕ) (Bs : List ℕ) (maxM : ℕ)
-    (hp : 0 < p) (hg : 0 < g) (ds : List ℕ)
-    (hsol : solutions p tval g Bs maxM = [ds])
-    (xs : List ℕ) (hxB : List.Forall₂ (· < ·) xs Bs) (hB : ∀ B ∈ Bs, B ≤ 256)
-    (b : ℕ) (hb : b < 256)
-    (hmod : (g * ladderVal xs) % p = tval b) (hle : g * ladderVal xs ≤ maxM) :
-    xs = ds := by
-  have := solutions_complete p tval g Bs maxM hp hg xs hxB hB b hb hmod hle
-  rw [hsol, List.mem_singleton] at this
-  exact this
-
 variable {p : ℕ}
 
-/-! ## Ladder recognition on linear forms -/
+/-! ## Ladder recognition on linear forms
 
-/-- The ℕ-coefficient of a term under a sign interpretation: `c.val` when the ladder is added to
-    the constant, `(-c).val` when it is subtracted. -/
-def coeffNat (pos : Bool) (c : ZMod p) : ℕ := if pos then c.val else (-c).val
+The `Nat`/`ZMod`-only ladder layer (`ladderVal` / `unpack?` / `solutions` / `coeffNat` / `signum` /
+`tval` and the completeness theorems) lives in `OptimizerPasses/DigitFold.lean` (re-homed there so
+the dense tree needs no import of this file); it is imported back above and reused unqualified. -/
 
 /-- Check that the (sorted) terms carry the exact coefficient ladder `n, 256n, 65536n, …`. -/
 def isLadder (pos : Bool) : ℕ → List (Variable × ZMod p) → Bool
   | _, [] => true
   | n, (_, c) :: rest => coeffNat pos c == n && isLadder pos (256 * n) rest
-
-/-- The ladder's sign as a field element. -/
-def signum (pos : Bool) : ZMod p := if pos then 1 else -1
-
-@[simp] theorem signum_true : (signum true : ZMod p) = 1 := rfl
-@[simp] theorem signum_false : (signum false : ZMod p) = -1 := rfl
 
 /-- A ladder's ZMod sum is the cast of its ℕ positional value (up to the sign). -/
 theorem isLadder_sum [NeZero p] (pos : Bool) :
@@ -178,10 +85,6 @@ theorem isLadder_sum [NeZero p] (pos : Bool) :
       conv_lhs => rw [henv]
       push_cast
       ring
-
-/-- The ℕ-residue the ladder sum must have when the byte-checked value reads `b`. -/
-def tval (pos : Bool) (K : ZMod p) (b : ℕ) : ℕ :=
-  (if pos then (b : ZMod p) - K else K - (b : ZMod p)).val
 
 /-- The env-side forcing theorem: if the solution grid for a byte-checked ladder is the singleton
     `[ds]`, any satisfying assignment's digit vector is exactly `ds`. -/

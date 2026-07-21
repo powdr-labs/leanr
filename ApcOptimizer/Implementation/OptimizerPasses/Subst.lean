@@ -1,5 +1,4 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Measure
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
 
 set_option autoImplicit false
 
