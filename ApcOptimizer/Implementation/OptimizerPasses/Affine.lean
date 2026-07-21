@@ -52,67 +52,6 @@ def denseLinearize : DenseExpr p → Option (DenseLinExpr p)
 def DenseLinExpr.toExpr (l : DenseLinExpr p) : DenseExpr p :=
   l.terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) (.const l.const)
 
-/-! ## Decoding a dense linear form -/
-
-/-- Decode a dense linear form by resolving each term's `VarId`. -/
-def VarRegistry.decodeLin (reg : VarRegistry) (l : DenseLinExpr p) : LinExpr p :=
-  ⟨l.const, l.terms.map (fun t => (reg.resolve t.1, t.2))⟩
-
-@[simp] theorem VarRegistry.decodeLin_const (reg : VarRegistry) (l : DenseLinExpr p) :
-    (reg.decodeLin l).const = l.const := rfl
-
-theorem VarRegistry.decodeLin_add (reg : VarRegistry) (a b : DenseLinExpr p) :
-    reg.decodeLin (a.add b) = (reg.decodeLin a).add (reg.decodeLin b) := by
-  simp only [VarRegistry.decodeLin, DenseLinExpr.add, LinExpr.add, List.map_append]
-
-theorem VarRegistry.decodeLin_scale (reg : VarRegistry) (k : ZMod p) (a : DenseLinExpr p) :
-    reg.decodeLin (a.scale k) = (reg.decodeLin a).scale k := by
-  simp only [VarRegistry.decodeLin, DenseLinExpr.scale, LinExpr.scale, List.map_map,
-    Function.comp_def]
-
-/-- `terms.isEmpty` is preserved by decoding (decode maps over the term list). -/
-theorem VarRegistry.decodeLin_terms_isEmpty (reg : VarRegistry) (l : DenseLinExpr p) :
-    (reg.decodeLin l).terms.isEmpty = l.terms.isEmpty := by
-  simp only [VarRegistry.decodeLin, List.isEmpty_map]
-
-/-- Decoding commutes with evaluation of a linear form. -/
-theorem VarRegistry.decodeLin_eval (reg : VarRegistry) (l : DenseLinExpr p) (env : Variable → ZMod p) :
-    (reg.decodeLin l).eval env = l.eval (fun i => env (reg.resolve i)) := by
-  simp only [VarRegistry.decodeLin, LinExpr.eval, DenseLinExpr.eval, List.map_map,
-    Function.comp_def]
-
-/-- **`linearize` commutes with decode.** No validity needed: `linearize` never compares variables. -/
-theorem VarRegistry.denseLinearize_decode (reg : VarRegistry) (e : DenseExpr p) :
-    (denseLinearize e).map reg.decodeLin = linearize (reg.decodeExpr e) := by
-  induction e with
-  | const n => rfl
-  | var i => rfl
-  | add a b iha ihb =>
-      simp only [denseLinearize, VarRegistry.decodeExpr, linearize, ← iha, ← ihb]
-      cases denseLinearize a <;> cases denseLinearize b <;>
-        simp [reg.decodeLin_add]
-  | mul a b iha ihb =>
-      simp only [denseLinearize, VarRegistry.decodeExpr, linearize, ← iha, ← ihb]
-      cases denseLinearize a <;> cases denseLinearize b <;>
-        simp [reg.decodeLin_terms_isEmpty, reg.decodeLin_scale,
-          apply_ite (Option.map reg.decodeLin)]
-
-/-- `toExpr` commutes with decode. -/
-theorem VarRegistry.decodeLin_toExpr (reg : VarRegistry) (l : DenseLinExpr p) :
-    reg.decodeExpr l.toExpr = (reg.decodeLin l).toExpr := by
-  simp only [DenseLinExpr.toExpr, LinExpr.toExpr, VarRegistry.decodeLin]
-  suffices H : ∀ (terms : List (VarId × ZMod p)) (init : DenseExpr p),
-      reg.decodeExpr (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init)
-        = (terms.map (fun t => (reg.resolve t.1, t.2))).foldl
-            (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) (reg.decodeExpr init) by
-    exact H l.terms (.const l.const)
-  intro terms
-  induction terms with
-  | nil => intro init; rfl
-  | cons t rest ih =>
-      intro init
-      simp only [List.foldl_cons, List.map_cons, ih, VarRegistry.decodeExpr]
-
 /-! # Dense affine solver (Task 3, WP-E — Gauss foundation, part 2)
 
 The dense mirror of the affine *solver* layer of `OptimizerPasses/Affine.lean` — `coeff`/`others`,
@@ -120,26 +59,13 @@ The dense mirror of the affine *solver* layer of `OptimizerPasses/Affine.lean` �
 These *compare variables* (they filter a term list on `t.1 = x`) and are `VarId`-native; the native
 Gauss proof (`GaussProof.lean`) consumes them directly (`densePm1PivotsOf`/`denseUnitPivotsOf` and
 their `_sound`/`_vars` lemmas). The commutation-era decode lemmas and the unused `solveAffineLin`/
-`solveAffine`/`solvableFrom` solver defs the old Gauss port relied on have been removed; the
-`decodeLin_*`/`denseLinearize_covered_terms` lemmas that other passes (AddrDiseqProof/Normalize/
-DomainBatch) still consume are kept. -/
+`solveAffine`/`solvableFrom` solver defs the old Gauss port relied on have been removed. -/
 
-/-! ## Membership-congruence helper for `flatMap` -/
+/-! ## `denseLinearize` introduces no new variable
 
-/-- `flatMap` depends only on its map's values on list members. -/
-theorem flatMap_congr_mem {α β : Type _} {f g : α → List β} (l : List α)
-    (h : ∀ a ∈ l, f a = g a) : l.flatMap f = l.flatMap g := by
-  induction l with
-  | nil => rfl
-  | cons a rest ih =>
-      rw [List.flatMap_cons, List.flatMap_cons, h a (by simp),
-          ih (fun b hb => h b (List.mem_cons_of_mem _ hb))]
-
-/-! ## `denseLinearize` introduces no new variable (coverage transfer)
-
-Reproved locally (independent of `Dense/Normalize.lean`, which sits *downstream* of this file): the
-term ids of a linearized dense expression are among the expression's variables, so a covered
-expression yields an all-valid term list. -/
+Proved locally (independent of `Dense/Normalize.lean`, which sits *downstream* of this file): the
+term ids of a linearized dense expression are among the expression's variables. The native Gauss
+proof (`GaussProof.lean`) consumes this. -/
 
 /-- Every term variable of `denseLinearize e` occurs in `e`. -/
 theorem denseLinearize_mem_vars (e : DenseExpr p) (l : DenseLinExpr p)
@@ -187,53 +113,6 @@ theorem denseLinearize_mem_vars (e : DenseExpr p) (l : DenseLinExpr p)
               rw [if_neg h1, if_neg h2] at h
               exact absurd h (by simp)
 
-/-- A covered dense expression linearizes to a term list of valid ids. -/
-theorem VarRegistry.denseLinearize_covered_terms (reg : VarRegistry) {c : DenseExpr p}
-    {l : DenseLinExpr p} (hc : c.CoveredBy reg) (hl : denseLinearize c = some l) :
-    ∀ i ∈ l.terms.map Prod.fst, reg.Valid i :=
-  fun i hi => hc i (denseLinearize_mem_vars c l hl i hi)
-
-/-! ## Decoding a dense pivot -/
-
-/-! ## Resolving a filtered-by-variable term list (validity-gated) -/
-
-/-- Filtering a term list on `t.1 = x` commutes with `resolve`-decoding, given all compared ids
-    valid (`resolve` is injective there, so the `VarId` test decodes to the `Variable` test). -/
-theorem VarRegistry.map_resolve_filter_eq (reg : VarRegistry) {x : VarId} (hx : reg.Valid x)
-    (ts : List (VarId × ZMod p)) (hv : ∀ i ∈ ts.map Prod.fst, reg.Valid i) :
-    (ts.filter (fun t => t.1 = x)).map (fun t => (reg.resolve t.1, t.2))
-      = (ts.map (fun t => (reg.resolve t.1, t.2))).filter (fun t => t.1 = reg.resolve x) := by
-  induction ts with
-  | nil => rfl
-  | cons t rest ih =>
-      have ht1 : reg.Valid t.1 := hv t.1 (by simp)
-      have hrest : ∀ i ∈ rest.map Prod.fst, reg.Valid i :=
-        fun i hi => hv i (List.mem_cons_of_mem _ hi)
-      by_cases h : t.1 = x
-      · rw [List.filter_cons_of_pos (by simpa using h), List.map_cons, List.map_cons,
-            List.filter_cons_of_pos (by simp [h]), ih hrest]
-      · have hne : reg.resolve t.1 ≠ reg.resolve x := fun he => h (reg.resolve_inj ht1 hx he)
-        rw [List.filter_cons_of_neg (by simpa using h), List.map_cons,
-            List.filter_cons_of_neg (by simpa using hne), ih hrest]
-
-/-- Filtering a term list on `t.1 ≠ x` commutes with `resolve`-decoding (validity-gated). -/
-theorem VarRegistry.map_resolve_filter_ne (reg : VarRegistry) {x : VarId} (hx : reg.Valid x)
-    (ts : List (VarId × ZMod p)) (hv : ∀ i ∈ ts.map Prod.fst, reg.Valid i) :
-    (ts.filter (fun t => t.1 ≠ x)).map (fun t => (reg.resolve t.1, t.2))
-      = (ts.map (fun t => (reg.resolve t.1, t.2))).filter (fun t => t.1 ≠ reg.resolve x) := by
-  induction ts with
-  | nil => rfl
-  | cons t rest ih =>
-      have ht1 : reg.Valid t.1 := hv t.1 (by simp)
-      have hrest : ∀ i ∈ rest.map Prod.fst, reg.Valid i :=
-        fun i hi => hv i (List.mem_cons_of_mem _ hi)
-      by_cases h : t.1 = x
-      · rw [List.filter_cons_of_neg (by simp [h]), List.map_cons,
-            List.filter_cons_of_neg (by simp [h]), ih hrest]
-      · have hne : reg.resolve t.1 ≠ reg.resolve x := fun he => h (reg.resolve_inj ht1 hx he)
-        rw [List.filter_cons_of_pos (by simpa using h), List.map_cons, List.map_cons,
-            List.filter_cons_of_pos (by simpa using hne), ih hrest]
-
 /-! ## Coefficient / remainder of a dense linear form -/
 
 /-- Total coefficient of `x` in a dense linear form (mirrors `LinExpr.coeff`). -/
@@ -271,23 +150,6 @@ theorem DenseLinExpr.eval_split (l : DenseLinExpr p) (x : VarId) (denv : VarId �
   simp only [DenseLinExpr.eval, DenseLinExpr.coeff, DenseLinExpr.others,
     denseEval_terms_split x denv l.terms]
   ring
-
-/-! ## Coefficient / remainder / term-vars commutation -/
-
-/-- **`coeff` commutes with decode** (validity-gated). -/
-theorem VarRegistry.decodeLin_coeff (reg : VarRegistry) (l : DenseLinExpr p) {x : VarId}
-    (hx : reg.Valid x) (hterms : ∀ i ∈ l.terms.map Prod.fst, reg.Valid i) :
-    (reg.decodeLin l).coeff (reg.resolve x) = l.coeff x := by
-  simp only [LinExpr.coeff, DenseLinExpr.coeff, VarRegistry.decodeLin]
-  rw [← reg.map_resolve_filter_eq hx l.terms hterms]
-  simp [List.map_map, Function.comp_def]
-
-/-- **`others` commutes with decode** (validity-gated). -/
-theorem VarRegistry.decodeLin_others (reg : VarRegistry) (l : DenseLinExpr p) {x : VarId}
-    (hx : reg.Valid x) (hterms : ∀ i ∈ l.terms.map Prod.fst, reg.Valid i) :
-    reg.decodeLin (l.others x) = (reg.decodeLin l).others (reg.resolve x) := by
-  simp only [VarRegistry.decodeLin, DenseLinExpr.others, LinExpr.others]
-  rw [reg.map_resolve_filter_ne hx l.terms hterms]
 
 /-! ## Solving for a unit-coefficient variable -/
 

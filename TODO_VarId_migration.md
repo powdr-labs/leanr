@@ -198,11 +198,34 @@ were dispatched as follows:
   `Implementation/Optimizer.lean`'s legacy import block. The still-live decode transport is now only in
   `AddrDiseqProof.lean` (`denseTwoRootOf?_decode`/`_A_valid` and the certificate stack) — Step D's target.
 
-**Step D — nativize `AddrDiseqProof`'s certificate stack.** Native proofs for `constDiffNZ`,
-`isZeroLin`, `diffSumOver`, `ptrBranchesOf`, `reciprocalWits?`, `addrAffineNeq`, `addrNonzeroNeq`,
-`NonzeroWits`. Then delete the orphaned `decodeLin` family in `Affine.lean` and the `decodeLin_norm`
-chain in `Normalize.lean` — the two decode transports (`AddrDiseqProof`, `RootPairUnifyProof`) are
-their only consumers (grep-verified).
+**Step D — nativize `AddrDiseqProof`'s certificate stack — DONE.** Every decode transport is gone from
+`AddrDiseqProof.lean`: it no longer imports `OldVariableBased/AddrDiseq.lean` and references no
+`decodeLin`/`decodeExpr`/`decodeBI` bridge, `eval_decode*`, or `denseTwoRootOf?_decode`/`_A_valid`.
+Each certificate is now proved sound **natively at the value level** over `VarId → ZMod p`, mirroring
+the reference `Variable`-level argument with the dense eval algebra (`DenseLinExpr.norm_eval`/
+`add_eval`/`scale_eval`/`eval_split`, `denseLinearize_eval`) and the representation-independent field
+core (`twoRoot_mem`):
+- `denseConstDiffNZ_sound`, `denseIsZeroLin_sound`, `denseDiffSumOver_eval_zero`,
+  `densePtrBranchesOf_eval`, `denseReciprocalWitsProd_sound`/`denseReciprocalWits?_sound`,
+  `denseAddr_slot_neq`/`denseAddr_eq_slot`, `densePtrReductions_sound`, `denseExprTwoRootNeq_sound`
+  — new/rewritten native lemmas in `AddrDiseqProof.lean`;
+- the public certificate soundness lemmas `denseAddrAffineNeq_sound`, `denseAddrTwoRootNeq_sound`,
+  `denseAddrNonzeroNeq_sound` keep their signatures (so `BusUnifyProof`/`BusPairCancelCheckProof`
+  callers are untouched) but their proofs are now native; the residual `reg`/`CoveredBy`/`denseBICovered`
+  hypotheses are unused by the native proofs (underscored);
+- the `DenseTwoRootMap.Sound` invariant and `denseTwoRootOf?_sound` were already native (Step C).
+
+The orphaned decode skeleton was deleted in the same commit (grep-verified consumer-less): the
+`decodeLin` family + `denseLinearize_decode`/`map_resolve_filter_eq`/`map_resolve_filter_ne` +
+`flatMap_congr_mem`/`denseLinearize_covered_terms` in `Affine.lean`, and the `decodeLin_norm` chain
+(`map_resolve_filter`/`denseAddCoeff_map`/`denseFoldAddCoeff_map`/`denseMergeTerms_map`) in
+`Normalize.lean`. `OldVariableBased/AddrDiseq.lean` stays reachable via
+`OldVariableBased/BusUnify.lean` in `Implementation/Optimizer.lean`'s legacy block.
+
+**The "Decode transports" group of Task 3 is now dead** — both transports (`RootPairUnifyProof`,
+Step C; `AddrDiseqProof`, Step D) are nativized and their bridging machinery deleted. What remains of
+Task 3 is Step E (re-home the enumeration engine) and Step F (native twins / re-homes for the residual
+`Variable`-typed memory-bus theorems).
 
 **Step E — re-home the enumeration engine.** Move the `IExpr` / `CBi` / `FiniteDomain` types and the
 `foldlStop` enumeration engine (representation-independent in substance, large and entangled) to a

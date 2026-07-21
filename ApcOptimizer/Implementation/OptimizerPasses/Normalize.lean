@@ -17,14 +17,7 @@ traversal returning both the normalized expression and the node's linear form, k
 `normalizeFused`). Its correctness is proved **natively** as a `DensePassCorrect` over
 `VarId → ZMod p` environments (the walk is eval-preserving and introduces no variables) and lifted to
 the spec `PassCorrect` once, at the pipeline edge, by `DenseVerifiedPassW.ofNative` — no dependency on
-the reference `normalizePass`. Mirrors the native `denseConstantFoldPass` (`Dense/ExprOps.lean`).
-
-The validity-gated decode-commutation lemma at the end (`decodeLin_norm` and its
-`denseMergeTerms`/`addCoeff` supporting lemmas) is **not** used by this pass; it remains as shared
-commutation machinery consumed by other passes (AddrDiseq). `resolve` is injective only on valid
-ids, so `denseMergeTerms` mapped through
-`resolve` equals the spec `mergeTerms` of the decoded terms only when every term's `VarId` is valid;
-those lemmas therefore carry a validity hypothesis, discharged from a coverage invariant. -/
+the reference `normalizePass`. Mirrors the native `denseConstantFoldPass` (`Dense/ExprOps.lean`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -614,82 +607,5 @@ def denseNormalizePass : DenseVerifiedPassW p :=
           exact BusState.equiv_refl _
         · intro _ _ i hi _
           exact ⟨DenseConstraintSystem.mapExpr_occ_subset denseNormalizeFused_fst_vars d i hi, rfl⟩)
-
-/-! ## Decode-commutation of the merge (validity-gated) -/
-
-/-- Resolving each term commutes with dropping zero-coefficient terms (the filter touches only
-    `.2`, which `resolve`-decoding preserves). -/
-theorem VarRegistry.map_resolve_filter (reg : VarRegistry) (l : List (VarId × ZMod p)) :
-    (l.filter (fun t => t.2 ≠ 0)).map (fun t => (reg.resolve t.1, t.2))
-      = (l.map (fun t => (reg.resolve t.1, t.2))).filter (fun t => t.2 ≠ 0) := by
-  induction l with
-  | nil => rfl
-  | cons t rest ih =>
-      by_cases h : t.2 = 0
-      · rw [List.filter_cons_of_neg (by simpa using h), List.map_cons,
-            List.filter_cons_of_neg (by simpa using h), ih]
-      · rw [List.filter_cons_of_pos (by simpa using h), List.map_cons, List.map_cons,
-            List.filter_cons_of_pos (by simpa using h), ih]
-
-/-- One `denseAddCoeff`, decoded, is one spec `addCoeff` on the decoded accumulator (validity-gated:
-    `resolve` must be injective on the compared ids). -/
-theorem VarRegistry.denseAddCoeff_map (reg : VarRegistry) (v : VarId) (c : ZMod p)
-    (hv : reg.Valid v) :
-    ∀ (acc : List (VarId × ZMod p)), (∀ i ∈ acc.map Prod.fst, reg.Valid i) →
-    (denseAddCoeff v c acc).map (fun t => (reg.resolve t.1, t.2))
-      = addCoeff (reg.resolve v) c (acc.map (fun t => (reg.resolve t.1, t.2))) := by
-  intro acc
-  induction acc with
-  | nil => intro _; rfl
-  | cons t rest ih =>
-      intro hacc
-      obtain ⟨v', c'⟩ := t
-      have hv' : reg.Valid v' := hacc v' (by simp)
-      have hrest : ∀ i ∈ rest.map Prod.fst, reg.Valid i :=
-        fun i hi => hacc i (List.mem_cons_of_mem _ hi)
-      by_cases hvv : v' = v
-      · simp only [denseAddCoeff, if_pos hvv, List.map_cons, addCoeff]
-        rw [if_pos (congrArg reg.resolve hvv)]
-      · have hne : reg.resolve v' ≠ reg.resolve v := fun he => hvv (reg.resolve_inj hv' hv he)
-        simp only [denseAddCoeff, if_neg hvv, List.map_cons, addCoeff, ih hrest]
-        rw [if_neg hne]
-
-/-- The full merge fold, decoded, is the spec merge fold on decoded terms (validity-gated). -/
-theorem VarRegistry.denseFoldAddCoeff_map (reg : VarRegistry) :
-    ∀ (ts : List (VarId × ZMod p)), (∀ i ∈ ts.map Prod.fst, reg.Valid i) →
-    ∀ (acc : List (VarId × ZMod p)), (∀ i ∈ acc.map Prod.fst, reg.Valid i) →
-      (ts.foldl (fun a t => denseAddCoeff t.1 t.2 a) acc).map (fun t => (reg.resolve t.1, t.2))
-        = (ts.map (fun t => (reg.resolve t.1, t.2))).foldl
-            (fun a t => addCoeff t.1 t.2 a) (acc.map (fun t => (reg.resolve t.1, t.2))) := by
-  intro ts
-  induction ts with
-  | nil => intro _ acc _; rfl
-  | cons t rest ih =>
-      intro hts acc hacc
-      have ht1 : reg.Valid t.1 := hts t.1 (by simp)
-      have hrestts : ∀ i ∈ rest.map Prod.fst, reg.Valid i :=
-        fun i hi => hts i (List.mem_cons_of_mem _ hi)
-      have hacc' : ∀ i ∈ (denseAddCoeff t.1 t.2 acc).map Prod.fst, reg.Valid i := by
-        intro i hi
-        rcases denseAddCoeff_fst t.1 t.2 acc i hi with h | h
-        · exact h ▸ ht1
-        · exact hacc i h
-      simp only [List.foldl_cons, List.map_cons]
-      rw [ih hrestts (denseAddCoeff t.1 t.2 acc) hacc',
-          reg.denseAddCoeff_map t.1 t.2 ht1 acc hacc]
-
-theorem VarRegistry.denseMergeTerms_map (reg : VarRegistry) (ts : List (VarId × ZMod p))
-    (hv : ∀ i ∈ ts.map Prod.fst, reg.Valid i) :
-    (denseMergeTerms ts).map (fun t => (reg.resolve t.1, t.2))
-      = mergeTerms (ts.map (fun t => (reg.resolve t.1, t.2))) := by
-  have h := reg.denseFoldAddCoeff_map ts hv [] (by simp)
-  simpa [denseMergeTerms, mergeTerms] using h
-
-/-- **The dense normal form decodes to the spec normal form** (given all term ids valid). -/
-theorem VarRegistry.decodeLin_norm (reg : VarRegistry) (l : DenseLinExpr p)
-    (hv : ∀ i ∈ l.terms.map Prod.fst, reg.Valid i) :
-    reg.decodeLin (DenseLinExpr.norm l) = (reg.decodeLin l).norm := by
-  simp only [DenseLinExpr.norm, VarRegistry.decodeLin, LinExpr.norm]
-  rw [reg.map_resolve_filter (denseMergeTerms l.terms), reg.denseMergeTerms_map l.terms hv]
 
 end ApcOptimizer.Dense
