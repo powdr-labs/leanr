@@ -11,6 +11,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DomainBatch
 import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
 import ApcOptimizer.Implementation.OptimizerPasses.MonicScale
+import ApcOptimizer.Implementation.OptimizerPasses.MonicScaleProof
 import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BusUnify
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BusPairCancel
@@ -163,7 +164,7 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
     ("tupleRange", DenseVerifiedPassW.ofSpec (tupleRangePass.guardDegree b)),
     ("bytePackLate", DenseVerifiedPassW.guardDegree b denseByteCheckPackPass),
-    ("monicScale", DenseVerifiedPassW.ofSpec (monicScalePass.withFacts.guardDegree b)),
+    ("monicScale", DenseVerifiedPassW.guardDegree b denseMonicScalePass),
     ("constFoldEnd", DenseVerifiedPassW.guardDegree b denseConstantFoldPass),
     -- Collapse recognised `sltu x, 1` (seqz) LessThan gadgets to the two-line is-zero gadget,
     -- dropping the four `diff_marker`s + `diff_val`. Runs after `monicScale`, where the cluster
