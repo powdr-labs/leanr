@@ -1100,10 +1100,10 @@ theorem get_spawn {α : Type} (f : Unit → α) : (Task.spawn f).get = f () := r
     novel parallel structure once, up front, so the entailment invariant is proved over the single
     serial fold. -/
 theorem denseCollectForcedV_eq_serial (bs : BusSemantics p) (facts : BusFacts p bs)
-    (reg : VarRegistry) (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (parallel : Bool)
-    (targets : List (List VarId)) (seen : Std.HashSet String) (dσ0 : DenseSolved p) :
-    denseCollectForcedV bs facts reg T fidx parallel targets seen dσ0
-      = (denseDedupTargetsV reg targets seen).foldl
+    (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (parallel : Bool)
+    (targets : List (List VarId)) (seen : Std.HashSet (List VarId)) (dσ0 : DenseSolved p) :
+    denseCollectForcedV bs facts T fidx parallel targets seen dσ0
+      = (denseDedupTargetsV targets seen).foldl
           (fun dσ xs => dσ.insertAll
             ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))) dσ0 := by
   simp only [denseCollectForcedV]
@@ -1116,14 +1116,14 @@ theorem denseCollectForcedV_eq_serial (bs : BusSemantics p) (facts : BusFacts p 
     no longer complicates the invariant, since the forced-pair hypothesis `hforced` is stated for
     **every** variable set. -/
 theorem denseCollectForcedV_entailed (bs : BusSemantics p) (facts : BusFacts p bs)
-    (reg : VarRegistry) (T : DenseDomainTable p) (fidx : DenseForcedIdx p)
+    (T : DenseDomainTable p) (fidx : DenseForcedIdx p)
     (d : DenseConstraintSystem p)
     (hforced : ∀ xs, ∀ f ∈ denseForcedOverV bs facts T fidx xs, ∀ denv,
       d.satisfies bs denv → denv f.1 = f.2) :
-    ∀ (parallel : Bool) (targets : List (List VarId)) (seen : Std.HashSet String)
+    ∀ (parallel : Bool) (targets : List (List VarId)) (seen : Std.HashSet (List VarId))
       (dσ : DenseSolved p),
       EntailedMap d bs dσ.map →
-      EntailedMap d bs (denseCollectForcedV bs facts reg T fidx parallel targets seen dσ).map := by
+      EntailedMap d bs (denseCollectForcedV bs facts T fidx parallel targets seen dσ).map := by
   have hfold : ∀ (uniq : List (List VarId)) (dσ : DenseSolved p), EntailedMap d bs dσ.map →
       EntailedMap d bs (uniq.foldl (fun dσ xs => dσ.insertAll
         ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))) dσ).map := by
@@ -1144,7 +1144,7 @@ theorem denseCollectForcedV_entailed (bs : BusSemantics p) (facts : BusFacts p b
       exact hforced xs f hf denv hsat
   intro parallel targets seen dσ h
   rw [denseCollectForcedV_eq_serial]
-  exact hfold (denseDedupTargetsV reg targets seen) dσ h
+  exact hfold (denseDedupTargetsV targets seen) dσ h
 
 /-! ## Reflexive (identity) native correctness -/
 
@@ -1190,17 +1190,17 @@ def dbFidx (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSys
     activeIdx := denseCovBuild DenseExpr.vars (dbActiveCs bs facts d),
     arrActive := (dbActiveCs bs facts d).toArray }
 
-theorem denseDomainBatchσV_eq (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
+theorem denseDomainBatchσV_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
-    denseDomainBatchσV reg bs facts d
-      = denseCollectForcedV bs facts reg (dbT bs facts d) (dbFidx bs facts d)
+    denseDomainBatchσV bs facts d
+      = denseCollectForcedV bs facts (dbT bs facts d) (dbFidx bs facts d)
           (8192 ≤ d.algebraicConstraints.length) (dbTargets d) ∅ DenseSolved.empty := rfl
 
-theorem denseDomainBatchσV_entailed [Fact p.Prime] [NeZero p] (reg : VarRegistry)
+theorem denseDomainBatchσV_entailed [Fact p.Prime] [NeZero p]
     (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
-    EntailedMap d bs (denseDomainBatchσV reg bs facts d).map := by
+    EntailedMap d bs (denseDomainBatchσV bs facts d).map := by
   rw [denseDomainBatchσV_eq]
-  refine denseCollectForcedV_entailed bs facts reg (dbT bs facts d) (dbFidx bs facts d) d
+  refine denseCollectForcedV_entailed bs facts (dbT bs facts d) (dbFidx bs facts d) d
     ?hforced (8192 ≤ d.algebraicConstraints.length) (dbTargets d) ∅ DenseSolved.empty ?hbase
   case hbase =>
     intro i t h
@@ -1227,38 +1227,38 @@ theorem denseDomainBatchσV_entailed [Fact p.Prime] [NeZero p] (reg : VarRegistr
 theorem denseDomainBatchTransformV_covered (pw : PrimeWitness p) (reg : VarRegistry)
     (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p)
     (hcov : d.CoveredBy reg) :
-    (denseDomainBatchTransformV pw reg bs facts d).CoveredBy reg := by
+    (denseDomainBatchTransformV pw bs facts d).CoveredBy reg := by
   by_cases hpB : pw.isPrime = true
   · haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     haveI : NeZero p := ⟨(pw.correct hpB).ne_zero⟩
-    rw [show denseDomainBatchTransformV pw reg bs facts d = applyσ (denseDomainBatchσV reg bs facts d) d
+    rw [show denseDomainBatchTransformV pw bs facts d = applyσ (denseDomainBatchσV bs facts d) d
         from by simp only [denseDomainBatchTransformV, if_pos hpB], applyσ]
-    by_cases he : (denseDomainBatchσV reg bs facts d).map.isEmpty = true
+    by_cases he : (denseDomainBatchσV bs facts d).map.isEmpty = true
     · rw [if_pos he]; exact hcov
     · rw [if_neg he]
       refine DenseConstraintSystem.substF_covered hcov (fun i _ t ht z hz => ?_)
       exact DenseConstraintSystem.occ_valid hcov z
-        ((denseDomainBatchσV_entailed reg bs facts d i t ht).1 z hz)
-  · rw [show denseDomainBatchTransformV pw reg bs facts d = d
+        ((denseDomainBatchσV_entailed bs facts d i t ht).1 z hz)
+  · rw [show denseDomainBatchTransformV pw bs facts d = d
         from by simp only [denseDomainBatchTransformV, if_neg hpB]]
     exact hcov
 
 theorem denseDomainBatchTransformV_correct (pw : PrimeWitness p) (reg : VarRegistry)
     (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
-    DensePassCorrect reg.isInput d (denseDomainBatchTransformV pw reg bs facts d) [] bs := by
+    DensePassCorrect reg.isInput d (denseDomainBatchTransformV pw bs facts d) [] bs := by
   by_cases hpB : pw.isPrime = true
   · haveI : Fact p.Prime := ⟨pw.correct hpB⟩
     haveI : NeZero p := ⟨(pw.correct hpB).ne_zero⟩
-    rw [show denseDomainBatchTransformV pw reg bs facts d = applyσ (denseDomainBatchσV reg bs facts d) d
+    rw [show denseDomainBatchTransformV pw bs facts d = applyσ (denseDomainBatchσV bs facts d) d
         from by simp only [denseDomainBatchTransformV, if_pos hpB], applyσ]
-    by_cases he : (denseDomainBatchσV reg bs facts d).map.isEmpty = true
+    by_cases he : (denseDomainBatchσV bs facts d).map.isEmpty = true
     · rw [if_pos he]; exact DensePassCorrect_refl reg.isInput d bs
     · rw [if_neg he]
-      refine DenseConstraintSystem.substF_denseCorrect d (denseDomainBatchσV reg bs facts d).fn bs
+      refine DenseConstraintSystem.substF_denseCorrect d (denseDomainBatchσV bs facts d).fn bs
         reg.isInput (fun denv hsat j t hjt => ?_) (fun j t hjt z hz => ?_)
-      · exact (denseDomainBatchσV_entailed reg bs facts d j t hjt).2 denv hsat
-      · exact (denseDomainBatchσV_entailed reg bs facts d j t hjt).1 z hz
-  · rw [show denseDomainBatchTransformV pw reg bs facts d = d
+      · exact (denseDomainBatchσV_entailed bs facts d j t hjt).2 denv hsat
+      · exact (denseDomainBatchσV_entailed bs facts d j t hjt).1 z hz
+  · rw [show denseDomainBatchTransformV pw bs facts d = d
         from by simp only [denseDomainBatchTransformV, if_neg hpB]]
     exact DensePassCorrect_refl reg.isInput d bs
 
@@ -1267,7 +1267,7 @@ theorem denseDomainBatchTransformV_correct (pw : PrimeWitness p) (reg : VarRegis
     reference pass). -/
 def denseDomainBatchPassV (pw : PrimeWitness p) : DenseVerifiedPassW p := fun reg d hcov bs facts =>
   { reg' := reg
-    out := denseDomainBatchTransformV pw reg bs facts d
+    out := denseDomainBatchTransformV pw bs facts d
     derivs := []
     ext := VarRegistry.Extends.refl reg
     covered := denseDomainBatchTransformV_covered pw reg bs facts d hcov

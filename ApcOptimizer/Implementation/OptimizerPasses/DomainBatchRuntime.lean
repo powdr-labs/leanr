@@ -39,9 +39,8 @@ predicate, and the scan — with **value-only points** (`List (ZMod p)`, positio
   box-check `allBox`/`constraintRedundant`.
 
 Everything **not** on the per-point path is reused unchanged from `Dense/DomainBatch.lean` (old,
-untouched) and `Dense/Gauss.lean`, since it was already measured at parity and is out of this task's
-scope (per `VarId.md`/`VarIdAddendum.md`, `varSetKey`'s exact-set repair is an isolated follow-up, not
-bundled here):
+untouched) and `Dense/Gauss.lean`, since it was already measured at parity and is out of this file's
+scope:
 
 * the domain-table layer (`DenseDomainTable`, `.insertEntry`, `.doms`, `denseAddConstraintDoms`,
   `denseAddBusDoms`, `denseRootsIn`, `denseInteractionDomainF`) — built once per pass invocation, no
@@ -292,24 +291,33 @@ def denseForcedOverV (bs : BusSemantics p) (facts : BusFacts p bs) (T : DenseDom
 
 /-! ## `collectForced`, value-only (mirrors `collectForced`/`denseCollectForced`)
 
-Unchanged target-dedup key (`denseVarSetKey`, reused — out of this task's scope, see the module
-header) and unchanged solution-map data structure (`DenseSolved`/`.insertAll`, reused from
-`Dense/Gauss.lean`); only the per-target forcing (`denseForcedOverV`) is new. Mirrors the spec's
-#165 split into a target dedup (`dedupTargets`) followed by an order-preserving fold, so the
-independent per-target enumerations can be spawned in parallel on large systems. -/
+The target-dedup key is `denseVarSetKey` (defined in `Dense/DomainBatch.lean`): the exact
+`VarId` set of the target, so distinct variables never collide, whatever their names. The
+solution-map data structure (`DenseSolved`/`.insertAll`) is reused from `Dense/Gauss.lean`; only the
+per-target forcing (`denseForcedOverV`) is new. Mirrors the spec's split into a target dedup
+(`dedupTargets`) followed by an order-preserving fold, so the independent per-target enumerations
+can be spawned in parallel on large systems. -/
 
-/-- The `seen`-deduplicated target list (value-only twin of the spec's `dedupTargets`, keyed by the
-    same `denseVarSetKey reg` the previous interleaved recursion used), split out so the per-target
-    enumerations can be spawned in parallel. Dedup behaviour is byte-for-byte the previous
-    interleaved threading — the exact-set-key repair is a separate follow-up (see the module
-    header). -/
-def denseDedupTargetsV (reg : VarRegistry) :
-    List (List VarId) → Std.HashSet String → List (List VarId)
+/-- The `seen`-deduplicated target list (value-only twin of the spec's `dedupTargets`), keyed by the
+    exact-`VarId`-set `denseVarSetKey`, split out so the per-target enumerations can be spawned in
+    parallel. `seen` is a set of already-emitted keys; the fold keeps the first target with each
+    distinct set of variables and drops later repeats. -/
+def denseDedupTargetsV :
+    List (List VarId) → Std.HashSet (List VarId) → List (List VarId)
   | [], _ => []
   | xs :: rest, seen =>
-    let key := denseVarSetKey reg xs
-    if seen.contains key then denseDedupTargetsV reg rest seen
-    else xs :: denseDedupTargetsV reg rest (seen.insert key)
+    let key := denseVarSetKey xs
+    if seen.contains key then denseDedupTargetsV rest seen
+    else xs :: denseDedupTargetsV rest (seen.insert key)
+
+-- (b) `denseDedupTargetsV` keeps both variables with equal names but distinct `VarId`s: their
+-- singleton targets have distinct exact-set keys, so neither is deduped away. Two variables with the
+-- same `name` and different `powdrId?` get distinct `VarId`s from the injective registry.
+private def ddRegA : VarRegistry × VarId :=
+  VarRegistry.empty.register { name := "x", powdrId? := some 1 }
+private def ddRegB : VarRegistry × VarId :=
+  ddRegA.1.register { name := "x", powdrId? := some 2 }
+#guard denseDedupTargetsV [[ddRegA.2], [ddRegB.2]] ∅ == [[ddRegA.2], [ddRegB.2]]
 
 /-- Collect every checked forced constant, mirroring the spec's `collectForced`: dedup the targets
     once (`denseDedupTargetsV`), then combine each target's forced constants into the solution map
@@ -319,10 +327,11 @@ def denseDedupTargetsV (reg : VarRegistry) :
     insertions the sequential fold would perform, so the pass output is unchanged and only wall-clock
     differs. Small systems keep the plain sequential fold. `parallel` is decided by the caller from
     the system size, matching the spec pass's gate. -/
-def denseCollectForcedV (bs : BusSemantics p) (facts : BusFacts p bs) (reg : VarRegistry)
+def denseCollectForcedV (bs : BusSemantics p) (facts : BusFacts p bs)
     (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (parallel : Bool)
-    (targets : List (List VarId)) (seen : Std.HashSet String) (dσ0 : DenseSolved p) : DenseSolved p :=
-  let uniq := denseDedupTargetsV reg targets seen
+    (targets : List (List VarId)) (seen : Std.HashSet (List VarId)) (dσ0 : DenseSolved p) :
+    DenseSolved p :=
+  let uniq := denseDedupTargetsV targets seen
   if parallel then
     let tasks := uniq.map (fun xs => Task.spawn fun _ => denseForcedOverV bs facts T fidx xs)
     tasks.foldl (init := dσ0) fun dσ t =>
@@ -341,7 +350,7 @@ wiring here — the prover states the correctness proof and wires this transform
 
 /-- The dense solution map (mirrors the spec pass's `σ` / `denseDomainBatchσ`), built with the
     value-only `denseCollectForcedV`. -/
-def denseDomainBatchσV (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
+def denseDomainBatchσV (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseSolved p :=
   let T : DenseDomainTable p :=
     denseAddBusDoms bs facts d.busInteractions
@@ -358,12 +367,12 @@ def denseDomainBatchσV (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFa
       arrActive := activeCs.toArray }
   -- Fan out only at keccak/SHA scale (the same raw-count gate as the spec pass): below it the
   -- sequential fold is byte-for-byte the same computation without spawn overhead.
-  denseCollectForcedV bs facts reg T fidx (8192 ≤ d.algebraicConstraints.length) targets ∅
+  denseCollectForcedV bs facts T fidx (8192 ≤ d.algebraicConstraints.length) targets ∅
     DenseSolved.empty
 
 /-- The value-only dense domain-batch transform (mirrors `domainBatchPass`/`denseDomainBatchF`). -/
-def denseDomainBatchTransformV (pw : PrimeWitness p) (reg : VarRegistry) (bs : BusSemantics p)
+def denseDomainBatchTransformV (pw : PrimeWitness p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
-  if pw.isPrime = true then applyσ (denseDomainBatchσV reg bs facts d) d else d
+  if pw.isPrime = true then applyσ (denseDomainBatchσV bs facts d) d else d
 
 end ApcOptimizer.Dense

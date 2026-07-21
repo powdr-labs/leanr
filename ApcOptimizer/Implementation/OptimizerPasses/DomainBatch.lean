@@ -584,8 +584,35 @@ theorem denseCoveredIdxUnord_mem_of_eq {α : Type} (idx : DenseCovIndex) (l : Li
   have hi' : i < l.length := by simpa using hi
   exact ⟨by simp [l.getElem_mem hi'], hq⟩
 
-/-- Canonical dedup key of a dense variable set: the spec `varSetKey` on the resolved variables. -/
-def denseVarSetKey (reg : VarRegistry) (xs : List VarId) : String := varSetKey (xs.map reg.resolve)
+/-- Canonical dedup key of a dense variable set: its exact set identity as a sorted, duplicate-free
+    `List VarId`. Registry injectivity makes a `VarId` a full variable identity, so `VarId`-set
+    equality *is* set equality of the underlying `Variable`s — and, unlike a name-based key, two
+    distinct variables with equal `name` but different `powdrId?` never collide. Sorting by the
+    underlying index and dropping duplicates makes the list canonical, so the key is invariant under
+    the order and multiplicity of `xs` and needs no registry lookup or string building. -/
+def denseVarSetKey (xs : List VarId) : List VarId :=
+  xs.dedup.mergeSort (fun a b => compare a.index b.index != .gt)
+
+/-! ### Regression guards: the key is an exact `VarId` set (equal-name variables do not collide)
+
+Construct two variables with the same `name` but different `powdrId?`: they are distinct `Variable`
+identities, so the injective registry assigns them distinct `VarId`s. A name-based key would collide
+them; the exact `VarId`-set key does not. The guards check distinctness, order-independence, and set
+(duplicate-collapsing) semantics — with no reference to any legacy name key. -/
+
+private def egRegA : VarRegistry × VarId :=
+  VarRegistry.empty.register { name := "x", powdrId? := some 1 }
+private def egRegB : VarRegistry × VarId :=
+  egRegA.1.register { name := "x", powdrId? := some 2 }
+private def egA : VarId := egRegA.2
+private def egB : VarId := egRegB.2
+
+-- (a) distinct equal-name variables get distinct singleton keys (a name key would collide them)
+#guard denseVarSetKey [egA] != denseVarSetKey [egB]
+-- (c) order-independence: the key does not depend on the order of `xs`
+#guard denseVarSetKey [egA, egB] == denseVarSetKey [egB, egA]
+-- (d) set semantics: duplicate ids collapse
+#guard denseVarSetKey [egA, egA, egB] == denseVarSetKey [egA, egB]
 
 /-- Apply a dense solution map to a system, unless it is empty (mirrors the spec pass's
     `if σ.map.isEmpty then cs else cs.substF σ.fn`). Kept as a standalone function so the solution

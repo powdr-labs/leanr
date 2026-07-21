@@ -116,6 +116,16 @@ Requirements: **separate commit**; a regression test involving equal names with 
 IDs; verify normal benchmark outputs are unchanged. This is the ONLY place the migration may
 intentionally change optimization behavior, and only on such adversarial inputs.
 
+**Done.** `denseVarSetKey` (`DomainBatch.lean`) now returns the exact set identity of a target as a
+sorted, duplicate-free `List VarId` (`xs.dedup.mergeSort` on the underlying index) — no `reg`
+lookup, no name string, no reference to the legacy `varSetKey`. `denseDedupTargetsV` /
+`denseCollectForcedV` (and the σ/transform above them) dropped their now-unused `reg` params, and
+`seen` became `Std.HashSet (List VarId)`. `#guard` regression guards (distinctness of equal-name
+singletons, order-independence, duplicate-collapse, and `denseDedupTargetsV` keeping both equal-name
+targets) sit next to the definitions. All six benchmark exports stayed byte-identical; behavior
+differs only on adversarial equal-name inputs. The proof plumbing was type-only (the entailment
+proofs never inspect the key).
+
 ## Task 3 — Remove the remaining references into OldVariableBased/
 
 Current, grep-verified coupling list from non-legacy files into the legacy tree, grouped by how
@@ -135,9 +145,10 @@ each dies:
   `argmin_map_key`/`map_filterMap` pair out of the legacy file — retry once the decode lemma
   dies), `DomainFold.lean` (spec `FoldIdx.mk'`/`refresh`/`anyVarIn`/`hasConstFoldableNode`),
   `Reencode.lean` (spec `evalFast`/`evalWith`/`sharesVarIn`/`ComputationMethod.eval_congr`),
-  `DomainBatch.lean` (spec `varSetKey` — dies with Task 2 — plus the `IExpr`/`CBi`/
-  `FiniteDomain` enumeration engine: representation-independent in substance but large and
-  entangled; move it to a neutral non-legacy home when the file's other couplings die),
+  `DomainBatch.lean` (the `IExpr`/`CBi`/`FiniteDomain` enumeration engine:
+  representation-independent in substance but large and entangled; move it to a neutral non-legacy
+  home when the file's other couplings die — the spec `varSetKey` coupling is already gone, killed
+  by Task 2),
   `DomainProp.lean` (a non-legacy but `Variable`-based shared facts file; consumes legacy
   `LinExpr.norm_eval` — re-home that lemma or prune at deletion time).
 - `BusPairCancelJustify.lean`: hosts representation-independent search-budget constants, but
