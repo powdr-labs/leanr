@@ -95,3 +95,24 @@ def dedupHash {α : Type} [BEq α] [Hashable α] (l : List α) : List α :=
   (l.reverse.foldl (fun (st : List α × Std.HashSet α) t =>
     if st.2.contains t then st else (t :: st.1, st.2.insert t))
     (([], ∅) : List α × Std.HashSet α)).1
+
+/-! ### `foldl max` bounds
+
+Re-homed here from `OldVariableBased/RootPairUnify.lean` (generic `Nat`/`List` machinery); the
+reference pass and the dense two-root bounds proof both consume them. -/
+
+/-- The seed is at most the `foldl max` accumulation. -/
+theorem init_le_foldl_max (l : List Nat) : ∀ b : Nat, b ≤ l.foldl max b := by
+  induction l with
+  | nil => intro b; simp
+  | cons c rest ih => intro b; exact le_trans (le_max_left b c) (ih (max b c))
+
+/-- Everything in a list is at most its `foldl max` accumulation. -/
+theorem le_foldl_max (l : List Nat) : ∀ (b : Nat), ∀ a ∈ l, a ≤ l.foldl max b := by
+  induction l with
+  | nil => intro b a ha; simp at ha
+  | cons c rest ih =>
+    intro b a ha
+    rcases List.mem_cons.1 ha with rfl | h
+    · exact le_trans (le_max_right b a) (init_le_foldl_max rest (max b a))
+    · exact ih (max b c) a h

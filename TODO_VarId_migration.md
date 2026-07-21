@@ -178,9 +178,25 @@ Two independent legacy couplings remain, out of Step B's scope: `DomainProp.lean
 machinery, not the LinExpr core), and `MemoryUnify.lean` still imports `TrivialConstraint.lean`
 (→ `OldVariableBased/TrivialConstraint.lean`).
 
-**Step C — nativize `RootPairUnifyProof`.** Prove the native statements without decoding through
-`OldVariableBased/RootPairUnify.lean`; the legacy lemmas to retire are `twoRootOf?_sound`,
-`rootPair_eq`, `le_foldl_max`.
+**Step C — nativize `RootPairUnifyProof` — DONE.** The decode transport is gone: `RootPairUnifyProof.lean`
+no longer imports `OldVariableBased/RootPairUnify.lean` and references no `decodeLin`/`decodeExpr`
+evaluation bridge, `eval_decode*`, or `denseTwoRootOf?_decode`/`_A_valid`. The three legacy lemma uses
+were dispatched as follows:
+- **Keystone (nativized):** the value-level two-root soundness `ApcOptimizer.Dense.denseTwoRootOf?_sound`
+  (`Dense/AddrDiseqProof.lean`, in the section "Two-root decomposition soundness (native, value-level)")
+  is proved directly over `DenseExpr`/`DenseLinExpr` evaluation via the field core `twoRoot_mem` — no
+  registry, no decode in statement or proof. **Step D reuses this lemma directly** (it lives in
+  `AddrDiseqProof.lean`, which `RootPairUnifyProof.lean` already imports); the helper
+  `DenseLinExpr.eval_of_terms_eq` moved there alongside it. Because the native soundness needs no
+  coverage/validity, the `reg`/`hcov`/`CoveredBy`/`Valid` hypotheses dropped out of the whole
+  `denseRpCheckPair_sound` → `denseRpLoop_sound` → `denseRootPairUnify_loop_invariant` chain.
+- **Re-homed (representation-independent):** the field lemmas `twoRoot_mem` and `rootPair_eq` →
+  new neutral file `OptimizerPasses/RootPairCore.lean` (`ZMod p`-value only); the `Nat`/`List` lemmas
+  `init_le_foldl_max`/`le_foldl_max` → `OptimizerPasses/ListSplit.lean`. The legacy
+  `OldVariableBased/RootPairUnify.lean` imports both back (still consumed by its own
+  `twoRootOf?_sound` and by `OldVariableBased/AddrDiseq.lean`), and stays reachable via
+  `Implementation/Optimizer.lean`'s legacy import block. The still-live decode transport is now only in
+  `AddrDiseqProof.lean` (`denseTwoRootOf?_decode`/`_A_valid` and the certificate stack) — Step D's target.
 
 **Step D — nativize `AddrDiseqProof`'s certificate stack.** Native proofs for `constDiffNZ`,
 `isZeroLin`, `diffSumOver`, `ptrBranchesOf`, `reciprocalWits?`, `addrAffineNeq`, `addrNonzeroNeq`,

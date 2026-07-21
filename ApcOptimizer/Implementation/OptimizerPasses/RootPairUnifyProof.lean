@@ -2,7 +2,8 @@ import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
 import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseqProof
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFoldProof
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.RootPairUnify
+import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
+import ApcOptimizer.Implementation.OptimizerPasses.RootPairCore
 
 set_option autoImplicit false
 
@@ -27,8 +28,8 @@ pass therefore only has to discharge, natively:
 Both come out of the scan-loop invariant `denseRpLoop_sound`, established here by a plain structural
 induction over the pending list threading the `DenseSolved` accumulator (a plain struct — no proof
 fields). The per-adoption entailment is the two-root pair certificate `denseRpCheckPair_sound`, which
-reuses the audited spec `twoRootOf?_sound`/`rootPair_eq` at the *value* level via the M1
-`denseTwoRootOf?_decode` (never a reference *pass*'s `PassCorrect`). `flagUnify`/`flagFold` reuse this
+combines the value-level two-root soundness `denseTwoRootOf?_sound` (`Dense/AddrDiseqProof.lean`) with
+the bounded-integer field core `rootPair_eq` (`RootPairCore.lean`). `flagUnify`/`flagFold` reuse this
 loop-invariant shape (an accumulator invariant + a `seen`-membership invariant recovering the dropped
 `mem` field) and the same certificate-soundness style. -/
 
@@ -293,41 +294,15 @@ theorem denseAnyVarBound_sound [Fact p.Prime] (bs : BusSemantics p) (facts : Bus
     obtain ⟨bi, hbi, hsb⟩ := List.exists_of_findSome?_eq_some h
     exact denseScaledSlotBound_sound bs facts domCs bi x B hsb denv hdom (hbus bi hbi)
 
-/-! ## The two-root decomposition is sound (native, via the M1 decode-commutation) -/
+/-! ## The pair certificate is sound -/
 
-/-- **`denseTwoRootOf?` is sound.** Native mirror of `twoRootOf?_sound`: reuses the audited spec
-    `twoRootOf?_sound` at the value level through `denseTwoRootOf?_decode` (chunk M1). Concludes over
-    the *dense* linear form `A.eval denv`. -/
-theorem denseTwoRootOf?_sound [Fact p.Prime] (reg : VarRegistry) (c : DenseExpr p) (x : VarId)
-    (k : ZMod p) (A : DenseLinExpr p) (δ : ZMod p) (hc : c.CoveredBy reg) (hx : reg.Valid x)
-    (h : denseTwoRootOf? c x = some (k, A, δ)) (hk : k * k⁻¹ = 1)
-    (denv : VarId → ZMod p) (hcz : c.eval denv = 0) :
-    denv x = -(k⁻¹ * A.eval denv) ∨ denv x = -(k⁻¹ * A.eval denv) - k⁻¹ * δ := by
-  have htr' := reg.denseTwoRootOf?_decode c x hc hx h
-  have hcz' : (reg.decodeExpr c).eval (reg.extendEnv denv (fun _ => 0)) = 0 := by
-    rw [eval_decodeExpr_extendEnv reg c hc denv (fun _ => 0)]; exact hcz
-  have hroot := twoRootOf?_sound (reg.decodeExpr c) (reg.resolve x) k (reg.decodeLin A) δ htr' hk
-    (reg.extendEnv denv (fun _ => 0)) hcz'
-  have hAv : ∀ i ∈ A.terms.map Prod.fst, reg.Valid i := reg.denseTwoRootOf?_A_valid hc h
-  rw [reg.extendEnv_resolve denv (fun _ => 0) hx,
-    eval_decodeLin_extendEnv reg A hAv denv (fun _ => 0)] at hroot
-  exact hroot
-
-/-- Two dense linear forms with equal term lists evaluate a constant apart. Native mirror of
-    `LinExpr.eval_of_terms_eq`. -/
-theorem DenseLinExpr.eval_of_terms_eq (a b : DenseLinExpr p) (h : b.terms = a.terms)
-    (denv : VarId → ZMod p) : b.eval denv = a.eval denv + (b.const - a.const) := by
-  simp only [DenseLinExpr.eval, h]; ring
-
-/-! ## The pair certificate is sound (native mirror of `rpCheckPair_sound`) -/
-
-/-- **`denseRpCheckPair` entails variable equality.** Native mirror of `rpCheckPair_sound`: two-root
-    twins with both variables range-bounded below the root gap are provably equal on satisfying
-    assignments. Reuses spec `twoRootOf?_sound`/`rootPair_eq` at the value level. -/
-theorem denseRpCheckPair_sound [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics p)
+/-- **`denseRpCheckPair` entails variable equality.** Two-root twins with both variables
+    range-bounded below the root gap are provably equal on satisfying assignments: the value-level
+    two-root soundness `denseTwoRootOf?_sound` places each variable at one of the two roots, and the
+    bounded-integer field core `rootPair_eq` forces the shared choice. -/
+theorem denseRpCheckPair_sound [Fact p.Prime] (bs : BusSemantics p)
     (facts : BusFacts p bs) (bis : List (BusInteraction (DenseExpr p))) (domCs : List (DenseExpr p))
-    (cX cY : DenseExpr p) (x y : VarId) (hcX : cX.CoveredBy reg) (hcY : cY.CoveredBy reg)
-    (hx : reg.Valid x) (hy : reg.Valid y)
+    (cX cY : DenseExpr p) (x y : VarId)
     (h : denseRpCheckPair bs facts bis domCs cX cY x y = true) (denv : VarId → ZMod p)
     (hdom : ∀ c ∈ domCs, c.eval denv = 0)
     (hcXe : cX.eval denv = 0) (hcYe : cY.eval denv = 0)
@@ -353,8 +328,8 @@ theorem denseRpCheckPair_sound [Fact p.Prime] (reg : VarRegistry) (bs : BusSeman
           rw [hbx, hby] at h
           simp only [Bool.and_eq_true, decide_eq_true_eq] at h
           obtain ⟨⟨⟨⟨⟨⟨⟨hk', hAt⟩, hAc⟩, hδ'⟩, hunit⟩, _hxv⟩, _hyv⟩, hB1, hB2⟩ := h
-          have hxr := denseTwoRootOf?_sound reg cX x k A δ hcX hx hxt hunit denv hcXe
-          have hyr := denseTwoRootOf?_sound reg cY y k' A' δ' hcY hy hyt (by rw [hk']; exact hunit)
+          have hxr := denseTwoRootOf?_sound cX x k A δ hxt hunit denv hcXe
+          have hyr := denseTwoRootOf?_sound cY y k' A' δ' hyt (by rw [hk']; exact hunit)
             denv hcYe
           have hAeq : A'.eval denv = A.eval denv := by
             rw [DenseLinExpr.eval_of_terms_eq A A' hAt denv, hAc]; ring
@@ -430,8 +405,8 @@ theorem denseRpInsertAll_seen {S : List (DenseExpr p)} :
     threads: the final solution map is entailed (a) and occurrence-closed (b). The certificate
     (`denseRpCheckPair_sound`) forces each adopted `x = y` on satisfying assignments; the bucketed
     `seen` scan is proof-free, its membership recovered by `denseRpInsertAll_seen`. -/
-theorem denseRpLoop_sound [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
+theorem denseRpLoop_sound [Fact p.Prime] (bs : BusSemantics p)
+    (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     ∀ (pending : List (DenseExpr p)) (seen : Std.HashMap UInt64 (List (DenseRPSeen p)))
       (σ : DenseSolved p),
       (∀ c ∈ pending, c ∈ d.algebraicConstraints) →
@@ -480,14 +455,9 @@ theorem denseRpLoop_sound [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics 
             have hcert : denseRpCheckPair bs facts d.busInteractions d.algebraicConstraints
                 e.c c e.x xk.1 = true := hcnd.2
             have hecmem : e.c ∈ d.algebraicConstraints := hseen (denseRpKeyHash xk.2) e hemem
-            obtain ⟨hexv, hxkv⟩ := denseRpCheckPair_vars bs facts d.busInteractions
+            obtain ⟨hexv, _hxkv⟩ := denseRpCheckPair_vars bs facts d.busInteractions
               d.algebraicConstraints e.c c e.x xk.1 hcert
             have hexocc : e.x ∈ d.occ := DenseConstraintSystem.mem_occ_of_constraint hecmem hexv
-            have hxkocc : xk.1 ∈ d.occ := DenseConstraintSystem.mem_occ_of_constraint hcmem hxkv
-            have hexvalid : reg.Valid e.x := DenseConstraintSystem.occ_valid hcov e.x hexocc
-            have hxkvalid : reg.Valid xk.1 := DenseConstraintSystem.occ_valid hcov xk.1 hxkocc
-            have hecov : e.c.CoveredBy reg := hcov.1 e.c hecmem
-            have hccov : c.CoveredBy reg := hcov.1 c hcmem
             -- the single-pair solution update `(xk.1 := .var e.x)`
             have hfn : ∀ i, (σ.insertAll [((e, xk.1).2, DenseExpr.var (e, xk.1).1.x)]).fn i
                 = (σ.map.insert xk.1 (DenseExpr.var e.x))[i]? := by
@@ -508,8 +478,8 @@ theorem denseRpLoop_sound [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics 
                 simp only [Option.some.injEq] at hti
                 subst hti
                 subst hi
-                have heq := denseRpCheckPair_sound reg bs facts d.busInteractions
-                  d.algebraicConstraints e.c c e.x xk.1 hecov hccov hexvalid hxkvalid hcert denv
+                have heq := denseRpCheckPair_sound bs facts d.busInteractions
+                  d.algebraicConstraints e.c c e.x xk.1 hcert denv
                   hsat.1 (hsat.1 e.c hecmem) (hsat.1 c hcmem) hsat.2
                 show denv xk.1 = denv e.x
                 exact heq.symm
@@ -543,14 +513,14 @@ theorem denseRootPairUnifyF_eq (pw : PrimeWitness p) (bs : BusSemantics p) (fact
 
 /-- The final loop solution map is entailed and occurrence-closed (specializing `denseRpLoop_sound`
     to the pass's initial `∅`/`empty` accumulators). -/
-theorem denseRootPairUnify_loop_invariant [Fact p.Prime] (reg : VarRegistry) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
+theorem denseRootPairUnify_loop_invariant [Fact p.Prime] (bs : BusSemantics p)
+    (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     (∀ denv, d.satisfies bs denv → ∀ i t,
         (denseRpLoop bs facts d.busInteractions d.algebraicConstraints d.algebraicConstraints ∅
           DenseSolved.empty).fn i = some t → denv i = t.eval denv) ∧
     (∀ i t, (denseRpLoop bs facts d.busInteractions d.algebraicConstraints d.algebraicConstraints ∅
         DenseSolved.empty).fn i = some t → ∀ z ∈ t.vars, z ∈ d.occ) := by
-  refine denseRpLoop_sound reg bs facts d hcov d.algebraicConstraints ∅ DenseSolved.empty
+  refine denseRpLoop_sound bs facts d d.algebraicConstraints ∅ DenseSolved.empty
     (fun _ h => h) ?_ ?_ ?_
   · intro hsh e hmem
     rw [Std.HashMap.getD_empty] at hmem
@@ -570,17 +540,17 @@ theorem denseRootPairUnifyF_covered (pw : PrimeWitness p) (reg : VarRegistry) (b
     refine DenseConstraintSystem.substF_covered hcov ?_
     intro i _ t hti z hz
     exact DenseConstraintSystem.occ_valid hcov z
-      ((denseRootPairUnify_loop_invariant reg bs facts d hcov).2 i t hti z hz)
+      ((denseRootPairUnify_loop_invariant bs facts d).2 i t hti z hz)
   · exact hcov
 
 theorem denseRootPairUnifyF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : BusSemantics p)
-    (facts : BusFacts p bs) (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
+    (facts : BusFacts p bs) (d : DenseConstraintSystem p) (_hcov : d.CoveredBy reg) :
     DensePassCorrect reg.isInput d (denseRootPairUnifyF pw bs facts d) [] bs := by
   rw [denseRootPairUnifyF_eq]
   split_ifs with hp hempty
   · exact dpcRefl reg.isInput d bs
   · haveI : Fact p.Prime := ⟨pw.correct hp⟩
-    have hinv := denseRootPairUnify_loop_invariant reg bs facts d hcov
+    have hinv := denseRootPairUnify_loop_invariant bs facts d
     exact DenseConstraintSystem.substF_denseCorrect d _ bs reg.isInput
       (fun denv hsat i t hti => hinv.1 denv hsat i t hti)
       (fun i t hti z hz => hinv.2 i t hti z hz)

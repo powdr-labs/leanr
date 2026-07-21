@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseq
 import ApcOptimizer.Implementation.OptimizerPasses.Bridge
+import ApcOptimizer.Implementation.OptimizerPasses.RootPairCore
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.AddrDiseq
 
 set_option autoImplicit false
@@ -37,8 +38,8 @@ is re-established over the dense map while the field-membership algebra (`twoRoo
 `ptrBranchesOf_eval`, `constDiffNZ_sound`) is reused from spec. No whole-`HashMap` decode-equality is
 used.
 
-`denseTwoRootOf?_decode` (the decode-commutation of `denseTwoRootOf?`) is flagged for reuse by the
-later dense `rootPairUnify` port (chunk S1). -/
+The value-level two-root soundness `denseTwoRootOf?_sound` (proved natively over dense evaluation via
+`twoRoot_mem`, no registry) also lives here; the dense `rootPairUnify` proof consumes it directly. -/
 
 namespace ApcOptimizer.Dense
 
@@ -492,7 +493,7 @@ theorem DenseTwoRootMap.build_sound (dcs : List (DenseExpr p)) :
       (DenseTwoRootMap.empty_sound dcs)
   · rw [if_neg hp]; exact DenseTwoRootMap.empty_sound dcs
 
-/-! ## Decode-commutation of `denseTwoRootOf?` (flagged for chunk S1 reuse) -/
+/-! ## Decode-commutation of `denseTwoRootOf?` -/
 
 /-- The `A` component of a recognized `denseTwoRootOf?` of a covered constraint has valid term ids. -/
 theorem VarRegistry.denseTwoRootOf?_A_valid (reg : VarRegistry) {c : DenseExpr p} {x : VarId}
@@ -525,8 +526,8 @@ theorem VarRegistry.denseTwoRootOf?_A_valid (reg : VarRegistry) {c : DenseExpr p
             obtain ⟨t, ht, rfl⟩ := h2
             exact ⟨t, List.mem_of_mem_filter ht, rfl⟩
 
-/-- **`denseTwoRootOf?` decodes** (forward; covered constraint, valid variable). Reused by the dense
-    `rootPairUnify` port (chunk S1). -/
+/-- **`denseTwoRootOf?` decodes** (forward; covered constraint, valid variable). Consumed by the
+    pointer-reduction certificate stack below. -/
 theorem VarRegistry.denseTwoRootOf?_decode (reg : VarRegistry) (c : DenseExpr p) (x : VarId)
     {k : ZMod p} {A : DenseLinExpr p} {δ : ZMod p} (hc : c.CoveredBy reg) (hx : reg.Valid x)
     (h : denseTwoRootOf? c x = some (k, A, δ)) :
@@ -590,6 +591,62 @@ theorem VarRegistry.denseTwoRootOf?_decode (reg : VarRegistry) (c : DenseExpr p)
             refine ⟨hkeq, ?_, ?_⟩
             · rw [hAeq]
             · rw [hA2dec, reg.decodeLin_const, reg.decodeLin_const]; exact hδeq
+
+/-! ## Two-root decomposition soundness (native, value-level)
+
+The keystone the dense `rootPairUnify` (and `busPairCancel`) proofs consume: a recognized
+`denseTwoRootOf?` puts `x` at one of the two roots on every satisfying dense assignment, proved
+directly over `DenseExpr`/`DenseLinExpr` evaluation via the field core `twoRoot_mem`. No registry
+or decode is involved — the statement and proof are entirely `VarId`-native. -/
+
+/-- Two dense linear forms with equal term lists evaluate a constant apart. -/
+theorem DenseLinExpr.eval_of_terms_eq (a b : DenseLinExpr p) (h : b.terms = a.terms)
+    (denv : VarId → ZMod p) : b.eval denv = a.eval denv + (b.const - a.const) := by
+  simp only [DenseLinExpr.eval, h]; ring
+
+/-- **`denseTwoRootOf?` is sound.** A recognized two-root decomposition `(k, A, δ)` of a constraint
+    `c` (a product of two affine factors, both linear in `x` with the same unit coefficient `k`,
+    `x`-free parts a constant `δ` apart) places `x` at one of the two roots `-(k⁻¹·A)` and
+    `-(k⁻¹·A) - k⁻¹·δ` on every satisfying assignment. Proved natively over dense evaluation. -/
+theorem denseTwoRootOf?_sound [Fact p.Prime] (c : DenseExpr p) (x : VarId)
+    (k : ZMod p) (A : DenseLinExpr p) (δ : ZMod p)
+    (h : denseTwoRootOf? c x = some (k, A, δ)) (hk : k * k⁻¹ = 1)
+    (denv : VarId → ZMod p) (hcz : c.eval denv = 0) :
+    denv x = -(k⁻¹ * A.eval denv) ∨ denv x = -(k⁻¹ * A.eval denv) - k⁻¹ * δ := by
+  cases c with
+  | const n => simp only [denseTwoRootOf?] at h; exact absurd h (by simp)
+  | var i => simp only [denseTwoRootOf?] at h; exact absurd h (by simp)
+  | add a b => simp only [denseTwoRootOf?] at h; exact absurd h (by simp)
+  | mul f1 f2 =>
+      simp only [denseTwoRootOf?] at h
+      cases hl1 : denseLinearize f1 with
+      | none => simp only [hl1] at h; exact absurd h (by simp)
+      | some l1 =>
+        cases hl2 : denseLinearize f2 with
+        | none => simp only [hl1, hl2] at h; exact absurd h (by simp)
+        | some l2 =>
+          simp only [hl1, hl2] at h
+          split_ifs at h with hcond
+          · obtain ⟨hk0, hcoeff, hterms⟩ := hcond
+            simp only [Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl, rfl⟩ := h
+            have hf1 : f1.eval denv = ((l1.others x).norm).eval denv + l1.coeff x * denv x := by
+              rw [denseLinearize_eval f1 l1 hl1 denv, l1.eval_split x]
+              have := DenseLinExpr.norm_eval (l1.others x) denv
+              rw [this]; ring
+            have hf2 : f2.eval denv = ((l1.others x).norm).eval denv
+                + ((l2.others x).norm.const - (l1.others x).norm.const) + l1.coeff x * denv x := by
+              rw [denseLinearize_eval f2 l2 hl2 denv, l2.eval_split x, hcoeff]
+              have h2 := DenseLinExpr.norm_eval (l2.others x) denv
+              have h3 := DenseLinExpr.eval_of_terms_eq (l1.others x).norm (l2.others x).norm hterms
+                denv
+              rw [← h2, h3]; ring
+            have hprod : (((l1.others x).norm).eval denv + l1.coeff x * denv x)
+                * (((l1.others x).norm).eval denv
+                  + ((l2.others x).norm.const - (l1.others x).norm.const)
+                  + l1.coeff x * denv x) = 0 := by
+              rw [← hf1, ← hf2]; exact hcz
+            exact twoRoot_mem (l1.coeff x) (((l1.others x).norm).eval denv) _ (denv x) hk hprod
 
 /-! ## Decode-commutation of `densePtrBranchesOf` -/
 

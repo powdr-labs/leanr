@@ -1,6 +1,8 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
+import ApcOptimizer.Implementation.OptimizerPasses.RootPairCore
+import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 
 set_option autoImplicit false
 
@@ -25,41 +27,6 @@ membership needs an integral domain); the pass re-checks `decide p.Prime` at run
 `busPairCancelPass`. -/
 
 variable {p : ℕ}
-
-/-! ## The core field lemmas -/
-
-/-- Membership in the root pair: a satisfied two-root constraint puts `x` at one of the two
-    roots, `g = k⁻¹·δ` apart. -/
-theorem twoRoot_mem [Fact p.Prime] (k a δ x : ZMod p) (hunit : k * k⁻¹ = 1)
-    (h : (a + k * x) * (a + δ + k * x) = 0) :
-    x = -(k⁻¹ * a) ∨ x = -(k⁻¹ * a) - k⁻¹ * δ := by
-  rcases mul_eq_zero.1 h with h0 | h0
-  · left; linear_combination k⁻¹ * h0 - x * hunit
-  · right; linear_combination k⁻¹ * h0 - x * hunit
-
-/-- Two values in the same root pair, both bounded below the root gap (and its complement),
-    are equal: their field difference is `0` or `±g`, and `±g` is out of integer reach. -/
-theorem rootPair_eq [Fact p.Prime] (r g x y : ZMod p)
-    (hx : x = r ∨ x = r - g) (hy : y = r ∨ y = r - g)
-    (B : Nat) (hxB : x.val < B) (hyB : y.val < B)
-    (h1 : B ≤ g.val) (h2 : B ≤ p - g.val) : x = y := by
-  have key : ∀ u v : ZMod p, u.val < B → v.val < B → u = v - g → False := by
-    intro u v hu hv huv
-    have hvg : v = u + g := by rw [huv]; ring
-    have hval : v.val = (u.val + g.val) % p := by rw [hvg, ZMod.val_add]
-    by_cases hlt : u.val + g.val < p
-    · rw [Nat.mod_eq_of_lt hlt] at hval
-      omega
-    · -- `u.val ≥ p − g.val ≥ B` contradicts `u.val < B`
-      have hgp : g.val < p := ZMod.val_lt g
-      omega
-  rcases hx with rfl | rfl
-  · rcases hy with h | h
-    · exact h.symm
-    · exact (key y x hyB hxB h).elim
-  · rcases hy with h | h
-    · exact (key (r - g) r hxB (h ▸ hyB) rfl).elim
-    · exact h.symm
 
 /-! ## Recognizing a two-root constraint -/
 
@@ -245,22 +212,6 @@ theorem LinExpr.eval_congr_vars (l : LinExpr p) (f g : Variable → ZMod p)
   refine congrArg List.sum ?_
   refine List.map_congr_left (fun t ht => ?_)
   rw [h t.1 (List.mem_map.2 ⟨t, ht, rfl⟩)]
-
-/-- The seed is at most the `foldl max` accumulation. -/
-theorem init_le_foldl_max (l : List Nat) : ∀ b : Nat, b ≤ l.foldl max b := by
-  induction l with
-  | nil => intro b; simp
-  | cons c rest ih => intro b; exact le_trans (le_max_left b c) (ih (max b c))
-
-/-- Everything in a list is at most its `foldl max` accumulation. -/
-theorem le_foldl_max (l : List Nat) : ∀ (b : Nat), ∀ a ∈ l, a ≤ l.foldl max b := by
-  induction l with
-  | nil => intro b a ha; simp at ha
-  | cons c rest ih =>
-    intro b a ha
-    rcases List.mem_cons.1 ha with rfl | h
-    · exact le_trans (le_max_right b a) (init_le_foldl_max rest (max b a))
-    · exact ih (max b c) a h
 
 /-- Bound `x` through one interaction: find a slot whose expression is affine in `x` with a
     unit coefficient and a bus-fact value bound; enumerate the remaining variables' proven
