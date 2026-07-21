@@ -28,6 +28,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Dedup
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.FlagUnify
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BoxRewrite
 import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
+import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDropProof
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.ZeroWidthRange
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRange
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRangeProof
@@ -155,7 +156,7 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     -- re-encoding; the coda has no reencode, so here it only exposes the degenerate checks.)
     ("identitySubst", DenseVerifiedPassW.ofSpec (IdentitySubst.identitySubstPass.guardDegree b)),
     ("dedupLate", DenseVerifiedPassW.guardDegree b denseDedupPass),
-    ("redundantByteDrop", DenseVerifiedPassW.ofSpec ((RedundantByteDrop.redundantByteDropPass pw).guardDegree b)),
+    ("redundantByteDrop", DenseVerifiedPassW.guardDegree b (denseRedundantByteDropPass pw)),
     ("subsumedRange", DenseVerifiedPassW.guardDegree b denseSubsumedRangeDropPass),
     ("subsumedCheck", DenseVerifiedPassW.guardDegree b denseSubsumedCheckDropPass),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
