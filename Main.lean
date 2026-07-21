@@ -28,6 +28,7 @@ provably terminating on the lexicographic size key `(vars, bus, constraints)`.
 -/
 
 open ApcOptimizer.OpenVM
+open ApcOptimizer.Dense
 
 /-- Read a benchmark file: `.json.gz` via `gunzip -c` (like the powdr test fixtures),
     `.json` directly. -/
@@ -332,18 +333,105 @@ partial def profileLoop {p : ℕ} (passes : List (String × VerifiedPassW p))
   else
     pure (cs, acc', iter)
 
+/-! ## Dense cleanup-stage profiling (WP-G)
+
+The cleanup stage runs over the dense `VarId` representation (`ApcOptimizer/Implementation/`
+`OptimizerPasses/`), so the profiler steps the dense `cleanupPasses` list the optimizer actually
+folds: it encodes once immediately before the cleanup fixpoint, threads a `⟨reg, dense system,
+coverage⟩` bundle from pass to pass and iteration to iteration, forces per-pass output with the
+**dense** count helpers (no decode), and decodes once after the fixpoint. Encode/decode are reported
+on their own lines and never charged to any pass. -/
+
+/-- The threaded dense cleanup state: the registry, the dense system, and its coverage proof (erased
+    at runtime — it just lets `DenseVerifiedPassW` application typecheck). -/
+abbrev DenseProfState (p : ℕ) :=
+  Σ' (reg : VarRegistry) (d : DenseConstraintSystem p), d.CoveredBy reg
+
+/-- Apply one dense pass, forcing its output with the dense count helpers (no decode), and return the
+    threaded state plus elapsed milliseconds. Mirrors the spec `applyTimed`. -/
+def denseApplyTimed {p : ℕ} (pass : DenseVerifiedPassW p) (st : DenseProfState p)
+    (bs : BusSemantics p) (facts : BusFacts p bs) : IO (DenseProfState p × Nat) := do
+  let t0 ← IO.monoMsNow
+  let r ← IO.lazyPure (fun _ => pass st.1 st.2.1 st.2.2 bs facts)
+  -- Force the whole dense output (dense varCount traverses every expression node), like the spec
+  -- `applyTimed` — but on the dense system, without ever decoding.
+  let _ ← IO.lazyPure (fun _ =>
+    r.out.varCount + r.out.algebraicConstraints.length + r.out.busInteractions.length)
+  let t1 ← IO.monoMsNow
+  pure (⟨r.reg', r.out, r.covered⟩, t1 - t0)
+
+/-- Run one dense cleanup cycle's passes in order, threading the dense state and accumulating
+    per-pass elapsed time (dense analogue of `runCycleTimed`). -/
+def denseRunCycleTimed {p : ℕ} (passes : List (String × DenseVerifiedPassW p))
+    (st : DenseProfState p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (acc : Std.HashMap String Nat) : IO (DenseProfState p × Std.HashMap String Nat) := do
+  let mut s := st
+  let mut a := acc
+  for (name, pass) in passes do
+    let (s', dt) ← denseApplyTimed pass s bs facts
+    s := s'
+    a := a.insert name (a.getD name 0 + dt)
+  pure (s, a)
+
+/-- Iterate the dense cleanup cycle to its fixpoint, exactly mirroring `denseIterateToFixpoint`'s
+    stopping rule: run one cycle, and continue only while the dense `sizeKey` strictly decreases;
+    otherwise return the pre-cycle state. Reports each iteration's dense sizes and wall time.
+    Terminates by well-founded recursion on the threaded key `k` (the current state's `sizeKey`),
+    which strictly decreases at every recursive call — no fuel, no `partial`. -/
+def denseProfileLoop {p : ℕ} (passes : List (String × DenseVerifiedPassW p))
+    (st : DenseProfState p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (acc : Std.HashMap String Nat) (iter : Nat) (k : Nat ×ₗ Nat ×ₗ Nat) :
+    IO (DenseProfState p × Std.HashMap String Nat × Nat) := do
+  let t0 ← IO.monoMsNow
+  let (st', acc') ← denseRunCycleTimed passes st bs facts acc
+  let t1 ← IO.monoMsNow
+  IO.println s!"  cycle {iter}: {st'.2.1.varCount} vars, {st'.2.1.busInteractions.length} bus, \
+    {st'.2.1.algebraicConstraints.length} constraints ({t1 - t0} ms)"
+  let k' := st'.2.1.sizeKey
+  if h : k' < k then
+    denseProfileLoop passes st' bs facts acc' (iter + 1) k'
+  else
+    pure (st, acc', iter)
+  termination_by k
+  decreasing_by exact h
+
 /-- Step the pipeline's three pass lists with per-pass timing, reporting the cumulative time spent in
     each pass across all fixpoint iterations. `preludePasses` / `cleanupPasses` / `codaPasses` are
     the exact lists `pipeline` folds (`ApcOptimizer/Implementation/Optimizer.lean`); per-pass timing
     is an IO side-effect, so the profiler steps the passes here instead of calling the pure
     `pipeline`, but it reads those same three lists, so it cannot time a pass the optimizer does not
-    run, nor drift out of sync. -/
+    run, nor drift out of sync. The prelude and coda step their spec-side lists as before; the
+    cleanup stage steps the dense `cleanupPasses` list — encode once before the fixpoint, decode once
+    after — exactly as the optimizer's `denseCleanupAdapter` runs it. -/
 def profileRun {p : ℕ} (b : DegreeBound) (fileName : String) (cs : ConstraintSystem p)
     (bs : BusSemantics p) (facts : BusFacts p bs) : IO Unit := do
   let t0 ← IO.monoMsNow
+  -- Prelude (spec-side, run once).
   let (cs, acc) ← runCycleTimed (preludePasses (p := p) b) cs bs facts ∅
-  let (cs, acc, iters) ← profileLoop (cleanupPasses (p := p) b) cs bs facts acc 0
-  let (_, acc) ← runCycleTimed (codaPasses (p := p) b) cs bs facts acc
+  -- Encode once, immediately before the dense cleanup fixpoint (reported on its own line, never
+  -- charged to a pass), exactly as `denseCleanupAdapter` does.
+  let tEnc0 ← IO.monoMsNow
+  -- Pure `let` (not `IO.lazyPure`) so `e` stays definitionally `encodeCS cs` and the coverage proof
+  -- typechecks; forcing `e.2` inside `IO.lazyPure` sequences the encode work between the clocks.
+  let e := VarRegistry.empty.encodeCS cs
+  let _ ← IO.lazyPure (fun _ =>
+    e.2.varCount + e.2.algebraicConstraints.length + e.2.busInteractions.length)
+  let tEnc1 ← IO.monoMsNow
+  IO.println s!"  encode: {tEnc1 - tEnc0} ms"
+  let st0 : DenseProfState p := ⟨e.1, e.2, VarRegistry.empty.encodeCS_covered cs⟩
+  -- Step the dense cleanup fixpoint (the SAME `cleanupPasses` list the optimizer folds), threading
+  -- the registry / dense system / coverage from pass to pass and iteration to iteration.
+  let (stF, acc, iters) ←
+    denseProfileLoop (cleanupPasses (p := p) b) st0 bs facts acc 0 st0.2.1.sizeKey
+  -- Decode once, after the fixpoint (reported on its own line).
+  let tDec0 ← IO.monoMsNow
+  let csAfter ← IO.lazyPure (fun _ => stF.1.decodeCS stF.2.1)
+  let _ ← IO.lazyPure (fun _ =>
+    csAfter.varCount + csAfter.algebraicConstraints.length + csAfter.busInteractions.length)
+  let tDec1 ← IO.monoMsNow
+  IO.println s!"  decode: {tDec1 - tDec0} ms"
+  -- Coda (spec-side, run once) on the decoded system.
+  let (_, acc) ← runCycleTimed (codaPasses (p := p) b) csAfter bs facts acc
   let t1 ← IO.monoMsNow
   IO.println s!"profile {fileName}: {iters} cleanup iterations, {t1 - t0} ms total"
   let sorted := acc.toList.toArray.qsort (fun a b => a.2 > b.2)
