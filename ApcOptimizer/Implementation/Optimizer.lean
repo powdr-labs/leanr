@@ -76,7 +76,7 @@ correctness proof follows automatically from the pass's own `PassCorrect`. -/
     canonicalizes the freshly-parsed system. The `String` labels name each pass in the profiler's
     timing report (irrelevant to behaviour). -/
 def preludePasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
-  [ ("constFold0", DenseVerifiedPassW.ofSpec (constantFoldPass.withFacts.guardDegree b)) ]
+  [ ("constFold0", DenseVerifiedPassW.guardDegree b denseConstantFoldPass) ]
 
 /-- The canonical labelled **dense** cleanup schedule (one of the three stages; see `preludePasses`)
     — the **single source of truth** for both the optimizer and the profiler: `pipeline` iterates the
@@ -150,7 +150,7 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     -- `bytePackLate` packs pairwise. (In the cleanup cycle the rename instead explodes the
     -- re-encoding; the coda has no reencode, so here it only exposes the degenerate checks.)
     ("identitySubst", DenseVerifiedPassW.ofSpec (IdentitySubst.identitySubstPass.guardDegree b)),
-    ("dedupLate", DenseVerifiedPassW.ofSpec (dedupPass.withFacts.guardDegree b)),
+    ("dedupLate", DenseVerifiedPassW.guardDegree b denseDedupPass),
     ("redundantByteDrop", DenseVerifiedPassW.ofSpec ((RedundantByteDrop.redundantByteDropPass pw).guardDegree b)),
     ("subsumedRange", DenseVerifiedPassW.ofSpec (SubsumedRange.subsumedRangeDropPass.guardDegree b)),
     ("subsumedCheck", DenseVerifiedPassW.ofSpec (SubsumedCheck.subsumedCheckDropPass.guardDegree b)),
@@ -160,9 +160,9 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     -- (packing a byte check early would hide it from the drop, leaving more bus interactions).
     -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
     ("tupleRange", DenseVerifiedPassW.ofSpec (tupleRangePass.guardDegree b)),
-    ("bytePackLate", DenseVerifiedPassW.ofSpec (VerifiedPassW.guardDegree b (iterateToFixpoint ByteCheckPack.byteCheckPackPass))),
+    ("bytePackLate", DenseVerifiedPassW.guardDegree b denseByteCheckPackPass),
     ("monicScale", DenseVerifiedPassW.ofSpec (monicScalePass.withFacts.guardDegree b)),
-    ("constFoldEnd", DenseVerifiedPassW.ofSpec (constantFoldPass.withFacts.guardDegree b)),
+    ("constFoldEnd", DenseVerifiedPassW.guardDegree b denseConstantFoldPass),
     -- Collapse recognised `sltu x, 1` (seqz) LessThan gadgets to the two-line is-zero gadget,
     -- dropping the four `diff_marker`s + `diff_val`. Runs after `monicScale`, where the cluster
     -- has reached the recognised form.
@@ -184,25 +184,27 @@ theorem denseCleanupChain_respectsDeg (b : DegreeBound) :
   simp only [cleanupPasses, List.map_cons, List.map_nil] at hf
   fin_cases hf <;> exact DenseVerifiedPassW.guardDegree_respectsDeg _
 
-/-- The dense prelude chain respects the degree bound (each entry is an `ofSpec`-wrapped
-    degree-guarded spec pass). -/
+/-- The dense prelude chain respects the degree bound (its single entry is a
+    `guardDegree`-wrapped dense pass). -/
 theorem densePreludeChain_respectsDeg (b : DegreeBound) :
     DenseRespectsDeg b (denseChain ((preludePasses (p := p) b).map (·.2))) := by
   apply denseChain_respectsDeg
   intro f hf
   simp only [preludePasses, List.map_cons, List.map_nil] at hf
   fin_cases hf
-  exact DenseVerifiedPassW.ofSpec_respectsDeg (VerifiedPassW.guardDegree_respectsDeg _)
+  exact DenseVerifiedPassW.guardDegree_respectsDeg _
 
-/-- The dense coda chain respects the degree bound (each entry is an `ofSpec`-wrapped
-    degree-guarded spec pass). -/
+/-- The dense coda chain respects the degree bound (each entry is a degree-guarded pass — either a
+    native `guardDegree`-wrapped dense pass or an `ofSpec`-wrapped degree-guarded spec pass). -/
 theorem denseCodaChain_respectsDeg (b : DegreeBound) :
     DenseRespectsDeg b (denseChain ((codaPasses (p := p) b).map (·.2))) := by
   apply denseChain_respectsDeg
   intro f hf
   simp only [codaPasses, List.map_cons, List.map_nil] at hf
   fin_cases hf <;>
-    exact DenseVerifiedPassW.ofSpec_respectsDeg (VerifiedPassW.guardDegree_respectsDeg _)
+    first
+      | exact DenseVerifiedPassW.guardDegree_respectsDeg _
+      | exact DenseVerifiedPassW.ofSpec_respectsDeg (VerifiedPassW.guardDegree_respectsDeg _)
 
 /-- The all-dense pipeline body over the `VarId` representation: fold the prelude chain, iterate the
     cleanup cycle to a fixpoint (`denseIterateToFixpoint`, no budget — it runs until the lexicographic
