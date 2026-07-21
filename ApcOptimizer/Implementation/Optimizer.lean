@@ -17,6 +17,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BusUnify
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BusPairCancel
 import ApcOptimizer.Implementation.OptimizerPasses.BytePack
 import ApcOptimizer.Implementation.OptimizerPasses.TupleRange
+import ApcOptimizer.Implementation.OptimizerPasses.TupleRangeProof
 import ApcOptimizer.Implementation.OptimizerPasses.DisconnectedComponent
 import ApcOptimizer.Implementation.OptimizerPasses.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DomainFold
@@ -165,7 +166,7 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     -- fixpoint, after `redundantByteDrop` has dropped droppable byte checks operand-granularly
     -- (packing a byte check early would hide it from the drop, leaving more bus interactions).
     -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
-    ("tupleRange", DenseVerifiedPassW.ofSpec (tupleRangePass.guardDegree b)),
+    ("tupleRange", DenseVerifiedPassW.guardDegree b denseTupleRangePass),
     ("bytePackLate", DenseVerifiedPassW.guardDegree b denseByteCheckPackPass),
     ("monicScale", DenseVerifiedPassW.guardDegree b denseMonicScalePass),
     ("constFoldEnd", DenseVerifiedPassW.guardDegree b denseConstantFoldPass),

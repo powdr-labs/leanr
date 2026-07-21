@@ -60,6 +60,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelWits
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancel
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPackProof
+import ApcOptimizer.Implementation.OptimizerPasses.TupleRange
 import ApcOptimizer.Implementation.OptimizerPasses.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.ReencodeProof
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
@@ -69,6 +70,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZeroProof
 import ApcOptimizer.Implementation.OptimizerPasses.RangeBoolProof
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtractProof
 import ApcOptimizer.Implementation.OptimizerPasses.IntervalForceProof
+import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
 
 /-! # Dense `VarId` internal representation — umbrella import (Task 3)
 
