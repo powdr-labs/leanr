@@ -1,0 +1,204 @@
+# TODO — completing the VarId migration
+
+The optimizer is being migrated from its original `Variable`-keyed representation to a dense
+`VarId` (registry-indexed) internal representation: the constraint system is encoded once into
+dense form, the passes run ID-native with **native** correctness proofs (`DensePassCorrect` over
+`VarId → ZMod p` environments, lifted to the audited `Variable`-based spec at the edges via
+`OptimizerPasses/Bridge.lean`), and the result is decoded once. This file is the worklist for
+finishing that migration, up to and including the deletion of the legacy
+`ApcOptimizer/Implementation/OptimizerPasses/OldVariableBased/` tree. Tasks are ordered; each is
+independently landable.
+
+## Current state
+
+- The **cleanup stage is fully dense**: all 29 cleanup labels have native dense implementations
+  and native `DensePassCorrect` proofs (no decode-commutation proofs, no per-pass
+  decode/re-encode adapters remain in the cleanup cycle). `cleanupPasses`
+  (`Implementation/Optimizer.lean`) is the canonical dense-typed schedule, consumed by both the
+  pipeline and the `profile` CLI command (which steps it densely: encode and decode timed
+  separately, dense counts, fixpoint mirrored on the dense size key).
+- The **prelude and coda still run `Variable`-based spec passes**. The dense region is entered
+  and exited by `denseCleanupAdapter`, which encodes at the start of the cleanup stage and
+  decodes at its end. Removing that wrapper by extending the dense region to the true pipeline
+  edges is Task 1.
+- This state is verified byte-identical to the pre-migration optimizer on every benchmark
+  corpus (identical per-case circuit sizes, effectiveness delta exactly 0), with whole-corpus
+  runtime improvements of 16% (openvm-eth), 30% (wasm-eth), 17% (keccak), 11% (sp1-rsp) and
+  19% (sp1-keccak) at the time of the dense-cleanup milestone.
+- Byte-identity reference counts (vars / constraints / bus interactions) for local checks:
+  `Benchmarks/OpenVM/openvm-eth/apc_037_pc0x361604` → 689/525/445;
+  `…/openvm-eth/apc_001_pc0x4ecc54` → 35/18/24;
+  `…/wasm-eth/apc_005_pc0x2E9C48` → 184/94/92;
+  `…/keccak/apc_001_pckeccak` → 2021/186/1748.
+
+## Standing rules (apply to every task below)
+
+- **The schedule is frozen**: pass sequence, labels, and optimization decisions never change.
+  Element types and wiring may — that is the migration. Byte-identical output is the expectation
+  for every step; it is verified by `cmp` on `opt-export` output locally and by the CI
+  effectiveness benchmark corpus-wide, never as a Lean obligation.
+- **Audit first, exact shape**: every pass conversion STARTS with a token-parallel audit of the
+  dense runtime definitions against the original pass; fix deviations before proof work.
+  Output-identical divergence from the reference implementation's micro-shape (data structures,
+  hoisted lets, early-outs, fold shapes) is not acceptable debt. This discipline has caught real
+  bugs: a missing `@[csimp]` fast-path twin, and a full-system scan recomputed inside a
+  per-candidate lambda where the reference hoists it once.
+- **Output-divergence policy**: ports are line-parallel transliterations; output may
+  legitimately differ only where the representation forces order changes (hash-map iteration
+  order, `VarId` sort keys replacing `Variable` name sorts, the value-only enumeration engine).
+  Any divergence must be attributed to its cause; effectiveness-count regressions are escalated
+  for human review rather than committed.
+- **Forbidden**: `sorry`/`admit`/`native_decide` (never write these tokens anywhere, including
+  comments — `Scripts/check-proof-integrity.sh` greps sources), new axioms, new `partial`
+  definitions, arbitrary fuel. Every commit builds warning-free with all modules reachable.
+- **Verification per commit**: `lake build` (no warnings), `bash
+  Scripts/check-proof-integrity.sh` (exactly the three standard axioms `propext`,
+  `Classical.choice`, `Quot.sound`), run the benchmark cases above and check counts, `cmp` the
+  `opt-export` output against a pre-change baseline when behavior should be unchanged. Do not
+  run the full corpus locally — open/update a draft PR and let CI run the full effectiveness
+  and runtime benchmarks.
+- **Audited surface untouchable**: `Spec.lean`, `OpenVmSemantics.lean`, `Sp1Semantics.lean`,
+  `MemoryBus.lean`, `ApcOptimizer/Optimizer.lean`, `OptimizerPasses/Basic.lean`.
+- **Known trap** (cost hours twice): a definition returning a bare function type is
+  eta-expanded to maximum arity by the compiler, so `let`s written before a trailing lambda
+  re-run on every call. Never strip a reference implementation's `Subtype` or one-field
+  structure return — it is often load-bearing for exactly this reason. When in doubt, compare
+  the generated C under `.lake/build/ir/` against the reference's actual shape.
+- **Worked examples to imitate** (all in `ApcOptimizer/Implementation/OptimizerPasses/`):
+  `GaussProof.lean` (loop-invariant threading through a solver loop), `DigitFoldProof.lean`
+  (value-level fact soundness — `denseBuild_sound` — with no registry or decode in the
+  statement), `CarryBranchProof.lean` and `RangeBoolProof.lean` (single-shot
+  `DenseVerifiedPassW.ofNative`, prime-witness-gated), `DropPassesProof.lean` (drop/filter
+  passes via `DensePassCorrect.ofEnvEq` and the entailed-filter helpers), `ReencodeProof.lean`
+  with `ofNativeExtending` in `Bridge.lean` (passes that mint fresh variables and extend the
+  registry), `BridgeSteps.lean` (drain/foldList combinators for internally-iterating passes).
+
+## Task 1 — Extend the dense region to the pipeline edges
+
+Goal: all three labelled lists (`preludePasses`, `cleanupPasses`, `codaPasses`) are dense; the
+pipeline encodes ONCE at optimizer entry and decodes ONCE at output; `denseCleanupAdapter` is
+removed; the `profile` command does the same (its encode/decode lines already exist and must
+never be charged to individual passes).
+
+Pass worklist, by kind:
+
+- **Near-free rewires** (a native dense pass already exists for the label's pass):
+  `constFold0` (prelude; `denseConstantFoldPass`), `dedupLate` (`denseDedupPass`),
+  `constFoldEnd` (`denseConstantFoldPass`), `bytePackLate` (`denseByteCheckPackPass`, which
+  drains internally — the spec entry's `iterateToFixpoint` wrapper is subsumed; verify that
+  equivalence stays byte-identical on CI).
+- **Mode extension**: `busPairCancelLate` is the existing dense busPairCancel with
+  `aggressive := true`; the native proof currently covers only the cleanup instance
+  (`aggressive := false`). Extend or re-instantiate it for the aggressive mode.
+- **New dense ports** (no dense twin exists yet; coda-only passes): `splitBytePair`,
+  `identitySubst`, `redundantByteDrop`, `subsumedRange`, `subsumedCheck`, `tupleRange`,
+  `monicScale`, `seqzCollapse`. `seqzCollapse` mints fresh variables and records derivations —
+  use `ofNativeExtending`; `ReencodeProof.lean`/`HintCollapseProof.lean` are the precedents.
+- **Structural**: dense-typed `preludePasses`/`codaPasses` (schedule content frozen), pipeline
+  restructured to edge encode/decode, `denseCleanupAdapter` deleted, the master-theorem proof
+  scripts in `Implementation/Optimizer.lean` re-plumbed (mechanical — the Bridge lift moves
+  from the cleanup edges to the pipeline edges), and the profiler's encode/decode moved to the
+  same edges.
+
+## Task 2 — Exact ID-set key in domainBatch (intentional behavior repair)
+
+`varSetKey` (the dedup key for candidate variable sets in domainBatch's finite-domain
+enumeration) concatenates variable NAME strings, so two distinct variables with equal names and
+different powdr IDs collide, and two different variable sets can be treated as the same
+candidate set. Not a soundness issue (every pass carries its correctness proof) — an
+optimization-behavior wart on adversarial inputs; real circuits never hit it. The dense side
+currently inherits the bug faithfully (`denseVarSetKey` resolves IDs back to `Variable`s and
+calls the string key) to preserve byte-identity.
+
+Fix: registry injectivity makes a `VarId` full variable identity, so replace the key with a
+sorted, duplicate-free `VarId` sequence (or an order-independent hash followed by exact
+comparison of the canonical sequence — hash collisions must never be trusted). This also
+removes the resolve + string-building cost from the key path.
+
+Requirements: **separate commit**; a regression test involving equal names with different powdr
+IDs; verify normal benchmark outputs are unchanged. This is the ONLY place the migration may
+intentionally change optimization behavior, and only on such adversarial inputs.
+
+## Task 3 — Remove the remaining references into OldVariableBased/
+
+Current, grep-verified coupling list from non-legacy files into the legacy tree, grouped by how
+each dies:
+
+**Decode transports (by design; nativize to kill):**
+- `AddrDiseqProof.lean` → `OldVariableBased/AddrDiseq.lean` and `RootPairUnifyProof.lean` →
+  `OldVariableBased/RootPairUnify.lean`: native-statement proofs that internally decode to
+  reuse spec soundness lemmas (e.g. `constDiffNZ_sound`). Proving those lemmas natively kills
+  the transports AND frees the `decodeLin` family in `Affine.lean` plus the `decodeLin_norm`
+  support chain in `Normalize.lean` that they keep alive.
+
+**Spec-definition reuse (dies with the transports, with Task 2, or with targeted re-homes):**
+- `Affine.lean` (spec `linearize`/`LinExpr.eval` referenced by its decode lemmas),
+  `Normalize.lean` (spec `LinExpr.norm`), `Gauss.lean` (`decodeExpr_isVar` references spec
+  `Expression.isVar`/`varCount`; this also blocks moving the representation-independent
+  `argmin_map_key`/`map_filterMap` pair out of the legacy file — retry once the decode lemma
+  dies), `DomainFold.lean` (spec `FoldIdx.mk'`/`refresh`/`anyVarIn`/`hasConstFoldableNode`),
+  `Reencode.lean` (spec `evalFast`/`evalWith`/`sharesVarIn`/`ComputationMethod.eval_congr`),
+  `DomainBatch.lean` (spec `varSetKey` — dies with Task 2 — plus the `IExpr`/`CBi`/
+  `FiniteDomain` enumeration engine: representation-independent in substance but large and
+  entangled; move it to a neutral non-legacy home when the file's other couplings die),
+  `DomainProp.lean` (a non-legacy but `Variable`-based shared facts file; consumes legacy
+  `LinExpr.norm_eval` — re-home that lemma or prune at deletion time).
+- `BusPairCancelJustify.lean`: hosts representation-independent search-budget constants, but
+  `BusPairCancelCore.lean` consumes `Variable`-typed theorems of
+  `OldVariableBased/BusPairCancel.lean` (`multiplicitySum_append`,
+  `MemoryBusShape.setNewMult_ne_zero`) THROUGH it. Unpick when those theorems get native twins
+  — the `busPairCancelLate` work in Task 1 may do this naturally.
+
+**Dies automatically with Task 1:** the 12 import-only wrapper files for prelude/coda spec
+passes (`ConstantFold`, `IdentitySubst`, `MonicScale`, `RedundantByteDrop`, `SeqzCollapse`,
+`SplitBytePair`, `SubsumedCheck`, `SubsumedRange`, `TautoBus`, `TrivialConstraint`,
+`TupleRange`, `ZeroMultBus`) and `Implementation/Optimizer.lean`'s legacy pass imports.
+
+**Dies with the folder (Task 4):** four imports kept only so their legacy modules remain in the
+build graph until deletion (`ByteCheckPack.lean`, `DisconnectedComponent.lean`,
+`RangeBool.lean`, `RangeForceZero.lean` — content-vestigial).
+
+## Task 4 — Delete the legacy tree
+
+When Tasks 1–3 are done: delete `OldVariableBased/` (42 files), the wrapper files, and the
+reachability-keeper imports; prune `Implementation/Optimizer.lean`'s imports; re-attempt the
+two deferred lemma moves (the Gauss `argmin_map_key`/`map_filterMap` pair and the
+`BusPairCancelJustify` constants — their blockers are gone by now); decide the fate of
+`DenseVerifiedPassW.ofSpec` (currently zero call sites; it is the documented on-ramp in
+"Adding an optimization" for spec-side passes — either keep it for contributor ergonomics or
+delete it and make new passes native-only; `AGENTS.md` must match the decision).
+
+Permanent, by design — do NOT delete: `Encoding.lean`'s encode/decode round-trip,
+`Bridge.lean`/`Measure.lean` (the lift to the audited `Variable`-based spec at the pipeline
+edges), `Registry.lean`, and the dense pass tree. The audited specification remains
+`Variable`-based; encode-at-entry/decode-at-output are the permanent boundary.
+
+## Task 5 — Comment and terminology hygiene
+
+Guiding principle: a comment or docstring must describe the code **as it stands**. Anything
+that narrates the migration process, contrasts with a discarded strategy, or only makes sense
+relative to the temporary in-migration state gets deleted or recast as a statement about the
+current code. Sweep the whole non-legacy tree; the categories below are known instances, NOT an
+exhaustive list — apply the principle, not just the list.
+
+- Migration-project jargon: "Task 3", work-package codenames ("WP-A" … "WP-H"), and
+  chunk/dispatch labels ("chunk C0"–"C7", "D1"–"D4", "F1/F2", "BP-I1/BP-P1", batch numbers).
+- Strategy-relative terminology: "native proof", "proved natively", "`VarId`-native" — the
+  contrast was with a decode-commutation proof strategy that no longer exists; it is just a
+  proof. Same for "commutation-era", "landing tactic", "decode-commutation" and similar
+  references, except where a comment genuinely documents the still-existing spec-lemma decode
+  transports (Task 3's first group) — those describe current code and stay until the transports
+  die.
+- Provenance/review-talk: comments that justify a change against a previous implementation
+  state ("byte-identical to …", "matches the spec shape", "the shape audit found …") rather
+  than stating what the code does.
+- Stale references to deleted machinery: six files still mention the removed label-dispatch
+  selector (`denseImpl`): `IntervalForce.lean`, `RangeForceZero.lean`, `RangeBool.lean`,
+  `XorEqExtract.lean`, `ByteCheckPack.lean`, `FlagFold.lean`.
+- Citations of untracked design notes (`VarId.md`/`VarIdAddendum.md`) in five files:
+  `DomainBatchRuntime.lean:43`, `BoxRewrite.lean:66`, `Reencode.lean:84`,
+  `DomainFoldRuntime.lean:38`, `Bridge.lean:7`. Replace each with a self-contained statement of
+  the relevant policy (all policies are in this file's Standing rules).
+- Identifier names are OUT of scope for the sweep (no API churn), with one noted exception to
+  decide at Task 4: `DenseVerifiedPassW.ofNative` keeps its meaning only as the counterpart of
+  `ofSpec` — revisit the name when `ofSpec`'s fate is decided.
