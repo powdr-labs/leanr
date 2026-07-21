@@ -139,7 +139,7 @@ def cleanupPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
 def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
   -- One primality decision per optimizer run (see `cleanupPasses`), for the prime-gated coda passes.
   let pw := PrimeWitness.of p
-  [ ("busPairCancelLate", DenseVerifiedPassW.ofSpec (VerifiedPassW.guardDegree b (busPairCancelPass pw true))),
+  [ ("busPairCancelLate", DenseVerifiedPassW.guardDegree b (denseBusPairCancelPass pw true)),
     -- Explode packed pair byte checks into singles so `dedupLate` collapses the same value
     -- byte-checked in several pairs and `redundantByteDrop` becomes operand-granular; the
     -- survivors are re-packed by `bytePackLate` below (a pair with nothing to shed round-trips).
