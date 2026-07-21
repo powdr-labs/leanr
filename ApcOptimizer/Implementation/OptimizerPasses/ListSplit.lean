@@ -116,3 +116,110 @@ theorem le_foldl_max (l : List Nat) : ∀ (b : Nat), ∀ a ∈ l, a ≤ l.foldl 
     rcases List.mem_cons.1 ha with rfl | h
     · exact le_trans (le_max_right b a) (init_le_foldl_max rest (max b a))
     · exact ih (max b c) a h
+
+/-! ### Early-exit list fold
+
+Re-homed here from `OldVariableBased/DomainBatch.lean` (generic list machinery); the finite-domain
+enumeration engine (`EnumEngine.lean`) and the reference passes both consume it. -/
+
+/-- Left fold with an early exit: once `stop acc` holds, the remaining elements are skipped. -/
+def foldlStop {α β : Type} (f : β → α → β) (stop : β → Bool) : List α → β → β
+  | [], acc => acc
+  | a :: rest, acc => if stop acc then acc else foldlStop f stop rest (f acc a)
+
+theorem foldlStop_stopped {α β : Type} (f : β → α → β) (stop : β → Bool) (l : List α) (acc : β)
+    (h : stop acc = true) : foldlStop f stop l acc = acc := by
+  cases l with
+  | nil => rfl
+  | cons a rest => rw [foldlStop, if_pos h]
+
+theorem foldlStop_append {α β : Type} (f : β → α → β) (stop : β → Bool)
+    (xs ys : List α) (acc : β) :
+    foldlStop f stop (xs ++ ys) acc = foldlStop f stop ys (foldlStop f stop xs acc) := by
+  induction xs generalizing acc with
+  | nil => rfl
+  | cons a xs ih =>
+    rw [List.cons_append, foldlStop, foldlStop]
+    by_cases h : stop acc = true
+    · rw [if_pos h, if_pos h, foldlStop_stopped f stop ys acc h]
+    · rw [if_neg h, if_neg h, ih]
+
+theorem foldlStop_map {α β γ : Type} (f : β → γ → β) (stop : β → Bool) (k : α → γ)
+    (l : List α) (acc : β) :
+    foldlStop f stop (l.map k) acc = foldlStop (fun acc a => f acc (k a)) stop l acc := by
+  induction l generalizing acc with
+  | nil => rfl
+  | cons a rest ih =>
+    rw [List.map_cons, foldlStop, foldlStop]
+    by_cases h : stop acc = true
+    · rw [if_pos h, if_pos h]
+    · rw [if_neg h, if_neg h, ih]
+
+theorem foldlStop_flatMap {α β γ : Type} (f : β → γ → β) (stop : β → Bool) (h : α → List γ)
+    (l : List α) (acc : β) :
+    foldlStop (fun acc a => foldlStop f stop (h a) acc) stop l acc
+      = foldlStop f stop (l.flatMap h) acc := by
+  induction l generalizing acc with
+  | nil => rfl
+  | cons a rest ih =>
+    rw [List.flatMap_cons, foldlStop, foldlStop_append]
+    by_cases hs : stop acc = true
+    · rw [if_pos hs, foldlStop_stopped f stop (h a) acc hs,
+        foldlStop_stopped f stop (rest.flatMap h) acc hs]
+    · rw [if_neg hs, ih]
+
+theorem foldlStop_congr {α β : Type} (f g : β → α → β) (stop : β → Bool) (l : List α) (acc : β)
+    (h : ∀ acc a, f acc a = g acc a) : foldlStop f stop l acc = foldlStop g stop l acc := by
+  induction l generalizing acc with
+  | nil => rfl
+  | cons a rest ih =>
+    rw [foldlStop, foldlStop]
+    by_cases hs : stop acc = true
+    · rw [if_pos hs, if_pos hs]
+    · rw [if_neg hs, if_neg hs, h acc a, ih]
+
+theorem foldlStop_all {α : Type} (pred : α → Bool) (l : List α) (acc : Bool) :
+    foldlStop (fun acc a => acc && pred a) (fun acc => !acc) l acc = (acc && l.all pred) := by
+  induction l generalizing acc with
+  | nil => simp [foldlStop]
+  | cons a rest ih =>
+    rw [foldlStop, List.all_cons]
+    by_cases hacc : acc = true
+    · subst hacc; rw [ih]; simp
+    · simp only [Bool.not_eq_true] at hacc; subst hacc; simp
+
+/-! ### Sparse positional map and self-zip membership
+
+Re-homed here from `OldVariableBased/DomainFold.lean` (`zipIdx_map_sparse`) and
+`OldVariableBased/Reencode.lean` (`zip_map_self_mem`) — generic list machinery; the reference passes
+and their dense correspondence proofs both consume them. -/
+
+/-- The positional pass-through map equals the plain map when the function fixes the item at
+    every position outside `mem`. -/
+theorem zipIdx_map_sparse {α : Type _} (l : List α) (f : α → α) (mem : Nat → Bool)
+    (hfix : ∀ (i : Nat) (hi : i < l.length), mem i = false → f l[i] = l[i]) :
+    l.zipIdx.map (fun ai => if mem ai.2 then f ai.1 else ai.1) = l.map f := by
+  rw [show l.map f = l.zipIdx.map (f ∘ Prod.fst) by rw [← List.map_map, List.zipIdx_map_fst]]
+  refine List.map_congr_left ?_
+  rintro ⟨a, i⟩ hp
+  obtain ⟨_, hlt, heq⟩ := List.mem_zipIdx (k := 0) hp
+  have hlt' : i < l.length := by simpa using hlt
+  have heq' : l[i]'hlt' = a := by simpa using heq.symm
+  dsimp only [Function.comp_apply]
+  by_cases hm : mem i = true
+  · rw [if_pos hm]
+  · rw [if_neg hm]
+    have := hfix i hlt' (by simpa using hm)
+    rw [heq'] at this
+    exact this.symm
+
+/-- Membership of the graph pairs in the zip of a list with its image. -/
+theorem zip_map_self_mem {α β : Type} (f : α → β) (l : List α) (a : α) (ha : a ∈ l) :
+    (a, f a) ∈ l.zip (l.map f) := by
+  induction l with
+  | nil => simp at ha
+  | cons x rest ih =>
+    rcases List.mem_cons.1 ha with rfl | ha
+    · simp
+    · simp only [List.map_cons, List.zip_cons_cons]
+      exact List.mem_cons_of_mem _ (ih ha)

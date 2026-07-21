@@ -1,4 +1,3 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatch
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
 

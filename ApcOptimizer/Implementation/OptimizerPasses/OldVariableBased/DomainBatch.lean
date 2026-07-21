@@ -4,6 +4,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.CoveredIndex
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Dedup
 import ApcOptimizer.Implementation.OptimizerPasses.SearchBudgets
+import ApcOptimizer.Implementation.OptimizerPasses.EnumEngine
 
 set_option autoImplicit false
 
@@ -32,39 +33,8 @@ variable {p : ℕ}
 
 /-! ## Symbolic finite domains
 
-A variable's finite domain is either an **explicit** list of field elements (the roots of a
-product-of-affine-factors constraint) or the **range** `[0, bound)` (a fact-bounded raw payload
-slot), which keeps only its `Nat` bound. Its `size` is read in O(1), and the box scan enumerates it
-with a `Nat` loop (`boxFold` / `FiniteDomain.foldElts`) that never builds an element list — a range
-recasts one `Nat` per point it actually visits, so an early-aborting scan touches only a handful.
-`toList` — `(List.range bound).map Nat.cast`, the `2^16`-element list a 16-bit limb would have
-materialized eagerly — is the **specification only**: it appears in the equivalence/soundness proofs
-(`foldElts_eq`, `boxFold_eq`, and the `matList` bridge) and never on the runtime path. Every
-table/box decision that used `List.length` on the old eagerly-materialized list now reads `size`;
-`size_eq` proves them equal, so the pass is byte-identical to the eager version. -/
-
-/-- A finite domain, kept symbolically: an explicit element list, or the range `[0, bound)`. -/
-inductive FiniteDomain (p : ℕ) where
-  | explicit (values : List (ZMod p))
-  | range (bound : Nat)
-
-/-- The element list a finite domain denotes — the **proof specification** for `size` and
-    `foldElts` (the range cast is materialized only here, in proofs). The runtime enumeration never
-    calls this; it streams the domain with the `Nat`-loop `FiniteDomain.foldElts`. -/
-def FiniteDomain.toList : FiniteDomain p → List (ZMod p)
-  | .explicit vs => vs
-  | .range b => (List.range b).map (Nat.cast : Nat → ZMod p)
-
-/-- The domain's cardinality — O(1) for a range (no materialization). On the runtime path. -/
-@[inline] def FiniteDomain.size : FiniteDomain p → Nat
-  | .explicit vs => vs.length
-  | .range b => b
-
-theorem FiniteDomain.size_eq (d : FiniteDomain p) : d.size = d.toList.length := by
-  cases d with
-  | explicit vs => rfl
-  | range b => simp only [FiniteDomain.toList, FiniteDomain.size, List.length_map,
-      List.length_range]
+The symbolic `FiniteDomain` (`explicit`/`range`) with its `toList`/`size`/`size_eq` and its
+`Nat`-loop element fold live in `EnumEngine.lean` (value-only, shared with the dense ports). -/
 
 /-! ## The proof-carrying domain table -/
 
@@ -189,96 +159,6 @@ the domains with a `Nat` loop for each `range` (no element list is ever built) a
 proved equal to the eager `foldlStop f stop (assignments (matList doms))` (`boxFold_eq`), so the
 existing `assignments`-based soundness results carry over verbatim. -/
 
-/-- Left fold with an early exit: once `stop acc` holds, the remaining elements are skipped. -/
-def foldlStop {α β : Type} (f : β → α → β) (stop : β → Bool) : List α → β → β
-  | [], acc => acc
-  | a :: rest, acc => if stop acc then acc else foldlStop f stop rest (f acc a)
-
-theorem foldlStop_stopped {α β : Type} (f : β → α → β) (stop : β → Bool) (l : List α) (acc : β)
-    (h : stop acc = true) : foldlStop f stop l acc = acc := by
-  cases l with
-  | nil => rfl
-  | cons a rest => rw [foldlStop, if_pos h]
-
-theorem foldlStop_append {α β : Type} (f : β → α → β) (stop : β → Bool)
-    (xs ys : List α) (acc : β) :
-    foldlStop f stop (xs ++ ys) acc = foldlStop f stop ys (foldlStop f stop xs acc) := by
-  induction xs generalizing acc with
-  | nil => rfl
-  | cons a xs ih =>
-    rw [List.cons_append, foldlStop, foldlStop]
-    by_cases h : stop acc = true
-    · rw [if_pos h, if_pos h, foldlStop_stopped f stop ys acc h]
-    · rw [if_neg h, if_neg h, ih]
-
-theorem foldlStop_map {α β γ : Type} (f : β → γ → β) (stop : β → Bool) (k : α → γ)
-    (l : List α) (acc : β) :
-    foldlStop f stop (l.map k) acc = foldlStop (fun acc a => f acc (k a)) stop l acc := by
-  induction l generalizing acc with
-  | nil => rfl
-  | cons a rest ih =>
-    rw [List.map_cons, foldlStop, foldlStop]
-    by_cases h : stop acc = true
-    · rw [if_pos h, if_pos h]
-    · rw [if_neg h, if_neg h, ih]
-
-theorem foldlStop_flatMap {α β γ : Type} (f : β → γ → β) (stop : β → Bool) (h : α → List γ)
-    (l : List α) (acc : β) :
-    foldlStop (fun acc a => foldlStop f stop (h a) acc) stop l acc
-      = foldlStop f stop (l.flatMap h) acc := by
-  induction l generalizing acc with
-  | nil => rfl
-  | cons a rest ih =>
-    rw [List.flatMap_cons, foldlStop, foldlStop_append]
-    by_cases hs : stop acc = true
-    · rw [if_pos hs, foldlStop_stopped f stop (h a) acc hs,
-        foldlStop_stopped f stop (rest.flatMap h) acc hs]
-    · rw [if_neg hs, ih]
-
-theorem foldlStop_congr {α β : Type} (f g : β → α → β) (stop : β → Bool) (l : List α) (acc : β)
-    (h : ∀ acc a, f acc a = g acc a) : foldlStop f stop l acc = foldlStop g stop l acc := by
-  induction l generalizing acc with
-  | nil => rfl
-  | cons a rest ih =>
-    rw [foldlStop, foldlStop]
-    by_cases hs : stop acc = true
-    · rw [if_pos hs, if_pos hs]
-    · rw [if_neg hs, if_neg hs, h acc a, ih]
-
-/-- Ascending `Nat` loop `start, start+1, …, start+count-1`, casting each into `ZMod p` and folding
-    with an early exit — the `range` case of a domain fold, allocating no element list. -/
-def rangeFoldFrom {β : Type} (f : β → ZMod p → β) (stop : β → Bool) (start : Nat) :
-    Nat → β → β
-  | 0, acc => acc
-  | n + 1, acc =>
-    if stop acc then acc else rangeFoldFrom f stop (start + 1) n (f acc ((start : ℕ) : ZMod p))
-
-theorem rangeFoldFrom_eq {β : Type} (f : β → ZMod p → β) (stop : β → Bool)
-    (start count : Nat) (acc : β) :
-    rangeFoldFrom f stop start count acc
-      = foldlStop f stop ((List.range' start count).map (Nat.cast : Nat → ZMod p)) acc := by
-  induction count generalizing start acc with
-  | zero => rfl
-  | succ n ih =>
-    rw [rangeFoldFrom, List.range'_succ, List.map_cons, foldlStop]
-    by_cases h : stop acc = true
-    · rw [if_pos h, if_pos h]
-    · rw [if_neg h, if_neg h, ih]
-
-/-- Fold a function over a domain's elements with an early exit: a plain list fold for `explicit`,
-    a `Nat` loop for `range` (no `toList`). Equal to `foldlStop f stop d.toList` (`foldElts_eq`). -/
-def FiniteDomain.foldElts {β : Type} (f : β → ZMod p → β) (stop : β → Bool) :
-    FiniteDomain p → β → β
-  | .explicit vs, acc => foldlStop f stop vs acc
-  | .range b, acc => rangeFoldFrom f stop 0 b acc
-
-theorem FiniteDomain.foldElts_eq {β : Type} (f : β → ZMod p → β) (stop : β → Bool)
-    (d : FiniteDomain p) (acc : β) : d.foldElts f stop acc = foldlStop f stop d.toList acc := by
-  cases d with
-  | explicit vs => rfl
-  | range b =>
-    rw [FiniteDomain.foldElts, FiniteDomain.toList, rangeFoldFrom_eq, List.range_eq_range']
-
 /-- Stream the Cartesian product of the domains into `f`, threading `β` and stopping as soon as
     `stop` holds. Ranges are enumerated by a `Nat` loop (`FiniteDomain.foldElts`); nothing is
     materialized. Enumeration order and result match `foldlStop f stop (assignments (matList ·))`
@@ -305,16 +185,6 @@ theorem boxFold_eq {β : Type} (f : β → List (Variable × ZMod p) → β) (st
     show d.foldElts (fun acc'' v => f acc'' ((x, v) :: a)) stop acc'
       = foldlStop f stop (d.toList.map (fun v => (x, v) :: a)) acc'
     rw [FiniteDomain.foldElts_eq, foldlStop_map]
-
-theorem foldlStop_all {α : Type} (pred : α → Bool) (l : List α) (acc : Bool) :
-    foldlStop (fun acc a => acc && pred a) (fun acc => !acc) l acc = (acc && l.all pred) := by
-  induction l generalizing acc with
-  | nil => simp [foldlStop]
-  | cons a rest ih =>
-    rw [foldlStop, List.all_cons]
-    by_cases hacc : acc = true
-    · subst hacc; rw [ih]; simp
-    · simp only [Bool.not_eq_true] at hacc; subst hacc; simp
 
 /-- `(assignments (matList doms)).all pred`, streamed lazily with an early exit at the first
     failing point (`allBox_eq`), so no element list of any range is ever built. -/
@@ -505,13 +375,6 @@ def lookupIx : List (Variable × ZMod p) → Nat → ZMod p
   | (_, v) :: _, 0 => v
   | _ :: rest, i + 1 => lookupIx rest i
 
-/-- An expression with variable leaves compiled to positions. -/
-inductive IExpr (p : ℕ) where
-  | const (n : ZMod p)
-  | ix (i : Nat)
-  | add (a b : IExpr p)
-  | mul (a b : IExpr p)
-
 def IExpr.eval (pt : List (Variable × ZMod p)) : IExpr p → ZMod p
   | .const n => n
   | .ix i => lookupIx pt i
@@ -677,12 +540,6 @@ theorem compileEs_all (keys : List Variable) (es : List (Expression p)) (ces : L
         subst h
         rw [List.all_cons, List.all_cons, ih irest hr,
           compileE_eval keys e ie he pt hpt]
-
-/-- A bus interaction with compiled multiplicity and payload. -/
-structure CBi (p : ℕ) where
-  busId : Nat
-  mult : IExpr p
-  payload : List (IExpr p)
 
 def CBi.eval (cbi : CBi p) (pt : List (Variable × ZMod p)) : BusInteraction (ZMod p) :=
   { busId := cbi.busId,

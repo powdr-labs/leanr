@@ -128,9 +128,10 @@ proofs never inspect the key).
 
 ## Task 3 — Remove the remaining references into OldVariableBased/
 
-Task 3 proceeds in labelled steps A–F. Step A (representation-independent re-homes) is done; the
-remaining steps kill the genuine couplings (decode transports, spec-definition reuse, the
-enumeration engine, and the residual `Variable`-typed memory-bus theorems).
+Task 3 proceeds in labelled steps A–F. Steps A–E are done (representation-independent re-homes,
+the sparse LinExpr spec core, the two decode transports, and the finite-domain enumeration engine);
+Step F is all that remains — native twins / re-homes for the residual `Variable`-typed memory-bus
+theorems, plus the two Step-B residual legacy couplings.
 
 **Step A — re-home representation-independent legacy content — DONE.** Content that quantifies over
 `Nat`/`ZMod`/`List`/bus-spec values only, previously owned by `OldVariableBased/` files that the
@@ -224,18 +225,47 @@ The orphaned decode skeleton was deleted in the same commit (grep-verified consu
 
 **The "Decode transports" group of Task 3 is now dead** — both transports (`RootPairUnifyProof`,
 Step C; `AddrDiseqProof`, Step D) are nativized and their bridging machinery deleted. What remains of
-Task 3 is Step E (re-home the enumeration engine) and Step F (native twins / re-homes for the residual
-`Variable`-typed memory-bus theorems).
+Task 3 is Step F (native twins / re-homes for the residual `Variable`-typed memory-bus theorems, plus
+the two Step-B residual couplings).
 
-**Step E — re-home the enumeration engine.** Move the `IExpr` / `CBi` / `FiniteDomain` types and the
-`foldlStop` enumeration engine (representation-independent in substance, large and entangled) to a
-neutral non-legacy home. It serves `DomainBatch(+Proof/Runtime)`, `Reencode(+Proof)`,
-`DomainFoldRuntime`, `DomainFoldProof`.
+**Step E — re-home the enumeration engine — DONE.** The value-only, `Variable`- and `VarId`-free core
+of the finite-domain enumeration moved to two neutral non-legacy homes (fully-qualified names
+preserved; each legacy file imports its home back):
+- the generic early-exit list fold `foldlStop` with its family (`foldlStop_stopped` / `_append` /
+  `_map` / `_flatMap` / `_congr` / `_all`), and the generic list lemmas `zipIdx_map_sparse` (from
+  `OldVariableBased/DomainFold.lean`) and `zip_map_self_mem` (from `OldVariableBased/Reencode.lean`) →
+  `OptimizerPasses/ListSplit.lean`;
+- the symbolic `FiniteDomain` (`explicit`/`range`) with `toList` / `size` / `size_eq` and its
+  `Nat`-loop element fold `rangeFoldFrom` (+`rangeFoldFrom_eq`) / `FiniteDomain.foldElts`
+  (+`foldElts_eq`), and the interned, index-compiled item types `IExpr` / `CBi` (from
+  `OldVariableBased/DomainBatch.lean`) → new `OptimizerPasses/EnumEngine.lean` (imports only
+  `ListSplit.lean`; mentions no `Variable`, no `VarId`, no reference pass, so it survives the legacy
+  deletion).
+
+The dense `DomainBatch.lean` / `Reencode.lean` / `DomainFold.lean` **dropped** their
+`OldVariableBased.*` imports (they consumed the engine only for these value-only items; `DomainBatch`
+now imports `EnumEngine` plus the `CoveredIndex` / `HashedDedup` / `SearchBudgets` its downstream
+`Runtime`/`Proof` used to reach transitively through the legacy import). The reference
+`OldVariableBased/DomainBatch.lean` / `DomainFold.lean` / `Reencode.lean` stay reachable via
+`Implementation/Optimizer.lean`'s legacy import block (`DomainBatch` and `DomainFold` directly;
+`Reencode` via the legacy `DomainFold`).
+
+What stayed in the reference tree (not consumed by any dense code — the dense side has native
+`dense…` twins, so these appear only in "mirrors X" docstrings and die with the folder in Task 4):
+the compiled evaluators/compilers and the eager box engine `IExpr.eval` / `evalWith` / `CBi.eval` /
+`evalWith` / `lookupIx` / `varIx(_lookup)` / `compileE(s)(_eval/_all/_map)` / `compileBi(s)` /
+`boxFold(_eq)` / `allBox(_eq)` / `survivesAll*` / `compiledSurv` / `envOfFast`, and the spec
+`DomainTable` (with `doms` / `doms_fst` / `doms_sound` / `matList`+lemmas). The Step-inventory's
+`doms_fst:542` flag was `Dense/DomainBatch.lean`'s own `DenseDomainTable.doms_fst` definition (whose
+docstring names the spec lemma), not a use of the spec `DomainTable.doms_fst`.
 
 **Step F — native twins or re-homes for the residual memory-bus theorems.** The `Variable`-typed
 facts the dense `BusPairCancel` cluster still consumes through `OldVariableBased/BusPairCancel.lean`
 (and its neighbours): `multiplicitySum_append`, `mem_core_of_ne`, `MemoryBusShape.setNewMult_ne_zero`,
 plus the extra legacy pulls surfaced by the Step-A scan — `IntervalForce.srep` and `MemoryBusDrop`.
+Also fold in the two Step-B residual couplings: `DomainProp.lean` still uses
+`ConstraintSystem.subst` / `subst_correct` from `OldVariableBased/Subst.lean`, and `MemoryUnify.lean`
+still imports `OldVariableBased/TrivialConstraint.lean`.
 
 **Scan findings (current):** `DomainFold.lean` is already keeper-only (no non-legacy consumer);
 dense `Gauss.lean`'s consumption of spec `Expression.isVar` / `varCount` is resolved by Step B (moved

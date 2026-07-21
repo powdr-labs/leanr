@@ -602,17 +602,6 @@ def groupRewriteCand (bits : List Variable) (σfn : Variable → Option (Express
   let vals := patts.map (fun aβ => sub.evalFast (envOf aβ))
   candSelect bits patts sub ((interpOfV patts vals).fold) vals
 
-/-- Membership of the graph pairs in the zip of a list with its image. -/
-theorem zip_map_self_mem {α β : Type} (f : α → β) (l : List α) (a : α) (ha : a ∈ l) :
-    (a, f a) ∈ l.zip (l.map f) := by
-  induction l with
-  | nil => simp at ha
-  | cons x rest ih =>
-    rcases List.mem_cons.1 ha with rfl | ha
-    · simp
-    · simp only [List.map_cons, List.zip_cons_cons]
-      exact List.mem_cons_of_mem _ (ih ha)
-
 /-- Replace maximal wholly-in-group subexpressions by their interpolations; substitute
     variable-wise everywhere else. -/
 def groupRewrite (xs bits : List Variable) (σfn : Variable → Option (Expression p))

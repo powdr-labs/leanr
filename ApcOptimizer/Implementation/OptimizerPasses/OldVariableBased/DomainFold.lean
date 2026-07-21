@@ -919,25 +919,6 @@ theorem mapExpr_eq_self {bi : BusInteraction (Expression p)} {g : Expression p �
     simp only [BusInteraction.mapExpr] at *
     rw [hm, hpl]
 
-/-- The positional pass-through map equals the plain map when the function fixes the item at
-    every position outside `mem`. -/
-theorem zipIdx_map_sparse {α : Type _} (l : List α) (f : α → α) (mem : Nat → Bool)
-    (hfix : ∀ (i : Nat) (hi : i < l.length), mem i = false → f l[i] = l[i]) :
-    l.zipIdx.map (fun ai => if mem ai.2 then f ai.1 else ai.1) = l.map f := by
-  rw [show l.map f = l.zipIdx.map (f ∘ Prod.fst) by rw [← List.map_map, List.zipIdx_map_fst]]
-  refine List.map_congr_left ?_
-  rintro ⟨a, i⟩ hp
-  obtain ⟨_, hlt, heq⟩ := List.mem_zipIdx (k := 0) hp
-  have hlt' : i < l.length := by simpa using hlt
-  have heq' : l[i]'hlt' = a := by simpa using heq.symm
-  dsimp only [Function.comp_apply]
-  by_cases hm : mem i = true
-  · rw [if_pos hm]
-  · rw [if_neg hm]
-    have := hfix i hlt' (by simpa using hm)
-    rw [heq'] at this
-    exact this.symm
-
 /-- **The sparse fold is the fold.** Every non-candidate position holds an item sharing no
     variable with `xs` (bucket completeness, contraposed), on which `foldRewrite` is the
     identity — so skipping it is exact. -/

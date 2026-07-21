@@ -1,4 +1,7 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DomainBatch
+import ApcOptimizer.Implementation.OptimizerPasses.EnumEngine
+import ApcOptimizer.Implementation.OptimizerPasses.CoveredIndex
+import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
+import ApcOptimizer.Implementation.OptimizerPasses.SearchBudgets
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
