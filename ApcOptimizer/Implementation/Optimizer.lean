@@ -36,6 +36,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.SubsumedCheckProof
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
+import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePairProof
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
@@ -146,7 +147,7 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     -- Explode packed pair byte checks into singles so `dedupLate` collapses the same value
     -- byte-checked in several pairs and `redundantByteDrop` becomes operand-granular; the
     -- survivors are re-packed by `bytePackLate` below (a pair with nothing to shed round-trips).
-    ("splitBytePair", DenseVerifiedPassW.ofSpec (SplitBytePair.splitBytePairPass.guardDegree b)),
+    ("splitBytePair", DenseVerifiedPassW.guardDegree b denseSplitBytePairPass),
     -- Rename each OR-identity result to its operand *before* the drop/pack stages: the renamed
     -- interactions become degenerate byte checks (`[or, x, x, 0]`, exactly "x is a byte") that
     -- `dedupLate` collapses, `redundantByteDrop` drops when justified elsewhere, and
