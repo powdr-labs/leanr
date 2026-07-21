@@ -316,7 +316,7 @@ def runCycleTimed {p : ℕ} (passes : List (String × VerifiedPassW p))
     a := a.insert name (a.getD name 0 + dt)
   pure (c, a)
 
-/-! ## Dense cleanup-stage profiling (WP-G)
+/-! ## Dense cleanup-stage profiling
 
 The cleanup stage runs over the dense `VarId` representation (`ApcOptimizer/Implementation/`
 `OptimizerPasses/`), so the profiler steps the dense `cleanupPasses` list the optimizer actually
