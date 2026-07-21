@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Rewrite
+import ApcOptimizer.Implementation.OptimizerPasses.LinExprCore
 
 set_option autoImplicit false
 
@@ -18,45 +19,10 @@ Field-free (works over any commutative ring). -/
 
 variable {p : ℕ}
 
-/-! ## Merging a linear form's terms -/
+/-! ## Merging a linear form's terms
 
-/-- Add coefficient `c` to variable `v` in a term list, merging into an existing entry. -/
-def addCoeff (v : Variable) (c : ZMod p) : List (Variable × ZMod p) → List (Variable × ZMod p)
-  | [] => [(v, c)]
-  | (v', c') :: rest => if v' = v then (v', c' + c) :: rest else (v', c') :: addCoeff v c rest
-
-theorem addCoeff_eval (v : Variable) (c : ZMod p) (ts : List (Variable × ZMod p))
-    (env : Variable → ZMod p) :
-    ((addCoeff v c ts).map (fun t => t.2 * env t.1)).sum
-    = c * env v + (ts.map (fun t => t.2 * env t.1)).sum := by
-  induction ts with
-  | nil => simp [addCoeff]
-  | cons t rest ih =>
-      simp only [addCoeff]
-      split
-      · next h => subst h; simp only [List.map_cons, List.sum_cons]; ring
-      · simp only [List.map_cons, List.sum_cons, ih]; ring
-
-/-- Merge a term list, combining coefficients of equal variables. `foldl` (with `addCoeff`
-    appending unseen variables at the tail) preserves first-occurrence order, making the merge
-    *idempotent* — a `foldr` here would reverse the term order on every application, so
-    normalization would oscillate with period 2 instead of reaching a fixpoint. -/
-def mergeTerms (ts : List (Variable × ZMod p)) : List (Variable × ZMod p) :=
-  ts.foldl (fun acc t => addCoeff t.1 t.2 acc) []
-
-theorem foldl_addCoeff_eval (env : Variable → ZMod p) (ts acc : List (Variable × ZMod p)) :
-    ((ts.foldl (fun acc t => addCoeff t.1 t.2 acc) acc).map (fun t => t.2 * env t.1)).sum
-    = (acc.map (fun t => t.2 * env t.1)).sum + (ts.map (fun t => t.2 * env t.1)).sum := by
-  induction ts generalizing acc with
-  | nil => simp
-  | cons t rest ih =>
-      simp only [List.foldl_cons, List.map_cons, List.sum_cons, ih, addCoeff_eval]
-      ring
-
-theorem mergeTerms_eval (ts : List (Variable × ZMod p)) (env : Variable → ZMod p) :
-    ((mergeTerms ts).map (fun t => t.2 * env t.1)).sum
-    = (ts.map (fun t => t.2 * env t.1)).sum := by
-  simp [mergeTerms, foldl_addCoeff_eval]
+`addCoeff` / `mergeTerms` and their eval lemmas now live in the neutral `LinExprCore.lean`
+(imported above); the fast `@[csimp]` replacement below still targets them. -/
 
 /-! ## Linear like-term merge (runtime `@[csimp]` replacement for `mergeTerms`)
 
@@ -278,26 +244,8 @@ def mergeTermsFast (ts : List (Variable × ZMod p)) : List (Variable × ZMod p) 
     have hcorr := mtFold_corr ts [] #[] ∅ hbase
     exact (recon _ _ _ hcorr).symm
 
-theorem dropZero_eval (ts : List (Variable × ZMod p)) (env : Variable → ZMod p) :
-    ((ts.filter (fun t => t.2 ≠ 0)).map (fun t => t.2 * env t.1)).sum
-    = (ts.map (fun t => t.2 * env t.1)).sum := by
-  induction ts with
-  | nil => rfl
-  | cons t rest ih =>
-      by_cases h : t.2 = 0
-      · rw [List.filter_cons_of_neg (by simpa using h), ih, List.map_cons, List.sum_cons, h]
-        simp
-      · rw [List.filter_cons_of_pos (by simpa using h), List.map_cons, List.sum_cons, ih,
-            List.map_cons, List.sum_cons]
-
-/-- The fully-merged normal form of a linear form: combine like terms, drop zeros. A linear form
-    that is really a constant thus normalizes to `⟨c, []⟩`, whose `toExpr` is the literal `c`. -/
-def LinExpr.norm (l : LinExpr p) : LinExpr p :=
-  ⟨l.const, (mergeTerms l.terms).filter (fun t => t.2 ≠ 0)⟩
-
-theorem LinExpr.norm_eval (l : LinExpr p) (env : Variable → ZMod p) :
-    l.norm.eval env = l.eval env := by
-  simp only [LinExpr.norm, LinExpr.eval, dropZero_eval, mergeTerms_eval]
+/-! `dropZero_eval`, `LinExpr.norm` and `LinExpr.norm_eval` now live in the neutral
+    `LinExprCore.lean` (imported above). -/
 
 /-! ## The normalization pass -/
 

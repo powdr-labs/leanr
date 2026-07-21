@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.ConstantFold
+import ApcOptimizer.Implementation.OptimizerPasses.LinExprCore
 
 set_option autoImplicit false
 
@@ -24,24 +25,10 @@ remove constant range checks that are in range). Field-free. -/
 
 variable {p : ℕ}
 
-/-! ## Constant messages -/
+/-! ## Constant messages
 
-/-- The constant value of an expression, if its fold is a literal constant. -/
-def Expression.constValue? (e : Expression p) : Option (ZMod p) :=
-  match e.fold with
-  | .const c => some c
-  | _ => none
-
-theorem Expression.constValue?_sound (e : Expression p) (c : ZMod p)
-    (h : e.constValue? = some c) (env : Variable → ZMod p) : e.eval env = c := by
-  unfold Expression.constValue? at h
-  split at h
-  · rename_i c' hfold
-    simp only [Option.some.injEq] at h
-    subst h
-    rw [← e.fold_eval env, hfold]
-    rfl
-  · exact absurd h (by simp)
+`Expression.constValue?` / `constValue?_sound` now live in the neutral `LinExprCore.lean`
+(imported above). -/
 
 /-- Constant values of a list of expressions, all-or-nothing. -/
 def constValues? : List (Expression p) → Option (List (ZMod p))

@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Rewrite
+import ApcOptimizer.Implementation.OptimizerPasses.LinExprCore
 
 set_option autoImplicit false
 
@@ -23,47 +24,9 @@ first pass, and is re-run after substitution passes to propagate freshly-exposed
 
 variable {p : ℕ}
 
-/-- Smart addition: fold two constants and drop `+ 0` on either side. -/
-def Expression.foldAdd (a b : Expression p) : Expression p :=
-  match a, b with
-  | .const m, .const n => .const (m + n)
-  | .const m, b => if m = 0 then b else .add (.const m) b
-  | a, .const n => if n = 0 then a else .add a (.const n)
-  | a, b => .add a b
-
-/-- Smart multiplication: fold two constants, absorb `* 0`, drop `* 1`. -/
-def Expression.foldMul (a b : Expression p) : Expression p :=
-  match a, b with
-  | .const m, .const n => .const (m * n)
-  | .const m, b => if m = 0 then .const 0 else if m = 1 then b else .mul (.const m) b
-  | a, .const n => if n = 0 then .const 0 else if n = 1 then a else .mul a (.const n)
-  | a, b => .mul a b
-
-theorem Expression.foldAdd_eval (a b : Expression p) (env : Variable → ZMod p) :
-    (a.foldAdd b).eval env = a.eval env + b.eval env := by
-  unfold Expression.foldAdd
-  split <;> (try split_ifs) <;> simp_all [Expression.eval]
-
-theorem Expression.foldMul_eval (a b : Expression p) (env : Variable → ZMod p) :
-    (a.foldMul b).eval env = a.eval env * b.eval env := by
-  unfold Expression.foldMul
-  split <;> (try split_ifs) <;> simp_all [Expression.eval]
-
-/-- One bottom-up constant-folding / algebraic-normalization pass over an expression. Children are
-    normalized first, then the smart constructors fold the current node. -/
-def Expression.fold : Expression p → Expression p
-  | .const n => .const n
-  | .var x => .var x
-  | .add a b => a.fold.foldAdd b.fold
-  | .mul a b => a.fold.foldMul b.fold
-
-theorem Expression.fold_eval (e : Expression p) (env : Variable → ZMod p) :
-    e.fold.eval env = e.eval env := by
-  induction e with
-  | const n => rfl
-  | var x => rfl
-  | add a b iha ihb => rw [Expression.fold, Expression.foldAdd_eval, iha, ihb]; rfl
-  | mul a b iha ihb => rw [Expression.fold, Expression.foldMul_eval, iha, ihb]; rfl
+/-! The smart constructors `Expression.foldAdd` / `foldMul`, the bottom-up `Expression.fold` and
+    their eval lemmas now live in the neutral `LinExprCore.lean` (imported above); the
+    variable-bound lemmas and the pass stay here. -/
 
 theorem Expression.foldAdd_vars (a b : Expression p) :
     ∀ x ∈ (a.foldAdd b).vars, x ∈ a.vars ++ b.vars := by

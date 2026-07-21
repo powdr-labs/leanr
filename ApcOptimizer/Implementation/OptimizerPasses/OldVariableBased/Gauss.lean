@@ -2,6 +2,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Normalize
+import ApcOptimizer.Implementation.OptimizerPasses.LinExprCore
 import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 
 set_option autoImplicit false
@@ -33,26 +34,10 @@ application is `ConstraintSystem.substF_correct`. Purely equational — no field
 
 variable {p : ℕ}
 
-/-! ## Cheap syntactic helpers (no allocation) -/
+/-! ## Cheap syntactic helpers (no allocation)
 
-/-- Does the expression mention variable `x`? -/
-def Expression.mentions (x : Variable) : Expression p → Bool
-  | .const _ => false
-  | .var y => y == x
-  | .add a b => a.mentions x || b.mentions x
-  | .mul a b => a.mentions x || b.mentions x
-
-/-- Number of variable occurrences (with multiplicity). -/
-def Expression.varCount : Expression p → Nat
-  | .const _ => 0
-  | .var _ => 1
-  | .add a b => a.varCount + b.varCount
-  | .mul a b => a.varCount + b.varCount
-
-/-- Is the expression literally a variable? -/
-def Expression.isVar : Expression p → Bool
-  | .var _ => true
-  | _ => false
+`Expression.mentions` / `Expression.varCount` / `Expression.isVar` now live in the neutral
+`LinExprCore.lean` (imported above). -/
 
 /-! ## The proof-carrying solution map -/
 

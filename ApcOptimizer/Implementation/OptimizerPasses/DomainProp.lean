@@ -1,9 +1,9 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Gauss
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Normalize
-import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
+import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
+import ApcOptimizer.Implementation.OptimizerPasses.LinExprCore
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
 import ApcOptimizer.Utils.Size
 import Mathlib.Algebra.Field.ZMod
+import Mathlib.Tactic.LinearCombination
 
 set_option autoImplicit false
 

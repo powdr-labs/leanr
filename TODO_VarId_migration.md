@@ -151,11 +151,32 @@ file imports its home back):
   `OptimizerPasses/DomainProp.lean`, next to its `Expression.eval_congr` / `BusInteraction.eval_congr`
   companions; consumed by the master-theorem completeness proof (`Implementation/Optimizer.lean`).
 
-**Step B — sparse LinExpr spec core re-home.** Move the `LinExpr` + `linearize` + `LinExpr.norm`
-algebra (with `LinExpr.norm_eval`, `linearize_eval`, …) and `Expression.constValue?` to a neutral
-spec-support home. This layer is representation-independent (`Variable`-keyed sparse linear forms)
-but permanently serves the `Variable`-side `DomainProp.lean` and `MemoryUnify.lean`, so it re-homes
-rather than dies. Frees `Affine.lean` / `Normalize.lean` of being consumed for it.
+**Step B — sparse LinExpr spec core re-home — DONE.** The representation-independent
+(`Variable`-keyed) sparse linear-expression spec core moved to the new neutral
+`OptimizerPasses/LinExprCore.lean` (imports `Spec` only, nothing legacy; each reference file imports
+it back; fully-qualified names preserved). Re-homed:
+- the sparse `LinExpr` with its algebra `eval` / `add` / `scale` / `coeff` / `others` / `eval_split`
+  / `toExpr` (and `add_eval` / `scale_eval` / `toExpr_eval`), plus `linearize` / `linearize_eval`
+  (from `OldVariableBased/Affine.lean`);
+- the normalization chain `addCoeff` / `mergeTerms` (with `addCoeff_eval` / `foldl_addCoeff_eval` /
+  `mergeTerms_eval` / `dropZero_eval`) and `LinExpr.norm` / `LinExpr.norm_eval` (from
+  `OldVariableBased/Normalize.lean`; the fast `@[csimp] mergeTerms_eq_fast` and the variable-bound
+  lemmas stay in the reference file, still targeting the moved `addCoeff`/`mergeTerms`);
+- `Expression.constValue?` / `constValue?_sound`, and — as their dependency closure — the
+  constant-fold *value* core `Expression.foldAdd` / `foldMul` / `fold` with their eval lemmas (from
+  `OldVariableBased/TautoBus.lean` and `OldVariableBased/ConstantFold.lean`; the variable-bound
+  lemmas and the folding pass stay in the reference file);
+- the syntactic `Expression` helpers `Expression.mentions` / `Expression.varCount` /
+  `Expression.isVar` (from `OldVariableBased/Gauss.lean`; `mentions` is consumed by `DomainProp.lean`,
+  `isVar`/`varCount` by the dense `Gauss.lean` — the Step-A scan finding, handled here).
+
+This frees `OldVariableBased/Affine.lean` / `Normalize.lean` / `Gauss.lean` / `ConstantFold.lean` /
+`TautoBus.lean` of being consumed for the spec core, and kills `DomainProp.lean`'s and
+`MemoryUnify.lean`'s legacy couplings *for this content* (they now reach it via `LinExprCore.lean`).
+Two independent legacy couplings remain, out of Step B's scope: `DomainProp.lean` still uses
+`ConstraintSystem.subst` / `subst_correct` from `OldVariableBased/Subst.lean` (substitution
+machinery, not the LinExpr core), and `MemoryUnify.lean` still imports `TrivialConstraint.lean`
+(→ `OldVariableBased/TrivialConstraint.lean`).
 
 **Step C — nativize `RootPairUnifyProof`.** Prove the native statements without decoding through
 `OldVariableBased/RootPairUnify.lean`; the legacy lemmas to retire are `twoRootOf?_sound`,
@@ -172,15 +193,17 @@ their only consumers (grep-verified).
 neutral non-legacy home. It serves `DomainBatch(+Proof/Runtime)`, `Reencode(+Proof)`,
 `DomainFoldRuntime`, `DomainFoldProof`.
 
-**Step F — native twins or re-homes for the residual memory-bus theorems.** `multiplicitySum_append`,
-`mem_core_of_ne`, and `MemoryBusShape.setNewMult_ne_zero` — the `Variable`-typed theorems the dense
-`BusPairCancel` cluster still consumes through `OldVariableBased/BusPairCancel.lean`.
+**Step F — native twins or re-homes for the residual memory-bus theorems.** The `Variable`-typed
+facts the dense `BusPairCancel` cluster still consumes through `OldVariableBased/BusPairCancel.lean`
+(and its neighbours): `multiplicitySum_append`, `mem_core_of_ne`, `MemoryBusShape.setNewMult_ne_zero`,
+plus the extra legacy pulls surfaced by the Step-A scan — `IntervalForce.srep` and `MemoryBusDrop`.
 
 **Scan findings (current):** `DomainFold.lean` is already keeper-only (no non-legacy consumer);
-`Gauss.lean`'s old blocker `decodeExpr_isVar` is gone (dense `Gauss.lean` still consumes spec
-`Expression.isVar` from it — retires with Step B/E as the file's other couplings clear);
-`MemoryUnify.lean` is a newly-identified `LinExpr` consumer (handled by Step B);
-`Implementation/Optimizer.lean`'s `ComputationMethod.eval_congr` use is handled by Step A.
+dense `Gauss.lean`'s consumption of spec `Expression.isVar` / `varCount` is resolved by Step B (moved
+to `LinExprCore.lean`); `MemoryUnify.lean` was a newly-identified `LinExpr` consumer (handled by
+Step B); the `BusPairCancel` cluster's extra legacy pulls (`IntervalForce.srep`, `MemoryBusDrop`)
+join Step F's scope; `Implementation/Optimizer.lean`'s `ComputationMethod.eval_congr` use is handled
+by Step A.
 
 **Dies with the folder (Task 4) — reachability keepers:** after Task 1, no schedule or pipeline
 code references a legacy pass; what remains are imports kept only so the legacy modules stay in
