@@ -45,6 +45,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZero
 import ApcOptimizer.Implementation.OptimizerPasses.RangeBool
 import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubst
+import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubstProof
 import ApcOptimizer.Implementation.OptimizerPasses.DenseUmbrella
 
 set_option autoImplicit false
@@ -154,7 +155,7 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     -- `dedupLate` collapses, `redundantByteDrop` drops when justified elsewhere, and
     -- `bytePackLate` packs pairwise. (In the cleanup cycle the rename instead explodes the
     -- re-encoding; the coda has no reencode, so here it only exposes the degenerate checks.)
-    ("identitySubst", DenseVerifiedPassW.ofSpec (IdentitySubst.identitySubstPass.guardDegree b)),
+    ("identitySubst", DenseVerifiedPassW.guardDegree b denseIdentitySubstPass),
     ("dedupLate", DenseVerifiedPassW.guardDegree b denseDedupPass),
     ("redundantByteDrop", DenseVerifiedPassW.guardDegree b (denseRedundantByteDropPass pw)),
     ("subsumedRange", DenseVerifiedPassW.guardDegree b denseSubsumedRangeDropPass),
