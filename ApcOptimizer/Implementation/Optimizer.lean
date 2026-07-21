@@ -29,6 +29,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BoxRewrite
 import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.ZeroWidthRange
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRange
+import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRangeProof
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedCheck
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedCheckProof
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
@@ -153,7 +154,7 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     ("identitySubst", DenseVerifiedPassW.ofSpec (IdentitySubst.identitySubstPass.guardDegree b)),
     ("dedupLate", DenseVerifiedPassW.guardDegree b denseDedupPass),
     ("redundantByteDrop", DenseVerifiedPassW.ofSpec ((RedundantByteDrop.redundantByteDropPass pw).guardDegree b)),
-    ("subsumedRange", DenseVerifiedPassW.ofSpec (SubsumedRange.subsumedRangeDropPass.guardDegree b)),
+    ("subsumedRange", DenseVerifiedPassW.guardDegree b denseSubsumedRangeDropPass),
     ("subsumedCheck", DenseVerifiedPassW.guardDegree b denseSubsumedCheckDropPass),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
     -- runs global range packing once at the end), so it runs once here, out of the cleanup
