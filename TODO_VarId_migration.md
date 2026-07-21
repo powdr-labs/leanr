@@ -11,25 +11,31 @@ independently landable.
 
 ## Current state
 
-- The **cleanup stage is fully dense**: all 29 cleanup labels have native dense implementations
-  and native `DensePassCorrect` proofs (no decode-commutation proofs, no per-pass
-  decode/re-encode adapters remain in the cleanup cycle). `cleanupPasses`
-  (`Implementation/Optimizer.lean`) is the canonical dense-typed schedule, consumed by both the
-  pipeline and the `profile` CLI command (which steps it densely: encode and decode timed
-  separately, dense counts, fixpoint mirrored on the dense size key).
-- The **prelude and coda still run `Variable`-based spec passes**. The dense region is entered
-  and exited by `denseCleanupAdapter`, which encodes at the start of the cleanup stage and
-  decodes at its end. Removing that wrapper by extending the dense region to the true pipeline
-  edges is Task 1.
-- This state is verified byte-identical to the pre-migration optimizer on every benchmark
-  corpus (identical per-case circuit sizes, effectiveness delta exactly 0), with whole-corpus
-  runtime improvements of 16% (openvm-eth), 30% (wasm-eth), 17% (keccak), 11% (sp1-rsp) and
-  19% (sp1-keccak) at the time of the dense-cleanup milestone.
+- **The whole pipeline is dense** (Task 1 complete): `preludePasses`, `cleanupPasses`, and
+  `codaPasses` (`Implementation/Optimizer.lean`) are all `DenseVerifiedPassW`-typed schedules —
+  42 labels (1 prelude, 29 cleanup, 12 coda), every one a native dense implementation with a
+  native `DensePassCorrect` proof (no decode-commutation proofs, no per-pass decode/re-encode
+  adapters anywhere). The pipeline encodes ONCE at optimizer entry and decodes ONCE at output
+  (`densePipeline` inside `pipeline`); the Bridge lift to the audited `Variable`-based spec sits
+  at exactly those edges. The `profile` CLI command steps the same three lists densely, with
+  encode and decode timed as their own lines, never charged to a pass.
+- `DenseVerifiedPassW.ofSpec` has zero schedule call sites; it remains the documented on-ramp
+  for contributing a `Variable`-based pass (Task 4 decides its fate).
+- The dense-cleanup milestone was verified byte-identical to the pre-migration optimizer on
+  every benchmark corpus (identical per-case circuit sizes, effectiveness delta exactly 0), with
+  whole-corpus runtime improvements of 16% (openvm-eth), 30% (wasm-eth), 17% (keccak), 11%
+  (sp1-rsp) and 19% (sp1-keccak). The Task 1 commits are each verified byte-identical on the
+  local reference cases below; the corpus-wide CI confirmation of the completed Task 1 state is
+  pending the next draft-PR run (watch `bytePackLate` — its dense pass drains internally,
+  subsuming the old `iterateToFixpoint` wrapper — and `subsumedCheck`, which is a no-op on
+  OpenVM, so only the SP1 corpus exercises it).
 - Byte-identity reference counts (vars / constraints / bus interactions) for local checks:
   `Benchmarks/OpenVM/openvm-eth/apc_037_pc0x361604` → 689/525/445;
   `…/openvm-eth/apc_001_pc0x4ecc54` → 35/18/24;
   `…/wasm-eth/apc_005_pc0x2E9C48` → 184/94/92;
-  `…/keccak/apc_001_pckeccak` → 2021/186/1748.
+  `…/keccak/apc_001_pckeccak` → 2021/186/1748;
+  `Benchmarks/SP1/keccak/apc_001_pc0x78007bbc` → 2665/313/2067;
+  `Benchmarks/SP1/rsp/apc_055_pc0x781ae3f8` → 18/0/16.
 
 ## Standing rules (apply to every task below)
 
@@ -73,32 +79,23 @@ independently landable.
   with `ofNativeExtending` in `Bridge.lean` (passes that mint fresh variables and extend the
   registry), `BridgeSteps.lean` (drain/foldList combinators for internally-iterating passes).
 
-## Task 1 — Extend the dense region to the pipeline edges
+## Task 1 — Extend the dense region to the pipeline edges — DONE
 
-Goal: all three labelled lists (`preludePasses`, `cleanupPasses`, `codaPasses`) are dense; the
-pipeline encodes ONCE at optimizer entry and decodes ONCE at output; `denseCleanupAdapter` is
-removed; the `profile` command does the same (its encode/decode lines already exist and must
-never be charged to individual passes).
+Landed as twelve commits (`f45736a` … `818ee09`): structural flip first (dense-typed
+prelude/coda with every entry `ofSpec`-wrapped, pipeline restructured to edge encode/decode,
+`denseCleanupAdapter` deleted, profiler moved to the same edges), then per-label swaps to native
+dense passes, each commit verified byte-identical on the local reference cases. Notes for later
+tasks:
 
-Pass worklist, by kind:
-
-- **Near-free rewires** (a native dense pass already exists for the label's pass):
-  `constFold0` (prelude; `denseConstantFoldPass`), `dedupLate` (`denseDedupPass`),
-  `constFoldEnd` (`denseConstantFoldPass`), `bytePackLate` (`denseByteCheckPackPass`, which
-  drains internally — the spec entry's `iterateToFixpoint` wrapper is subsumed; verify that
-  equivalence stays byte-identical on CI).
-- **Mode extension**: `busPairCancelLate` is the existing dense busPairCancel with
-  `aggressive := true`; the native proof currently covers only the cleanup instance
-  (`aggressive := false`). Extend or re-instantiate it for the aggressive mode.
-- **New dense ports** (no dense twin exists yet; coda-only passes): `splitBytePair`,
-  `identitySubst`, `redundantByteDrop`, `subsumedRange`, `subsumedCheck`, `tupleRange`,
-  `monicScale`, `seqzCollapse`. `seqzCollapse` mints fresh variables and records derivations —
-  use `ofNativeExtending`; `ReencodeProof.lean`/`HintCollapseProof.lean` are the precedents.
-- **Structural**: dense-typed `preludePasses`/`codaPasses` (schedule content frozen), pipeline
-  restructured to edge encode/decode, `denseCleanupAdapter` deleted, the master-theorem proof
-  scripts in `Implementation/Optimizer.lean` re-plumbed (mechanical — the Bridge lift moves
-  from the cleanup edges to the pipeline edges), and the profiler's encode/decode moved to the
-  same edges.
+- The anticipated `busPairCancelLate` mode-extension work was unnecessary: `denseBusPairCancelPass`
+  takes `aggressive : Bool` and its bundled proof always covered both modes; the rewire was
+  audit-only.
+- `bytePackLate` uses `denseByteCheckPackPass`, whose internal drain subsumes the old
+  `iterateToFixpoint ByteCheckPack.byteCheckPackPass` wrapper; `seqzCollapse` keeps its
+  reference fixpoint as `denseIterateToFixpoint` around the `ofNativeExtending`-built step.
+- Pass/VM coverage of the local byte-identity cases: `subsumedCheck` is a no-op on OpenVM
+  (`rangeCheckAt` empty there) and `subsumedRange` is a no-op on SP1 (no `varRangeBus`), so the
+  corpus-wide CI run is the real check for the respective other side.
 
 ## Task 2 — Exact ID-set key in domainBatch (intentional behavior repair)
 
@@ -147,21 +144,35 @@ each dies:
   `BusPairCancelCore.lean` consumes `Variable`-typed theorems of
   `OldVariableBased/BusPairCancel.lean` (`multiplicitySum_append`,
   `MemoryBusShape.setNewMult_ne_zero`) THROUGH it. Unpick when those theorems get native twins
-  — the `busPairCancelLate` work in Task 1 may do this naturally.
+  — Task 1's `busPairCancelLate` rewire did NOT do this naturally: the dense justify code
+  deliberately consumes the spec file's `maxDeepPoints`/`maxDeepVars` directly (budgets cannot
+  drift), so the coupling stands until the constants are re-homed.
+- `SeqzCollapseProof.lean`: reuses the spec file's representation-independent `ZMod p` value
+  lemmas verbatim (`seqz_forward`, `seqz_reconstruct`, `zbool`, `bus_accepts_byte_zero`,
+  `bus_byte_of_accepts`, and their support chain) — the same convention as
+  `HintCollapseProof.lean`. Re-home them at deletion time.
 
-**Dies automatically with Task 1:** the 12 import-only wrapper files for prelude/coda spec
-passes (`ConstantFold`, `IdentitySubst`, `MonicScale`, `RedundantByteDrop`, `SeqzCollapse`,
-`SplitBytePair`, `SubsumedCheck`, `SubsumedRange`, `TautoBus`, `TrivialConstraint`,
-`TupleRange`, `ZeroMultBus`) and `Implementation/Optimizer.lean`'s legacy pass imports.
-
-**Dies with the folder (Task 4):** four imports kept only so their legacy modules remain in the
-build graph until deletion (`ByteCheckPack.lean`, `DisconnectedComponent.lean`,
-`RangeBool.lean`, `RangeForceZero.lean` — content-vestigial).
+**Dies with the folder (Task 4) — reachability keepers:** after Task 1, no schedule or pipeline
+code references a legacy pass; what remains are imports kept only so the legacy modules stay in
+the build graph until deletion (several — `Identity`, `ZeroRegister`, `CarryBranch`,
+`BoxRewrite`, `OneHotAnnihilate`, `DigitFold` — are reachable ONLY this way):
+- `Implementation/Optimizer.lean`'s `OldVariableBased.*` import block;
+- the `import …OldVariableBased.X` line inside each of the eight Task 1 port files
+  (`SubsumedCheck`, `SubsumedRange`, `MonicScale`, `SplitBytePair`, `RedundantByteDrop`,
+  `IdentitySubst`, `TupleRange`, `SeqzCollapse` — these files now host the dense
+  implementations, so only the import line dies, not the file);
+- the four import-only keeper files `ConstantFold.lean`, `TautoBus.lean`,
+  `TrivialConstraint.lean`, `ZeroMultBus.lean` (their dense twins live in `ExprOps.lean` /
+  `DropPassesProof.lean`);
+- the four content-vestigial keepers `ByteCheckPack.lean`, `DisconnectedComponent.lean`,
+  `RangeBool.lean`, `RangeForceZero.lean`.
 
 ## Task 4 — Delete the legacy tree
 
-When Tasks 1–3 are done: delete `OldVariableBased/` (42 files), the wrapper files, and the
-reachability-keeper imports; prune `Implementation/Optimizer.lean`'s imports; re-attempt the
+When Tasks 1–3 are done: delete `OldVariableBased/` (42 files) and every reachability keeper
+listed at the end of Task 3 (the four import-only keeper files, the four content-vestigial
+keepers, the legacy import lines inside the eight Task 1 port files, and
+`Implementation/Optimizer.lean`'s legacy import block); re-attempt the
 two deferred lemma moves (the Gauss `argmin_map_key`/`map_filterMap` pair and the
 `BusPairCancelJustify` constants — their blockers are gone by now); decide the fate of
 `DenseVerifiedPassW.ofSpec` (currently zero call sites; it is the documented on-ramp in
