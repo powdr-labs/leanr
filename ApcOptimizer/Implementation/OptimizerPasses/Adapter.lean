@@ -202,13 +202,13 @@ theorem VarRegistry.decodeDerivs_encodeDerivs (r : VarRegistry) (ds : Derivation
           exact (r.register x).1.decodeCM_encodeCM cm
       · exact ih ((r.register x).1.encodeCM cm).1
 
-/-! ## The generic spec adapter (development scaffolding) -/
+/-! ## The generic spec adapter -/
 
-/-- Wrap a spec `VerifiedPassW` as a dense pass by decode → run → re-encode. Correct and
-    byte-identical by construction, but runtime-neutral (round-trips through the spec form). It is
-    the documented on-ramp for a new spec-side pass — `cleanupPasses` may hold
-    `DenseVerifiedPassW.ofSpec (pass.….guardDegree b)` entries — until that pass is ported to a
-    native dense proof, which should be preferred (a per-pass decode/re-encode wins no runtime). -/
+/-- Wrap a `Variable`-based `VerifiedPassW` as a dense pass by decode → run → re-encode. It
+    produces exactly the wrapped pass's output and inherits its correctness, but pays a full
+    decode/re-encode round-trip per invocation. This is the entry route for a `Variable`-based
+    pass in `cleanupPasses` (`DenseVerifiedPassW.ofSpec (pass.….guardDegree b)`); a dense pass
+    carrying its own `DensePassCorrect` is preferred. -/
 def DenseVerifiedPassW.ofSpec (f : VerifiedPassW p) : DenseVerifiedPassW p :=
   fun reg d _ bs facts =>
     let r := f (reg.decodeCS d) bs facts

@@ -92,10 +92,11 @@ def preludePasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
 
     **To add an optimization:** write a pass in a new file under
     `ApcOptimizer/Implementation/OptimizerPasses/`, import it above, and add one
-    `(name, X.guardDegree b)` entry to this list — a native `DenseVerifiedPassW`, or, until it is
-    ported to a native dense proof, `DenseVerifiedPassW.ofSpec (pass.….guardDegree b)`. That is the
-    only edit needed here; the correctness proof follows automatically from the pass's own
-    `PassCorrect`, and the profiler picks up the new label for free (it steps this same list). -/
+    `(name, X.guardDegree b)` entry to this list — a `DenseVerifiedPassW`, or
+    `DenseVerifiedPassW.ofSpec (pass.….guardDegree b)` for a `Variable`-based pass (correct by
+    construction, but it round-trips through the `Variable` form each iteration, so a dense pass
+    is preferred). That is the only edit needed here; correctness follows from the pass's own
+    bundled proof, and the profiler picks up the new label for free (it steps this same list). -/
 def cleanupPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
   -- One primality decision per optimizer run, threaded to every prime-gated pass below (they read
   -- the `Bool` in O(1) instead of re-running `decide (Nat.Prime p)` per invocation per iteration).
