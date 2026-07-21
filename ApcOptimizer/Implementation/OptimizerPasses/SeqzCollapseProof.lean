@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapseCore
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapseProof
 
 set_option autoImplicit false

@@ -69,6 +69,36 @@ theorem BusInteraction.eval_congr (bi : BusInteraction (Expression p))
         exact Or.inr ⟨e, he, hx⟩))
   simp only [BusInteraction.eval, hmult, hpay]
 
+/-- A computation method reads only its variables.
+
+    Re-homed here from `OldVariableBased/Reencode.lean` (next to the `Expression`/`BusInteraction`
+    `eval_congr` companions it is built from) so the master-theorem completeness proof
+    (`Implementation/Optimizer.lean`) and the reference pass consume it from a neutral home without
+    depending on the reference pass; `ComputationMethod` itself is the audited spec type. -/
+theorem ComputationMethod.eval_congr (cm : ComputationMethod p) (e1 e2 : Variable → ZMod p) :
+    (∀ v ∈ cm.vars, e1 v = e2 v) → cm.eval e1 = cm.eval e2 := by
+  induction cm with
+  | const c => intro _; rfl
+  | quotientOrZero num den =>
+      intro h
+      have hn : num.eval e1 = num.eval e2 :=
+        Expression.eval_congr num _ _ (fun v hv => h v (List.mem_append_left _ hv))
+      have hd : den.eval e1 = den.eval e2 :=
+        Expression.eval_congr den _ _ (fun v hv => h v (List.mem_append_right _ hv))
+      show (if den.eval e1 = 0 then 0 else (den.eval e1)⁻¹ * num.eval e1)
+         = (if den.eval e2 = 0 then 0 else (den.eval e2)⁻¹ * num.eval e2)
+      rw [hn, hd]
+  | ifEqZero cond thenM elseM iht ihe =>
+      intro h
+      have hc : cond.eval e1 = cond.eval e2 :=
+        Expression.eval_congr cond _ _ (fun v hv =>
+          h v (List.mem_append_left _ (List.mem_append_left _ hv)))
+      have ht := iht (fun v hv => h v (List.mem_append_left _ (List.mem_append_right _ hv)))
+      have he := ihe (fun v hv => h v (List.mem_append_right _ hv))
+      show (if cond.eval e1 = 0 then thenM.eval e1 else elseM.eval e1)
+         = (if cond.eval e2 = 0 then thenM.eval e2 else elseM.eval e2)
+      rw [hc, ht, he]
+
 /-! ## Allocation-free "all variables lie in a set" checks
 
 `Expression.vars` materializes a fresh list on every call; predicates like "are all of `c`'s

@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Reencode
+import ApcOptimizer.Implementation.OptimizerPasses.SearchBudgets
 
 set_option autoImplicit false
 
@@ -1083,11 +1084,6 @@ def foldLoopDirect [Fact p.Prime] (bs : BusSemantics p) :
         exact h1.symm)
       let r2 := foldLoopDirect bs rest r1.out
       ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
-
-/-- Systems with at least this many algebraic constraints use the inverted index; smaller ones use
-    the direct per-target `coveredCsOf` scan (see the section comment). Purely a runtime gate —
-    both paths compute the identical fold. -/
-def domainFoldIndexThreshold : Nat := 8192
 
 /-- The domain-constant folding pass: for every constraint's (small) variable group, fold each
     subexpression that is constant on the group's surviving joint values to that constant — keeping

@@ -2,6 +2,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Normalize
+import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 
 set_option autoImplicit false
 
@@ -183,32 +184,6 @@ Remaining opportunity (not taken here): `pm1Desc`/`unitDesc` still build `l.othe
 `l.coeff v` per candidate, so scoring is O(terms²) per constraint. On the measured corpora affine
 forms are short, so this is below the win; a single coefficient/others-count index pass would make
 scoring linear if longer forms ever dominate. -/
-
-/-- `argmin` commutes with a key-preserving map: when `g` carries the key (`kγ (g a) = kα a`), the
-    winner of the mapped list is the mapped winner. This lets us score cheap descriptors in place
-    of built candidates. -/
-theorem argmin_map_key {α γ : Type*} (g : α → γ) (kα : α → Nat) (kγ : γ → Nat)
-    (h : ∀ a, kγ (g a) = kα a) : ∀ l : List α, (l.map g).argmin kγ = (l.argmin kα).map g := by
-  intro l
-  induction l with
-  | nil => simp
-  | cons a t ih =>
-      rw [List.map_cons, List.argmin_cons, List.argmin_cons, ih]
-      cases t.argmin kα with
-      | none => simp
-      | some c =>
-          simp only [Option.map_some, h]
-          by_cases hlt : kα c < kα a <;> simp [hlt]
-
-theorem map_filterMap {α β γ : Type*} (f : α → Option β) (g : β → γ) (l : List α) :
-    (l.filterMap f).map g = l.filterMap (fun a => (f a).map g) := by
-  induction l with
-  | nil => simp
-  | cons a t ih =>
-      simp only [List.filterMap_cons]
-      cases f a with
-      | none => simpa using ih
-      | some b => simp [ih]
 
 /-! ### `toExpr` size facts (score a candidate without building it) -/
 

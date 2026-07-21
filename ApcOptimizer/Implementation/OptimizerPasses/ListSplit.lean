@@ -49,3 +49,49 @@ theorem split_of_extracts {α : Type _} {l : List α} {arr : Array α}
     List.size_toArray, List.drop_zero, Nat.sub_zero]
   rw [List.take_of_length_le (l := l.drop (j + 1)) (by simp)]
   exact list_split_two hij hjl
+
+/-! ### Generic `argmin` / `filterMap` list lemmas
+
+Representation-independent list machinery re-homed here from `OldVariableBased/Gauss.lean` so the
+dense Gauss pass can consume them without importing the reference pass; the reference pass imports
+them back. -/
+
+/-- `argmin` commutes with a key-preserving map: when `g` carries the key (`kγ (g a) = kα a`), the
+    winner of the mapped list is the mapped winner. This lets us score cheap descriptors in place
+    of built candidates. -/
+theorem argmin_map_key {α γ : Type*} (g : α → γ) (kα : α → Nat) (kγ : γ → Nat)
+    (h : ∀ a, kγ (g a) = kα a) : ∀ l : List α, (l.map g).argmin kγ = (l.argmin kα).map g := by
+  intro l
+  induction l with
+  | nil => simp
+  | cons a t ih =>
+      rw [List.map_cons, List.argmin_cons, List.argmin_cons, ih]
+      cases t.argmin kα with
+      | none => simp
+      | some c =>
+          simp only [Option.map_some, h]
+          by_cases hlt : kα c < kα a <;> simp [hlt]
+
+theorem map_filterMap {α β γ : Type*} (f : α → Option β) (g : β → γ) (l : List α) :
+    (l.filterMap f).map g = l.filterMap (fun a => (f a).map g) := by
+  induction l with
+  | nil => simp
+  | cons a t ih =>
+      simp only [List.filterMap_cons]
+      cases f a with
+      | none => simpa using ih
+      | some b => simp [ih]
+
+/-! ### Linear-time dedup
+
+Re-homed here from `OldVariableBased/Reencode.lean` (generic list machinery); the reference passes
+import it back. -/
+
+/-- `List.dedup` computed in linear time via a hash set, with the **identical** result: an element
+    is kept at its last-occurrence position (exactly `List.dedup`'s order), so swapping this in is a
+    pure speedup — `reencodeLoop`'s correctness is independent of the target list, and its
+    (order-sensitive, greedy) behaviour is unchanged because the list itself is unchanged. -/
+def dedupHash {α : Type} [BEq α] [Hashable α] (l : List α) : List α :=
+  (l.reverse.foldl (fun (st : List α × Std.HashSet α) t =>
+    if st.2.contains t then st else (t :: st.1, st.2.insert t))
+    (([], ∅) : List α × Std.HashSet α)).1

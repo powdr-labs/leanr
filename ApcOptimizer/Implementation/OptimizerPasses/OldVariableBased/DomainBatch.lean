@@ -3,6 +3,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.CoveredIndex
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Dedup
+import ApcOptimizer.Implementation.OptimizerPasses.SearchBudgets
 
 set_option autoImplicit false
 
@@ -893,9 +894,6 @@ def coveredCs (cs : ConstraintSystem p) (xs : List Variable) : List (Expression 
 def coveredBis (bs : BusSemantics p) (cs : ConstraintSystem p) (xs : List Variable) :
     List (BusInteraction (Expression p)) :=
   cs.busInteractions.filter (fun bi => bi.varsInF xs && !bs.isStateful bi.busId)
-
-/-- Work cap for one joint enumeration: box size × number of covered targets. -/
-def maxEnumWork : Nat := 524288
 
 /-- Can this covered interaction ever eliminate a box point? A payload of raw variables and
     constants is usually the range/byte check that *defined* the box domains (probing it filters

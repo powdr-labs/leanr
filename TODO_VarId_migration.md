@@ -128,40 +128,59 @@ proofs never inspect the key).
 
 ## Task 3 — Remove the remaining references into OldVariableBased/
 
-Current, grep-verified coupling list from non-legacy files into the legacy tree, grouped by how
-each dies:
+Task 3 proceeds in labelled steps A–F. Step A (representation-independent re-homes) is done; the
+remaining steps kill the genuine couplings (decode transports, spec-definition reuse, the
+enumeration engine, and the residual `Variable`-typed memory-bus theorems).
 
-**Decode transports (by design; nativize to kill):**
-- `AddrDiseqProof.lean` → `OldVariableBased/AddrDiseq.lean` and `RootPairUnifyProof.lean` →
-  `OldVariableBased/RootPairUnify.lean`: native-statement proofs that internally decode to
-  reuse spec soundness lemmas (e.g. `constDiffNZ_sound`). Proving those lemmas natively kills
-  the transports AND frees the `decodeLin` family in `Affine.lean` plus the `decodeLin_norm`
-  support chain in `Normalize.lean` that they keep alive.
+**Step A — re-home representation-independent legacy content — DONE.** Content that quantifies over
+`Nat`/`ZMod`/`List`/bus-spec values only, previously owned by `OldVariableBased/` files that the
+dense tree consumed, moved to neutral non-legacy homes (fully-qualified names preserved; each legacy
+file imports its home back):
+- list machinery `argmin_map_key` / `map_filterMap` and the linear-time `dedupHash` →
+  `OptimizerPasses/ListSplit.lean`;
+- the search / enumeration budget constants `maxDeepPoints` / `maxDeepDomain` / `maxDeepConstraints`
+  / `maxDeepVars` / `basisFuel` / `maxEnumWork` / `domainFoldIndexThreshold` →
+  `OptimizerPasses/SearchBudgets.lean` (new neutral file, `Nat`-only);
+- the `seqzCollapse` gadget's `ZMod p`-value-level lemmas and range-check bus facts (`seqz_forward`,
+  `seqz_reconstruct`, `zbool`, `bus_accepts_byte_zero`, `bus_byte_of_accepts`, and the support
+  closure `neg_byte_val_big` / `small_natCast_ne_zero` / `val_one_eq` / `val_add_one` /
+  `byte_sub_one_val` / `byte_sub_two_val` / `oneHot`; `sum_zero_all_zero` was already in
+  `HintCollapse.lean`) → `OptimizerPasses/SeqzCollapseCore.lean` (new neutral file, kept under the
+  `SeqzCollapse` namespace);
+- `ComputationMethod.eval_congr` (`ComputationMethod` is the audited spec type) →
+  `OptimizerPasses/DomainProp.lean`, next to its `Expression.eval_congr` / `BusInteraction.eval_congr`
+  companions; consumed by the master-theorem completeness proof (`Implementation/Optimizer.lean`).
 
-**Spec-definition reuse (dies with the transports, with Task 2, or with targeted re-homes):**
-- `Affine.lean` (spec `linearize`/`LinExpr.eval` referenced by its decode lemmas),
-  `Normalize.lean` (spec `LinExpr.norm`), `Gauss.lean` (`decodeExpr_isVar` references spec
-  `Expression.isVar`/`varCount`; this also blocks moving the representation-independent
-  `argmin_map_key`/`map_filterMap` pair out of the legacy file — retry once the decode lemma
-  dies), `DomainFold.lean` (spec `FoldIdx.mk'`/`refresh`/`anyVarIn`/`hasConstFoldableNode`),
-  `Reencode.lean` (spec `evalFast`/`evalWith`/`sharesVarIn`/`ComputationMethod.eval_congr`),
-  `DomainBatch.lean` (the `IExpr`/`CBi`/`FiniteDomain` enumeration engine:
-  representation-independent in substance but large and entangled; move it to a neutral non-legacy
-  home when the file's other couplings die — the spec `varSetKey` coupling is already gone, killed
-  by Task 2),
-  `DomainProp.lean` (a non-legacy but `Variable`-based shared facts file; consumes legacy
-  `LinExpr.norm_eval` — re-home that lemma or prune at deletion time).
-- `BusPairCancelJustify.lean`: hosts representation-independent search-budget constants, but
-  `BusPairCancelCore.lean` consumes `Variable`-typed theorems of
-  `OldVariableBased/BusPairCancel.lean` (`multiplicitySum_append`,
-  `MemoryBusShape.setNewMult_ne_zero`) THROUGH it. Unpick when those theorems get native twins
-  — Task 1's `busPairCancelLate` rewire did NOT do this naturally: the dense justify code
-  deliberately consumes the spec file's `maxDeepPoints`/`maxDeepVars` directly (budgets cannot
-  drift), so the coupling stands until the constants are re-homed.
-- `SeqzCollapseProof.lean`: reuses the spec file's representation-independent `ZMod p` value
-  lemmas verbatim (`seqz_forward`, `seqz_reconstruct`, `zbool`, `bus_accepts_byte_zero`,
-  `bus_byte_of_accepts`, and their support chain) — the same convention as
-  `HintCollapseProof.lean`. Re-home them at deletion time.
+**Step B — sparse LinExpr spec core re-home.** Move the `LinExpr` + `linearize` + `LinExpr.norm`
+algebra (with `LinExpr.norm_eval`, `linearize_eval`, …) and `Expression.constValue?` to a neutral
+spec-support home. This layer is representation-independent (`Variable`-keyed sparse linear forms)
+but permanently serves the `Variable`-side `DomainProp.lean` and `MemoryUnify.lean`, so it re-homes
+rather than dies. Frees `Affine.lean` / `Normalize.lean` of being consumed for it.
+
+**Step C — nativize `RootPairUnifyProof`.** Prove the native statements without decoding through
+`OldVariableBased/RootPairUnify.lean`; the legacy lemmas to retire are `twoRootOf?_sound`,
+`rootPair_eq`, `le_foldl_max`.
+
+**Step D — nativize `AddrDiseqProof`'s certificate stack.** Native proofs for `constDiffNZ`,
+`isZeroLin`, `diffSumOver`, `ptrBranchesOf`, `reciprocalWits?`, `addrAffineNeq`, `addrNonzeroNeq`,
+`NonzeroWits`. Then delete the orphaned `decodeLin` family in `Affine.lean` and the `decodeLin_norm`
+chain in `Normalize.lean` — the two decode transports (`AddrDiseqProof`, `RootPairUnifyProof`) are
+their only consumers (grep-verified).
+
+**Step E — re-home the enumeration engine.** Move the `IExpr` / `CBi` / `FiniteDomain` types and the
+`foldlStop` enumeration engine (representation-independent in substance, large and entangled) to a
+neutral non-legacy home. It serves `DomainBatch(+Proof/Runtime)`, `Reencode(+Proof)`,
+`DomainFoldRuntime`, `DomainFoldProof`.
+
+**Step F — native twins or re-homes for the residual memory-bus theorems.** `multiplicitySum_append`,
+`mem_core_of_ne`, and `MemoryBusShape.setNewMult_ne_zero` — the `Variable`-typed theorems the dense
+`BusPairCancel` cluster still consumes through `OldVariableBased/BusPairCancel.lean`.
+
+**Scan findings (current):** `DomainFold.lean` is already keeper-only (no non-legacy consumer);
+`Gauss.lean`'s old blocker `decodeExpr_isVar` is gone (dense `Gauss.lean` still consumes spec
+`Expression.isVar` from it — retires with Step B/E as the file's other couplings clear);
+`MemoryUnify.lean` is a newly-identified `LinExpr` consumer (handled by Step B);
+`Implementation/Optimizer.lean`'s `ComputationMethod.eval_congr` use is handled by Step A.
 
 **Dies with the folder (Task 4) — reachability keepers:** after Task 1, no schedule or pipeline
 code references a legacy pass; what remains are imports kept only so the legacy modules stay in

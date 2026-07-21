@@ -27,7 +27,7 @@ index parameter that exists only to state `sound`) dropped; no `lookup_mem`/`tes
 * `Expression.normalize` (`Normalize.lean:306`) → `DenseExpr.normalize` (`Dense/Normalize.lean:47`,
   already ported and wired for the `normalize` cleanup pass), reused unqualified in
   `DenseEqConstraintMap.addAll`/`densePayloadEntailedEq`.
-* `maxDeepConstraints` (`BusPairCancel.lean:57`) is a plain `Nat` literal, reused unqualified —
+* `maxDeepConstraints` (`SearchBudgets.lean`) is a plain `Nat` literal, reused unqualified —
   same precedent as `BusPairCancelJustify.lean`'s header for `maxDeepPoints`/`maxDeepDomain`/
   `maxDeepVars`.
 

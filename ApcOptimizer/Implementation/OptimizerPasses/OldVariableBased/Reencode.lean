@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DomainBatch
+import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 
 set_option autoImplicit false
 
@@ -887,31 +888,6 @@ whose interpolation image equals the group's values, output that pattern's bit. 
 `group = poly(bits)` for witness generation, and — crucially — the pattern the forward direction
 selects (`find?` below) is exactly this first match, so the method computes the witness's bit. -/
 
-/-- A computation method reads only its variables. -/
-theorem ComputationMethod.eval_congr (cm : ComputationMethod p) (e1 e2 : Variable → ZMod p) :
-    (∀ v ∈ cm.vars, e1 v = e2 v) → cm.eval e1 = cm.eval e2 := by
-  induction cm with
-  | const c => intro _; rfl
-  | quotientOrZero num den =>
-      intro h
-      have hn : num.eval e1 = num.eval e2 :=
-        Expression.eval_congr num _ _ (fun v hv => h v (List.mem_append_left _ hv))
-      have hd : den.eval e1 = den.eval e2 :=
-        Expression.eval_congr den _ _ (fun v hv => h v (List.mem_append_right _ hv))
-      show (if den.eval e1 = 0 then 0 else (den.eval e1)⁻¹ * num.eval e1)
-         = (if den.eval e2 = 0 then 0 else (den.eval e2)⁻¹ * num.eval e2)
-      rw [hn, hd]
-  | ifEqZero cond thenM elseM iht ihe =>
-      intro h
-      have hc : cond.eval e1 = cond.eval e2 :=
-        Expression.eval_congr cond _ _ (fun v hv =>
-          h v (List.mem_append_left _ (List.mem_append_left _ hv)))
-      have ht := iht (fun v hv => h v (List.mem_append_left _ (List.mem_append_right _ hv)))
-      have he := ihe (fun v hv => h v (List.mem_append_right _ hv))
-      show (if cond.eval e1 = 0 then thenM.eval e1 else elseM.eval e1)
-         = (if cond.eval e2 = 0 then thenM.eval e2 else elseM.eval e2)
-      rw [hc, ht, he]
-
 /-- The interpolation image of group variable `x` at pattern `aβ` (a field constant). -/
 def imgVal (xs : List Variable) (hm : Std.HashMap Variable (Expression p))
     (aβ : List (Variable × ZMod p)) (x : Variable) : ZMod p :=
@@ -1624,15 +1600,6 @@ def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) (b : DegreeBound) (useId
       (s!"rnc{cs.algebraicConstraints.length}_{cs.busInteractions.length}_{idx}")
     let r2 := reencodeLoop bsem b useIdx rest (idx + 1) r1.1.out r1.2.1 r1.2.2.1 r1.2.2.2
     ⟨r2.out, r1.1.derivs ++ r2.derivs, r1.1.correct.andThen r2.correct⟩
-
-/-- `List.dedup` computed in linear time via a hash set, with the **identical** result: an element
-    is kept at its last-occurrence position (exactly `List.dedup`'s order), so swapping this in is a
-    pure speedup — `reencodeLoop`'s correctness is independent of the target list, and its
-    (order-sensitive, greedy) behaviour is unchanged because the list itself is unchanged. -/
-def dedupHash {α : Type} [BEq α] [Hashable α] (l : List α) : List α :=
-  (l.reverse.foldl (fun (st : List α × Std.HashSet α) t =>
-    if st.2.contains t then st else (t :: st.1, st.2.insert t))
-    (([], ∅) : List α × Std.HashSet α)).1
 
 /-- The witness re-encoding pass: for every constraint's (small) all-input-column variable group
     whose covered constraints allow only a few joint values, re-encode the group with `⌈log₂ m⌉`

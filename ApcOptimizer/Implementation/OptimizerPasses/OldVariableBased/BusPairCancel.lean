@@ -1,6 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BusUnify
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
+import ApcOptimizer.Implementation.OptimizerPasses.SearchBudgets
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.BytePack
 import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.IntervalForce
@@ -46,19 +47,6 @@ re-adding a dropped receive is only free when its data limbs are provably bytes 
 assignment satisfying the remaining system. The pass justifies each declared byte slot of the
 dropped pair's payload from the *remaining* interactions, so no justification can cite the pair
 being dropped. -/
-
-/-- Cap on the number of enumerated flag assignments per deep-justification attempt. -/
-def maxDeepPoints : Nat := 64
-
-/-- Cap on a single enumerated variable's domain size in the deep justification. -/
-def maxDeepDomain : Nat := 4
-
-/-- Cap on the number of candidate defining constraints tried per deep justification. -/
-def maxDeepConstraints : Nat := 4
-
-/-- Cap on a candidate constraint's number of distinct other variables (wider constraints
-    cannot collapse to the ≤2-term linear shapes `pointByteOk` accepts anyway). -/
-def maxDeepVars : Nat := 8
 
 /-- Does the expression mention `x`? (No allocation — `Expression.vars` would materialize a
     fresh list per constraint on every deep-justification scan.) -/
@@ -575,9 +563,6 @@ theorem formBoundAt_sound {bs : BusSemantics p} (facts : BusFacts p bs)
             facts.slotBound_sound (bi.eval env) (bi.payload.map Expression.constValue?) i B
               (e.eval env) hsb' (matches_evalPattern bi.payload env) hv hget
           rwa [LinExpr.norm_eval, ← linearize_eval e L' hL env]
-
-/-- Reduction fuel: how many checked forms one basis justification may subtract. -/
-def basisFuel : Nat := 3
 
 /-- Fuel-bounded basis reduction: is `L`'s value provably `< bound − used` using per-variable
     bounds (`bnd`, the finish arm) after subtracting positive integer multiples of range-checked

@@ -15,11 +15,11 @@ file is **impl-only**: no `_sound` lemma is ported and no theorem is stated (def
 ## Constants
 
 `maxDeepPoints`/`maxDeepDomain`/`maxDeepConstraints`/`maxDeepVars` are reused **directly, unqualified**
-from the spec file (`OptimizerPasses/BusPairCancel.lean`): they are plain `Nat` literals, wholly
-representation-independent (they cap enumeration/candidate counts, never touch `Variable`/`VarId`),
-so mirroring them under a new name here would just be a duplicate binding to the same value — the
-established precedent for such spec constants (e.g. `maxDomainBound`/`maxEnumSize`/`maxEnumWork`,
-reused unqualified throughout `Dense/DomainBatch.lean`/`Dense/DomainFold.lean`).
+from the shared budget home (`OptimizerPasses/SearchBudgets.lean`): they are plain `Nat` literals,
+wholly representation-independent (they cap enumeration/candidate counts, never touch
+`Variable`/`VarId`), so mirroring them under a new name here would just be a duplicate binding to the
+same value — the established precedent for such constants (e.g. `maxDomainBound`/`maxEnumSize`/
+`maxEnumWork`, reused unqualified throughout `Dense/DomainBatch.lean`/`Dense/DomainFold.lean`).
 
 ## Reuse map (not re-derived)
 
@@ -210,7 +210,7 @@ def denseAffineJustified (bound : Nat) (bnd : VarId → Option Nat) (e : DenseEx
 
 Dense, `VarId`-native transliteration of the *basis* justification tier
 (`BusPairCancel.lean:506-706`): `formBoundAt`/`basisReduceGo`/`basisJustified`. `basisFuel`
-(`BusPairCancel.lean:580`) is a plain `Nat` literal, wholly representation-independent, so it is
+(`SearchBudgets.lean`) is a plain `Nat` literal, wholly representation-independent, so it is
 reused unqualified below — same precedent as `maxDeepPoints` in the C1a header.
 
 ### `IntervalForce.srep` reuse (no dense counterpart needed)
