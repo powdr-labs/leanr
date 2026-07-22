@@ -4391,3 +4391,35 @@ Maintainability pass; no runtime or proof-content change, effectiveness untouche
 
 **Worked: yes (−10 dead theorems; `lake build` warning-free; proof integrity green, correctness
 axioms `{propext, Classical.choice, Quot.sound}`-only).**
+
+### 123. Structure: generic entailed-check skeleton; zeroWidthRange+rangeBool → degenRange
+
+Maintainability pass (PR #177); output byte-identical on the 13-case sample (5 openvm-eth,
+5 sp1/rsp, 3 wasm-eth).
+
+`EntailedCheck.lean` + `Proofs/EntailedCheck.lean` factor the recurring "recognize a stateless
+check, append the entailed constraint, drop the check" shape: `DenseCheckRule` bundles a
+recognizer with its four obligations (unit multiplicity, statelessness, variable containment,
+acceptance ⟺ vanishing), `DenseVerifiedPassW.ofCheckRules` turns a rule list into the
+append-and-drop pass (grouped per recognizer — provably the same output as running the rules as
+consecutive passes), and `DenseVerifiedPassW.ofAddConstraints` is the append-only sibling. The
+reusable `denseAddConstraints`/`denseFilterBusEntailed` moved here from their historical homes in
+`Proofs/BusUnify.lean`/`Proofs/FlagFoldDrops.lean`; the two private `dpcRefl` copies of
+`DensePassCorrect.refl` are gone. zeroWidthRange+rangeBool became one `degenRange` entry
+(`DegenRange.lean`, two rules); xorEqExtract/oneHotAnnihilate/zeroRegister rewired through
+`ofAddConstraints`, each dropping its covered/correct/wiring block. **Worked: yes (net −148
+lines; a new pass of either shape is now recognizers + soundness lemmas + one builder call).**
+
+### 124. Structure: digitFold pass removed; bounds engine renamed FactBounds
+
+Removal probe (the entry-119 method): dropping the `digitFold` cleanup entry leaves per-case
+sizes identical on the 13-case sample — its base-256 ladder folding is fully covered by the
+surrounding domainBatch/intervalForce-era passes (digitFold predates both). The unused-theorem
+linter then flagged the entire ladder/solution-grid proof stack (22 theorems), deleted with the
+pass; what remains of `DigitFold.lean` is the widely-shared fact-derived bounds map
+(`denseBuild` + probes), renamed `FactBounds.lean`/`Proofs/FactBounds.lean` to match its actual
+role. The single-variable `subst` machinery only digitFold consumed went too (Gauss keeps
+`DenseExpr.subst`). Full-set verification via the PR #177 CI matrix. Removal probes that
+regressed the sample and were kept: carryBranch, zeroRegister, intervalForce (plus earlier
+zeroWidthRange, xorEqExtract). **Worked: yes (net −610 lines; one sample case differs byte-wise
+at identical sizes).**
