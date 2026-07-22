@@ -7,7 +7,7 @@ set_option autoImplicit false
 
 Native `DensePassCorrect` for `denseFxSubstF` (`Dense/FxSubstNative.lean`, part A of the four
 sub-pass `flagFold` composite), lifted to the audited `Variable` spec through
-`DenseVerifiedPassW.ofNative` (`Dense/Bridge.lean`). **This is the third SUBSTITUTION-shaped native
+`DenseVerifiedPassW.of` (`Dense/Bridge.lean`). **This is the third SUBSTITUTION-shaped native
 pass in the busUnify cluster** and a direct parallel of chunk S2 (`Dense/FlagUnifyNativeProof.lean`):
 the entailed nonlinear interpolations are adopted into a `DenseSolved` map and applied by one
 `DenseConstraintSystem.substF`, so correctness rides on the reusable native substitution core
@@ -485,10 +485,10 @@ theorem denseFxSubstF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : Bu
     interpolations `vy := E` (`E` interpolated over the survivor-side flags) are adopted into a
     `DenseSolved` map and applied by one `DenseConstraintSystem.substF`, proved correct natively over
     `VarId → ZMod p` and connected to the audited spec via `DensePassCorrect.lift` (through
-    `ofNative`) — no commutation with the reference pass. Directly parallels `denseFlagUnifyPass`
+    `of`) — no commutation with the reference pass. Directly parallels `denseFlagUnifyPass`
     (chunk S2). Not wired here: the selector swap lands with boxRewrite (S4b) in chunk S5. -/
 def denseFxSubstPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (denseFxSubstF pw) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (denseFxSubstF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseFxSubstF_covered pw reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d hcov => denseFxSubstF_correct pw reg bs facts d hcov)

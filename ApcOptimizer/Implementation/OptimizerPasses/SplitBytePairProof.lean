@@ -30,7 +30,7 @@ payload entries of the replaced interaction).
   `denseMkByteCheck_eval`/`_breaks`/`_payload_vars` (`BusPairCancelCheckProof.lean`),
   `denseMkByteCheck_covered` (`BusPairCancel.lean`) — the same bus-fact lemma cluster the pack pass
   reasons about, mined rather than re-derived.
-* `DensePassCorrect.ofEnvEq`/`.refl` and `DenseVerifiedPassW.ofNative` (`Dense/Bridge.lean`) close
+* `DensePassCorrect.ofEnvEq`/`.refl` and `DenseVerifiedPassW.of` (`Dense/Bridge.lean`) close
   the pass and lift it to the audited `Variable` spec once, at the optimizer boundary. -/
 
 namespace ApcOptimizer.Dense
@@ -327,11 +327,11 @@ theorem denseSplitBytePairF_correct (reg : VarRegistry) (bs : BusSemantics p) (f
   next => exact DensePassCorrect.refl reg.isInput d bs
 
 /-- The dense byte-check pair splitting pass. Registry-preserving (`a`/`b` are existing operands, no
-    fresh variables): `ofNative` over `denseSplitBytePairF`, lifted to the audited `Variable`
+    fresh variables): `of` over `denseSplitBytePairF`, lifted to the audited `Variable`
     `PassCorrect` once by `DensePassCorrect.lift`. Native proof — no dependency on the reference
     `splitBytePairPass`. -/
 def denseSplitBytePairPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun bs facts d => denseSplitBytePairF bs facts d)
     (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseSplitBytePairF_covered reg bs facts d hcov)

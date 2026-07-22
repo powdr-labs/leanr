@@ -9,7 +9,7 @@ set_option autoImplicit false
 
 Native `DensePassCorrect` — over `VarId → ZMod p` environments, with no dependency on the reference
 `Variable` pass — for the dense subsumed variable-range-check dropper (`SubsumedRange.lean`), lifted
-once to the audited `Variable` spec through `DenseVerifiedPassW.ofNative`.
+once to the audited `Variable` spec through `DenseVerifiedPassW.of`.
 
 The pass drops a recognised single-variable range check `[x, w]` (`facts.varRangeBus` at
 multiplicity `1`, satisfiable width `w.val ≤ 17`) whose variable is already bounded `< 2^w.val` by a
@@ -126,7 +126,7 @@ theorem denseSubsumedRangeDropF_correct (bs : BusSemantics p) (facts : BusFacts 
 /-- **The native dense subsumed variable-range-check drop pass.** Consumes `facts` directly (through
     `varRangeBus`); unconditional in `p`. Runtime transform unchanged from `SubsumedRange.lean`. -/
 def denseSubsumedRangeDropPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun bs facts d => denseSubsumedRangeDropF bs facts d)
     (fun _ _ _ => [])
     (fun _ bs facts d hcov => by

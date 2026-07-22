@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Dense one-hot annihilation: native proof and wiring (Task 3)
 
 Native `DensePassCorrect` proof for the dense `oneHotAnnihilate` transform
-(`OneHotAnnihilate.lean`), lifted to the audited spec via `DenseVerifiedPassW.ofNative`. No
+(`OneHotAnnihilate.lean`), lifted to the audited spec via `DenseVerifiedPassW.of`. No
 dependency on the reference `OneHotAnnihilate.oneHotAnnihilatePass` — the transform appends `x = 0`
 for every one-hot-annihilated variable `x` via `DensePassCorrect.denseAddConstraints`, a single-shot
 "add entailed constraints" step.
@@ -202,9 +202,9 @@ theorem denseOneHotAnnihilateF_correct (reg : VarRegistry) (bs : BusSemantics p)
       exact denseDeadVars_entailed d bs denv hsat x hx)
 
 /-- **The native dense one-hot annihilation pass.** Fact-free; connected to the audited spec via
-    `DensePassCorrect.lift` (through `ofNative`) — no reference-pass dependency. -/
+    `DensePassCorrect.lift` (through `of`) — no reference-pass dependency. -/
 def denseOneHotAnnihilatePass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (fun _ _ d => denseOneHotAnnihilateF d) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (fun _ _ d => denseOneHotAnnihilateF d) (fun _ _ _ => [])
     (fun reg _ _ d hcov => denseOneHotAnnihilateF_covered reg d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs _ d _ => denseOneHotAnnihilateF_correct reg bs d)

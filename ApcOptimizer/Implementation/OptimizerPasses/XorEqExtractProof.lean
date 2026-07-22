@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Dense XOR/OR/AND constant-operand equality extraction: native proof and wiring (Task 3)
 
 Native `DensePassCorrect` proof for the dense `xorEqExtract` transform (`XorEqExtract.lean`), lifted
-to the audited spec via `DenseVerifiedPassW.ofNative`. No dependency on the reference
+to the audited spec via `DenseVerifiedPassW.of`. No dependency on the reference
 `XorEqExtract.xorEqExtractPass` — the pass is a single-shot **append of entailed constraints**, so
 its correctness rides on the reusable `DensePassCorrect.denseAddConstraints` (`BusUnifyProof.lean`)
 once every appended equality is shown to evaluate to `0` on any satisfying dense assignment.
@@ -305,9 +305,9 @@ theorem denseXorEqExtractF_correct (reg : VarRegistry) (bs : BusSemantics p) (fa
   · rw [if_neg h]; exact DensePassCorrect.refl reg.isInput d bs
 
 /-- **The native dense `xorEqExtract` pass.** Threads the original `facts` unchanged, connected to
-    the audited spec via `DensePassCorrect.lift` (through `ofNative`) — no reference-pass dependency. -/
+    the audited spec via `DensePassCorrect.lift` (through `of`) — no reference-pass dependency. -/
 def denseXorEqExtractPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative denseXorEqExtractF (fun _ _ _ => [])
+  DenseVerifiedPassW.of denseXorEqExtractF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseXorEqExtractF_covered reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d _ => denseXorEqExtractF_correct reg bs facts d)

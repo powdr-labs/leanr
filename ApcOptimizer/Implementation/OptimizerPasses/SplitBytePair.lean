@@ -13,7 +13,7 @@ no theorem/lemma from the spec file is ported (`asBytePair_eq`, `splitOne_P`,
 `DensePassCorrect` wrapper is built here — the runtime transform `denseSplitBytePairF` is shaped
 like `denseByteCheckPackF` (`ByteCheckPack.lean`): unconditional in `p` (gated only by the same
 `(1 : ZMod p) ≠ 0` self-check as the spec pass), consuming `facts` directly with no fresh
-variables, so the prover wraps it directly with `DenseVerifiedPassW.ofNative`.
+variables, so the prover wraps it directly with `DenseVerifiedPassW.of`.
 
 ## Reuse map (not re-derived)
 

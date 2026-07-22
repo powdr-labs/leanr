@@ -6,7 +6,7 @@ set_option autoImplicit false
 
 Native `DensePassCorrect` — over `VarId → ZMod p` environments, with no dependency on the reference
 `Variable` pass — for the dense monic-scaling canonicalizer (`MonicScale.lean`), lifted once to the
-audited `Variable` spec through `DenseVerifiedPassW.ofNative`.
+audited `Variable` spec through `DenseVerifiedPassW.of`.
 
 An algebraic constraint matters only through its zero set, so it may be rescaled by any unit without
 changing satisfiability. This pass walks each constraint's product tree and scales each affine factor
@@ -177,7 +177,7 @@ theorem denseMonicScaleF_correct (bs : BusSemantics p) (isInput : VarId → Bool
     form; unconditional in `p`. Runtime transform unchanged from `MonicScale.lean`; the pass is
     fully `facts`/`bs`-free. -/
 def denseMonicScalePass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun _ _ d => denseMonicScaleF d)
     (fun _ _ _ => [])
     (fun _ _ _ d hcov => by

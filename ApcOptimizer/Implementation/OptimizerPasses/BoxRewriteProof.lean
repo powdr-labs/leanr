@@ -7,7 +7,7 @@ set_option autoImplicit false
     sub-pass (Task 3, busUnify cluster, chunk S4b — prover)
 
 Native `DensePassCorrect` for the dense `boxRewrite` transform (`Dense/BoxRewriteNative.lean`),
-lifted to the audited `Variable` spec through `DenseVerifiedPassW.ofNative` (`Dense/Bridge.lean`). NO
+lifted to the audited `Variable` spec through `DenseVerifiedPassW.of` (`Dense/Bridge.lean`). NO
 WIRING here — `boxRewrite` is the second sub-pass of the scheduled `flagFold` composite
 (`fxSubstPass → boxRewritePass → boxTautoDropPass → pointwiseDupDropPass`); the chain assembly and
 selector swap happen in chunk S5. This file delivers the native proof plus the `DenseVerifiedPassW`
@@ -41,9 +41,9 @@ soundness, which only needs the two lists sorted by the SAME total order).
 `boxRewrite` intermediates legitimately exceed the degree bound (its whole point is to rewrite
 syntactically over-bound expressions back within bound), and the scheduled composite wraps the ENTIRE
 `flagFold` chain under a single `guardDegree` in S5. Accordingly this pass value carries NO degree
-guard of its own: `DenseVerifiedPassW.ofNative` produces a `DenseVerifiedPassW` with the spec
+guard of its own: `DenseVerifiedPassW.of` produces a `DenseVerifiedPassW` with the spec
 `PassCorrect`-on-decode discharged via the lift and NO `DenseRespectsDeg` obligation attached (that
-is the separate `ofNative_respectsDeg` theorem, only invoked when a pass is individually
+is the separate `of_respectsDeg` theorem, only invoked when a pass is individually
 `guardDegree`-wrapped — as the S3 drop passes and this one are NOT). The S5 assembly guards the
 composite. -/
 
@@ -360,11 +360,11 @@ theorem denseBoxRewriteF_correct (pw : PrimeWitness p) (b : DegreeBound) (reg : 
   · exact dpcRefl reg.isInput d bs
 
 /-- **The native dense box-rewrite pass** (second sub-pass of the flagFold composite). Fact-free —
-    the `ofNative` transform ignores `facts`. Carries NO degree guard: the whole `flagFold` chain is
+    the `of` transform ignores `facts`. Carries NO degree guard: the whole `flagFold` chain is
     wrapped under one `guardDegree` in S5 (box-rewrite intermediates legitimately exceed the bound).
     Ready for S5 chain assembly. -/
 def denseBoxRewritePass (pw : PrimeWitness p) (b : DegreeBound) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (fun bs _ d => denseBoxRewriteF pw b bs d) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (fun bs _ d => denseBoxRewriteF pw b bs d) (fun _ _ _ => [])
     (fun reg bs _ d hcov => denseBoxRewriteF_covered pw b reg bs d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs _ d hcov => denseBoxRewriteF_correct pw b reg bs d hcov)

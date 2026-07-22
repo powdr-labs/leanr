@@ -14,7 +14,7 @@ reference `Variable` passes — for the three dense drop passes previously built
 
 The runtime transforms are unchanged (they still live in `DropPasses.lean`); only the correctness
 argument moves from "decode the dense filter to the spec filter, inherit the spec `PassCorrect`" to a
-direct native argument, lifted once to the audited `Variable` spec by `DenseVerifiedPassW.ofNative`.
+direct native argument, lifted once to the audited `Variable` spec by `DenseVerifiedPassW.of`.
 
 The reusable core is `DensePassCorrect.denseFilterConstraintsEntailed` (native mirror of
 `ConstraintSystem.filterConstraints_correct`) for constraint drops, and — for the two bus drops —
@@ -79,10 +79,10 @@ theorem DenseExpr.isConstZero_sound (e : DenseExpr p) (h : e.isConstZero = true)
     (denv : VarId → ZMod p) : e.eval denv = 0 := by
   cases e <;> simp_all [DenseExpr.isConstZero, DenseExpr.eval]
 
-/-- **The native dense trivial-constraint drop pass.** Fact-free — the `ofNative` transform ignores
+/-- **The native dense trivial-constraint drop pass.** Fact-free — the `of` transform ignores
     `facts`. Runtime transform unchanged from the `ofTransform` version in `DropPasses.lean`. -/
 def denseTrivialConstraintDropPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun _ _ d => d.filterConstraints (fun c => !c.fold.isConstZero))
     (fun _ _ _ => [])
     (fun _ _ _ _ hcov => DenseConstraintSystem.filterConstraints_covered hcov)
@@ -217,7 +217,7 @@ theorem DensePassCorrect.denseFilterBusZeroMult (d : DenseConstraintSystem p) (b
     `DropPasses.lean`: in the degenerate `1 = 0` ring the pass is the identity (`refl`), else it drops
     zero-multiplicity interactions. Fact-free. -/
 def denseZeroMultBusDropPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun _ _ d =>
       if (1 : ZMod p) = 0 then d
       else d.filterBus (fun bi => !bi.multiplicity.fold.isConstZero))
@@ -296,7 +296,7 @@ theorem denseConstMessage?_sound (bi : BusInteraction (DenseExpr p))
     message the bus accepts is sound under every assignment (the acceptance is unconditional — a
     strictly stronger fact than `denseFilterBusEntailed` needs). Fact-free. -/
 def denseTautoBusDropPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun bs _ d => d.filterBus (fun bi => !denseIsTautoLookup bs bi))
     (fun _ _ _ => [])
     (fun _ _ _ _ hcov => DenseConstraintSystem.filterBus_covered hcov)

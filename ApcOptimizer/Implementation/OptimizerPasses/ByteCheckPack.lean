@@ -155,7 +155,7 @@ def denseFindGo (bs : BusSemantics p) (facts : BusFacts p bs)
     payload entries of the replaced interactions). Folds the label's outer
     `iterateToFixpoint ByteCheckPack.byteCheckPackPass` (`Implementation/Optimizer.lean`'s
     `"bytePack"`/`"bytePackLate"` entries) into this single dense call, so the pass can slot into the
-    dense schedule as one `DenseVerifiedPassW.ofNative` entry rather than a wrapped
+    dense schedule as one `DenseVerifiedPassW.of` entry rather than a wrapped
     `denseIterateToFixpoint`. -/
 def denseDrainBytePacks (bs : BusSemantics p) (facts : BusFacts p bs) :
     Nat → List (BusInteraction (DenseExpr p)) → List (BusInteraction (DenseExpr p))
@@ -166,7 +166,7 @@ def denseDrainBytePacks (bs : BusSemantics p) (facts : BusFacts p bs) :
       denseDrainBytePacks bs facts fuel (pre ++ denseMkBytePair spec busId eA eB :: mid ++ post)
     | none => bis
 
-/-- The dense pack-until-fixpoint transform (`ofNative` shape: registry unchanged, no fresh
+/-- The dense pack-until-fixpoint transform (`of` shape: registry unchanged, no fresh
     variables). Mirrors `byteCheckPackPass`'s `hp1`
     self-gate (VM-neutral: with a trivial `BusFacts`, `byteXorSpec` is `none` everywhere,
     `denseSvCheck?` returns `none`, and the drain is the identity in its first step) composed with

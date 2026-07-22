@@ -12,7 +12,7 @@ definitions (`rangeCheck?`, `dropBase`, `dropKeep`, and the pass's computed outp
 `DensePassCorrect` wrapper is built here — the runtime transform `denseSubsumedRangeDropF` is
 shaped like `denseSubsumedCheckDropF` (`SubsumedCheck.lean`): this pass, like its spec counterpart,
 is unconditional in `p` and consumes `facts` directly, so the prover wraps it directly with
-`DenseVerifiedPassW.ofNative`.
+`DenseVerifiedPassW.of`.
 
 ## Reuse map (not re-derived)
 

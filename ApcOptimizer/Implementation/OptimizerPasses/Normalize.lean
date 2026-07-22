@@ -15,7 +15,7 @@ traversal returning both the normalized expression and the node's linear form, k
 `Expression.normalize`'s O(size × depth) `denseLinearize` re-walks (mirrors #165's spec
 `normalizeFused`). Its correctness is proved **natively** as a `DensePassCorrect` over
 `VarId → ZMod p` environments (the walk is eval-preserving and introduces no variables) and lifted to
-the spec `PassCorrect` once, at the pipeline edge, by `DenseVerifiedPassW.ofNative` — no dependency on
+the spec `PassCorrect` once, at the pipeline edge, by `DenseVerifiedPassW.of` — no dependency on
 the reference `normalizePass`. Mirrors the native `denseConstantFoldPass` (`Dense/ExprOps.lean`). -/
 
 namespace ApcOptimizer.Dense
@@ -571,13 +571,13 @@ theorem denseNormalizeFused_fst_vars (e : DenseExpr p) :
 
 The affine-normalization pass, computing through the fused walk. Its correctness is proved
 **natively** as a `DensePassCorrect` (the fused walk is eval-preserving and introduces no variables)
-and lifted to the spec `PassCorrect` by `DenseVerifiedPassW.ofNative` — no dependency on the spec
+and lifted to the spec `PassCorrect` by `DenseVerifiedPassW.of` — no dependency on the spec
 `normalizePass`. Mirrors `denseConstantFoldPass` (`Dense/ExprOps.lean`), the closest native mapExpr
 precedent. -/
 
 /-- The dense affine-normalization pass, native proof (wired into `normalize1`/`normalize2`). -/
 def denseNormalizePass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun _ _ d => d.mapExpr (fun e => (denseNormalizeFused e).1))
     (fun _ _ _ => [])
     (fun _ _ _ _ hcov =>

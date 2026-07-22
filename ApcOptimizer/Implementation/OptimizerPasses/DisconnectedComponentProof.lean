@@ -6,7 +6,7 @@ set_option autoImplicit false
 
 Native `DensePassCorrect` for the dense disconnected-component transform (`denseDisconnectedF`,
 `DisconnectedComponent.lean`), lifted to the audited `Variable` spec through
-`DenseVerifiedPassW.ofNative` (`Bridge.lean`), and wired at the `disconnected` cleanup label.
+`DenseVerifiedPassW.of` (`Bridge.lean`), and wired at the `disconnected` cleanup label.
 
 The proof is a direct native re-derivation of the spec's `dropComponent_correct`
  over `VarId → ZMod p` environments — **it does not
@@ -300,11 +300,11 @@ theorem denseDisconnectedF_correct (bs : BusSemantics p) (isInput : VarId → Bo
   unfold denseDisconnectedF
   exact denseDropGuarded_correct bs isInput d _
 
-/-- **The native dense disconnected-component pass.** Fact-free — the `ofNative` transform ignores
+/-- **The native dense disconnected-component pass.** Fact-free — the `of` transform ignores
     `facts` (the spec pass is a `VerifiedPass`). Registry unchanged (no fresh variables), no
     derivations. -/
 def denseDisconnectedPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (fun bs _ d => denseDisconnectedF bs d) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (fun bs _ d => denseDisconnectedF bs d) (fun _ _ _ => [])
     (fun reg bs _ d hcov => denseDisconnectedF_covered bs d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs _ d _ => denseDisconnectedF_correct bs reg.isInput d)

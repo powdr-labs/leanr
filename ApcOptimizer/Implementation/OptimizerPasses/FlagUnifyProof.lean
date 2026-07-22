@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Native soundness for the dense `flagUnify` pass (Task 3, busUnify cluster, chunk S2 — prover)
 
 Native `DensePassCorrect` for `denseFlagUnifyF` (`Dense/FlagUnifyNative.lean`), lifted to the audited
-`Variable` spec through `DenseVerifiedPassW.ofNative` (`Dense/Bridge.lean`). **This is the second
+`Variable` spec through `DenseVerifiedPassW.of` (`Dense/Bridge.lean`). **This is the second
 SUBSTITUTION-shaped native pass in the busUnify cluster** and a direct parallel of chunk S1
 (`Dense/RootPairUnifyNativeProof.lean`): the entailed flag equalities are adopted into a `DenseSolved`
 map and applied by one `DenseConstraintSystem.substF`, so correctness rides on the reusable native
@@ -526,10 +526,10 @@ theorem denseFlagUnifyF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : 
 /-- **The native dense `flagUnify` pass.** Flag unification across duplicate scaled range checks
     proved correct natively over `VarId → ZMod p` (substitution-shaped: the entailed flag equalities
     are adopted into a `DenseSolved` map and applied by one `DenseConstraintSystem.substF`), connected
-    to the audited spec via `DensePassCorrect.lift` (through `ofNative`) — no commutation with the
+    to the audited spec via `DensePassCorrect.lift` (through `of`) — no commutation with the
     reference pass. Directly parallels `denseRootPairUnifyPass` (chunk S1). -/
 def denseFlagUnifyPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (denseFlagUnifyF pw) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (denseFlagUnifyF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseFlagUnifyF_covered pw reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d hcov => denseFlagUnifyF_correct pw reg bs facts d hcov)

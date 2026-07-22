@@ -13,7 +13,7 @@ and the pass's `filterBusEntailed_correct`-built `PassCorrect` term are all proo
 prover's job), and no `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the runtime
 transform `denseRedundantByteDropF` is shaped exactly like `denseSubsumedCheckDropF`
 (`SubsumedCheck.lean`): a `PrimeWitness`-threading, unconditional-in-`p` filter, so the prover wraps
-it directly with `DenseVerifiedPassW.ofNative`.
+it directly with `DenseVerifiedPassW.of`.
 
 ## Reuse map (not re-derived)
 

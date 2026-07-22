@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Dense late identity-result substitution: native proof and wiring (Task 3)
 
 Native `DensePassCorrect` proof for the dense `denseIdentitySubstF` transform
-(`IdentitySubst.lean`), lifted to the audited spec via `DenseVerifiedPassW.ofNative` and iterated to
+(`IdentitySubst.lean`), lifted to the audited spec via `DenseVerifiedPassW.of` and iterated to
 a fixpoint by `denseIterateToFixpoint` (`Pass.lean`). No dependency on the reference
 `IdentitySubst.identitySubstStep` — the pass is a single batch `DenseConstraintSystem.substF` of the
 `result ↦ operand` map, so its correctness rides on the reusable native substitution core
@@ -250,9 +250,9 @@ theorem denseIdentitySubstF_covered (reg : VarRegistry) (bs : BusSemantics p) (f
 
 /-- **The native dense `identitySubst` step.** A single batch substitution of the OR-identity
     `result ↦ operand` map, connected to the audited spec via `DensePassCorrect.lift` (through
-    `ofNative`) — no reference-pass dependency. -/
+    `of`) — no reference-pass dependency. -/
 def denseIdentitySubstStep : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (fun bs facts d => denseIdentitySubstF bs facts d) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (fun bs facts d => denseIdentitySubstF bs facts d) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseIdentitySubstF_covered reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d _ => denseIdentitySubstF_correct reg bs facts d)

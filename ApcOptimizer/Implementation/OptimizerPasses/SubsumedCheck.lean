@@ -12,7 +12,7 @@ proof-side, the prover's job), and no `DenseVerifiedPassW`/`DensePassCorrect` wr
 — the runtime transform `denseSubsumedCheckDropF` is shaped like `denseBoxTautoDropF`
 (`Dense/FlagFoldDrops.lean`) MINUS a `PrimeWitness`/`facts`-selection gate (this pass, like its
 spec counterpart, is unconditional in `p` and consumes `facts` directly), so the prover wraps it
-directly with `DenseVerifiedPassW.ofNative`.
+directly with `DenseVerifiedPassW.of`.
 
 ## Reuse map (not re-derived)
 

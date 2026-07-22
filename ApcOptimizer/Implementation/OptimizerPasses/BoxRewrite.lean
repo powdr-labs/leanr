@@ -17,7 +17,7 @@ from the spec file is ported (`envF_ptFun_self`, `brCert_sound`, `brRw_sound`, `
 prover's job), and no `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the top-level
 transform `denseBoxRewriteF` is shaped exactly like `denseBoxTautoDropF`/`densePointwiseDupDropF`
 (`Dense/FlagFoldDropsNative.lean`), so the prover wraps it directly with
-`DenseVerifiedPassW.ofNative`. `flagFoldPass'` itself (the chain assembly) is chunk S5, not touched
+`DenseVerifiedPassW.of`. `flagFoldPass'` itself (the chain assembly) is chunk S5, not touched
 here.
 
 Notes on how spec pieces map here:
@@ -28,7 +28,7 @@ Notes on how spec pieces map here:
   `bs` at all except in the (proof-only) `PassCorrect` term. `denseBoxRewriteF` mirrors this exact
   shape: `(pw) (b) (_bs) (d)` — the drop-pass precedent's `(pw) (bs) (d)` plus the pass's own extra
   `DegreeBound` argument, unused `_bs` kept only for shape parity with the other `denseXxxF`
-  transforms in this cluster (erased at the call site once the prover's `ofNative` wrapper ignores
+  transforms in this cluster (erased at the call site once the prover's `of` wrapper ignores
   it too, exactly as `denseBoxTautoDropF`'s `_bs` already does).
 * **`findDomainAlg`/`assignments`/`envOf` reuse.** Owned by `OptimizerPasses/DomainProp.lean`,
   already ported: `denseFindDomainAlg`/`denseAssignments` (`Dense/DomainFold.lean`, transitively

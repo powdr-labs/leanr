@@ -48,11 +48,13 @@ This file is *implementation* — it needs no audit. The user-facing optimizer d
 surface live in `ApcOptimizer/Optimizer.lean`; each theorem is a projection of the per-instance
 `optimizerWithBusFacts_correct` / `optimizerWithBusFacts_respectsDegree` proved here.
 
-**To add an optimization:** write a pass in a new file under
-`ApcOptimizer/Implementation/OptimizerPasses/`, import it here, and add one dense entry to the
-`cleanupPasses` list below — a native `DenseVerifiedPassW`, or, until it is ported to a native dense
-proof, `DenseVerifiedPassW.ofSpec (pass.….guardDegree b)`. That is the only edit needed here; the
-correctness proof follows automatically from the pass's own `PassCorrect`. -/
+**To add an optimization:** write a dense pass bundling its own `DensePassCorrect` proof in a new
+file under `ApcOptimizer/Implementation/OptimizerPasses/`, import it here, and add one entry
+`(name, pass.guardDegree b)` to the `cleanupPasses` list below. That is the only edit needed here;
+correctness follows from the pass's own bundled `DensePassCorrect`. See the worked examples
+`GaussProof.lean` / `DropPassesProof.lean` / `CarryBranchProof.lean` / `RangeBoolProof.lean`
+(`DenseVerifiedPassW.of`) and `ReencodeProof.lean` (`DenseVerifiedPassW.ofExtending`, for passes
+that mint fresh variables). -/
 
 /-- The optimizer runs in three stages: a **prelude** (this list) once, then the `cleanupPasses`
     cycle iterated to a fixpoint, then a **coda** (`codaPasses`) once. All three lists are dense —
@@ -79,13 +81,13 @@ def preludePasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     interactions, drop stateless interactions whose constant message satisfies the bus table, and add
     the receive-equals-send equations entailed by the memory discipline.
 
-    **To add an optimization:** write a pass in a new file under
-    `ApcOptimizer/Implementation/OptimizerPasses/`, import it above, and add one
-    `(name, X.guardDegree b)` entry to this list — a `DenseVerifiedPassW`, or
-    `DenseVerifiedPassW.ofSpec (pass.….guardDegree b)` for a `Variable`-based pass (correct by
-    construction, but it round-trips through the `Variable` form each iteration, so a dense pass
-    is preferred). That is the only edit needed here; correctness follows from the pass's own
-    bundled proof, and the profiler picks up the new label for free (it steps this same list). -/
+    **To add an optimization:** write a dense pass bundling its own `DensePassCorrect` proof in a new
+    file under `ApcOptimizer/Implementation/OptimizerPasses/`, import it above, and add one
+    `(name, pass.guardDegree b)` entry to this list. That is the only edit needed here; correctness
+    follows from the pass's own bundled proof, and the profiler picks up the new label for free (it
+    steps this same list). Templates: `GaussProof.lean` / `DropPassesProof.lean` /
+    `CarryBranchProof.lean` (`DenseVerifiedPassW.of`) and `ReencodeProof.lean`
+    (`DenseVerifiedPassW.ofExtending`, for passes that mint fresh variables). -/
 def cleanupPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
   -- One primality decision per optimizer run, threaded to every prime-gated pass below (they read
   -- the `Bool` in O(1) instead of re-running `decide (Nat.Prime p)` per invocation per iteration).

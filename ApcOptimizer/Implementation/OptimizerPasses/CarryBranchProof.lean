@@ -218,7 +218,7 @@ theorem denseCarryBranchF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs 
     never-vanishing factor to its other factor. Fact-consuming; proved natively over `VarId` via
     `denseCarryBranchF_correct`. Identity for composite `p`. -/
 def denseCarryBranchPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (denseCarryBranchF pw)
     (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseCarryBranchF_covered pw reg bs facts d hcov)

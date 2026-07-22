@@ -20,10 +20,10 @@ and no `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here.
 
 Like `Reencode`/`HintCollapse`, this pass mints a fresh derived witness (the reciprocal hint `inv`
 of the is-zero gadget), so it is shaped for the registry-extending builder — the prover wires it with
-`DenseVerifiedPassW.ofNativeExtending (denseSeqzCollapseF) …`
+`DenseVerifiedPassW.ofExtending (denseSeqzCollapseF) …`
 (`transform : VarRegistry → (bs) → BusFacts p bs → DenseConstraintSystem p → VarRegistry ×
 DenseConstraintSystem p × DenseDerivations p`, `Reencode.lean`/`HintCollapse.lean`'s own shape).
-Still out of scope: the correctness theorems and the `ofNativeExtending` call itself.
+Still out of scope: the correctness theorems and the `ofExtending` call itself.
 
 ## Where the fresh variable is minted, and the freshness-decision mechanism
 
@@ -348,8 +348,8 @@ def denseSeqzTryList (reg : VarRegistry) (d : DenseConstraintSystem p) (bs : Bus
 
 /-! ## The pass, as a registry-extending native transform -/
 
-/-- The seqz-collapse transform, shaped for `DenseVerifiedPassW.ofNativeExtending` (the prover wires
-    it with `DenseVerifiedPassW.ofNativeExtending denseSeqzCollapseF …`). Mirrors `seqzCollapsePass`
+/-- The seqz-collapse transform, shaped for `DenseVerifiedPassW.ofExtending` (the prover wires
+    it with `DenseVerifiedPassW.ofExtending denseSeqzCollapseF …`). Mirrors `seqzCollapsePass`
     (`:1109`): scan for the first recognised gadget, replacing it by the is-zero gadget (dropping the
     four `diff_marker`s and `diff_val`, minting one `QuotientOrZero` witness); identity when none is
     found. -/

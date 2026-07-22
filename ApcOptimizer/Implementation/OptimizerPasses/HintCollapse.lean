@@ -24,10 +24,10 @@ application's conclusion type) — they carry zero runtime content to transliter
 
 Like `Reencode`, this pass mints a fresh derived witness (the reciprocal-hint `inv`), so it is
 shaped for the registry-extending builder — the prover wires it with
-`DenseVerifiedPassW.ofNativeExtending (denseHintCollapseF pw) …`
+`DenseVerifiedPassW.ofExtending (denseHintCollapseF pw) …`
 (`transform : VarRegistry → (bs) → BusFacts p bs → DenseConstraintSystem p → VarRegistry ×
 DenseConstraintSystem p × DenseDerivations p`, `Reencode.lean`'s own shape). Still out of scope:
-the correctness theorems and the `ofNativeExtending` call itself.
+the correctness theorems and the `ofExtending` call itself.
 
 ## Where the fresh variable is minted, and the freshness-decision mechanism
 
@@ -368,8 +368,8 @@ def denseTryList (reg : VarRegistry) (d : DenseConstraintSystem p) (Bm : Std.Has
 
 /-! ## The pass, as a registry-extending native transform -/
 
-/-- The hint-collapse transform, shaped for `DenseVerifiedPassW.ofNativeExtending` (the prover wires
-    it with `DenseVerifiedPassW.ofNativeExtending (denseHintCollapseF pw) …`). Mirrors
+/-- The hint-collapse transform, shaped for `DenseVerifiedPassW.ofExtending` (the prover wires
+    it with `DenseVerifiedPassW.ofExtending (denseHintCollapseF pw) …`). Mirrors
     `hintCollapsePass` (`:1003`): identity when `p` isn't (witnessed) prime, else builds the bounds
     map (`denseBuild`, once), the bus-occurring variable set and the constraint-occurrence counter
     (both inline folds over `DenseExpr.vars`, once, exactly as the spec builds them), and scans. -/

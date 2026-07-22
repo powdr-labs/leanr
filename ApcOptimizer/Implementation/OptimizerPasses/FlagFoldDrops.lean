@@ -17,7 +17,7 @@ file is **impl-only**: no theorem/lemma from the spec file is ported (`btKeep_ce
 the prover's job), and no `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the two
 top-level transforms `denseBoxTautoDropF`/`densePointwiseDupDropF` are shaped like
 `denseFlagUnifyF` (`Dense/FlagUnifyNative.lean`) MINUS the `facts` argument (see below), so the
-prover wraps each directly with `DenseVerifiedPassW.ofNative`.
+prover wraps each directly with `DenseVerifiedPassW.of`.
 
 Notes on how spec pieces map here:
 
@@ -26,7 +26,7 @@ Notes on how spec pieces map here:
   ported so far, neither consults `BusFacts` (their certificates are purely
   `findDomainAlg`/domain-box-enumeration and syntactic/domain-agreement checks). The dense mirrors
   therefore drop `facts` entirely rather than threading an unused parameter, mirroring the spec
-  signature exactly; the prover's `ofNative` wrapper (which always takes `(bs) (facts) (d)` at that
+  signature exactly; the prover's `of` wrapper (which always takes `(bs) (facts) (d)` at that
   layer) will simply ignore `facts` at the call site, the same way `denseConstantFoldPass` ignores
   both `bs` and `facts` (`Dense/ExprOps.lean`).
 * **`bs` is threaded but genuinely unused by part B's *output*.** `boxTautoDropPass`'s spec `.out`

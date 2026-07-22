@@ -20,7 +20,7 @@ The `VarId`-native runtime of the batch linear-elimination pass, keyed on `VarId
 
 The pass's **native** `DensePassCorrect` — with no dependency on the reference `gaussElimPass` —
 lives downstream in `OptimizerPasses/GaussProof.lean` (which also builds the wired
-`denseGaussElimPass` via `DenseVerifiedPassW.ofNative`). The commutation-era `Corr` bisimulation and
+`denseGaussElimPass` via `DenseVerifiedPassW.of`). The commutation-era `Corr` bisimulation and
 the decode-correspondence lemmas that inherited the reference `PassCorrect` have been removed. -/
 
 namespace ApcOptimizer.Dense
@@ -488,7 +488,7 @@ theorem denseGaussElim_eq (bs : BusSemantics p) (d : DenseConstraintSystem p) :
           (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty).fn := rfl
 
 /-! `denseGaussElimPass` (the wired pass) is built and proved **natively** in
-`OptimizerPasses/GaussProof.lean` via `DenseVerifiedPassW.ofNative` — no commutation with the
+`OptimizerPasses/GaussProof.lean` via `DenseVerifiedPassW.of` — no commutation with the
 reference `gaussElimPass`. -/
 
 end ApcOptimizer.Dense

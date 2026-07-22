@@ -1290,10 +1290,10 @@ theorem denseDomainFoldFV_covered (pw : PrimeWitness p) (reg : VarRegistry)
   · rw [if_neg hpB]; exact hcov
 
 /-- **The native value-only dense domain-fold pass.** Connects to the audited spec via
-    `DensePassCorrect.lift` (through `ofNative`) on the native `DensePassCorrect` proof — no
+    `DensePassCorrect.lift` (through `of`) on the native `DensePassCorrect` proof — no
     commutation with the reference pass, no `decode` in a discharged obligation. -/
 def denseDomainFoldPassV (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun _ _ d => denseDomainFoldFV pw d)
     (fun _ _ _ => [])
     (fun reg _ _ d hcov => denseDomainFoldFV_covered pw reg d hcov)

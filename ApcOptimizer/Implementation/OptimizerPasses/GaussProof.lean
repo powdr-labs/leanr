@@ -302,9 +302,9 @@ theorem denseGaussElim_correct (reg : VarRegistry) (bs : BusSemantics p)
     proved `DensePassCorrect` directly over `VarId → ZMod p` (substitution-shaped: the entailed
     equalities are adopted into a `DenseSolved` map and applied by one
     `DenseConstraintSystem.substF`), connected to the audited spec once via `DensePassCorrect.lift`
-    (through `ofNative`). No dependency on the reference `gaussElimPass`. -/
+    (through `of`). No dependency on the reference `gaussElimPass`. -/
 def denseGaussElimPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun bs _ d => denseGaussElim bs d)
     (fun _ _ _ => [])
     (fun reg bs _ d hcov => denseGaussElim_covered reg bs d hcov)

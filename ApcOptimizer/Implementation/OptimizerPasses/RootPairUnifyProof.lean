@@ -10,7 +10,7 @@ set_option autoImplicit false
 /-! # Native soundness for the dense `rootPairUnify` pass (Task 3, busUnify cluster, chunk S1 — prover)
 
 Native `DensePassCorrect` for `denseRootPairUnifyF` (`Dense/RootPairUnifyNative.lean`), lifted to the
-audited `Variable` spec through `DenseVerifiedPassW.ofNative` (`Dense/Bridge.lean`). **This is the
+audited `Variable` spec through `DenseVerifiedPassW.of` (`Dense/Bridge.lean`). **This is the
 first SUBSTITUTION-shaped native pass in the busUnify cluster**: rather than adding constraints
 (`busUnify`, chunk M2), it *eliminates* variables via a solution map (`DenseSolved`) and one final
 `DenseConstraintSystem.substF`.
@@ -559,9 +559,9 @@ theorem denseRootPairUnifyF_correct (pw : PrimeWitness p) (reg : VarRegistry) (b
 /-- **The native dense `rootPairUnify` pass.** Two-root decomposition unification proved correct
     natively over `VarId → ZMod p` (substitution-shaped: the entailed equalities are adopted into a
     `DenseSolved` map and applied by one `DenseConstraintSystem.substF`), connected to the audited
-    spec via `DensePassCorrect.lift` (through `ofNative`) — no commutation with the reference pass. -/
+    spec via `DensePassCorrect.lift` (through `of`) — no commutation with the reference pass. -/
 def denseRootPairUnifyPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (denseRootPairUnifyF pw) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (denseRootPairUnifyF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseRootPairUnifyF_covered pw reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d hcov => denseRootPairUnifyF_correct pw reg bs facts d hcov)

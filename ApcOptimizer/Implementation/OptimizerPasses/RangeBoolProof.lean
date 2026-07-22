@@ -8,7 +8,7 @@ set_option autoImplicit false
 /-! # Dense width-1 range check → booleanity: native proof and wiring (Task 3)
 
 Native `DensePassCorrect` proof for the dense `rangeBool` transform (`RangeBool.lean`), lifted to
-the audited spec via `DenseVerifiedPassW.ofNative`. No dependency on the reference
+the audited spec via `DenseVerifiedPassW.of`. No dependency on the reference
 `RangeBool.rangeBoolPass` — the pass is exactly **two** native steps composed by
 `DensePassCorrect.trans`, mirroring the spec's `PassCorrect.andThen`:
 
@@ -205,10 +205,10 @@ theorem denseRangeBoolF_correct (pw : PrimeWitness p) (reg : VarRegistry) {bs : 
   · rw [if_neg h1]; exact DensePassCorrect.refl reg.isInput d bs
 
 /-- **The native dense `rangeBool` pass.** Prime-gated; threads the original `facts` unchanged,
-    connected to the audited spec via `DensePassCorrect.lift` (through `ofNative`) — no
+    connected to the audited spec via `DensePassCorrect.lift` (through `of`) — no
     reference-pass dependency. -/
 def denseRangeBoolPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (denseRangeBoolF pw) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (denseRangeBoolF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseRangeBoolF_covered pw reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d _ => denseRangeBoolF_correct pw reg facts d)

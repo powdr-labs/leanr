@@ -15,7 +15,7 @@ Dense, `VarId`-native transliteration of the reference `TupleRange` pass's *runt
 `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the runtime transform
 `denseTupleRangeF` is shaped like `denseByteCheckPackF`/`denseSplitBytePairF` (unconditional in `p`,
 gated only by the same `(1 : ZMod p) ≠ 0` self-check as the spec pass, consuming `facts` directly
-with no fresh variables), so the prover wraps it with `DenseVerifiedPassW.ofNative`.
+with no fresh variables), so the prover wraps it with `DenseVerifiedPassW.of`.
 
 ## Reuse map (not re-derived)
 
@@ -225,7 +225,7 @@ def denseDrainTuplePacks (bs : BusSemantics p) (facts : BusFacts p bs) :
       denseDrainTuplePacks bs facts fuel (pre ++ denseTupleCheck trBus x y :: mid ++ post)
     | none => bis
 
-/-- The dense pack-until-drained transform (`ofNative` shape: registry unchanged, no fresh
+/-- The dense pack-until-drained transform (`of` shape: registry unchanged, no fresh
     variables). Mirrors `tupleRangePass`'s `hp1` self-gate
     (VM-neutral: with a trivial `BusFacts`, `tupleRangeBus` is `none` everywhere, so
     `denseTupleBusCandidates` is always `[]` and the drain is the identity in its first step)

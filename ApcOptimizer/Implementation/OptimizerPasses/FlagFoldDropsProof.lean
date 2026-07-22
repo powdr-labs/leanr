@@ -8,7 +8,7 @@ set_option autoImplicit false
 
 Native `DensePassCorrect` for the two flagFold drop transforms
 (`Dense/FlagFoldDropsNative.lean`), lifted to the audited `Variable` spec through
-`DenseVerifiedPassW.ofNative` (`Dense/Bridge.lean`). NO WIRING here — the scheduled `flagFold`
+`DenseVerifiedPassW.of` (`Dense/Bridge.lean`). NO WIRING here — the scheduled `flagFold`
 label is a four-sub-pass composite (`fxSubstPass → boxRewritePass → boxTautoDropPass →
 pointwiseDupDropPass`); only parts B/C exist densely so far, and the selector swap happens in a
 later chunk (S5) once all four are ready. This file delivers the two proofs plus their
@@ -41,10 +41,10 @@ proofs, so the mutable sweep carries no proof — dropping more is always sound 
 `densePdDropSet` loop is NOT reasoned about, exactly as the spec never reasons about `pdDropSet`
 beyond the verdict entries' carried certificates.
 
-## Fact-free `ofNative` wrapping
+## Fact-free `of` wrapping
 
 Both spec passes are `VerifiedPass p` (no `BusFacts`); the dense transforms drop `facts` entirely.
-`DenseVerifiedPassW.ofNative` expects a `(bs) (facts) (d)` transform, so each is wrapped
+`DenseVerifiedPassW.of` expects a `(bs) (facts) (d)` transform, so each is wrapped
 `fun bs _ d => denseXxxF pw bs d`, ignoring `facts` — the same shape `denseConstantFoldPass` uses
 for its `bs`/`facts`-ignoring transform. -/
 
@@ -212,9 +212,9 @@ theorem denseBoxTautoDropF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs
   · exact dpcRefl reg.isInput d bs
 
 /-- **The native dense box-tautology drop pass** (part B of the flagFold composite). Fact-free —
-    the `ofNative` transform ignores `facts`. Ready for S5 chain assembly. -/
+    the `of` transform ignores `facts`. Ready for S5 chain assembly. -/
 def denseBoxTautoDropPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (fun bs _ d => denseBoxTautoDropF pw bs d) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (fun bs _ d => denseBoxTautoDropF pw bs d) (fun _ _ _ => [])
     (fun reg bs _ d hcov => denseBoxTautoDropF_covered pw reg bs d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs _ d hcov => denseBoxTautoDropF_correct pw reg bs d hcov)
@@ -539,9 +539,9 @@ theorem densePointwiseDupDropF_correct (pw : PrimeWitness p) (reg : VarRegistry)
   · exact dpcRefl reg.isInput d bs
 
 /-- **The native dense pointwise-duplicate drop pass** (part C of the flagFold composite). Fact-free
-    — the `ofNative` transform ignores `facts`. Ready for S5 chain assembly. -/
+    — the `of` transform ignores `facts`. Ready for S5 chain assembly. -/
 def densePointwiseDupDropPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (fun bs _ d => densePointwiseDupDropF pw bs d) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (fun bs _ d => densePointwiseDupDropF pw bs d) (fun _ _ _ => [])
     (fun reg bs _ d hcov => densePointwiseDupDropF_covered pw reg bs d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs _ d hcov => densePointwiseDupDropF_correct pw reg bs d hcov)

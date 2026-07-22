@@ -9,7 +9,7 @@ set_option autoImplicit false
 
 Native `DensePassCorrect` — over `VarId → ZMod p` environments, with no dependency on the reference
 `Variable` pass — for the dense redundant byte-check dropper (`RedundantByteDrop.lean`), lifted once
-to the audited `Variable` spec through `DenseVerifiedPassW.ofNative`.
+to the audited `Variable` spec through `DenseVerifiedPassW.of`.
 
 The pass drops a recognised pure byte-check interaction (`denseByteCheckOperands?`, decoded through
 the VM-neutral `facts.byteXorSpec` at byte bound `256`) whose operands are all already byte-justified
@@ -228,7 +228,7 @@ theorem denseRedundantByteDropF_correct (pw : PrimeWitness p) (bs : BusSemantics
     `byteXorSpec`) and the prime witness; unconditional in `p`. Runtime transform unchanged from
     `RedundantByteDrop.lean`. -/
 def denseRedundantByteDropPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun bs facts d => denseRedundantByteDropF pw bs facts d)
     (fun _ _ _ => [])
     (fun _ bs facts d hcov => by

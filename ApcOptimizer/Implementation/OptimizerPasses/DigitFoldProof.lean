@@ -674,7 +674,7 @@ theorem denseDigitFoldF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts
     invocation (the cleanup fixpoint re-solves the shrunken ladder on the next iteration). Native
     correctness over `VarId` via `denseDigitFoldF_correct`; no dependency on the reference pass. -/
 def denseDigitFoldPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     denseDigitFoldF
     (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseDigitFoldF_covered reg bs facts d hcov)

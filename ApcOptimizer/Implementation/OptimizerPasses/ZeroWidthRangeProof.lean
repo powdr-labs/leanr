@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Dense width-0 / width-1 range-check conversion: native proof and wiring (Task 3)
 
 Native `DensePassCorrect` proof for the dense `zeroWidthRange` transform (`ZeroWidthRange.lean`),
-lifted to the audited spec via `DenseVerifiedPassW.ofNative`. No dependency on the reference
+lifted to the audited spec via `DenseVerifiedPassW.of`. No dependency on the reference
 `ZeroWidthRange.zeroWidthRangePass` — the transform is exactly the two native steps the spec
 composes with `PassCorrect.andThen`, gated on `(1 : ZMod p) ≠ 0`:
 
@@ -187,10 +187,10 @@ theorem denseZeroWidthRangeF_correct (pw : PrimeWitness p) (reg : VarRegistry) {
   · rw [if_neg h1]; exact DensePassCorrect.refl reg.isInput d bs
 
 /-- **The native dense `zeroWidthRange` pass.** Threads the original `facts` unchanged, connected to
-    the audited spec via `DensePassCorrect.lift` (through `ofNative`) — no reference-pass
+    the audited spec via `DensePassCorrect.lift` (through `of`) — no reference-pass
     dependency. -/
 def denseZeroWidthRangePass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative (denseZeroWidthRangeF pw) (fun _ _ _ => [])
+  DenseVerifiedPassW.of (denseZeroWidthRangeF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseZeroWidthRangeF_covered pw reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d _ => denseZeroWidthRangeF_correct pw reg facts d)

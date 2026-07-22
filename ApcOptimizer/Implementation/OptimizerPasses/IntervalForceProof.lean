@@ -7,7 +7,7 @@ set_option autoImplicit false
 /-! # Dense interval forcing: native proof and wiring (Task 3)
 
 Native `DensePassCorrect` proof for the dense `intervalForce` transform (`IntervalForce.lean`),
-lifted to the audited spec via `DenseVerifiedPassW.ofNative`. No dependency on the reference
+lifted to the audited spec via `DenseVerifiedPassW.of`. No dependency on the reference
 `IntervalForce.intervalForcePass` — the pass is a single-shot **append of entailed constraints**, so
 its correctness rides on the reusable `DensePassCorrect.denseAddConstraints` (`BusUnifyProof.lean`)
 once every appended seed is shown to evaluate to `0` on any satisfying dense assignment.
@@ -496,9 +496,9 @@ theorem denseIntervalForceF_correct (reg : VarRegistry) (bs : BusSemantics p) (f
       (fun denv _ hsat => denseIntervalForceNew_sound bs facts d denv hsat)
 
 /-- **The native dense `intervalForce` pass.** Threads the original `facts` unchanged, connected to
-    the audited spec via `DensePassCorrect.lift` (through `ofNative`) — no reference-pass dependency. -/
+    the audited spec via `DensePassCorrect.lift` (through `of`) — no reference-pass dependency. -/
 def denseIntervalForcePass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative denseIntervalForceF (fun _ _ _ => [])
+  DenseVerifiedPassW.of denseIntervalForceF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseIntervalForceF_covered reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d _ => denseIntervalForceF_correct reg bs facts d)

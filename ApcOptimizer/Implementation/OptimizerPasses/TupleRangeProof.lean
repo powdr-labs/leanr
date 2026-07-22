@@ -552,9 +552,9 @@ theorem denseTupleRangeF_correct (reg : VarRegistry) (bs : BusSemantics p) (fact
 
 /-- The dense tuple-range packing pass: pack every byte-check + exact-width range-check pair into a
     single tuple check, draining every packable pair in one invocation. Registry-preserving (no
-    fresh variables), so built through `DenseVerifiedPassW.ofNative`. -/
+    fresh variables), so built through `DenseVerifiedPassW.of`. -/
 def denseTupleRangePass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun bs facts d => denseTupleRangeF bs facts d)
     (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseTupleRangeF_covered reg bs facts d hcov)

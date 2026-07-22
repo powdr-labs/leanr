@@ -16,7 +16,7 @@ The scheduled pass is `monicScalePass.withFacts` — `VerifiedPass.withFacts` (`
 discards the `facts` argument (`fun cs bs _ => f cs bs`), and `monicScalePass` itself never
 consults `bs` either, so the pass is fully fact-free and `bs`-free. The dense transform below is
 correspondingly a plain `DenseConstraintSystem p → DenseConstraintSystem p`; the prover wraps it
-with `DenseVerifiedPassW.ofNative` under a `fun _ _ d => denseMonicScaleF d` that ignores its
+with `DenseVerifiedPassW.of` under a `fun _ _ d => denseMonicScaleF d` that ignores its
 `bs`/`facts` arguments, mirroring the `.withFacts` discard exactly.
 
 Soundness of the scaling is field-free (works over any commutative ring, unconditional in `p`):

@@ -14,7 +14,7 @@ no theorem/lemma from the spec file is ported (`fxCheck_vars`, `fxCheck_sound` a
 prover's job), and no `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the
 top-level transform `denseFxSubstF` is shaped exactly like `denseFlagUnifyF`
 (`Dense/FlagUnifyNative.lean`) and `denseRootPairUnifyF` (`Dense/RootPairUnifyNative.lean`), so
-the prover wraps it directly with `DenseVerifiedPassW.ofNative`.
+the prover wraps it directly with `DenseVerifiedPassW.of`.
 
 Notes on how spec pieces map here:
 
@@ -136,7 +136,7 @@ def denseFxLoop (bs : BusSemantics p) (facts : BusFacts p bs) (domCs : List (Den
 /-- Part A's runtime transform: substitute every certified interpolation. Prime `p` only
     (re-checked at runtime); identity otherwise. Mirrors `fxSubstPass`'s computed output (dropping
     its `PassCorrect` term); shaped as `(pw) → (bs) → (facts) → (d) → out`, matching
-    `denseFlagUnifyF`/`denseRootPairUnifyF`'s shape exactly for `DenseVerifiedPassW.ofNative`. -/
+    `denseFlagUnifyF`/`denseRootPairUnifyF`'s shape exactly for `DenseVerifiedPassW.of`. -/
 def denseFxSubstF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then

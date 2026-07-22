@@ -7,7 +7,7 @@ set_option autoImplicit false
 /-! # Native soundness for the dense `busUnify` pass (Task 3, busUnify cluster, chunk M2 — prover)
 
 Native `DensePassCorrect` for `denseBusUnifyF` (`Dense/BusUnifyNative.lean`), lifted to the audited
-`Variable` spec through `DenseVerifiedPassW.ofNative` (`Dense/Bridge.lean`). **This is the first
+`Variable` spec through `DenseVerifiedPassW.of` (`Dense/Bridge.lean`). **This is the first
 native pass that consumes `BusFacts` at runtime** (`facts.memShape` in the transform,
 `facts.admissible_sound` in the proof), so it also establishes the template later fact-consuming
 ports copy.
@@ -766,10 +766,10 @@ theorem denseBusUnifyF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts 
 
 /-- **The native dense `busUnify` pass.** Threads the original `facts` unchanged (real
     `facts.memShape` calls at runtime), connects to the audited spec via `DensePassCorrect.lift`
-    (through `ofNative`) on the native `DensePassCorrect` proof — no commutation with the reference
+    (through `of`) on the native `DensePassCorrect` proof — no commutation with the reference
     pass. -/
 def denseBusUnifyPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative denseBusUnifyF (fun _ _ _ => [])
+  DenseVerifiedPassW.of denseBusUnifyF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseBusUnifyF_covered reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d hcov => denseBusUnifyF_correct reg bs facts d hcov)

@@ -111,11 +111,11 @@ theorem DenseConstraintSystem.dedup_denseCorrect {isInput : VarId → Bool}
     exact ⟨(hiff denv).2 hsat, (hadm denv).2 hadm', by rw [hside]; exact BusState.equiv_refl _⟩
 
 /-- **The native dense duplicate-removal pass** (runs the fully hash-bucketed `dedupN`). Fact-free:
-    the `ofNative` transform ignores `facts`. Its `PassCorrect`-on-decode is discharged natively via
-    `DensePassCorrect.lift` (through `ofNative`) on `dedup_denseCorrect`, transported along
+    the `of` transform ignores `facts`. Its `PassCorrect`-on-decode is discharged natively via
+    `DensePassCorrect.lift` (through `of`) on `dedup_denseCorrect`, transported along
     `dedupN_eq` — no commutation with the reference pass. -/
 def denseDedupPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun bs _ d => d.dedupN bs)
     (fun _ _ _ => [])
     (fun _ _ _ _ hcov => DenseConstraintSystem.dedupN_covered hcov)

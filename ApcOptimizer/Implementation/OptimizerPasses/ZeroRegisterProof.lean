@@ -7,7 +7,7 @@ set_option autoImplicit false
 /-! # Dense fixed-zero-register pinning: native proof and wiring (Task 3)
 
 Native `DensePassCorrect` proof for the dense `zeroRegister` transform, lifted to the audited spec
-via `DenseVerifiedPassW.ofNative`. No dependency on the reference `zeroRegisterPass` — the transform
+via `DenseVerifiedPassW.of`. No dependency on the reference `zeroRegisterPass` — the transform
 appends `data_i = 0` for every active fixed-zero memory message via
 `DensePassCorrect.denseAddConstraints`, a single-shot "add entailed constraints" step whose
 entailment needs only admissibility (the value is fixed by the real-trace `zeroCell` fact).
@@ -178,10 +178,10 @@ theorem denseZeroRegisterF_correct (reg : VarRegistry) (bs : BusSemantics p) (fa
       (fun denv hadm _hsat => denseZeroRegisterNew_sound bs facts d denv hadm)
 
 /-- **The native dense fixed-zero-register pass.** Fact-consuming; threads the original `facts`
-    unchanged, connected to the audited spec via `DensePassCorrect.lift` (through `ofNative`) — no
+    unchanged, connected to the audited spec via `DensePassCorrect.lift` (through `of`) — no
     reference-pass dependency. -/
 def denseZeroRegisterPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative denseZeroRegisterF (fun _ _ _ => [])
+  DenseVerifiedPassW.of denseZeroRegisterF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseZeroRegisterF_covered reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d _ => denseZeroRegisterF_correct reg bs facts d)

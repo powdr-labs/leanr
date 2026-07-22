@@ -740,7 +740,7 @@ theorem hcOutOcc {d : DenseConstraintSystem p} {E E' : DenseExpr p} {i : VarId}
 
 /-! ## The full collapse bundle (extends + coverage + native correctness) at the minted registry -/
 
-/-- The complete `ofNativeExtending` obligation bundle for one accepted collapse: mint `invVar`
+/-- The complete `ofExtending` obligation bundle for one accepted collapse: mint `invVar`
     (`powdrId? = none`, so `isInput` is preserved pointwise), extend the registry, and combine coverage
     of the output/derivations with `dense_collapse_correct`. Both `tryOne`/`tryOneSq` discharge only
     the pure structural hypotheses and call this. -/
@@ -1052,7 +1052,7 @@ theorem denseHintCollapseF_props (pw : PrimeWitness p) (reg : VarRegistry) (bs :
 
 /-- The native, registry-extending hint-collapse pass. -/
 def denseHintCollapsePass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNativeExtending (denseHintCollapseF pw)
+  DenseVerifiedPassW.ofExtending (denseHintCollapseF pw)
     (fun reg bs facts d hcov => (denseHintCollapseF_props pw reg bs facts d hcov).1)
     (fun reg bs facts d hcov => (denseHintCollapseF_props pw reg bs facts d hcov).2.1)
     (fun reg bs facts d hcov => (denseHintCollapseF_props pw reg bs facts d hcov).2.2.1)

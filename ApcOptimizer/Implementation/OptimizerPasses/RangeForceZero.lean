@@ -8,7 +8,7 @@ Dense, `VarId`-native transliteration of the reference `RangeForceZero` pass's *
 definitions: `forceZeroAt` (`:24`), `forceZeroSeeds` (`:93`), and the pass `rangeForceZeroPass`
 (`:99`). This is a **single-shot add-seeds** transform (`ConstraintSystem.addConstraints_correct`
 at `:99`), so its dense mirror `denseRangeForceZeroF` is one `if`-gated append, exactly the shape
-`DenseVerifiedPassW.ofNative`/the DigitFold-style direct construction expects
+`DenseVerifiedPassW.of`/the DigitFold-style direct construction expects
 (`bs → facts → d → d'`). **Impl-only**: `forceZeroAt_spec`/`forceZeroAt_sound`/`forceZeroSeeds_sound`
 are proof-side and left for the prover. The native `DensePassCorrect` proof and the pass wiring
 (`denseRangeForceZeroPass`, scheduled as `"rangeForceZero"`) live in `RangeForceZeroProof.lean`.

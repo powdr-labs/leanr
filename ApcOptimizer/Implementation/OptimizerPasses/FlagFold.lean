@@ -44,7 +44,7 @@ variable {p : ℕ}
     (`fxSubst`), rewrite the over-bound survivors multilinearly (`boxRewrite b`), then collect the
     box tautologies (`boxTautoDrop`) and pointwise stateless-check duplicates (`pointwiseDupDrop`),
     composed left-to-right with the dense chain combinator `DenseVerifiedPassW.andThen`. Each
-    sub-pass carries its own native `DensePassCorrect` (through `ofNative`); the composite's
+    sub-pass carries its own native `DensePassCorrect` (through `of`); the composite's
     correctness is their `PassCorrect.andThen` composition, threaded by `andThen`. Unguarded here —
     the whole chain runs under ONE `guardDegree b` at the selector, since box-rewrite intermediates
     legitimately exceed the bound. -/

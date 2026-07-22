@@ -12,7 +12,7 @@ definitions (`twoRootVarsOk`, `Expression.splitAt`, `scaledSlotBound`, `anyVarBo
 **impl-only**: no theorem/lemma from the spec file is ported, and no `DenseVerifiedPassW`/
 `DensePassCorrect` wrapper is built here — the top-level transform `denseRootPairUnifyF` is shaped
 exactly like `denseBusUnifyF` (`Dense/BusUnifyNative.lean`), so the prover wraps it directly with
-`DenseVerifiedPassW.ofNative`.
+`DenseVerifiedPassW.of`.
 
 Notes on how spec pieces map here:
 
@@ -271,7 +271,7 @@ def denseRpLoop (bs : BusSemantics p) (facts : BusFacts p bs)
     cleanup fixpoint iterates the pass. Solutions are bare variables, so substitution can never grow
     a degree. Mirrors `rootPairUnifyPass`'s computed output (dropping its `PassCorrect` term); shaped
     as `(pw) → (bs) → (facts) → (d) → out`, so after currying `pw` it matches `denseBusUnifyF`'s
-    shape for `DenseVerifiedPassW.ofNative` (`Dense/BusUnifyNative.lean`). -/
+    shape for `DenseVerifiedPassW.of` (`Dense/BusUnifyNative.lean`). -/
 def denseRootPairUnifyF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then

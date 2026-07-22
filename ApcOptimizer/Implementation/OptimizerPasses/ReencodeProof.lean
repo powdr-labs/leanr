@@ -1160,7 +1160,7 @@ theorem denseCheckReencode_sound [Fact p.Prime] (d : DenseConstraintSystem p) (b
 /-! ## Chunk P3: step / loop correctness, pass assembly (native)
 
 The registry-extending native pass `denseReencodePass`, built from the runtime `denseReencodeF`
-(`Reencode.lean`, chunk R2) via `DenseVerifiedPassW.ofNativeExtending`. The chain: `denseRegisterBits`
+(`Reencode.lean`, chunk R2) via `DenseVerifiedPassW.ofExtending`. The chain: `denseRegisterBits`
 mints only bits with `powdrId? = none`, so it preserves `isInput` pointwise and extends the registry
 (`denseRegisterBits_props`); `denseBuildReencode` inherits both plus validity of the bits it returns
 (`denseBuildReencode_props`); one `denseReencodeStep` is `DensePassCorrect` at its own output
@@ -1172,7 +1172,7 @@ certificate forward to the uniform final registry's `isInput` using the pointwis
 `isInput`-preservation the loop threads (`funext` of the loop bundle's second field), so no genuine
 `isInput` transport machinery is needed beyond the pointwise-stability lemma. `denseReencodeF_props`
 lifts the loop bundle across the pass's `pw.isPrime`/target-construction preamble, and
-`denseReencodePass` packages it through `ofNativeExtending`. -/
+`denseReencodePass` packages it through `ofExtending`. -/
 
 theorem register_isInput_eq (reg : VarRegistry) (v : Variable) (hv : v.powdrId? = none)
     (i : VarId) : (reg.register v).1.isInput i = reg.isInput i := by
@@ -1483,7 +1483,7 @@ theorem denseReencodeF_props (pw : PrimeWitness p) (b : DegreeBound) (reg : VarR
     intro x hx; simp at hx
 
 def denseReencodePass (pw : PrimeWitness p) (b : DegreeBound) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNativeExtending (denseReencodeF pw b)
+  DenseVerifiedPassW.ofExtending (denseReencodeF pw b)
     (fun reg bs facts d hcov => (denseReencodeF_props pw b reg bs facts d hcov).1)
     (fun reg bs facts d hcov => (denseReencodeF_props pw b reg bs facts d hcov).2.1)
     (fun reg bs facts d hcov => (denseReencodeF_props pw b reg bs facts d hcov).2.2.1)

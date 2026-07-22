@@ -11,7 +11,7 @@ definitions (`FuData`, `fuPairData?`, `fuCheckWith`, `fuCheck`, `FUSeen`, `fuKey
 no theorem/lemma from the spec file is ported, and no `DenseVerifiedPassW`/`DensePassCorrect`
 wrapper is built here — the top-level transform `denseFlagUnifyF` is shaped exactly like
 `denseRootPairUnifyF` (`Dense/RootPairUnifyNative.lean`), so the prover wraps it directly with
-`DenseVerifiedPassW.ofNative`.
+`DenseVerifiedPassW.of`.
 
 Notes on how spec pieces map here (mirroring the `RootPairUnifyNative` chunk S1 precedent):
 
@@ -234,7 +234,7 @@ def denseFuLoop (bs : BusSemantics p) (facts : BusFacts p bs) (domCs : List (Den
     Runs after `denseRootPairUnifyF` — the carrier limbs must already be shared — and before dedup,
     which collects the checks this pass makes syntactically identical. Mirrors `flagUnifyPass`'s
     computed output (dropping its `PassCorrect` term); shaped as `(pw) → (bs) → (facts) → (d) → out`,
-    matching `denseRootPairUnifyF`'s shape exactly for `DenseVerifiedPassW.ofNative`. -/
+    matching `denseRootPairUnifyF`'s shape exactly for `DenseVerifiedPassW.of`. -/
 def denseFlagUnifyF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then

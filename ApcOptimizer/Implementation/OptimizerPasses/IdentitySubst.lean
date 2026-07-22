@@ -14,7 +14,7 @@ definitions (`asVar`, `orIdentityOperand`, `identityPairAt`, `identityPairs`, `f
 `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the runtime transform
 `denseIdentitySubstF` is shaped like `denseByteCheckPackF`/`denseSplitBytePairF`: unconditional in
 `p` (gated only by the same `(1 : ZMod p) ≠ 0` self-check as the spec pass step), so the prover
-wraps it directly with `DenseVerifiedPassW.ofNative` and applies the already-landed
+wraps it directly with `DenseVerifiedPassW.of` and applies the already-landed
 `denseIterateToFixpoint` (`Pass.lean`) to reach the scheduled fixpoint pass, exactly as
 `identitySubstPass := iterateToFixpoint identitySubstStep` does over the spec step.
 

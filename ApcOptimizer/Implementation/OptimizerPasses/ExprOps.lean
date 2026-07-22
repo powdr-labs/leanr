@@ -13,7 +13,7 @@ preserves the dense semantics — satisfaction, admissibility, stateful-bus effe
 preservation, and the occurrence set — proved natively here (`mapExpr_satisfies` etc.). The dense
 constant-fold pass then discharges its `DensePassCorrect` **natively** (no dependency on the spec
 `constantFoldPass`) and is lifted to the spec `PassCorrect` once, at the pipeline edge, by
-`DenseVerifiedPassW.ofNative`. -/
+`DenseVerifiedPassW.of`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -220,10 +220,10 @@ theorem DenseConstraintSystem.mapExpr_occ_subset
 
 /-- The dense constant-folding pass: normalize every dense expression. Its correctness is proved
     **natively** as a `DensePassCorrect` (the fold is eval-preserving and introduces no variables) and
-    lifted to the spec `PassCorrect` by `DenseVerifiedPassW.ofNative` — no dependency on the spec
+    lifted to the spec `PassCorrect` by `DenseVerifiedPassW.of` — no dependency on the spec
     `constantFoldPass`. -/
 def denseConstantFoldPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNative
+  DenseVerifiedPassW.of
     (fun _ _ d => d.mapExpr DenseExpr.fold)
     (fun _ _ _ => [])
     (fun _ _ _ _ hcov => DenseConstraintSystem.mapExpr_covered DenseExpr.fold_vars hcov)

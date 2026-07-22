@@ -636,7 +636,7 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
 /-! ## The full collapse bundle (extends + coverage + native correctness) at the minted registry -/
 
 set_option maxHeartbeats 1600000 in
-/-- The complete `ofNativeExtending` obligation bundle for one accepted collapse: mint the fresh `inv`
+/-- The complete `ofExtending` obligation bundle for one accepted collapse: mint the fresh `inv`
     witness (`powdrId? = none`, so `isInput` is preserved pointwise), extend the registry, and combine
     coverage of the output/derivations with `dense_seqzCollapse_correct`. Primality is recovered from
     the accepting `denseSeqzRolesValid` flag (no outer `[Fact p.Prime]`). -/
@@ -834,9 +834,9 @@ theorem denseSeqzCollapseF_props (reg : VarRegistry) (bs : BusSemantics p) (fact
 
 /-- **The native dense `seqzCollapse` step.** One scan-and-collapse of the recognised `sltu x, 1`
     gadget, minting one `QuotientOrZero` witness, connected to the audited spec via
-    `DensePassCorrect.lift` (through `ofNativeExtending`) — no reference-pass dependency. -/
+    `DensePassCorrect.lift` (through `ofExtending`) — no reference-pass dependency. -/
 def denseSeqzCollapseStep : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNativeExtending (fun reg bs facts d => denseSeqzCollapseF reg bs facts d)
+  DenseVerifiedPassW.ofExtending (fun reg bs facts d => denseSeqzCollapseF reg bs facts d)
     (fun reg bs facts d hcov => (denseSeqzCollapseF_props reg bs facts d hcov).1)
     (fun reg bs facts d hcov => (denseSeqzCollapseF_props reg bs facts d hcov).2.1)
     (fun reg bs facts d hcov => (denseSeqzCollapseF_props reg bs facts d hcov).2.2.1)

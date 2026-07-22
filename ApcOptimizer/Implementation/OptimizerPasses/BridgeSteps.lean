@@ -156,9 +156,9 @@ def DenseNativeStep.drain {σ : Type} (bs : BusSemantics p)
 /-! ## Glue into `DensePassResult` / the pass builders
 
 `toDensePassResult` closes a certified step directly into the existing `DensePassResult` (what
-`ofNative`/`ofNativeExtending` produce), applying `DensePassCorrect.lift` at the extended registry and
+`of`/`ofExtending` produce), applying `DensePassCorrect.lift` at the extended registry and
 restating the input decode at the original registry via `Extends.decodeCS_eq` — the same discharge as
-`ofNativeExtending`'s `correct` field. `ofDenseStep` wires it into a `DenseVerifiedPassW`: a pass
+`ofExtending`'s `correct` field. `ofDenseStep` wires it into a `DenseVerifiedPassW`: a pass
 author builds a `DenseNativeStep` (via `foldList`/`drain`/`ofSame`) and gets the pass for free. -/
 
 /-- Close a certified step into the framework `DensePassResult`. The `correct` field is discharged by
@@ -188,7 +188,7 @@ def DenseVerifiedPassW.ofDenseStep
   fun reg d hcov bs facts => (build reg bs facts d hcov).toDensePassResult hcov
 
 /-- `ofDenseStep` respects the degree bound whenever the built step's decoded output stays within
-    bound (the per-build degree obligation; mirrors `ofNative_respectsDeg`). -/
+    bound (the per-build degree obligation; mirrors `of_respectsDeg`). -/
 theorem DenseVerifiedPassW.ofDenseStep_respectsDeg {b : DegreeBound}
     {build : (reg : VarRegistry) → (bs : BusSemantics p) → (facts : BusFacts p bs) →
       (d : DenseConstraintSystem p) → d.CoveredBy reg → DenseNativeStep p bs reg d}
@@ -200,16 +200,16 @@ theorem DenseVerifiedPassW.ofDenseStep_respectsDeg {b : DegreeBound}
   intro reg d hcov bs facts hin
   exact hdeg reg bs facts d hcov hin
 
-/-! ## Projection glue for `ofNativeExtending`
+/-! ## Projection glue for `ofExtending`
 
 For pass authors who split the runtime data transform from the proof: package a certified step as the
-`(reg', out, dd)` tuple `ofNativeExtending`'s `transform` returns, and discharge the four obligations
-by projection. Each lemma's statement is exactly the shape `ofNativeExtending` demands
+`(reg', out, dd)` tuple `ofExtending`'s `transform` returns, and discharge the four obligations
+by projection. Each lemma's statement is exactly the shape `ofExtending` demands
 (`hext`/`hcov`/`hdcov`/`hcorrect`) — the tuple projections reduce definitionally to the fields, so the
 discharge is `.proj_ext`/`.proj_cov`/… with zero rewriting (`hcorrect` lines up because `.correct` is
 already stated at `reg'.isInput = toTuple.1.isInput`). -/
 
-/-- The `(reg', out, dd)` tuple an `ofNativeExtending` transform returns. -/
+/-- The `(reg', out, dd)` tuple an `ofExtending` transform returns. -/
 @[reducible] def DenseNativeStep.toTuple {bs : BusSemantics p} {reg : VarRegistry}
     {d : DenseConstraintSystem p} (s : DenseNativeStep p bs reg d) :
     VarRegistry × DenseConstraintSystem p × DenseDerivations p := (s.reg', s.out, s.dd)
@@ -230,7 +230,7 @@ theorem DenseNativeStep.proj_correct {bs : BusSemantics p} {reg : VarRegistry}
     {d : DenseConstraintSystem p} (s : DenseNativeStep p bs reg d) :
     DensePassCorrect s.toTuple.1.isInput d s.toTuple.2.1 s.toTuple.2.2 bs := s.correct
 
-/-- The four projections deliver exactly the `ofNativeExtending` obligation shapes for the transform
+/-- The four projections deliver exactly the `ofExtending` obligation shapes for the transform
     `fun … => s.toTuple`. -/
 private example {bs : BusSemantics p} {reg : VarRegistry} {d : DenseConstraintSystem p}
     (s : DenseNativeStep p bs reg d) :

@@ -25,7 +25,7 @@ mention only registered variables so evaluation agrees. Every correspondence lem
 `Prop`-valued and erases; `decode` appears only in these erased bridge statements, never in the
 runtime pipeline.
 
-`DenseVerifiedPassW.ofNative` packages the whole thing: given a dense transform, coverage
+`DenseVerifiedPassW.of` packages the whole thing: given a dense transform, coverage
 preservation, and a `DensePassCorrect` proof, it yields the existing `DensePassResult` by applying
 the lift — so a native pass slots into the current `denseChain`/selector with no change to
 composition, the fixpoint, or the other passes.
@@ -821,14 +821,14 @@ theorem DensePassCorrect.lift {reg : VarRegistry} {d out : DenseConstraintSystem
             rw [specCM_eval_congr cm env' E (fun x hx => hpw4 x (hcmpow x hx)), hcmeval, henv',
               reg.extendEnv_resolve denv' E hvi, hpres]
 
-/-! ## The native-pass builder -/
+/-! ## The dense-pass builder -/
 
-/-- Build a `DenseVerifiedPassW` from a native dense transform (registry unchanged — no fresh
+/-- Build a `DenseVerifiedPassW` from a dense transform (registry unchanged — no fresh
     variables), its coverage preservation, and a `DensePassCorrect` proof, discharging the spec
-    `PassCorrect`-on-decode field via `DensePassCorrect.lift`. Native passes slot into the existing
-    `denseChain`/selector unchanged. Fresh-variable passes (`Reencode`/`HintCollapse`/`SeqzCollapse`)
-    need the registry-extending path instead. -/
-def DenseVerifiedPassW.ofNative
+    `PassCorrect`-on-decode field via `DensePassCorrect.lift`. Fresh-variable passes
+    (`Reencode`/`HintCollapse`/`SeqzCollapse`) need the registry-extending path (`ofExtending`)
+    instead. -/
+def DenseVerifiedPassW.of
     (denseF : (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
       DenseConstraintSystem p)
     (denseDerivsF : (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
@@ -851,9 +851,9 @@ def DenseVerifiedPassW.ofNative
       correct := DensePassCorrect.lift hcovd (hcov reg bs facts d hcovd)
         (hdcov reg bs facts d hcovd) (hcorrect reg bs facts d hcovd) }
 
-/-- `ofNative`'s decoded output equals the decode of the dense transform's output (registry
+/-- `of`'s decoded output equals the decode of the dense transform's output (registry
     unchanged), so it respects the degree bound whenever the dense output stays within bound. -/
-theorem DenseVerifiedPassW.ofNative_respectsDeg {b : DegreeBound}
+theorem DenseVerifiedPassW.of_respectsDeg {b : DegreeBound}
     {denseF : (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
       DenseConstraintSystem p}
     {denseDerivsF : (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
@@ -862,22 +862,22 @@ theorem DenseVerifiedPassW.ofNative_respectsDeg {b : DegreeBound}
     (hdeg : ∀ (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
       (d : DenseConstraintSystem p), d.CoveredBy reg →
       (reg.decodeCS d).withinDegree b → (reg.decodeCS (denseF bs facts d)).withinDegree b) :
-    DenseRespectsDeg b (ofNative denseF denseDerivsF hcov hdcov hcorrect) := by
+    DenseRespectsDeg b (of denseF denseDerivsF hcov hdcov hcorrect) := by
   intro reg d hcovd bs facts hin
   exact hdeg reg bs facts d hcovd hin
 
-/-! ## The registry-extending native-pass builder
+/-! ## The registry-extending dense-pass builder
 
-`ofNative` hardcodes `reg' := reg` (no fresh variables). Fresh-variable passes
+`of` hardcodes `reg' := reg` (no fresh variables). Fresh-variable passes
 (`Reencode`/`HintCollapse`/`SeqzCollapse`) mint columns: they extend the registry and emit non-empty
-dense derivations. `ofNativeExtending` is their builder — the sibling of `ofNative`, same obligation
+dense derivations. `ofExtending` is their builder — the sibling of `of`, same obligation
 naming, but with a transform that returns the extended registry alongside the output and
 derivations, and a `DensePassCorrect` obligation stated at the **extended** registry's `isInput`. -/
 
 /-- Constraint-system coverage is preserved by a registry extension. (`Adapter.lean` carries a
-    public copy, but that module is dev scaffolding and is not on the native bridge's import path;
-    the extending builder needs the fact to re-cover the input at the extended registry.
-    Public — `BridgeSteps.lean`'s certified-step glue reuses it, per the proof-architecture note.) -/
+    public copy as `DenseConstraintSystem.CoveredBy.mono`, but that module is not on this bridge's
+    import path; the extending builder needs the fact to re-cover the input at the extended registry.
+    Public — `BridgeSteps.lean`'s certified-step glue reuses it.) -/
 theorem denseCS_coveredBy_mono {r r' : VarRegistry} (h : r.Extends r')
     {d : DenseConstraintSystem p} (hc : d.CoveredBy r) : d.CoveredBy r' := by
   obtain ⟨hac, hbi⟩ := hc
@@ -886,7 +886,7 @@ theorem denseCS_coveredBy_mono {r r' : VarRegistry} (h : r.Extends r')
   exact ⟨hm.mono h, fun e he => (hp e he).mono h⟩
 
 /-- Build a `DenseVerifiedPassW` from a registry-**extending** native dense transform — the sibling
-    of `ofNative` for passes that mint fresh variables (`Reencode`/`HintCollapse`/`SeqzCollapse`).
+    of `of` for passes that mint fresh variables (`Reencode`/`HintCollapse`/`SeqzCollapse`).
     The `transform` takes the incoming registry and returns the extended registry together with the
     dense output and dense derivations; the obligations are the registry extension (`hext`), coverage
     of the output and the derivations at the **extended** registry (`hcov`/`hdcov`), and a native
@@ -896,10 +896,9 @@ theorem denseCS_coveredBy_mono {r r' : VarRegistry} (h : r.Extends r')
     the extended registry (`lift` fixes no registry): re-cover the input there with `CoveredBy.mono`
     across the extension, lift to get `PassCorrect` with the input decoded at the extended registry,
     then `Extends.decodeCS_eq` restates that input decode at the original registry — exactly the field
-    `DensePassResult` demands. Extending native passes then slot into the existing
-    `denseChain`/selector unchanged. The transform is evaluated once per invocation (`let`-bound), so
+    `DensePassResult` demands. The transform is evaluated once per invocation (`let`-bound), so
     the extended registry, output, and derivations are shared, not recomputed. -/
-def DenseVerifiedPassW.ofNativeExtending
+def DenseVerifiedPassW.ofExtending
     (transform : VarRegistry → (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
       VarRegistry × DenseConstraintSystem p × DenseDerivations p)
     (hext : ∀ (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -932,10 +931,10 @@ def DenseVerifiedPassW.ofNativeExtending
         have hlift := DensePassCorrect.lift hcovd' hcov' hdcov' hcorrect'
         rwa [hext'.decodeCS_eq hcovd] at hlift }
 
-/-- `ofNativeExtending`'s decoded output equals the decode of the transform's output at the extended
+/-- `ofExtending`'s decoded output equals the decode of the transform's output at the extended
     registry, so it respects the degree bound whenever that dense output stays within bound. Mirrors
-    `ofNative_respectsDeg`. -/
-theorem DenseVerifiedPassW.ofNativeExtending_respectsDeg {b : DegreeBound}
+    `of_respectsDeg`. -/
+theorem DenseVerifiedPassW.ofExtending_respectsDeg {b : DegreeBound}
     {transform : VarRegistry → (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
       VarRegistry × DenseConstraintSystem p × DenseDerivations p}
     {hext hcov hdcov hcorrect}
@@ -943,19 +942,19 @@ theorem DenseVerifiedPassW.ofNativeExtending_respectsDeg {b : DegreeBound}
       (d : DenseConstraintSystem p), d.CoveredBy reg →
       (reg.decodeCS d).withinDegree b →
       ((transform reg bs facts d).1.decodeCS (transform reg bs facts d).2.1).withinDegree b) :
-    DenseRespectsDeg b (ofNativeExtending transform hext hcov hdcov hcorrect) := by
+    DenseRespectsDeg b (ofExtending transform hext hcov hdcov hcorrect) := by
   intro reg d hcovd bs facts hin
   exact hdeg reg bs facts d hcovd hin
 
 /-! ### Sanity check: a trivial registry-minting stub composes through the builder -/
 
 /-- A trivial registry-**minting** stub — register one fresh `Variable`, keep the system unchanged,
-    emit no derivations — composes through `ofNativeExtending`. Output coverage rides on
+    emit no derivations — composes through `ofExtending`. Output coverage rides on
     `CoveredBy.mono` across the registration extension, and the `DensePassCorrect` obligation is the
     `refl` template at the extended registry. An erased `example` that only witnesses the extending
     builder type-checks end-to-end (nothing is wired). -/
 private example (v : Variable) : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.ofNativeExtending
+  DenseVerifiedPassW.ofExtending
     (fun reg _ _ d => ((reg.register v).1, d, []))
     (fun reg _ _ _ _ => VarRegistry.register_extends reg v)
     (fun reg _ _ _ hcov => denseCS_coveredBy_mono (VarRegistry.register_extends reg v) hcov)

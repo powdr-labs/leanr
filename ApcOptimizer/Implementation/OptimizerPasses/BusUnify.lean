@@ -11,7 +11,7 @@ Dense, `VarId`-native transliteration of `OptimizerPasses/BusUnify.lean`'s **run
 `candidateSplits`, `collectForBus`, `collectAllBuses`, `busUnifyPass`). This file is **impl-only**:
 no theorem/lemma from the spec file is ported, and no `DenseVerifiedPassW`/`DensePassCorrect` wrapper
 is built here — the top-level transform `denseBusUnifyF` is shaped exactly like the `denseF`
-argument `DenseVerifiedPassW.ofNative` (`Dense/Bridge.lean`) expects, so the prover wraps it
+argument `DenseVerifiedPassW.of` (`Dense/Bridge.lean`) expects, so the prover wraps it
 directly.
 
 Three notes on how spec pieces map here:
@@ -306,7 +306,7 @@ def denseCollectAllBuses (d : DenseConstraintSystem p) (bs : BusSemantics p) (fa
     send→receive slot equalities for every declared memory / execution-bridge bus (skipping
     equations already present or trivially zero). Mirrors `busUnifyPass`'s computed output
     (dropping its `PassCorrect` term); shaped as `(bs) → (facts) → (d) → out`, matching the `denseF`
-    argument `DenseVerifiedPassW.ofNative` expects (`Dense/Bridge.lean`), so the prover can wrap it
+    argument `DenseVerifiedPassW.of` expects (`Dense/Bridge.lean`), so the prover can wrap it
     directly (with `fun _ _ _ => ([] : DenseDerivations p)` for the no-derivations side). -/
 def denseBusUnifyF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     DenseConstraintSystem p :=

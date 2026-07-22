@@ -26,9 +26,9 @@ indexed-vs-direct covered-set gathering — reusing `denseCoveredIdx`, `DomainFo
 `degPreReject`, the #165 degree pre-gate), `denseReencodeStep`/`denseReencodeLoop` (↔
 `reencodeStep`/`reencodeLoop`, the per-candidate step and the sequential driver, including the
 registry-extending fresh-variable plumbing), and `denseReencodeF` (↔ `reencodePass`, as a plain
-transform matching the `ofNativeExtending` builder's shape — the prover wires it with
-`DenseVerifiedPassW.ofNativeExtending (denseReencodeF pw b) …`). The native correctness proof and
-the `ofNativeExtending` wiring live in `ReencodeProof.lean`.
+transform matching the `ofExtending` builder's shape — the prover wires it with
+`DenseVerifiedPassW.ofExtending (denseReencodeF pw b) …`). The native correctness proof and
+the `ofExtending` wiring live in `ReencodeProof.lean`.
 
 ### Fresh bits: where they are minted, and the freshness prefilter mechanism
 
@@ -479,7 +479,7 @@ def denseDegPreReject (b : DegreeBound) (d : DenseConstraintSystem p)
     header). The spec threads `bsem : BusSemantics p` only to build the discarded branches'
     `PassCorrect.refl cs bsem` proof witness; since this chunk carries no proof at all, `bsem` has
     no runtime role here and is dropped (kept, necessarily, at `denseReencodeF`, whose signature
-    `ofNativeExtending` fixes). -/
+    `ofExtending` fixes). -/
 def denseReencodeStep (b : DegreeBound) (useIdx : Bool)
     (reg : VarRegistry) (d : DenseConstraintSystem p) (csIdx : DenseCovIndex)
     (arrCs : Array (DenseExpr p)) (varSet : Std.HashSet VarId) (xs : List VarId)
@@ -541,12 +541,12 @@ def denseReencodeLoop (b : DegreeBound) (useIdx : Bool) :
 
 /-! ### The pass, as a plain registry-extending transform -/
 
-/-- The witness re-encoding transform, shaped exactly for `DenseVerifiedPassW.ofNativeExtending`
-    (the prover wires it with `DenseVerifiedPassW.ofNativeExtending (denseReencodeF pw b) …`).
+/-- The witness re-encoding transform, shaped exactly for `DenseVerifiedPassW.ofExtending`
+    (the prover wires it with `DenseVerifiedPassW.ofExtending (denseReencodeF pw b) …`).
     Mirrors `reencodePass`'s target-group construction (see the module header for the ordering-
     parity comparator and the shared-`csVs` hoist) and dispatch. `facts` is unused: reencode is
     fact-free, as the spec pass is (its signature takes only `bsem`); the parameter exists solely to
-    match `ofNativeExtending`'s uniform transform shape. -/
+    match `ofExtending`'s uniform transform shape. -/
 def denseReencodeF (pw : PrimeWitness p) (b : DegreeBound) (reg : VarRegistry)
     (bsem : BusSemantics p) (_facts : BusFacts p bsem) (d : DenseConstraintSystem p) :
     VarRegistry × DenseConstraintSystem p × DenseDerivations p :=
