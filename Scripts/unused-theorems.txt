@@ -1,0 +1,24 @@
+# Seed file for the unused-theorem linter (`Scripts/UnusedTheorems.lean`).
+#
+# The linter flags every human-written theorem/lemma in the project that is NOT reachable,
+# through proof terms and types, from the roots below (plus every `@[csimp]` theorem, which is
+# auto-detected: the compiler references it, so a proof-term walk cannot see the use).
+#
+# Format: `#` starts a comment; blank lines are ignored; `[roots]` / `[ignore]` switch sections.
+# Names are fully qualified.
+
+# The theorems we ultimately care about: the audited correctness statements in
+# `ApcOptimizer/Optimizer.lean`. Everything a correct optimizer needs is reachable from these.
+[roots]
+optimizerWithBusFacts_maintainsCorrectness
+simpleOptimizer_maintainsCorrectness
+ApcOptimizer.OpenVM.openVmOptimizer_maintainsCorrectness
+ApcOptimizer.SP1.sp1Optimizer_maintainsCorrectness
+
+# Theorems the closure cannot see are used, so they must be listed by hand. The only class so far:
+# a `rfl`-lemma named in a `simp only`/`rw` list whose rewrite step collapses to `Eq.refl`, leaving
+# no reference to the lemma in the resulting proof term.
+[ignore]
+# `(Task.spawn f).get = f ()`, used in `denseCollectForcedV_eq_serial` (Proofs/DomainBatch.lean);
+# `Task.get` is opaque, so the `simp only` needs the lemma even though it rewrites by `rfl`.
+ApcOptimizer.Dense.get_spawn

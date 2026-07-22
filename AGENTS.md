@@ -95,6 +95,12 @@ Keep the implementation lean; don't let comments regrow.
 ## Pushing work
 
 - All commits have to compile without warnings.
+- `Scripts/check-proof-integrity.sh` (run in CI) must pass: no `sorry`/`admit`/`axiom`/
+  `native_decide`, the correctness theorems rest only on Lean's three standard axioms, and no
+  human-written theorem is unused. The last is `Scripts/UnusedTheorems.lean`, which flags any
+  theorem/lemma unreachable from the correctness roots in `Scripts/unused-theorems.txt`; if you
+  orphan a lemma (e.g. by deleting its last use) either delete it too or, for a genuine
+  false-positive, add it to that file's `[ignore]` section.
 - Changes should be committed in incremental commits if possible. Rebases are fine.
 - The agent can always open a draft PR.
 - Opening a PR triggers a CI run with benchmark results posted as a sticky comment. Agents may

@@ -4362,3 +4362,32 @@ deeply nested matches can hit grind's `maximum term generation` gate (leave thos
 recognizers want an existing `_iff` lemma in the bracket rather than the raw `def`.
 
 **Worked: yes (net −190 lines, effectiveness and runtime unchanged by construction).**
+
+### 122. Tooling: unused-theorem linter + dead-lemma sweep
+
+Maintainability pass; no runtime or proof-content change, effectiveness untouched.
+
+- **Linter** (`Scripts/UnusedTheorems.lean`, seeded by `Scripts/unused-theorems.txt`): walks the
+  proof-term + type dependency closure of the audited correctness theorems in
+  `ApcOptimizer/Optimizer.lean` and flags every human-written theorem/lemma not reachable from
+  them. Wired into `check-proof-integrity.sh`, so CI now fails on a newly-orphaned lemma. Two
+  subtleties the walk handles: `ConstantInfo.value?` omits imported theorem bodies (read the
+  `.thmInfo`/`.defnInfo` value field directly, else the closure sees only types and looks 883/1370
+  "dead"), and `@[csimp]` theorems are compiler-referenced, not term-referenced, so they are
+  auto-detected as implicit roots. Auto-generated names (projections, `injEq`, equation lemmas)
+  are excluded by requiring a source declaration range and no `getProjectionFnInfo?`. The seed
+  file also carries an `[ignore]` list for the one residual false-positive class: a `rfl`-lemma
+  named in a `simp only`/`rw` whose rewrite collapses to `Eq.refl`, leaving no reference in the
+  term (`get_spawn`, needed because `Task.get` is opaque).
+- **Sweep**: the 10 theorems the linter flagged, all orphaned by earlier refactors, removed —
+  `PassCorrect.ofEnvEq` (Basic); `DenseVerifiedPassW.{of,ofExtending}_respectsDeg` (Bridge, dead
+  since #119's guard-once pipeline); `DenseExpr.foldVars_eq` (Gauss, #120's runtime `foldVars`
+  feeds only heuristic occ/revDeps bookkeeping, which no correctness proof reasons about);
+  `VarRegistry.encodeBI_busId` (Encoding, a `rfl` projection `congr` already discharges);
+  `VarRegistry.{decodeCS_varCount,decodeCS_sizeKey}` (Measure, the dense/spec size-key
+  correspondence, unused since the driver runs on the dense key);
+  `denseIterateToFixpoint{,From}_monotone` (Pass, the size never-grows property, unused by
+  correctness); `VarRegistry.idOf_inj` (Registry).
+
+**Worked: yes (−10 dead theorems; `lake build` warning-free; proof integrity green, correctness
+axioms `{propext, Classical.choice, Quot.sound}`-only).**
