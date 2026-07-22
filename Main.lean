@@ -16,9 +16,13 @@ Benchmark harness for the optimizer on powdr `SymbolicMachine` exports
 
 - `apc-optimizer run [vm] <file.json[.gz]>` — parse, run the apc-optimizer with the file's
   own bus map, report sizes and effectiveness.
-- `apc-optimizer powdr [vm] <unopt.json[.gz]> <opt.json[.gz]>` — report powdr's effectiveness from
-  its serialized optimizer output (no apc-optimizer run).
-- `apc-optimizer compare [vm] <unopt.json[.gz]> <opt.json[.gz]>` — both, side by side.
+- `apc-optimizer compare [vm] <unopt.json[.gz]> <opt.json[.gz]>` — the apc-optimizer run plus
+  powdr's own effectiveness (from its serialized optimizer output), side by side.
+- `apc-optimizer profile [vm] <file.json[.gz]>` — per-pass optimizer timing.
+- `apc-optimizer report [vm] <unopt.json[.gz]> <opt.json[.gz]>` — JSON dump of the original,
+  powdr and apc-optimizer circuits (consumed by the benchmark HTML report).
+- `apc-optimizer opt-export [vm] <in.json[.gz]> <out.json>` — optimize and write the result as
+  `{machine, bus_map}` JSON (the shape the parser reads), so it can be fed back to `compare`/`report`.
 
 `vm` is an optional leading `openvm` (default, BabyBear) or `sp1` (KoalaBear) token, selecting the
 VM whose bus semantics and fact-aware optimizer to use.
@@ -158,28 +162,19 @@ def cmdRunImpl {p : ℕ} {τ : Type} (be : VmBackend p τ) (fileName : String) :
     output {if optimized.withinDegreeB bound then "ok" else "EXCEEDED"}"
   IO.println s!"  ({t1 - t0} ms)"
 
-/-- Like `cmdRun`, but also dump the distinct variables remaining after optimization (for
-    diagnosing which variable classes the optimizer misses). -/
-def cmdVarsImpl {p : ℕ} {τ : Type} (be : VmBackend p τ) (fileName : String) : IO Unit := do
-  let (cs, busMap) ← parseFileWith be.parse fileName
-  let optimized ← IO.lazyPure (fun _ => (be.optimize busMap cs).1)
-  let occurrences := optimized.algebraicConstraints.flatMap Expression.vars ++
-    optimized.busInteractions.flatMap BusInteraction.vars
-  let distinct := (occurrences.foldl (init := (∅ : Std.HashSet Variable)) (·.insert ·)).toList
-  for v in (distinct.map (fun x => x.name)).mergeSort (fun a b => decide (a ≤ b)) do
-    IO.println v
-
-/-- Render the optimized system (for diagnosing residual constraints/interactions). -/
-def cmdRenderImpl {p : ℕ} {τ : Type} (be : VmBackend p τ) (fileName : String) : IO Unit := do
-  let (cs, busMap) ← parseFileWith be.parse fileName
-  let optimized ← IO.lazyPure (fun _ => (be.optimize busMap cs).1)
-  IO.println (ApcOptimizer.Spec.Dsl.render optimized)
+def cmdCompareImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
+    (unoptFile optFile : String) : IO Unit := do
+  cmdRunImpl be unoptFile
+  let (csBefore, _) ← parseFileWith be.parse unoptFile
+  let (csAfter, _) ← parseFileWith be.parse optFile
+  printStats (label := "powdr        ") (stats := statsOf csAfter)
+  printEffectiveness (label := "powdr") (before := statsOf csBefore) (after := statsOf csAfter)
 
 /-- `opt-export [vm] <in> <out.json>`: run the optimizer and write the optimized machine back out as
     `{"machine", "bus_map"}` JSON — the same shape the parser reads, so the export can be fed to
-    `powdr`/`compare` like a `.powdr_opt` file. The `bus_map` is spliced through verbatim from the
-    input; the machine comes from the FFI serializer (`serializeSystem`, including
-    `derived_columns` for optimizer-introduced witness columns). -/
+    `compare`/`report` like a `.powdr_opt` file. The `bus_map` is spliced through verbatim from the
+    input; the machine comes from the serializer (`serializeSystem`, including `derived_columns` for
+    optimizer-introduced witness columns). -/
 def cmdOptExportImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
     (inFile outFile : String) : IO Unit := do
   let (cs, busMap) ← parseFileWith be.parse inFile
@@ -200,24 +195,6 @@ def cmdOptExportImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
     | .ok j => pure j
   IO.FS.writeFile outFile
     (Lean.Json.mkObj [("machine", machineJson), ("bus_map", busMapJson)]).compress
-
-def cmdPowdrImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
-    (unoptFile optFile : String) : IO Unit := do
-  let (csBefore, _) ← parseFileWith be.parse unoptFile
-  let (csAfter, _) ← parseFileWith be.parse optFile
-  let before := statsOf csBefore
-  let after := statsOf csAfter
-  printStats (label := "before       ") (stats := before)
-  printStats (label := "powdr        ") (stats := after)
-  printEffectiveness (label := "powdr") (before := before) (after := after)
-
-def cmdCompareImpl {p : ℕ} {τ : Type} (be : VmBackend p τ)
-    (unoptFile optFile : String) : IO Unit := do
-  cmdRunImpl be unoptFile
-  let (csBefore, _) ← parseFileWith be.parse unoptFile
-  let (csAfter, _) ← parseFileWith be.parse optFile
-  printStats (label := "powdr        ") (stats := statsOf csAfter)
-  printEffectiveness (label := "powdr") (before := statsOf csBefore) (after := statsOf csAfter)
 
 /-- Escape a string for embedding inside a JSON string literal. -/
 def jsonEscape (s : String) : String :=
@@ -268,20 +245,6 @@ def isSp1 (vm : String) : Bool := vm == "sp1"
 def cmdRun (vm fileName : String) : IO Unit :=
   if isSp1 vm then cmdRunImpl sp1Backend fileName else cmdRunImpl openVmBackend fileName
 
-def cmdVars (vm fileName : String) : IO Unit :=
-  if isSp1 vm then cmdVarsImpl sp1Backend fileName else cmdVarsImpl openVmBackend fileName
-
-def cmdRender (vm fileName : String) : IO Unit :=
-  if isSp1 vm then cmdRenderImpl sp1Backend fileName else cmdRenderImpl openVmBackend fileName
-
-def cmdOptExport (vm inFile outFile : String) : IO Unit :=
-  if isSp1 vm then cmdOptExportImpl sp1Backend inFile outFile
-  else cmdOptExportImpl openVmBackend inFile outFile
-
-def cmdPowdr (vm unoptFile optFile : String) : IO Unit :=
-  if isSp1 vm then cmdPowdrImpl sp1Backend unoptFile optFile
-  else cmdPowdrImpl openVmBackend unoptFile optFile
-
 def cmdCompare (vm unoptFile optFile : String) : IO Unit :=
   if isSp1 vm then cmdCompareImpl sp1Backend unoptFile optFile
   else cmdCompareImpl openVmBackend unoptFile optFile
@@ -289,6 +252,10 @@ def cmdCompare (vm unoptFile optFile : String) : IO Unit :=
 def cmdReport (vm unoptFile optFile : String) : IO Unit :=
   if isSp1 vm then cmdReportImpl sp1Backend unoptFile optFile
   else cmdReportImpl openVmBackend unoptFile optFile
+
+def cmdOptExport (vm inFile outFile : String) : IO Unit :=
+  if isSp1 vm then cmdOptExportImpl sp1Backend inFile outFile
+  else cmdOptExportImpl openVmBackend inFile outFile
 
 /-! ## Dense pipeline profiling
 
@@ -410,11 +377,10 @@ def cmdProfile (vm fileName : String) : IO Unit := do
 def usage : String :=
   "usage: apc-optimizer run [vm] <file.json[.gz]>\n" ++
   "       apc-optimizer profile [vm] <file.json[.gz]>  (per-pass optimizer timing)\n" ++
-  "       apc-optimizer powdr [vm] <unopt.json[.gz]> <opt.json[.gz]>\n" ++
   "       apc-optimizer compare [vm] <unopt.json[.gz]> <opt.json[.gz]>\n" ++
   "       apc-optimizer report  [vm] <unopt.json[.gz]> <opt.json[.gz]>  (JSON: stats + render x3)\n" ++
   "       apc-optimizer opt-export [vm] <in.json[.gz]> <out.json>  (optimize and write the result\n" ++
-  "                                as {machine, bus_map} JSON, readable by powdr/compare)\n\n" ++
+  "                                as {machine, bus_map} JSON, readable by compare/report)\n\n" ++
   "[vm] is an optional `openvm` (default, BabyBear) or `sp1` (KoalaBear) token.\n" ++
   "Files are powdr SymbolicMachine exports (ApcWithBusMap), e.g. Benchmarks/OpenVM/openvm-eth/*.json.gz.\n" ++
   "The optimizer runs its cleanup loop to a fixpoint (provably terminating); there is no\n" ++
@@ -432,9 +398,6 @@ def main (args : List String) : IO Unit := do
   match rest with
   | ["run", fileName] => cmdRun vm fileName
   | ["profile", fileName] => cmdProfile vm fileName
-  | ["vars", fileName] => cmdVars vm fileName
-  | ["render", fileName] => cmdRender vm fileName
-  | ["powdr", unoptFile, optFile] => cmdPowdr vm unoptFile optFile
   | ["report", unoptFile, optFile] => cmdReport vm unoptFile optFile
   | ["opt-export", inFile, outFile] => cmdOptExport vm inFile outFile
   | ["compare", unoptFile, optFile] => cmdCompare vm unoptFile optFile

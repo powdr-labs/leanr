@@ -32,13 +32,11 @@ lake build
 # Optimize one case and report effectiveness (`[vm]` = openvm (default) | sp1)
 lake exe apc-optimizer run Benchmarks/OpenVM/openvm-eth/apc_001_pc0x4ecc54.json.gz
 
-# powdr's own effectiveness, from its serialized optimizer output
-lake exe apc-optimizer powdr <unopt>.json.gz <unopt>.powdr_opt.json.gz
-
-# Both, side by side (add `sp1` after the subcommand for SP1 / KoalaBear inputs)
+# apc-optimizer and powdr side by side, where `<opt>` is powdr's own serialized optimizer output
+# (add `sp1` after the subcommand for SP1 / KoalaBear inputs)
 lake exe apc-optimizer compare <unopt>.json.gz <unopt>.powdr_opt.json.gz
 
-# Optimize and write the result as {machine, bus_map} JSON (readable by powdr/compare above)
+# Optimize and write the result as {machine, bus_map} JSON (readable by compare/report above)
 lake exe apc-optimizer opt-export <unopt>.json.gz <out>.json
 ```
 
