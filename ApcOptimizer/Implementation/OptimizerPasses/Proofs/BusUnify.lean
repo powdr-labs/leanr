@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.EntailedCheck
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.AddrDiseq
 import ApcOptimizer.Implementation.MemoryBusDrop
 
@@ -517,66 +518,6 @@ theorem denseCollectAllBuses_sound (d : DenseConstraintSystem p) (bs : BusSemant
           (d.busInteractions.filter (fun bi => bi.busId = busId)) cand hcand
       · exact ih c hc
 
-/-! ## The reusable "add entailed constraints" correctness -/
-
-/-- Adding constraints that every admissible satisfying assignment already fulfils (and introduce no
-    new occurring variable) is `DensePassCorrect`; reusable by every "append entailed equalities"
-    pass. -/
-theorem DensePassCorrect.denseAddConstraints {isInput : VarId → Bool} (d : DenseConstraintSystem p)
-    (bs : BusSemantics p) (new : List (DenseExpr p))
-    (hnv : ∀ c ∈ new, ∀ z ∈ c.vars, z ∈ d.occ)
-    (H : ∀ denv, d.admissible bs denv → d.satisfies bs denv → ∀ c ∈ new, c.eval denv = 0) :
-    DensePassCorrect isInput d
-      { d with algebraicConstraints := d.algebraicConstraints ++ new } [] bs := by
-  set out : DenseConstraintSystem p :=
-    { d with algebraicConstraints := d.algebraicConstraints ++ new } with hout
-  have hfwd : ∀ denv, out.satisfies bs denv → d.satisfies bs denv := by
-    rintro denv ⟨hc, hb⟩
-    exact ⟨fun c hcm => hc c (List.mem_append_left _ hcm), hb⟩
-  have hoccsub : ∀ i ∈ out.occ, i ∈ d.occ := by
-    intro i hi
-    have hi2 : i ∈ (d.algebraicConstraints ++ new).flatMap DenseExpr.vars
-        ++ d.busInteractions.flatMap denseBIVars := hi
-    rw [List.mem_append, List.mem_flatMap, List.mem_flatMap] at hi2
-    rcases hi2 with ⟨c, hc, hic⟩ | ⟨bi, hbi, hib⟩
-    · rcases List.mem_append.1 hc with h | h
-      · exact DenseConstraintSystem.mem_occ_of_constraint h hic
-      · exact hnv c h i hic
-    · exact DenseConstraintSystem.mem_occ_of_bi hbi hib
-  refine ⟨?_, ?_, ?_, ?_⟩
-  · -- soundness
-    intro denv hsat
-    exact ⟨denv, hfwd denv hsat, BusState.equiv_refl _⟩
-  · -- invariant preservation
-    intro hgi denv hsat bi hbi
-    exact hgi denv (hfwd denv hsat) bi hbi
-  · -- no new powdr-ID column
-    intro i hi _; exact hoccsub i hi
-  · -- completeness, witness `denv`
-    intro denv hadm hsat
-    have hout_sat : out.satisfies bs denv := by
-      refine ⟨fun c hcm => ?_, hsat.2⟩
-      rcases List.mem_append.1 hcm with h | h
-      · exact hsat.1 c h
-      · exact H denv hadm hsat c h
-    refine ⟨denv, hout_sat, hadm, BusState.equiv_refl _, fun _ _ => rfl, ?_⟩
-    intro inputVarIds _ i hi _
-    show i ∈ d.occ ∧ denv i = denv i
-    exact ⟨hoccsub i hi, rfl⟩
-
-/-- `DensePassCorrect` reflexivity, for the no-op branches of `denseBusUnifyF`. -/
-private theorem dpcRefl (isInput : VarId → Bool) (d : DenseConstraintSystem p) (bs : BusSemantics p) :
-    DensePassCorrect isInput d d [] bs := by
-  refine ⟨?_, ?_, ?_, ?_⟩
-  · intro denv hsat; exact ⟨denv, hsat, BusState.equiv_refl _⟩
-  · intro hinv; exact hinv
-  · intro i hi _; exact hi
-  · intro denv hadm hsat
-    refine ⟨denv, hsat, hadm, BusState.equiv_refl _, fun _ _ => rfl, ?_⟩
-    intro inputVarIds _ i hi _
-    show i ∈ d.occ ∧ denv i = denv i
-    exact ⟨hi, rfl⟩
-
 /-! ## The pass transform: correctness and coverage -/
 
 /-- The list of entailed equalities `denseBusUnifyF` appends, factored out so the guard cases get
@@ -658,11 +599,11 @@ theorem denseBusUnifyF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts 
     DensePassCorrect reg.isInput d (denseBusUnifyF bs facts d) [] bs := by
   rw [denseBusUnifyF_eq]
   split_ifs with hp1 hempty
-  · exact dpcRefl reg.isInput d bs
+  · exact DensePassCorrect.refl reg.isInput d bs
   · exact DensePassCorrect.denseAddConstraints d bs (denseBusUnifyNew bs facts d)
       (denseBusUnifyNew_vars bs facts d)
       (fun denv hadm hsat => denseBusUnifyNew_sound bs facts reg d hcov hp1 denv hadm hsat)
-  · exact dpcRefl reg.isInput d bs
+  · exact DensePassCorrect.refl reg.isInput d bs
 
 /-! ## The dense `busUnify` pass -/
 

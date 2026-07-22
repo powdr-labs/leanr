@@ -1,16 +1,16 @@
+import ApcOptimizer.Implementation.OptimizerPasses.EntailedCheck
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
-import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
-import ApcOptimizer.Implementation.OptimizerPasses.Rewrite
 import Mathlib.Tactic.LinearCombination
 
 set_option autoImplicit false
 
-/-! # Dense width-0 / width-1 range-check conversion
+/-! # Dense degenerate range checks → algebraic constraints
 
-Impl-only: booleanity builder `denseBoolC`, recognizer `denseRangeEq?`, transform
-`denseZeroWidthRangeF`; correctness and wiring in `Proofs/ZeroWidthRange.lean`. -/
+Impl-only recognizers for the `degenRange` pass (an `ofCheckRules` instance): a width-0 range
+check forces its value slot to `0`; a width-1 check (on a prime field) makes its value boolean.
+Rules, proofs and wiring in `Proofs/DegenRange.lean`. -/
 
-namespace ZeroWidthRange
+namespace DegenRange
 
 variable {p : ℕ}
 
@@ -33,7 +33,7 @@ theorem val_lt_two_iff (hp : Nat.Prime p) (x : ZMod p) :
     · have hx1 : x = 1 := by linear_combination h1
       rw [hx1, ZMod.val_one_eq_one_mod, Nat.mod_eq_of_lt hp.one_lt]; omega
 
-end ZeroWidthRange
+end DegenRange
 
 namespace ApcOptimizer.Dense
 
@@ -56,15 +56,17 @@ def denseRangeEq? (one : Bool) (bs : BusSemantics p) (facts : BusFacts p bs)
     else none
   | _ => none
 
-/-- Append the entailed constraints, then drop the now-entailed interactions (identity off a
-    prime field). Gated on `(1 : ZMod p) ≠ 0`. -/
-def denseZeroWidthRangeF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
-  if (1 : ZMod p) ≠ 0 then
-    ({ d with algebraicConstraints :=
-        d.algebraicConstraints ++ d.busInteractions.filterMap (denseRangeEq? pw.isPrime bs facts) }
-      : DenseConstraintSystem p).filterBus
-      (fun bi => (denseRangeEq? pw.isPrime bs facts bi).isNone)
-  else d
+/-- The booleanity `x·(x−1)` of a width-1 (`bound = 2`) check whose value slot is a bare variable
+    `x`. -/
+def denseBoolCheck? {bs : BusSemantics p} (facts : BusFacts p bs)
+    (bi : BusInteraction (DenseExpr p)) : Option (DenseExpr p) :=
+  match facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?) with
+  | some (valSlot, bound) =>
+    if bi.multiplicity = DenseExpr.const 1 ∧ bound = 2 then
+      match bi.payload[valSlot]? with
+      | some (DenseExpr.var x) => some (denseBoolC (DenseExpr.var x))
+      | _ => none
+    else none
+  | none => none
 
 end ApcOptimizer.Dense

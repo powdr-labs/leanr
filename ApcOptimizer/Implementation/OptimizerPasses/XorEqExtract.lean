@@ -66,15 +66,4 @@ def denseBoolEq? (bs : BusSemantics p) (facts : BusFacts p bs)
       | none => none
     else none
 
-/-- For a byte XOR/OR/AND interaction with a constant operand, extracts the resulting equality on
-    the result cell — e.g. `0 XOR b = r` gives `r = b`, `255 XOR b = r` gives `r = 255 − b` — and
-    adds it as an algebraic constraint. Gated on `(1 : ZMod p) ≠ 0`. -/
-def denseXorEqExtractF (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
-  if (1 : ZMod p) ≠ 0 then
-    let new := d.busInteractions.filterMap (denseXorEq? bs facts)
-      ++ d.busInteractions.filterMap (denseBoolEq? bs facts)
-    { d with algebraicConstraints := d.algebraicConstraints ++ new }
-  else d
-
 end ApcOptimizer.Dense

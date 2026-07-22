@@ -319,7 +319,7 @@ theorem denseBoxRewriteF_correct (pw : PrimeWitness p) (b : DegreeBound) (reg : 
   split_ifs with hp
   · haveI : Fact p.Prime := ⟨pw.correct hp⟩
     exact DenseConstraintSystem.boxRewrite_denseCorrect d bs reg.isInput b
-  · exact dpcRefl reg.isInput d bs
+  · exact DensePassCorrect.refl reg.isInput d bs
 
 /-- The dense box-rewrite pass (second sub-pass of the flagFold composite; see
     `DenseConstraintSystem.boxRewrite`). -/

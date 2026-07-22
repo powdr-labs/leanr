@@ -200,11 +200,13 @@ theorem denseBoolEq?_vars (bs : BusSemantics p) (facts : BusFacts p bs) (d : Den
 
 /-! ## The pass -/
 
-/-- The appended list of entailed equalities (`denseXorEqExtractF`'s internal `new`). -/
+/-- The appended list of entailed equalities; gated on `(1 : ZMod p) ≠ 0`. -/
 def denseXorEqExtractNew (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     List (DenseExpr p) :=
-  d.busInteractions.filterMap (denseXorEq? bs facts)
-    ++ d.busInteractions.filterMap (denseBoolEq? bs facts)
+  if (1 : ZMod p) ≠ 0 then
+    d.busInteractions.filterMap (denseXorEq? bs facts)
+      ++ d.busInteractions.filterMap (denseBoolEq? bs facts)
+  else []
 
 theorem denseXorEqExtractNew_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
@@ -212,40 +214,15 @@ theorem denseXorEqExtractNew_vars (bs : BusSemantics p) (facts : BusFacts p bs)
   grind [denseXorEqExtractNew, denseXorEq?_vars, denseBoolEq?_vars]
 
 theorem denseXorEqExtractNew_sound (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) (h1ne : (1 : ZMod p) ≠ 0) (denv : VarId → ZMod p)
+    (d : DenseConstraintSystem p) (denv : VarId → ZMod p)
     (hsat : d.satisfies bs denv) : ∀ c ∈ denseXorEqExtractNew bs facts d, c.eval denv = 0 := by
   grind [denseXorEqExtractNew, denseXorEq?_eval, denseBoolEq?_eval]
 
-theorem denseXorEqExtractF_covered (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
-    (denseXorEqExtractF bs facts d).CoveredBy reg := by
-  unfold denseXorEqExtractF
-  by_cases h : (1 : ZMod p) ≠ 0
-  · rw [if_pos h]
-    refine ⟨fun e he => ?_, hcov.2⟩
-    rcases List.mem_append.1 he with h1 | h1
-    · exact hcov.1 e h1
-    · intro i hi
-      exact DenseConstraintSystem.occ_valid hcov i
-        (denseXorEqExtractNew_vars bs facts d e h1 i hi)
-  · rw [if_neg h]; exact hcov
-
-theorem denseXorEqExtractF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) :
-    DensePassCorrect reg.isInput d (denseXorEqExtractF bs facts d) [] bs := by
-  unfold denseXorEqExtractF
-  by_cases h : (1 : ZMod p) ≠ 0
-  · rw [if_pos h]
-    exact DensePassCorrect.denseAddConstraints d bs (denseXorEqExtractNew bs facts d)
-      (denseXorEqExtractNew_vars bs facts d)
-      (fun denv _ hsat => denseXorEqExtractNew_sound bs facts d h denv hsat)
-  · rw [if_neg h]; exact DensePassCorrect.refl reg.isInput d bs
-
-/-- The dense `xorEqExtract` pass. -/
+/-- The dense `xorEqExtract` pass: for a byte XOR/OR/AND interaction with a constant operand, adds
+    the resulting equality on the result cell as a constraint — e.g. `0 XOR b = r` gives `r = b`,
+    `255 XOR b = r` gives `r = 255 − b`. -/
 def denseXorEqExtractPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.of denseXorEqExtractF (fun _ _ _ => [])
-    (fun reg bs facts d hcov => denseXorEqExtractF_covered reg bs facts d hcov)
-    (fun _ _ _ _ _ => by intro x hx; simp at hx)
-    (fun reg bs facts d _ => denseXorEqExtractF_correct reg bs facts d)
+  DenseVerifiedPassW.ofAddConstraints denseXorEqExtractNew denseXorEqExtractNew_vars
+    (fun bs facts d denv _ hsat => denseXorEqExtractNew_sound bs facts d denv hsat)
 
 end ApcOptimizer.Dense

@@ -86,23 +86,6 @@ def denseZeroRegisterNew (bs : BusSemantics p) (facts : BusFacts p bs) (d : Dens
   let dVars := d.occ
   exprs.filter (denseZeroPred d dVars)
 
-/-- The dense fixed-zero pinning transform: append the filtered fixed-zero data limbs (identity
-    when there are none). -/
-def denseZeroRegisterF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
-    DenseConstraintSystem p :=
-  let exprs := (denseCollectZeroCells d bs facts d.busInteractions (fun _ h => h)).1
-  let dVars := d.occ
-  let new := exprs.filter (denseZeroPred d dVars)
-  if new.isEmpty then d
-  else { d with algebraicConstraints := d.algebraicConstraints ++ new }
-
-theorem denseZeroRegisterF_eq (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) :
-    denseZeroRegisterF bs facts d =
-      if (denseZeroRegisterNew bs facts d).isEmpty then d
-      else { d with algebraicConstraints := d.algebraicConstraints ++ denseZeroRegisterNew bs facts d } :=
-  rfl
-
 /-- Every variable of a surviving candidate occurs in `d` (the filter's third conjunct). -/
 theorem denseZeroRegisterNew_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
@@ -121,33 +104,10 @@ theorem denseZeroRegisterNew_sound (bs : BusSemantics p) (facts : BusFacts p bs)
   exact (denseCollectZeroCells d bs facts d.busInteractions (fun _ h => h)).2 denv hadm c
     (List.mem_of_mem_filter hc)
 
-theorem denseZeroRegisterF_covered (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
-    (denseZeroRegisterF bs facts d).CoveredBy reg := by
-  rw [denseZeroRegisterF_eq]
-  split
-  · exact hcov
-  · refine ⟨fun e he => ?_, hcov.2⟩
-    rcases List.mem_append.1 he with h' | h'
-    · exact hcov.1 e h'
-    · intro i hi
-      exact DenseConstraintSystem.occ_valid hcov i (denseZeroRegisterNew_vars bs facts d e h' i hi)
-
-theorem denseZeroRegisterF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) :
-    DensePassCorrect reg.isInput d (denseZeroRegisterF bs facts d) [] bs := by
-  rw [denseZeroRegisterF_eq]
-  split
-  · exact DensePassCorrect.refl reg.isInput d bs
-  · exact DensePassCorrect.denseAddConstraints d bs (denseZeroRegisterNew bs facts d)
-      (denseZeroRegisterNew_vars bs facts d)
-      (fun denv hadm _hsat => denseZeroRegisterNew_sound bs facts d denv hadm)
-
-/-- The dense fixed-zero-register pass. -/
+/-- The dense fixed-zero-register pass: appends `data_i = 0` for every data slot of a memory
+    message pinned to a declared fixed-zero cell. -/
 def denseZeroRegisterPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.of denseZeroRegisterF (fun _ _ _ => [])
-    (fun reg bs facts d hcov => denseZeroRegisterF_covered reg bs facts d hcov)
-    (fun _ _ _ _ _ => by intro x hx; simp at hx)
-    (fun reg bs facts d _ => denseZeroRegisterF_correct reg bs facts d)
+  DenseVerifiedPassW.ofAddConstraints denseZeroRegisterNew denseZeroRegisterNew_vars
+    (fun bs facts d denv hadm _ => denseZeroRegisterNew_sound bs facts d denv hadm)
 
 end ApcOptimizer.Dense
