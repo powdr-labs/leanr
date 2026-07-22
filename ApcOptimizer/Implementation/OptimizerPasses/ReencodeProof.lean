@@ -7,7 +7,7 @@ set_option autoImplicit false
 /-! # Witness re-encoding — dense structure lemmas (Task 3, reencode native port, chunk P1)
 
 Native, `VarId`-side transliterations of the *structure lemmas below the transport core* of
-`OptimizerPasses/OldVariableBased/Reencode.lean` — every proof-side fact the reencode transport core
+the reference `Reencode` pass — every proof-side fact the reencode transport core
 (`reencode_correct`/`_D`, chunk P2) and the capstone certificate soundness (`checkReencode_sound_D`,
 chunk P3) consume that is **not** itself the transport core. Each lemma is stated and proved
 **natively** over dense environments `VarId → ZMod p`, decode-free, mirroring the spec proof
@@ -18,7 +18,7 @@ Explicitly **out of scope** (P2/P3, not proved here): the transport core `reencC
 `reencode_correct`/`reencode_correct_D`, the certificate soundness `checkReencode_sound_D`, and
 anything about `denseReencodeStep`/`denseReencodeLoop`/`denseReencodeF`.
 
-## Lemma inventory (dense twin ↔ spec original in `OldVariableBased/Reencode.lean`)
+## Lemma inventory (dense twin ↔ spec original in the reference `Reencode` pass)
 
 * Environment extension (`:40`/`:57`): `denseEnvExt_eq_envOfFast_of_mem`, `denseEnvExt_eq_env_of_notmem`.
 * `mentions`/vars + fast eval (`:69`/`:108`/`:123`): `denseMentions_false_not_mem_vars`,
@@ -41,8 +41,8 @@ anything about `denseReencodeStep`/`denseReencodeLoop`/`denseReencodeF`.
 Reused unchanged from existing dense proof modules (not re-proved here): `DenseExpr.eval_congr`,
 `denseVarsInF_sound`, `denseContainsFast_sound` (`DomainFold`/`DomainBatch`), `denseGroupDoms_fst`
 (`DomainFold`), `DenseExpr.eval_substF`/`denseEnvF` (`DomainBatchProof`),
-`DenseDerivations.methodFor_append` (`Bridge`), and `zip_map_self_mem` (generic,
-`OldVariableBased/Reencode`).
+`DenseDerivations.methodFor_append` (`Bridge`), and `zip_map_self_mem` (generic, now in
+`ListSplit`).
 
 The interpolation building blocks (`denseIndicatorExpr`/`denseInterpOfV`/`denseCandSelect`/
 `denseInterpPoly`) have **no standalone eval lemma in the spec**: their acceptance/agreement content

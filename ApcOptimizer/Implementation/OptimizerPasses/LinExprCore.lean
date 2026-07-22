@@ -7,24 +7,22 @@ set_option autoImplicit false
 /-! # Sparse linear-expression spec core
 
 Representation-independent (`Variable`/`Expression`/`ZMod`/`List`) content re-homed here from the
-reference `OldVariableBased/` passes so the permanent `Variable`-side shared-facts files
+reference `Variable` passes so the permanent `Variable`-side shared-facts files
 (`DomainProp.lean`, `MemoryUnify.lean`) — and parts of the dense `Affine`/`Normalize`/`Gauss`
-bridges — can consume it without importing the reference passes; each reference pass imports it
-back. Every item keeps its original (fully-qualified) name, so no consumer changes but its import.
-Nothing here mentions a `VarId` or a reference pass, so it survives the eventual legacy-tree
-deletion. This home imports nothing legacy.
+bridges — consume it from a neutral home. Every item keeps its original (fully-qualified) name, so
+no consumer changed but its import.
 
 Collected here:
 
 * the `Expression` syntactic helpers `Expression.mentions` / `Expression.varCount` /
-  `Expression.isVar` (from `OldVariableBased/Gauss.lean`);
+  `Expression.isVar` (from the reference `Gauss` pass);
 * the constant-fold *value* core `Expression.foldAdd` / `foldMul` / `fold` and their eval lemmas,
-  plus `Expression.constValue?` / `constValue?_sound` (from `OldVariableBased/ConstantFold.lean` and
-  `OldVariableBased/TautoBus.lean`);
+  plus `Expression.constValue?` / `constValue?_sound` (from the reference `ConstantFold` and
+  `TautoBus` passes);
 * the sparse linear form `LinExpr` with its algebra (`add` / `scale` / `eval` / `coeff` / `others` /
-  `eval_split` / `toExpr`), `linearize` / `linearize_eval` (from `OldVariableBased/Affine.lean`);
+  `eval_split` / `toExpr`), `linearize` / `linearize_eval` (from the reference `Affine` pass);
 * the normalization chain `addCoeff` / `mergeTerms` / `LinExpr.norm` / `LinExpr.norm_eval` (from
-  `OldVariableBased/Normalize.lean`). -/
+  the reference `Normalize` pass). -/
 
 variable {p : ℕ}
 
@@ -52,8 +50,7 @@ def Expression.isVar : Expression p → Bool
 /-! ## Constant-fold value core
 
 The smart constructors and the bottom-up fold, plus `constValue?` (the constant an expression folds
-to, if any). Only the *value*-level content lives here; the constant-folding pass and its
-variable-bound lemmas stay in `OldVariableBased/ConstantFold.lean`. -/
+to, if any). Only the *value*-level content lives here. -/
 
 /-- Smart addition: fold two constants and drop `+ 0` on either side. -/
 def Expression.foldAdd (a b : Expression p) : Expression p :=
@@ -259,8 +256,7 @@ theorem LinExpr.toExpr_eval (l : LinExpr p) (env : Variable → ZMod p) :
 
 Merge a linear form's terms — combine coefficients of equal variables and drop zeros — preserving
 first-occurrence order so the merge is idempotent. `LinExpr.norm_eval` shows it is eval-preserving.
-Field-free (works over any commutative ring). The fast (`@[csimp]`) merge and the variable-bound
-lemmas stay in `OldVariableBased/Normalize.lean`. -/
+Field-free (works over any commutative ring). Only the value-level content lives here. -/
 
 /-- Add coefficient `c` to variable `v` in a term list, merging into an existing entry. -/
 def addCoeff (v : Variable) (c : ZMod p) : List (Variable × ZMod p) → List (Variable × ZMod p)

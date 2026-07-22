@@ -1,4 +1,3 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.RedundantByteDrop
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelJustify
 
@@ -6,7 +5,7 @@ set_option autoImplicit false
 
 /-! # Dense redundant byte-check removal (Task 3 — impl)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/RedundantByteDrop.lean`'s *runtime*
+Dense, `VarId`-native transliteration of the reference `RedundantByteDrop` pass's *runtime*
 definitions (`byteCheckOperands?` :88, `byteDropBase` :245, `byteDropKeep` :251, and
 `redundantByteDropPass`'s computed output :260). This file is **impl-only**: no `_sound`/soundness
 lemma is ported (`isByteCompl_sound`, `byteCheckOperands?_stateless`, `byteCheckOperands?_accepted`,
@@ -56,7 +55,7 @@ variable {p : ℕ}
     XOR-with-zero mirrors (`o₂ = 0, o₁ = r` / `o₁ = 0, o₂ = r`), and the two NOT forms
     (`o₂ = 255, r = 255 − o₁` / `o₁ = 255, r = 255 − o₂`, when `256 ≤ p`); for the OR-identity op(s)
     the same zero mirrors; for `op = pairOp` the packed pair `r = 0`. `none` otherwise. Mirrors
-    `byteCheckOperands?` (`OldVariableBased/RedundantByteDrop.lean:88`), same gate order (`bound =
+    `byteCheckOperands?`, same gate order (`bound =
     256`, then decode, then each shape in the same order) and the same `==`/`&&` (Bool) recognition
     style as the reference (not `denseSvCheck?`'s `=`/`∧` style). -/
 def denseByteCheckOperands? (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -90,14 +89,14 @@ def denseByteCheckOperands? (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-- The justification base: the interactions this pass can never drop (not recognized as byte
     checks). Justifying only against these makes the drop non-circular. Mirrors `byteDropBase`
-    (`OldVariableBased/RedundantByteDrop.lean:245`). -/
+   . -/
 def denseByteDropBase (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     List (BusInteraction (DenseExpr p)) :=
   d.busInteractions.filter (fun bi => (denseByteCheckOperands? bs facts bi).isNone)
 
 /-- Keep `bi` unless it is a recognized byte check whose operands are all byte-justified from the
     constraints and the justification base. Mirrors `byteDropKeep`
-    (`OldVariableBased/RedundantByteDrop.lean:251`). -/
+   . -/
 def denseByteDropKeep (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (all : List (DenseExpr p)) (rest : List (BusInteraction (DenseExpr p)))
     (bi : BusInteraction (DenseExpr p)) : Bool :=
@@ -107,7 +106,7 @@ def denseByteDropKeep (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFa
 
 /-- Drop every stateless byte-check interaction whose operands are all byte-justified from the
     parts of the system this pass can never remove. Mirrors `redundantByteDropPass`'s computed
-    output (`OldVariableBased/RedundantByteDrop.lean:260`), dropping its `PassCorrect` term. -/
+    output, dropping its `PassCorrect` term. -/
 def denseRedundantByteDropF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   d.filterBus (denseByteDropKeep pw bs facts d.algebraicConstraints (denseByteDropBase bs facts d))

@@ -1,11 +1,10 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.TupleRange
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheck
 
 set_option autoImplicit false
 
 /-! # Dense tuple-range packing (Task 3 — impl)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/TupleRange.lean`'s *runtime* definitions
+Dense, `VarId`-native transliteration of the reference `TupleRange` pass's *runtime* definitions
 (`rangeCheck1` :32, `tupleCheck` :36, `matchByteSingle` :207, `matchRangeCheck` :222,
 `tupleBusCandidates` :235, `findRangeIdx` :304, `findByteIdx` :320, `findTuplePackIdx` :422,
 `tryTupleBuses` :510, `drainTuplePacks` :528, and the pass `tupleRangePass` :542). This file is
@@ -82,12 +81,12 @@ variable {p : ℕ}
 /-! ## The two message shapes being packed and unpacked -/
 
 /-- Range check `[y, b]` (multiplicity `1`) on a variable-range-checker bus. Mirrors `rangeCheck1`
-    (`OldVariableBased/TupleRange.lean:32`). -/
+   . -/
 def denseRangeCheck1 (busId : Nat) (y b : DenseExpr p) : BusInteraction (DenseExpr p) :=
   { busId := busId, multiplicity := .const 1, payload := [y, b] }
 
 /-- Tuple check `[x, y]` (multiplicity `1`). Mirrors `tupleCheck`
-    (`OldVariableBased/TupleRange.lean:36`). -/
+   . -/
 def denseTupleCheck (busId : Nat) (x y : DenseExpr p) : BusInteraction (DenseExpr p) :=
   { busId := busId, multiplicity := .const 1, payload := [x, y] }
 
@@ -95,7 +94,7 @@ def denseTupleCheck (busId : Nat) (x y : DenseExpr p) : BusInteraction (DenseExp
 
 /-- If `bi` is a single-value byte check (decoded op `= xorOp`, `o₁ = o₂`, result `0`, multiplicity
     `1`) on a `byteXorSpec` bus with byte bound `256`, return the bus spec and checked value.
-    Mirrors `matchByteSingle` (`OldVariableBased/TupleRange.lean:207`). -/
+    Mirrors `matchByteSingle`. -/
 def denseMatchByteSingle (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (ByteXorSpec p × DenseExpr p) :=
   match facts.byteXorSpec bi.busId with
@@ -112,7 +111,7 @@ def denseMatchByteSingle (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-- If `bi` is a range check `[y, b]` (multiplicity `1`, constant supported width, exact size
     `2 ^ b = s2`) on a `varRangeBus`, return `(y, b)`. Mirrors `matchRangeCheck`
-    (`OldVariableBased/TupleRange.lean:222`). -/
+   . -/
 def denseMatchRangeCheck (bs : BusSemantics p) (facts : BusFacts p bs) (s2 : Nat)
     (bi : BusInteraction (DenseExpr p)) : Option (DenseExpr p × ZMod p) :=
   if facts.varRangeBus bi.busId then
@@ -125,7 +124,7 @@ def denseMatchRangeCheck (bs : BusSemantics p) (facts : BusFacts p bs) (s2 : Nat
 
 /-- The declared tuple buses with a byte-sized first slot, probed over a bounded id range (the
     target bus typically carries no interaction in the input circuit, so its id cannot be read off
-    `d`). Mirrors `tupleBusCandidates` (`OldVariableBased/TupleRange.lean:235`). -/
+    `d`). Mirrors `tupleBusCandidates`. -/
 def denseTupleBusCandidates (bs : BusSemantics p) (facts : BusFacts p bs) (maxId : Nat) :
     List (Nat × Nat × Nat) :=
   (List.range maxId).filterMap (fun k =>
@@ -137,7 +136,7 @@ def denseTupleBusCandidates (bs : BusSemantics p) (facts : BusFacts p bs) (maxId
 
 /-- Scan for the next exact-size range check, returning the interior `mid`, the checked value `y`
     with its width witness `b`, and the remainder `post`. Mirrors `findRangeIdx`
-    (`OldVariableBased/TupleRange.lean:304`), dropping the `Array`+index+`PSigma` scaffolding (see
+   , dropping the `Array`+index+`PSigma` scaffolding (see
     the module header). -/
 def denseFindRangePartner (bs : BusSemantics p) (facts : BusFacts p bs) (s2 : Nat) :
     List (BusInteraction (DenseExpr p)) → List (BusInteraction (DenseExpr p)) →
@@ -151,7 +150,7 @@ def denseFindRangePartner (bs : BusSemantics p) (facts : BusFacts p bs) (s2 : Na
 
 /-- Scan for the next single-value byte check, returning the interior `mid`, the recognized spec
     and checked value `x`, and the remainder `post`. Mirrors `findByteIdx`
-    (`OldVariableBased/TupleRange.lean:320`), dropping the `Array`+index+`PSigma` scaffolding (see
+   , dropping the `Array`+index+`PSigma` scaffolding (see
     the module header). -/
 def denseFindBytePartner (bs : BusSemantics p) (facts : BusFacts p bs) :
     List (BusInteraction (DenseExpr p)) → List (BusInteraction (DenseExpr p)) →
@@ -169,7 +168,7 @@ def denseFindBytePartner (bs : BusSemantics p) (facts : BusFacts p bs) :
     check (`denseFindBytePartner`); failing both, move on. Returns the packed values `x` (byte) and
     `y` (range) with the surrounding `pre`/`mid`/`post` split — `x`/`y` are all `denseTupleCheck`
     needs to build the replacement, in either orientation. Mirrors `findTuplePackIdx`
-    (`OldVariableBased/TupleRange.lean:422`), same two-recognizer, two-orientation, first-match
+   , same two-recognizer, two-orientation, first-match
     order; dropping the `Array`+index+`PSigma` scaffolding (see the module header). -/
 def denseFindTuplePack (bs : BusSemantics p) (facts : BusFacts p bs) (s2 : Nat)
     (revPre : List (BusInteraction (DenseExpr p))) :
@@ -194,7 +193,7 @@ def denseFindTuplePack (bs : BusSemantics p) (facts : BusFacts p bs) (s2 : Nat)
 /-! ## The pass: try every candidate tuple bus, drain every packable pair -/
 
 /-- Try each candidate tuple bus in order: the first bus with a packable pair wins. Mirrors
-    `tryTupleBuses` (`OldVariableBased/TupleRange.lean:510`), dropping the redundant re-`decide` of
+    `tryTupleBuses`, dropping the redundant re-`decide` of
     `facts.tupleRangeBus trBus = some (s1, s2) ∧ s1 = 256` (see the module header). -/
 def denseTryTupleBuses (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (DenseExpr p))) :
@@ -214,7 +213,7 @@ def denseTryTupleBuses (bs : BusSemantics p) (facts : BusFacts p bs)
     the call site (`denseTupleRangeF`): each successful pack strictly drops that list's length by
     one, so the fuel is never actually exhausted before `denseTryTupleBuses` reports `none` — the
     same fuel-for-termination shape as `ByteCheckPack.lean`'s `denseDrainBytePacks`, standing in for
-    the reference `drainTuplePacks`'s (`OldVariableBased/TupleRange.lean:528`) well-founded
+    the reference `drainTuplePacks`'s well-founded
     recursion on the strictly-dropping interaction count. -/
 def denseDrainTuplePacks (bs : BusSemantics p) (facts : BusFacts p bs) :
     Nat → List (BusInteraction (DenseExpr p)) → List (BusInteraction (DenseExpr p))
@@ -227,7 +226,7 @@ def denseDrainTuplePacks (bs : BusSemantics p) (facts : BusFacts p bs) :
     | none => bis
 
 /-- The dense pack-until-drained transform (`ofNative` shape: registry unchanged, no fresh
-    variables). Mirrors `tupleRangePass`'s (`OldVariableBased/TupleRange.lean:542`) `hp1` self-gate
+    variables). Mirrors `tupleRangePass`'s `hp1` self-gate
     (VM-neutral: with a trivial `BusFacts`, `tupleRangeBus` is `none` everywhere, so
     `denseTupleBusCandidates` is always `[]` and the drain is the identity in its first step)
     composed with the single internal-drain call (see `denseDrainTuplePacks`'s doc comment) — this

@@ -58,9 +58,8 @@ Notes on how spec pieces map here (mirroring the `RootPairUnifyNative` chunk S1 
 
 /-- Two summands below `M` that complete the same integer against multiples of `M` are equal.
 
-    Representation-independent (`Nat`-only) arithmetic lemma, re-homed here from
-    `OldVariableBased/FlagUnify.lean` so the dense proof tree (`FlagUnifyProof.lean`) can consume it
-    without importing the reference pass; the reference pass imports it back. -/
+    Representation-independent (`Nat`-only) arithmetic lemma, re-homed here from the reference
+    `FlagUnify` pass so the dense proof tree (`FlagUnifyProof.lean`) can consume it. -/
 theorem residue_uniq (M A B w1 w2 : Nat) (h : M * A + w1 = M * B + w2)
     (h1 : w1 < M) (h2 : w2 < M) : w1 = w2 := by
   have e1 : (M * A + w1) % M = w1 := by rw [Nat.mul_add_mod]; exact Nat.mod_eq_of_lt h1

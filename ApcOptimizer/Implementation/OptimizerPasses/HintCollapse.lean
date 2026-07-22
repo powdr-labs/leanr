@@ -7,7 +7,7 @@ set_option autoImplicit false
 /-! # Collapsing a multi-limb reciprocal-witness group to one hint — dense `VarId` port (impl-only)
 
 Dense, `VarId`-native transliteration of the *runtime* definitions of
-`OptimizerPasses/OldVariableBased/HintCollapse.lean` (`Variable`/`Expression`-based): the
+the reference `HintCollapse` pass (`Variable`/`Expression`-based): the
 single-variable linear peel (`extractLinear`/`peel`), the witness sum (`sumExpr`), the
 once-in-the-target occurrence test (`occursOnlyInTarget`), the byte-bound coefficient recognizers
 for both collapse shapes (`coeffVar`/`coeffsByteOK`, `diffVarsOf`/`sqCoeffsOK`), the per-constraint
@@ -31,7 +31,7 @@ the correctness theorems and the `ofNativeExtending` call itself.
 
 ## Where the fresh variable is minted, and the freshness-decision mechanism
 
-The spec constructs `inv` (`OldVariableBased/HintCollapse.lean:788`/`876`) **unconditionally**, at
+The reference pass constructs `inv` **unconditionally**, at
 the very top of `tryOne`/`tryOneSq`, before any of the `by_cases hchk` gates — cheaply (a `headD`
 field read and a string append), so its cost is paid regardless of whether the candidate is
 eventually accepted. `denseTryOne`/`denseTryOneSq` mirror this positioning exactly: the candidate
@@ -109,8 +109,8 @@ stay exactly where they're actually used, in `witnessesOf`/`tryList`. -/
 /-! ## Re-homed representation-independent field-sum lemmas
 
 `sum_val_eq` / `sum_zero_all_zero` / `sq_diff_val_lt` are `Nat`/`ZMod`-only wrap-free-sum lemmas,
-re-homed here from `OldVariableBased/HintCollapse.lean` so the dense proof (`HintCollapseProof.lean`)
-consumes them without importing the reference pass; the reference pass imports them back. -/
+re-homed here from the reference `HintCollapse` pass so the dense proof (`HintCollapseProof.lean`)
+consumes them from a neutral home. -/
 
 section RehomedHintCollapse
 variable {p : ℕ}
@@ -174,7 +174,7 @@ variable {p : ℕ}
 /-! ## Splitting off the linear part in one variable -/
 
 /-- Split `E` as `coeff · wv + rest` in the single variable `wv`. Mirrors `extractLinear`
-    (`OldVariableBased/HintCollapse.lean:39`). -/
+   . -/
 def denseExtractLinear (wv : VarId) : DenseExpr p → DenseExpr p × DenseExpr p
   | .const c => (.const 0, .const c)
   | .var x => if x = wv then (.const 1, .const 0) else (.const 0, .var x)

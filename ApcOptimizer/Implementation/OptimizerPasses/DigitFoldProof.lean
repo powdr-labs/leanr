@@ -281,7 +281,7 @@ theorem denseBuild_sound (bs : BusSemantics p) (facts : BusFacts p bs)
 
 Native `VarId`-level correctness for `denseDigitFoldPass` (`DigitFold.lean`), proved over dense
 environments `VarId → ZMod p` with no decode and no dependency on the reference `Variable` pass. The
-spec `OldVariableBased/DigitFold.lean` is the roadmap only: the recognizer soundness
+spec pass `DigitFold` is the roadmap only: the recognizer soundness
 (`pairByteOps?_bytes`), the ladder soundness chain (`isLadder_sum` / `env_forced` / `tryLadder_spec`
 / `lookupBounds_spec` / `attemptLadder_sound` / `solveOperand_sound`) and the scan (`findFold`'s
 `Fold.sound`) are transliterated here over the dense defs. The representation-independent ℕ-side layer
@@ -297,7 +297,7 @@ pass correctness reduces the forced substitution to `DenseConstraintSystem.subst
 /-! ## Native byte-pair recognizer soundness (dense twin of `pairByteOps?_bytes`) -/
 
 /-- Acceptance of a recognized pair check bounds both operands below 256. Dense twin of
-    `pairByteOps?_bytes` (`OldVariableBased/DigitFold.lean:246`); the acceptance characterization is
+    `pairByteOps?_bytes`; the acceptance characterization is
     the value-level `BusFacts.byteXorSpec_sound` applied to the decoded payload (the inline dense
     mirror of `byteXorSpec_decode_iff`'s `pairOp` half). -/
 theorem densePairByteOps?_bytes (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -337,7 +337,7 @@ theorem densePairByteOps?_bytes (bs : BusSemantics p) (facts : BusFacts p bs)
 /-! ## Native ladder soundness chain -/
 
 /-- A dense ladder's ZMod sum is the cast of its ℕ positional value (up to sign). Dense twin of
-    `isLadder_sum` (`OldVariableBased/DigitFold.lean:147`). -/
+    `isLadder_sum`. -/
 theorem denseIsLadder_sum [NeZero p] (pos : Bool) :
     ∀ (g : ℕ) (l : List (VarId × ZMod p)), denseIsLadder pos g l = true →
     ∀ (denv : VarId → ZMod p),
@@ -373,7 +373,7 @@ theorem denseIsLadder_sum [NeZero p] (pos : Bool) :
 
 /-- The env-side forcing theorem: if the solution grid for a byte-checked dense ladder is the
     singleton `[ds]`, any satisfying assignment's digit vector is exactly `ds`. Dense twin of
-    `env_forced` (`OldVariableBased/DigitFold.lean:188`). -/
+    `env_forced`. -/
 theorem denseEnv_forced [NeZero p] (hp : 256 < p) (pos : Bool) (g : ℕ) (hg : 0 < g) (K : ZMod p)
     (l : List (VarId × ZMod p)) (hlad : denseIsLadder pos g l = true)
     (Bs : List ℕ) (hB : ∀ B ∈ Bs, B ≤ 256)
@@ -416,7 +416,7 @@ theorem denseEnv_forced [NeZero p] (hp : 256 < p) (pos : Bool) (g : ℕ) (hg : 0
 
 /-- Recognizing a dense ladder yields a permutation of the input terms with the leading coefficient
     positive and the ladder shape confirmed. Dense twin of `tryLadder_spec`
-    (`OldVariableBased/DigitFold.lean:282`). -/
+   . -/
 theorem denseTryLadder_spec (pos : Bool) (terms : List (VarId × ZMod p))
     (g : ℕ) (sorted : List (VarId × ZMod p))
     (h : denseTryLadder pos terms = some (g, sorted)) :
@@ -434,7 +434,7 @@ theorem denseTryLadder_spec (pos : Bool) (terms : List (VarId × ZMod p))
     exact ⟨hperm.symm, hcond.1, hcond.2⟩
 
 /-- Bound lookup returns byte-sized (`≤ 256`) bounds paired to the terms in order. Dense twin of
-    `lookupBounds_spec` (`OldVariableBased/DigitFold.lean:307`). -/
+    `lookupBounds_spec`. -/
 theorem denseLookupBounds_spec (bounds : Std.HashMap VarId Nat) :
     ∀ (l : List (VarId × ZMod p)) (Bs : List ℕ), denseLookupBounds bounds l = some Bs →
     (∀ B ∈ Bs, B ≤ 256) ∧
@@ -463,7 +463,7 @@ theorem denseLookupBounds_spec (bounds : Std.HashMap VarId Nat) :
     · exact absurd h (by simp)
 
 /-- One sign interpretation forces the lowest-coefficient variable's value, using fact bounds valid
-    at the assignment. Dense twin of `attemptLadder_sound` (`OldVariableBased/DigitFold.lean:351`). -/
+    at the assignment. Dense twin of `attemptLadder_sound`. -/
 theorem denseAttemptLadder_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap VarId Nat)
     (pos : Bool) (l : DenseLinExpr p) (v : VarId) (d : ℕ)
     (h : denseAttemptLadder pos bounds l = some (v, d))
@@ -507,7 +507,7 @@ theorem denseAttemptLadder_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap
       · exact absurd h (by simp)
 
 /-- Solving one byte-checked operand forces the returned variable's value. Dense twin of
-    `solveOperand_sound` (`OldVariableBased/DigitFold.lean:412`). -/
+    `solveOperand_sound`. -/
 theorem denseSolveOperand_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap VarId Nat)
     (E : DenseExpr p) (v : VarId) (d : ℕ)
     (h : denseSolveOperand bounds E = some (v, d))

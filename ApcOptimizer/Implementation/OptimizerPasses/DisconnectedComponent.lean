@@ -1,4 +1,3 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.DisconnectedComponent
 import ApcOptimizer.Implementation.OptimizerPasses.Bridge
 
 set_option autoImplicit false
@@ -6,7 +5,7 @@ set_option autoImplicit false
 /-! # Disconnected-component removal — dense `VarId` port (impl-only)
 
 Dense, `VarId`-native transliteration of the *runtime* definitions of
-`OptimizerPasses/OldVariableBased/DisconnectedComponent.lean` (`Variable`/`Expression`-based). A
+the reference `DisconnectedComponent` pass (`Variable`/`Expression`-based). A
 *disconnected component* is a set of algebraic constraints and stateless bus interactions whose
 variables never touch any **stateful** bus interaction. The pass finds such a component by
 connectivity from the stateful buses, tries the all-zero witness, and drops the component only if

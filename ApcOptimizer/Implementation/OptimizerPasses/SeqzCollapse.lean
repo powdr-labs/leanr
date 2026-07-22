@@ -1,11 +1,10 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SeqzCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
 
 set_option autoImplicit false
 
 /-! # Collapsing the `sltu x, 1` (seqz) gadget — dense `VarId` port (impl-only)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/SeqzCollapse.lean`'s *runtime*
+Dense, `VarId`-native transliteration of the reference `SeqzCollapse` pass's *runtime*
 definitions: the expression templates (`eM1`/`e0`/`e1`/`e2`/`sExpr`/`markerSum`/`krExpr`/`twoRExpr`/
 `diffInner`/`diffInner0`/`clusterConstraints`/`clusterBus`/`boolConstraint`/`sumExpr4`/
 `newConstraints`/`invMethod`), the recognizer (`matchMarkerSum`/`matchNegVar`/`matchE11`/
@@ -28,7 +27,7 @@ Still out of scope: the correctness theorems and the `ofNativeExtending` call it
 
 ## Where the fresh variable is minted, and the freshness-decision mechanism
 
-The spec's `Roles.inv` (`OldVariableBased/SeqzCollapse.lean:533`) is a pure getter,
+The spec's `Roles.inv` is a pure getter,
 `⟨"seqzinv#" ++ r.dv.name, none⟩`, readable off any recognised `Roles` value without side effects
 (a spec `Variable` needs no registration). `rolesValid` (`:591`) gates on `decide (r.inv ∉ cs.vars)`
 before `tryList` (`:1101`) ever uses `r.inv` as a fresh column. The dense port mirrors this exactly
@@ -104,7 +103,7 @@ variable {p : ℕ}
 
 /-! ## Expression templates for the recognised gadget
 
-Mirrors `OldVariableBased/SeqzCollapse.lean:44`–`123`. Names are prefixed `denseSeqz` (rather than
+Mirrors the reference `SeqzCollapse` pass's expression templates. Names are prefixed `denseSeqz` (rather than
 just `dense`) since the reference's own names (`e0`, `markerSum`, `boolConstraint`, `sumExpr4`, …) are
 short enough to plausibly collide with other dense pass files sharing this flat namespace — indeed
 `denseBoolConstraint`/`denseTryList` are already taken by `Reencode.lean`/`HintCollapse.lean`. -/
@@ -201,7 +200,7 @@ def denseSeqzInvMethod (R a0 a1 a2 a3 : VarId) : DenseComputationMethod p :=
 
 /-! ## Role extraction (recogniser)
 
-Mirrors `OldVariableBased/SeqzCollapse.lean:494`–`593`. -/
+Mirrors the reference `SeqzCollapse` pass's role extraction. -/
 
 /-- Match the bus multiplicity `((m3 + m2) + m1) + m0`. Mirrors `matchMarkerSum` (`:494`). -/
 def denseSeqzMatchMarkerSum : DenseExpr p → Option (VarId × VarId × VarId × VarId)

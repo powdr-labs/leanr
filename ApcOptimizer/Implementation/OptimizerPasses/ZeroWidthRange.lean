@@ -7,7 +7,7 @@ set_option autoImplicit false
 /-! # Dense width-0 / width-1 range-check conversion (Task 3, impl-only)
 
 Dense, `VarId`-native transliteration of the *runtime* content of
-`OldVariableBased/ZeroWidthRange.lean`: the booleanity builder `boolC` (`:43`), the recognizer
+the reference `ZeroWidthRange` pass: the booleanity builder `boolC` (`:43`), the recognizer
 `rangeEq?` (`:76`), and the transform inside `zeroWidthRangePass` (`:144`). **Impl-only**: the
 native `DensePassCorrect` proof and the pass wiring live in `ZeroWidthRangeProof.lean`.
 
@@ -22,10 +22,9 @@ variable {p : ℕ}
 
 /-- On a prime field, `x < 2` (as a value) is exactly booleanity.
 
-    Representation-independent (`Nat`/`ZMod`) lemma re-homed here from
-    `OldVariableBased/ZeroWidthRange.lean` so the dense proof tree (`ZeroWidthRangeProof.lean` /
-    `RangeBoolProof.lean`) can consume it without importing the reference pass; the reference pass
-    imports it back. -/
+    Representation-independent (`Nat`/`ZMod`) lemma re-homed here from the reference
+    `ZeroWidthRange` pass so the dense proof tree (`ZeroWidthRangeProof.lean` /
+    `RangeBoolProof.lean`) can consume it. -/
 theorem val_lt_two_iff (hp : Nat.Prime p) (x : ZMod p) :
     x.val < 2 ↔ x * (x - 1) = 0 := by
   haveI : Fact p.Prime := ⟨hp⟩

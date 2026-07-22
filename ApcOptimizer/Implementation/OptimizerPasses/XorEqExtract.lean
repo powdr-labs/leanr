@@ -5,7 +5,7 @@ set_option autoImplicit false
 
 /-! # Dense bitwise-XOR constant-operand equality extraction (Task 3, impl-only)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/XorEqExtract.lean`'s *runtime* content —
+Dense, `VarId`-native transliteration of the reference `XorEqExtract` pass's *runtime* content —
 the constant-operand XOR recognizer `xorEq?` (`:60`), the OR/AND generalization `boolEq?` (`:233`,
 with its `simpleTarget`/`opIs` ingredients), and the pass `xorEqExtractPass` (`:352`), a
 **single-shot** append of the two recognizers' outputs
@@ -34,7 +34,7 @@ variable {p : ℕ}
 /-! ## Constant-operand XOR recognizer -/
 
 /-- The entailed equality from a constant-operand XOR interaction, recognized through the VM-neutral
-    `byteXorSpec`. Mirrors `XorEqExtract.xorEq?` (`OldVariableBased/XorEqExtract.lean:60`), reusing
+    `byteXorSpec`. Mirrors `XorEqExtract.xorEq?`, reusing
     `denseEqExpr` (`BusUnify.lean`) for `subE` and `denseComplExpr` (`ByteCheckPack.lean`) for
     `complE`. -/
 def denseXorEq? (bs : BusSemantics p) (facts : BusFacts p bs)

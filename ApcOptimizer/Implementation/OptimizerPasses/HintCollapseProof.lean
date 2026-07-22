@@ -7,7 +7,7 @@ set_option autoImplicit false
 
 Native `VarId` correctness for the dense `hintCollapse` port (`OptimizerPasses/HintCollapse.lean`),
 proved over dense environments `VarId → ZMod p` with no permanent dependency on the reference
-`Variable` pass. The spec pass `OldVariableBased/HintCollapse.lean` is the roadmap only: its
+`Variable` pass. The spec pass `HintCollapse` is the roadmap only: its
 `collapse_correct` / `tryOne` / `tryOneSq` / `tryList` argument structure is mirrored here over the
 native semantics of `Bridge.lean` (satisfaction / admissibility / stateful-bus side effects /
 `DensePassCorrect` / `DenseOutReconstructs`).

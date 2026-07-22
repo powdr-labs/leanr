@@ -27,7 +27,7 @@ touched stored solutions stay entailed because the pivot equality makes the rewr
 no-op (`DenseExpr.eval_subst`). The list update is handled by `DenseSolved.insertAll_preserves`.
 
 The native affine soundness/vars lemmas here transliterate the audited spec lemmas
-(`OldVariableBased/Affine.lean`) over `DenseLinExpr`/`DenseExpr`/`VarId`, reusing the dense eval
+ over `DenseLinExpr`/`DenseExpr`/`VarId`, reusing the dense eval
 identities already proved at their definitions' home (`Affine.lean`). -/
 
 namespace ApcOptimizer.Dense

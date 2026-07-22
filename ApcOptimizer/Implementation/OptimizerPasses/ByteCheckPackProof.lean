@@ -8,7 +8,7 @@ set_option autoImplicit false
 
 Native, `VarId`-native proofs for the recognizer and pair builder of the dense generalized
 single-value byte-check packing pass (`OptimizerPasses/ByteCheckPack.lean`, impl chunk BP-I1).
-These mirror the spec's `OldVariableBased/ByteCheckPack.lean` `_sound` lemmas and
+These mirror the reference `ByteCheckPack` pass's `_sound` lemmas and
 `BytePack.lean`'s `mkBytePair_*` cluster, re-derived over dense environments `VarId → ZMod p`
 with no decode dependency (`denseBIEval`, `DenseExpr.eval`, and value-level `BusFacts` application).
 
@@ -146,7 +146,7 @@ theorem denseByteBoolSound_decode_iff (bs : BusSemantics p) (facts : BusFacts p 
 /-! ## The NOT-form complement recognizer -/
 
 /-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. Copy of the
-    spec's `val_255_sub` (`OldVariableBased/ByteCheckPack.lean:96`). -/
+    spec's `val_255_sub`. -/
 private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
     (255 - a).val = Nat.xor a.val 255 := by
   haveI : NeZero p := ⟨by omega⟩
@@ -161,13 +161,13 @@ private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
   rw [hval]; exact (nat_xor_255 _ ha).symm
 
 /-- `(255 : ZMod p).val = 255` when `256 ≤ p`. Copy of the spec's `val_255`
-    (`OldVariableBased/ByteCheckPack.lean:110`). -/
+   . -/
 private theorem val_255 (hp : 256 ≤ p) : (255 : ZMod p).val = 255 := by
   have hc : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
   rw [← hc, ZMod.val_natCast_of_lt (by omega)]
 
 /-- Does `b` evaluate to the byte complement `255 − a` under every assignment. Native mirror of
-    `isByteCompl_sound` (`OldVariableBased/ByteCheckPack.lean:45`). -/
+    `isByteCompl_sound`. -/
 theorem denseIsByteCompl_sound (a b : DenseExpr p) (h : denseIsByteCompl a b = true)
     (denv : VarId → ZMod p) : b.eval denv = 255 - a.eval denv := by
   unfold denseIsByteCompl at h
@@ -182,7 +182,7 @@ theorem denseIsByteCompl_sound (a b : DenseExpr p) (h : denseIsByteCompl a b = t
 /-! ## Membership helper -/
 
 /-- A variable of a payload expression is a variable of the dense interaction. Native mirror of
-    `mem_biVars_of_payload` (`OldVariableBased/ByteCheckPack.lean:90`). -/
+    `mem_biVars_of_payload`. -/
 theorem denseMem_biVars_of_payload (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (he : e ∈ bi.payload) {v : VarId} (hv : v ∈ e.vars) : v ∈ denseBIVars bi := by
   rw [denseBIVars, List.mem_append]
@@ -192,7 +192,7 @@ theorem denseMem_biVars_of_payload (bi : BusInteraction (DenseExpr p)) (e : Dens
 
 /-- A recognized single-value byte check is stateless, has multiplicity 1, its value is a payload
     entry, and its acceptance is exactly "the value is a byte". Native mirror of `svCheck?_sound`
-    (`OldVariableBased/ByteCheckPack.lean:116`), same 7 branches. -/
+   , same 7 branches. -/
 theorem denseSvCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (h : denseSvCheck? bs facts bi = some e) :
@@ -307,7 +307,7 @@ theorem denseSvCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-- If `denseFindSecond` returns `(mid, b, eB, post)` then `b` is a recognized single-value byte
     check with value `eB`. Native mirror of `findSecond_sound`
-    (`OldVariableBased/ByteCheckPack.lean:244`). -/
+   . -/
 theorem denseFindSecond_sound (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) :
     ∀ (revMid rest : List (BusInteraction (DenseExpr p)))
       (mid : List (BusInteraction (DenseExpr p))) (b : BusInteraction (DenseExpr p))
@@ -333,7 +333,7 @@ theorem denseFindSecond_sound (bs : BusSemantics p) (facts : BusFacts p bs) (bus
 /-! ## Native correctness of one stateless two-for-one pack (chunk BP-P2)
 
 `denseMergeStateless2_correct` is the dense mirror of `mergeStateless2_correct`
-(`OldVariableBased/TupleRange.lean:54`): replacing two stateless multiplicity-1 interactions `D₁`,
+: replacing two stateless multiplicity-1 interactions `D₁`,
 `D₂` by one stateless multiplicity-1 interaction `C` whose obligation is exactly their conjunction is
 `DensePassCorrect`. Since every interaction involved is stateless, both the stateful-bus side effects
 and the active∧stateful admissibility argument collapse (the filtered lists coincide), so the

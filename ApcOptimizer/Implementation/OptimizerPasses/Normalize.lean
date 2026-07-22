@@ -46,7 +46,7 @@ setup), so a hybrid keeps the tiny-form path (asymptotically still linear: the b
 O(1)). Proven `= denseMergeTerms` and installed via `@[csimp]`, so every call site
 (`DenseLinExpr.norm`, hence the fused normalize walk and gauss's per-constraint reduce) uses it at
 runtime with **no proof churn** and the byte-identical result. Dense twin of the spec's #153
-`mergeTermsFast`/`mergeTerms_eq_fast` (`OldVariableBased/Normalize.lean`); the proof structure
+`mergeTermsFast`/`mergeTerms_eq_fast`; the proof structure
 transfers line-by-line since `VarId` has `DecidableEq`/`Hashable`/`LawfulBEq` like `Variable`. -/
 
 /-- The coefficient the first-occurrence-ordered accumulator holds for `v` after merging (the

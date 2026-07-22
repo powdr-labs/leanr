@@ -19,10 +19,9 @@ the build's structure and prove the correspondence by induction. -/
 /-! ## Re-homed representation-independent ℕ-side ladder arithmetic + solution grid
 
 The `Nat`/`ZMod`-only ladder layer (`ladderVal` / `unpack?` / `solutions` / their completeness
-theorems / `coeffNat` / `signum` / `tval`) is re-homed here from `OldVariableBased/DigitFold.lean`
-so the dense pass + proof (`DigitFold.lean` / `DigitFoldProof.lean`) consume it without importing the
-reference pass; the reference pass — whose `Variable`-typed `isLadder` / `isLadder_sum` /
-`env_forced` build on this layer — imports it back. FQN is preserved (`namespace DigitFold`). -/
+theorems / `coeffNat` / `signum` / `tval`) originally lived in the reference `DigitFold` pass and
+is re-homed here so the dense pass + proof (`DigitFold.lean` / `DigitFoldProof.lean`) consume it
+directly. FQN is preserved (`namespace DigitFold`). -/
 
 namespace DigitFold
 

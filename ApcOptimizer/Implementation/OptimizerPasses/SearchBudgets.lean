@@ -3,12 +3,11 @@ set_option autoImplicit false
 /-! # Search / enumeration budget constants
 
 Representation-independent (`Nat`) runtime work caps and gates, re-homed here from the reference
-`OldVariableBased/` passes so the dense passes and their proofs can consume them without importing
-the reference passes; each reference pass imports them back. Moving a plain `Nat` constant cannot
+`Variable` passes so the dense passes and their proofs can consume them from a neutral home. Moving a plain `Nat` constant cannot
 change behaviour — the same literal is shared, so every reference-vs-dense decision it gates is
 unchanged. Each constant keeps its original (root-namespace) fully-qualified name. -/
 
-/-! ## Deep byte-justification budgets (`OldVariableBased/BusPairCancel.lean`) -/
+/-! ## Deep byte-justification budgets -/
 
 /-- Cap on the number of enumerated flag assignments per deep-justification attempt. -/
 def maxDeepPoints : Nat := 64
@@ -26,7 +25,7 @@ def maxDeepVars : Nat := 8
 /-- Reduction fuel: how many checked forms one basis justification may subtract. -/
 def basisFuel : Nat := 3
 
-/-! ## Enumeration work caps (`OldVariableBased/DomainBatch.lean`, `.../DomainFold.lean`) -/
+/-! ## Enumeration work caps (`DomainBatch` / `DomainFold`) -/
 
 /-- Work cap for one joint enumeration: box size × number of covered targets. -/
 def maxEnumWork : Nat := 524288

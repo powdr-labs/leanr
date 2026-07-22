@@ -52,9 +52,8 @@ theorem split_of_extracts {α : Type _} {l : List α} {arr : Array α}
 
 /-! ### Generic `argmin` / `filterMap` list lemmas
 
-Representation-independent list machinery re-homed here from `OldVariableBased/Gauss.lean` so the
-dense Gauss pass can consume them without importing the reference pass; the reference pass imports
-them back. -/
+Representation-independent list machinery, originally in the reference `Gauss` pass, consumed by
+the dense Gauss pass. -/
 
 /-- `argmin` commutes with a key-preserving map: when `g` carries the key (`kγ (g a) = kα a`), the
     winner of the mapped list is the mapped winner. This lets us score cheap descriptors in place
@@ -84,8 +83,7 @@ theorem map_filterMap {α β γ : Type*} (f : α → Option β) (g : β → γ) 
 
 /-! ### Linear-time dedup
 
-Re-homed here from `OldVariableBased/Reencode.lean` (generic list machinery); the reference passes
-import it back. -/
+Generic list machinery, originally in the reference `Reencode` pass. -/
 
 /-- `List.dedup` computed in linear time via a hash set, with the **identical** result: an element
     is kept at its last-occurrence position (exactly `List.dedup`'s order), so swapping this in is a
@@ -98,8 +96,8 @@ def dedupHash {α : Type} [BEq α] [Hashable α] (l : List α) : List α :=
 
 /-! ### `foldl max` bounds
 
-Re-homed here from `OldVariableBased/RootPairUnify.lean` (generic `Nat`/`List` machinery); the
-reference pass and the dense two-root bounds proof both consume them. -/
+Generic `Nat`/`List` machinery, originally in the reference `RootPairUnify` pass; consumed by the
+dense two-root bounds proof. -/
 
 /-- The seed is at most the `foldl max` accumulation. -/
 theorem init_le_foldl_max (l : List Nat) : ∀ b : Nat, b ≤ l.foldl max b := by
@@ -119,8 +117,8 @@ theorem le_foldl_max (l : List Nat) : ∀ (b : Nat), ∀ a ∈ l, a ≤ l.foldl 
 
 /-! ### Early-exit list fold
 
-Re-homed here from `OldVariableBased/DomainBatch.lean` (generic list machinery); the finite-domain
-enumeration engine (`EnumEngine.lean`) and the reference passes both consume it. -/
+Generic list machinery, originally in the reference `DomainBatch` pass; consumed by the
+finite-domain enumeration engine (`EnumEngine.lean`). -/
 
 /-- Left fold with an early exit: once `stop acc` holds, the remaining elements are skipped. -/
 def foldlStop {α β : Type} (f : β → α → β) (stop : β → Bool) : List α → β → β
@@ -190,9 +188,9 @@ theorem foldlStop_all {α : Type} (pred : α → Bool) (l : List α) (acc : Bool
 
 /-! ### Sparse positional map and self-zip membership
 
-Re-homed here from `OldVariableBased/DomainFold.lean` (`zipIdx_map_sparse`) and
-`OldVariableBased/Reencode.lean` (`zip_map_self_mem`) — generic list machinery; the reference passes
-and their dense correspondence proofs both consume them. -/
+Generic list machinery: `zipIdx_map_sparse` (originally in the reference `DomainFold` pass) and
+`zip_map_self_mem` (originally in the reference `Reencode` pass), consumed by the dense
+correspondence proofs. -/
 
 /-- The positional pass-through map equals the plain map when the function fixes the item at
     every position outside `mem`. -/

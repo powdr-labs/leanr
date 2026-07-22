@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Witness re-encoding — dense expression operations (Task 3, reencode native port, chunk R1)
 
 Dense, `VarId`-native transliteration of the *expression-level* runtime definitions of
-`OptimizerPasses/OldVariableBased/Reencode.lean` (`Variable`/`Expression`-based): environment
+the reference `Reencode` pass (`Variable`/`Expression`-based): environment
 extension, the fast hoisted evaluator, the booleanity constraint, the group substitution and bit
 box, the degree-aware group rewrite (`indicatorExpr`/`interpOfV`/`candSelect`/`groupRewriteCand`/
 `groupRewrite`), the re-encoded output, the group's survivor enumeration and the checked
@@ -27,16 +27,12 @@ indexed-vs-direct covered-set gathering — reusing `denseCoveredIdx`, `DomainFo
 `reencodeStep`/`reencodeLoop`, the per-candidate step and the sequential driver, including the
 registry-extending fresh-variable plumbing), and `denseReencodeF` (↔ `reencodePass`, as a plain
 transform matching the `ofNativeExtending` builder's shape — the prover wires it with
-`DenseVerifiedPassW.ofNativeExtending (denseReencodeF pw b) …`). Still **out of scope**: the
-correctness theorems and the `ofNativeExtending` call itself (the prover's job, P3). The
-`OldVariableBased.Reencode` import is kept: the `ofSpec` selector branch still runs the spec pass
-until the prover flips it, and the native proof may cite the spec's own transport lemmas while it
-is under construction.
+`DenseVerifiedPassW.ofNativeExtending (denseReencodeF pw b) …`). The native correctness proof and
+the `ofNativeExtending` wiring live in `ReencodeProof.lean`.
 
 ### Fresh bits: where they are minted, and the freshness prefilter mechanism
 
-The spec constructs the fresh bit `Variable`s **inside `buildReencode`** (`OldVariableBased/
-Reencode.lean:1514`), not in `reencodeStep` — only on the single accepting path (box small enough,
+The spec constructs the fresh bit `Variable`s **inside `buildReencode`**, not in `reencodeStep` — only on the single accepting path (box small enough,
 not the single-var-only hopeless case, `2 ≤ survs.length`, `k < xs.length`). `denseBuildReencode`
 mints them at the **identical point**: `denseRegisterBits` constructs the same full `Variable`
 values (`{ name := freshBase ++ "_" ++ toString j }`, `j = 0, …, k-1`, in order) and registers each
@@ -75,7 +71,7 @@ subtype's proof obligation is dropped (left for the prover to restate and discha
 ### Ordering parity for the candidate-group targets (deliberate divergence exception)
 
 `denseReencodeF`'s target list (mirroring the spec's `csVs`/`svSet`/`targets` construction,
-`OldVariableBased/Reencode.lean:1650-1658`, byte-identical text to `domainFoldPass`'s own preamble)
+byte-identical text to `domainFoldPass`'s own preamble)
 sorts each candidate group with a **resolve-based comparator**,
 `compare (reg.resolve a) (reg.resolve b) != .gt` — reproducing the spec's `Variable`-`compare`
 order exactly, rather than the `VarId.index`-native order `Dense/DomainFoldNative.lean`'s sibling
@@ -101,15 +97,10 @@ transliteration (reusing the already-dense `denseBuildStep`/`DenseCovIndex` from
 `DomainBatch.lean`), used exactly where the spec calls `CoveredIndex.buildPruned Expression.vars 8
 …` (the pass-level initial index and the accept-time rebuilt index in `denseReencodeStep`).
 
-## Import-graph note (cycle resolved at the coordinator level)
+## Import-graph note
 
-`OldVariableBased/` spec files used to import sibling spec passes through the canonical wrapper
-paths (e.g. `OldVariableBased/DomainFold.lean` importing `OptimizerPasses.Reencode` for the spec's
-own `coveredBy`/`groupDoms`), which would close an import cycle the moment a canonical file — this
-one — gains dense content that imports dense `DomainFold.lean`. All such spec→spec edges have been
-repointed to stay inside `OldVariableBased/` (a pure import-respelling, no semantic change), so
-this file imports the dense `DomainFold.lean` primitives (`denseFindDomainAlg`, `denseCoveredBy`,
-`denseCoveredCsOf`, `denseGroupDoms`, `denseAssignments`, `DenseExpr.hasVar`) normally — no local
+This file imports the dense `DomainFold.lean` primitives (`denseFindDomainAlg`, `denseCoveredBy`,
+`denseCoveredCsOf`, `denseGroupDoms`, `denseAssignments`, `DenseExpr.hasVar`) directly — no local
 copies. Later chunks may likewise import `DomainFoldRuntime.lean` (`denseSvSet`,
 `denseCoveredIdx`, `DenseFoldIdx`) without obstruction.
 
@@ -142,7 +133,7 @@ workaround: spec `Reencode.lean` itself defines `survZeroCW`/`groupSurvivorsE` (
   `denseIndicatorExpr` folds directly over the pattern list itself, reading each pair's own stored
   value with no lookup at all — a different (and cheaper) computation, mirroring a different spec
   function. Ported fresh below as `denseIndicatorExpr`, not reused.
-* `dedupHash` (spec, `OldVariableBased/Reencode.lean:1632`) is fully generic
+* `dedupHash` (spec) is fully generic
   (`{α : Type} [BEq α] [Hashable α]`) and representation-independent; it is reused unqualified at
   `VarId`, exactly as `DomainFoldRuntime.lean`'s `denseTargetsV` already does — no dense-specific
   version is defined here (not needed by any definition in this chunk; the candidate-group builder

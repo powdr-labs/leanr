@@ -1,11 +1,10 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SplitBytePair
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheck
 
 set_option autoImplicit false
 
 /-! # Dense byte-check pair splitting (Task 3 — impl)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/SplitBytePair.lean`'s *runtime*
+Dense, `VarId`-native transliteration of the reference `SplitBytePair` pass's *runtime*
 definitions (`asBytePair`, `splitOne`, and the pass's computed output). This file is **impl-only**:
 no theorem/lemma from the spec file is ported (`asBytePair_eq`, `splitOne_P`,
 `forall_P_flatMap`, `splitOne_filter_stateful`, `filter_stateful_flatMap`, `splitOne_map_filter`,
@@ -43,7 +42,7 @@ variable {p : ℕ}
 
 /-- Recognize a packed pair byte check (decoded op `= pairOp`, result `0`, multiplicity `1`) on a
     `byteXorSpec` bus, returning `(busId, spec, a, b)`. Mirrors `asBytePair`
-    (`OldVariableBased/SplitBytePair.lean:42`). -/
+   . -/
 def denseAsBytePair (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) :
     Option (Nat × ByteXorSpec p × DenseExpr p × DenseExpr p) :=
@@ -58,7 +57,7 @@ def denseAsBytePair (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-- Split one interaction: a recognized packed pair becomes its two single-value checks (in
     decode order `a` then `b`); anything else passes through unchanged. Mirrors `splitOne`
-    (`OldVariableBased/SplitBytePair.lean:82`). -/
+   . -/
 def denseSplitOne (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : List (BusInteraction (DenseExpr p)) :=
   match denseAsBytePair bs facts bi with
@@ -67,7 +66,7 @@ def denseSplitOne (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-- The runtime transform: explode every packed pair byte check into its two single-value checks,
     in place, preserving the order of every other interaction. Mirrors `splitBytePairPass`'s
-    (`OldVariableBased/SplitBytePair.lean:241`) `hp1` self-gate (VM-neutral: with a trivial
+    `hp1` self-gate (VM-neutral: with a trivial
     `BusFacts`, `byteXorSpec` is `none` everywhere, so `denseAsBytePair` never fires and the
     `flatMap` is the identity up to `[bi]`-singleton unwrapping) composed with its computed output
     (dropping the `PassCorrect` term). -/

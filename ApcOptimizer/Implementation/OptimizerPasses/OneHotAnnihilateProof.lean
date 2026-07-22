@@ -14,7 +14,7 @@ for every one-hot-annihilated variable `x` via `DensePassCorrect.denseAddConstra
 Every recogniser structure lemma (`denseAffineCloser_spec`/`denseReadCloser_spec`), the annihilation
 algebra (`denseSum_mul_eq_zero`/`denseSum_map_mul_left`/`denseAnnihilate`/`denseCofactor_eval` via
 `denseLinearize_eval`), and the entailment (`denseDeadVars_entailed`, against native
-`DenseConstraintSystem.satisfies`) are line-parallel mirrors of `OldVariableBased/OneHotAnnihilate.lean`
+`DenseConstraintSystem.satisfies`) are line-parallel mirrors of the reference `OneHotAnnihilate` pass
 over `VarId`/`DenseExpr` — `eq_of_beq` on the `==` comparisons goes through the `DecidableEq`-derived
 lawful `BEq` on `DenseExpr`. The added `.var x`'s occurrence is discharged directly from the closer
 `.mul A (.var x) ∈ algebraicConstraints` (`mem_occ_of_constraint`), not through `denseLinearize_vars`

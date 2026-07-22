@@ -1,11 +1,10 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.RangeBool
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
 
 set_option autoImplicit false
 
 /-! # Dense width-1 range check → booleanity (Task 3, impl-only)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/RangeBool.lean`'s *runtime* content:
+Dense, `VarId`-native transliteration of the reference `RangeBool` pass's *runtime* content:
 the recognizer `boolCheck?` (`:26`) and the pass `rangeBoolPass` (`:85`). **Impl-only**:
 `boolCheck?_spec`/`_stateless`/`_violates_iff` are proof-side and left for the prover; nothing here
 is wired into the `denseImpl` selector.
@@ -31,7 +30,7 @@ namespace ApcOptimizer.Dense
 variable {p : ℕ}
 
 /-- The booleanity constraint of a width-1 (`bound = 2`) op-6 check whose value slot is a bare
-    variable. Mirrors `RangeBool.boolCheck?` (`OldVariableBased/RangeBool.lean:26`), reusing
+    variable. Mirrors `RangeBool.boolCheck?`, reusing
     `denseBoolC` (`ZeroWidthRange.lean`) in place of `ZeroWidthRange.boolC`. -/
 def denseBoolCheck? {bs : BusSemantics p} (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (DenseExpr p) :=

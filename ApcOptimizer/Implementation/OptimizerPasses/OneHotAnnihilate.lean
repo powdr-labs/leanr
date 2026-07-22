@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Dense one-hot annihilation (Task 3, impl-only)
 
 Dense, `VarId`-native transliteration of the *runtime* content of
-`OldVariableBased/OneHotAnnihilate.lean`: the recogniser chain
+the reference `OneHotAnnihilate` pass: the recogniser chain
 (`affineCloser`/`readCloser`/`hasProd`/`deadFromCloser`/`deadVars`) and the append transform. The
 pass appends `x = 0` for every one-hot-annihilated variable `x`, read off the closer constraints.
 It is **fact-free**. The native `DensePassCorrect` proof and the pass wiring live in

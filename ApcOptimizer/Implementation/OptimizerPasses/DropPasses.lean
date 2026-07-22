@@ -1,7 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Rewrite
 import ApcOptimizer.Implementation.OptimizerPasses.Adapter
-import ApcOptimizer.Implementation.OptimizerPasses.ZeroMultBus
-import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
 
 set_option autoImplicit false
 

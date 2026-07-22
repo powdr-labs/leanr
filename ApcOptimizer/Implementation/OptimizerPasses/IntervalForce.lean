@@ -8,7 +8,7 @@ set_option autoImplicit false
 
 /-! # Dense interval forcing: integer-window analysis of bounded affine slots (Task 3, impl-only)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/IntervalForce.lean`'s *runtime* content:
+Dense, `VarId`-native transliteration of the reference `IntervalForce` pass's *runtime* content:
 the signed-representative processed term (`PTerm`/`procTerms`/`maxSum`/`minSum`), the seed walk
 (`pairDiff`/`findPartner`/`walk`), the per-slot seed extraction (`slotSeeds`), the per-invocation
 bounds index (`BoundIdx`), the per-interaction/whole-system seed collection
@@ -25,7 +25,7 @@ never calls it; it exists only to state the proof-side window lemmas, which the 
 
 `IntervalForce.srep : ZMod p → Int` / `srep_cast` / `term_window` / `int_window` and
 `IntervalForce.maxTerms : Nat` touch neither `Variable` nor `Expression`; they are
-**re-homed here** from `OldVariableBased/IntervalForce.lean` (the reference pass imports them back)
+**re-homed here** from the reference `IntervalForce` pass
 and reused **unqualified** via `open IntervalForce`, exactly as `open`ed spec constants/helpers are
 reused elsewhere (`IntervalForce.srep.eval`, `denseSlotSeeds` below). `PTerm` itself is *not*
 reusable as-is: its `v` field is typed `Variable`, so a dense `DensePTerm` (`v : VarId`) is a new
@@ -64,9 +64,8 @@ variable {p : ℕ}
 /-! ## Re-homed representation-independent signed-representative + window arithmetic
 
 `srep`/`srep_cast`/`term_window`/`int_window`/`maxTerms` touch only `Nat`/`Int`/`ZMod` — re-homed
-here from `OldVariableBased/IntervalForce.lean` so the dense pass + proof (and
-`BusPairCancelJustify.lean`, which reuses `srep`) consume them without importing the reference pass;
-the reference pass imports them back. -/
+here from the reference `IntervalForce` pass so the dense pass + proof (and
+`BusPairCancelJustify.lean`, which reuses `srep`) consume them from a neutral home. -/
 
 /-- Signed minimal-magnitude integer representative of a field element: `c.val` when
     `c.val ≤ (p−1)/2`, else `c.val − p`. Scaled differences like `256·a − 256·b` thus get the
@@ -139,7 +138,7 @@ variable {p : ℕ}
 /-! ## Signed representatives and processed terms -/
 
 /-- A dense processed affine term: signed integer coefficient, a proven strict bound for the
-    variable's value, and the `VarId` itself. Mirrors `PTerm` (`OldVariableBased/IntervalForce.lean:62`). -/
+    variable's value, and the `VarId` itself. Mirrors `PTerm`. -/
 structure DensePTerm where
   sc : Int
   bnd : Nat

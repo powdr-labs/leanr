@@ -17,8 +17,8 @@ two shapes that have already been hand-rolled twice each in the dense port:
   `DenseNativeStep.trans`/`.foldList`/`.drain` package the induction once.
 
 * **The bus-rewrite vocabulary.** The spec's `BusInteraction.mapExpr` is `Expression`-specific
-  (`bi : BusInteraction (Expression p)`, `g : Expression p → Expression p`,
-  `OldVariableBased/Rewrite.lean:27`), so `BusInteraction` being generic over its payload does *not*
+  (`bi : BusInteraction (Expression p)`, `g : Expression p → Expression p`), so
+  `BusInteraction` being generic over its payload does *not*
   make it apply to `BusInteraction (DenseExpr p)`. `denseBIMapExpr` is the dense twin (same field
   order), with the canonical public lemma cluster named 1:1 with the spec's
   (`mapExpr_eval_of_agree` / `mapExpr_eq_self` / `mapExpr_vars_subset`, `DomainFold.lean`).
@@ -292,7 +292,7 @@ private def toyPass : DenseVerifiedPassW p :=
 /-! ## Bus-rewrite vocabulary: the dense `BusInteraction.mapExpr`
 
 `denseBIMapExpr` is the dense twin of the `Expression`-specific spec `BusInteraction.mapExpr`
-(`OldVariableBased/Rewrite.lean:27`), same field order. The three canonical public lemmas mirror the
+, same field order. The three canonical public lemmas mirror the
 spec's `mapExpr_eval_of_agree` / `mapExpr_eq_self` / `mapExpr_vars_subset` (`DomainFold.lean`). This
 is additive: existing per-pass inline copies (`denseBIEval_mapExpr_of_agree`, `denseMapExpr_eq_self`,
 `denseMapExpr_vars_subset` in `DomainFoldProof.lean`, stated over the inline `{ bi with … }` form)

@@ -37,7 +37,7 @@ variable {p : ℕ}
 /-! ## Local wraparound-free byte facts -/
 
 /-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. Copy of the
-    spec's `val_255_sub` (`OldVariableBased/RedundantByteDrop.lean:69`). -/
+    spec's `val_255_sub`. -/
 private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
     (255 - a).val = Nat.xor a.val 255 := by
   haveI : NeZero p := ⟨by omega⟩

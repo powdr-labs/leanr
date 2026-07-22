@@ -9,8 +9,8 @@ set_option autoImplicit false
 /-! # Two-root field core
 
 Representation-independent (`ZMod p`-value only) core of the two-root bounded-integer argument.
-Both the dense two-root soundness (`Dense/AddrDiseqProof.lean`, `Dense/RootPairUnifyProof.lean`) and
-the reference `OldVariableBased/RootPairUnify.lean` consume these lemmas; they mention no
+The dense two-root soundness (`Dense/AddrDiseqProof.lean`, `Dense/RootPairUnifyProof.lean`) consumes
+these lemmas; they mention no
 `Variable`/`Expression`/`VarId` representation, only field values and integer bounds. -/
 
 variable {p : ℕ}

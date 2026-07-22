@@ -8,7 +8,7 @@ set_option autoImplicit false
 
 Native `VarId` correctness for the dense `seqzCollapse` port (`OptimizerPasses/SeqzCollapse.lean`),
 proved over dense environments `VarId → ZMod p` with no permanent dependency on the reference
-`Variable` pass. The spec pass `OldVariableBased/SeqzCollapse.lean` is the roadmap: its
+`Variable` pass. The spec pass `SeqzCollapse` is the roadmap: its
 `seqzCollapse_correct` / `tryList` argument structure is mirrored here over the native semantics of
 `Bridge.lean` (satisfaction / admissibility / stateful-bus side effects / `DensePassCorrect`).
 

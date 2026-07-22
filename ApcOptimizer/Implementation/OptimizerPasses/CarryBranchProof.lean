@@ -7,7 +7,7 @@ set_option autoImplicit false
 
 Native `VarId`-level correctness for `denseCarryBranchPass` (`CarryBranch.lean`), proved over dense
 environments `VarId → ZMod p` with no decode and no dependency on the reference `Variable` pass. The
-spec pass `OldVariableBased/CarryBranch.lean` is the roadmap only: its two-sided interval certificate
+spec pass `CarryBranch` is the roadmap only: its two-sided interval certificate
 (`splitSum_val` / `linNeverZeroSplit` / `intervalCert_sound` / `neverZeroB_sound`) and its resolution
 equivalence (`resolveExpr_eval_iff`) are transliterated here over the dense defs — the `ZMod`
 arithmetic is representation-independent — and the pass correctness is `DensePassCorrect.ofEnvEq`

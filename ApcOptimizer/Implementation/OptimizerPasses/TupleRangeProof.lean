@@ -12,7 +12,7 @@ and a variable range check `[y, b]` with `2 ^ b.val = s2`, so the two stateless 
 into one with the identical satisfying set.
 
 Everything here is over dense environments `VarId → ZMod p` — no `decode` transport into
-`OldVariableBased/`. The proof mirrors the spec's `mergeStateless2_correct`/`tupleKey`/
+the reference `Variable` passes. The proof mirrors the spec's `mergeStateless2_correct`/`tupleKey`/
 `packByteFirst_correct`/`packRangeFirst_correct` argument natively, reusing
 `denseMergeStateless2_correct` (`ByteCheckPackProof.lean`) as the two-for-one swap workhorse and the
 `denseMkByteCheck_*` acceptance cluster (`BusPairCancelCheckProof.lean`). The scan's positional

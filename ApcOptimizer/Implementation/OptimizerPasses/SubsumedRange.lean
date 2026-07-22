@@ -1,11 +1,10 @@
 import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.SubsumedRange
 
 set_option autoImplicit false
 
 /-! # Dense subsumed range-check removal (Task 3 — impl)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/SubsumedRange.lean`'s *runtime*
+Dense, `VarId`-native transliteration of the reference `SubsumedRange` pass's *runtime*
 definitions (`rangeCheck?`, `dropBase`, `dropKeep`, and the pass's computed output). This file is
 **impl-only**: no theorem/lemma from the spec file is ported (`rangeCheck?_spec`,
 `rangeCheck?_stateless`, `rangeCheck?_accepted`, and the pass's `filterBusEntailed_correct`-built

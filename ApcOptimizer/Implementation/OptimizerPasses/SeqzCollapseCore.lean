@@ -5,9 +5,8 @@ set_option autoImplicit false
 /-! # Value-level semantic core of the seqz-collapse gadget
 
 The `ZMod p`-value-level lemmas and range-check bus facts underlying the `seqzCollapse` pass,
-re-homed here from `OldVariableBased/SeqzCollapse.lean` so both the dense proof
-(`SeqzCollapseProof.lean`) and the reference pass consume them from a shared neutral home rather
-than the reference pass owning them. They quantify over `ZMod p` values and bus specs only, so they
+re-homed here from the reference `SeqzCollapse` pass so the dense proof
+(`SeqzCollapseProof.lean`) consumes them from a neutral home. They quantify over `ZMod p` values and bus specs only, so they
 are wholly representation-independent; kept under the original `SeqzCollapse` namespace so every
 consumer's fully-qualified name is unchanged. `sum_zero_all_zero` is reused unqualified from
 `HintCollapse.lean` (itself re-homed there). -/

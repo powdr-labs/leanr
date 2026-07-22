@@ -2,6 +2,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
+import ApcOptimizer.Implementation.OptimizerPasses.LinExprCore
 
 set_option autoImplicit false
 

@@ -1,5 +1,4 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Bridge
-import ApcOptimizer.Implementation.OptimizerPasses.ConstantFold
 
 set_option autoImplicit false
 

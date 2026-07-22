@@ -1,19 +1,17 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.RangeForceZero
 import ApcOptimizer.Implementation.OptimizerPasses.DropPasses
 
 set_option autoImplicit false
 
 /-! # Dense width-0 range check → equality (Task 3, impl-only)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/RangeForceZero.lean`'s *runtime*
+Dense, `VarId`-native transliteration of the reference `RangeForceZero` pass's *runtime*
 definitions: `forceZeroAt` (`:24`), `forceZeroSeeds` (`:93`), and the pass `rangeForceZeroPass`
 (`:99`). This is a **single-shot add-seeds** transform (`ConstraintSystem.addConstraints_correct`
 at `:99`), so its dense mirror `denseRangeForceZeroF` is one `if`-gated append, exactly the shape
 `DenseVerifiedPassW.ofNative`/the DigitFold-style direct construction expects
 (`bs → facts → d → d'`). **Impl-only**: `forceZeroAt_spec`/`forceZeroAt_sound`/`forceZeroSeeds_sound`
-are proof-side and left for the prover; nothing here is wired into the `denseImpl` selector (the
-`OldVariableBased.RangeForceZero` import is kept, so `"rangeForceZero"` still runs the spec pass via
-`ofSpec` until the prover flips the selector branch).
+are proof-side and left for the prover. The native `DensePassCorrect` proof and the pass wiring
+(`denseRangeForceZeroPass`, scheduled as `"rangeForceZero"`) live in `RangeForceZeroProof.lean`.
 
 `facts.rangeCheckAt` is representation-independent (`(busId : Nat) → (pattern : List (Option (ZMod
 p))) → …`) and is consulted unqualified, exactly as the spec does — no dense twin needed.
@@ -27,7 +25,7 @@ variable {p : ℕ}
 
 /-- The forced-zero expression of `bi`: its value-slot expression, when `bi` is a mult-1 range
     check whose `rangeCheckAt` bound is `1` (`= 2⁰`, so the slot is `< 1`, i.e. `0`). Mirrors
-    `RangeForceZero.forceZeroAt` (`OldVariableBased/RangeForceZero.lean:24`). -/
+    `RangeForceZero.forceZeroAt`. -/
 def denseForceZeroAt {bs : BusSemantics p} (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (DenseExpr p) :=
   match facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?) with

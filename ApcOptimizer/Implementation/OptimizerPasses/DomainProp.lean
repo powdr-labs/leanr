@@ -71,10 +71,10 @@ theorem BusInteraction.eval_congr (bi : BusInteraction (Expression p))
 
 /-- A computation method reads only its variables.
 
-    Re-homed here from `OldVariableBased/Reencode.lean` (next to the `Expression`/`BusInteraction`
+    Re-homed here from the reference `Reencode` pass (next to the `Expression`/`BusInteraction`
     `eval_congr` companions it is built from) so the master-theorem completeness proof
-    (`Implementation/Optimizer.lean`) and the reference pass consume it from a neutral home without
-    depending on the reference pass; `ComputationMethod` itself is the audited spec type. -/
+    (`Implementation/Optimizer.lean`) consumes it from a neutral home;
+    `ComputationMethod` itself is the audited spec type. -/
 theorem ComputationMethod.eval_congr (cm : ComputationMethod p) (e1 e2 : Variable → ZMod p) :
     (∀ v ∈ cm.vars, e1 v = e2 v) → cm.eval e1 = cm.eval e2 := by
   induction cm with

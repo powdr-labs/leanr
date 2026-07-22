@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Dense fixed-zero-register pinning (Task 3, impl-only)
 
 Dense, `VarId`-native transliteration of the *runtime* recognisers of
-`OldVariableBased/ZeroRegister.lean`: the per-interaction fixed-zero data-limb recogniser
+the reference `ZeroRegister` pass: the per-interaction fixed-zero data-limb recogniser
 `cellZeroExprs` (`:30`) and the filter predicate inside `zeroRegisterPass` (`:113`). The
 proof-carrying candidate collection (`denseCollectZeroCells`), the transform (`denseZeroRegisterF`),
 the native `DensePassCorrect` proof, and the pass wiring live in `ZeroRegisterProof.lean` (the

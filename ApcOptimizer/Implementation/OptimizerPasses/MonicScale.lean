@@ -1,11 +1,10 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.MonicScale
 
 set_option autoImplicit false
 
 /-! # Dense monic scaling of constraint factors (Task 3 — impl)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/MonicScale.lean`'s *runtime* definitions
+Dense, `VarId`-native transliteration of the reference `MonicScale` pass's *runtime* definitions
 (`monicScaleAffine`, `monicScale`, `ConstraintSystem.mapConstraints`, and the pass's computed
 output). This file is **impl-only**: no theorem/lemma from the spec file is ported
 (`monicScaleAffine_eval`, `monicScaleAffine_unit`, `monicScaleAffine_vars`, `monicScale_eval`,

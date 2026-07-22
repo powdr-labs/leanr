@@ -1,11 +1,10 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.IdentitySubst
 import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
 
 set_option autoImplicit false
 
 /-! # Dense late identity-result substitution (Task 3 — impl)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/IdentitySubst.lean`'s *runtime*
+Dense, `VarId`-native transliteration of the reference `IdentitySubst` pass's *runtime*
 definitions (`asVar`, `orIdentityOperand`, `identityPairAt`, `identityPairs`, `firstWins`,
 `resolveGo`, `identityMap`, `identityFm`, and `identitySubstStep`'s computed output). This file is
 **impl-only**: no theorem/lemma from the spec file is ported (`asVar_spec`,
@@ -49,13 +48,13 @@ namespace ApcOptimizer.Dense
 variable {p : ℕ}
 
 /-- The `VarId` of a bare-variable dense expression, else `none`. Mirrors `asVar`
-    (`OldVariableBased/IdentitySubst.lean:32`). -/
+   . -/
 def denseAsVar (e : DenseExpr p) : Option VarId :=
   match e with | .var v => some v | _ => none
 
 /-- The operand `VarId` of an OR-identity `(op, o1, o2, r)`: the non-zero operand when the other is
     the constant `0` (so `r = o1 | o2` collapses to that operand). Mirrors `orIdentityOperand`
-    (`OldVariableBased/IdentitySubst.lean:45`). -/
+   . -/
 def denseOrIdentityOperand (o1 o2 : DenseExpr p) : Option VarId :=
   if o2 = DenseExpr.const 0 then denseAsVar o1
   else if o1 = DenseExpr.const 0 then denseAsVar o2
@@ -63,7 +62,7 @@ def denseOrIdentityOperand (o1 o2 : DenseExpr p) : Option VarId :=
 
 /-- The `(result, operand)` pair of an OR-identity interaction decoding to `(orOp, o1, o2, result)`
     where one operand is `0` and the surviving operand is a bare variable distinct from the result.
-    Mirrors `identityPairAt` (`OldVariableBased/IdentitySubst.lean:61`). -/
+    Mirrors `identityPairAt`. -/
 def denseIdentityPairAt {bs : BusSemantics p} (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (VarId × VarId) :=
   match facts.byteXorSpec bi.busId with
@@ -88,14 +87,14 @@ def denseIdentityPairAt {bs : BusSemantics p} (facts : BusFacts p bs)
     out of the per-variable lookup below keeps the substitution — which calls the map once per
     variable occurrence — from re-`filterMap`ping (and re-decoding) every bus interaction on each
     visit; the lookup becomes a linear scan of this (small) list instead. Mirrors `identityPairs`
-    (`OldVariableBased/IdentitySubst.lean:145`). -/
+   . -/
 def denseIdentityPairs {bs : BusSemantics p} (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     List (VarId × VarId) :=
   d.busInteractions.filterMap (denseIdentityPairAt facts)
 
 /-- First-wins key→value map of a pair list: the value stored for `y` is the first pair keyed `y`,
     exactly the `filterMap … |>.head?` semantics, at one hash lookup per query. Mirrors `firstWins`
-    (`OldVariableBased/IdentitySubst.lean:151`). -/
+   . -/
 def denseFirstWins : List (VarId × VarId) → Std.HashMap VarId VarId → Std.HashMap VarId VarId
   | [], m => m
   | pr :: rest, m => denseFirstWins rest (if m.contains pr.1 then m else m.insert pr.1 pr.2)
@@ -104,7 +103,7 @@ def denseFirstWins : List (VarId × VarId) → Std.HashMap VarId VarId → Std.H
     stops harmlessly — the fixpoint wrapper then discards the no-op, exactly as it discarded the
     old one-link-per-iteration swaps). Compressing the chains lets one substitution collapse a
     whole chain, so the fixpoint converges in ~2 iterations instead of one per link. Mirrors
-    `resolveGo` (`OldVariableBased/IdentitySubst.lean:182`). -/
+    `resolveGo`. -/
 def denseResolveGo (m : Std.HashMap VarId VarId) : Nat → VarId → VarId
   | 0, v => v
   | fuel + 1, v =>
@@ -113,7 +112,7 @@ def denseResolveGo (m : Std.HashMap VarId VarId) : Nat → VarId → VarId
     | none => v
 
 /-- The mapped pairs, with the operand side path-compressed. Mirrors `identityMap`
-    (`OldVariableBased/IdentitySubst.lean:216`). -/
+   . -/
 def denseIdentityMap {bs : BusSemantics p} (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     Std.HashMap VarId VarId :=
   denseFirstWins (denseIdentityPairs facts d) ∅
@@ -122,7 +121,7 @@ def denseIdentityMap {bs : BusSemantics p} (facts : BusFacts p bs) (d : DenseCon
     resolved through chains (`denseResolveGo`). The map is a **parameter**, computed once by the
     pass body — a def-local `let … ; fun y => …` is re-evaluated per query by arity expansion,
     which made the old form rebuild the pair list per variable occurrence. Mirrors `identityFm`
-    (`OldVariableBased/IdentitySubst.lean:225`). -/
+   . -/
 def denseIdentityFm (m : Std.HashMap VarId VarId) (fuel : Nat) : VarId → Option (DenseExpr p) :=
   fun y => m[y]?.map (fun w => DenseExpr.var (denseResolveGo m fuel w))
 
@@ -131,7 +130,7 @@ def denseIdentityFm (m : Std.HashMap VarId VarId) (fuel : Nat) : VarId → Optio
     `orOp` — the `[]` branch returns it unchanged, skipping the whole-system `substF` traversal
     (which would be a no-op but still walks every expression). This keeps the pass ~free wherever it
     finds nothing to do. Mirrors `identitySubstStep`'s computed output
-    (`OldVariableBased/IdentitySubst.lean:256`), dropping its `PassCorrect` term. -/
+   , dropping its `PassCorrect` term. -/
 def denseIdentitySubstF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     DenseConstraintSystem p :=
   match denseIdentityPairs facts d with

@@ -9,7 +9,7 @@ Native `DensePassCorrect` for the dense disconnected-component transform (`dense
 `DenseVerifiedPassW.ofNative` (`Bridge.lean`), and wired at the `disconnected` cleanup label.
 
 The proof is a direct native re-derivation of the spec's `dropComponent_correct`
-(`OldVariableBased/DisconnectedComponent.lean`) over `VarId → ZMod p` environments — **it does not
+ over `VarId → ZMod p` environments — **it does not
 depend on the spec pass**. Exactly as in the spec, correctness is *generic in the removable set*
 (`DensePassCorrect.denseDropComponent`, stated for an arbitrary `remV`/`keepCon`/`keepBi`), so the
 well-founded connectivity search (`denseBfsClosure`/`denseConnBad`) is never reasoned about: the

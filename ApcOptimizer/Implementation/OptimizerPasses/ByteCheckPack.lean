@@ -1,4 +1,3 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.DropPasses
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheck
@@ -7,7 +6,7 @@ set_option autoImplicit false
 
 /-! # Dense generalized single-value byte-check packing (Task 3, chunk BP-I1 — impl)
 
-Dense, `VarId`-native transliteration of `OldVariableBased/ByteCheckPack.lean`'s *runtime* content:
+Dense, `VarId`-native transliteration of the reference `ByteCheckPack` pass's *runtime* content:
 `complExpr` (:37), `isByteCompl` (:42), `svCheck?` (:63), `findSecond` (:231), `findGo` (:268), and
 the pass `byteCheckPackPass` (:315), which the `"bytePack"`/`"bytePackLate"` labels
 (`Implementation/Optimizer.lean`) each run through an outer `iterateToFixpoint`. This is
@@ -57,12 +56,12 @@ variable {p : ℕ}
 /-! ## Recognizing the NOT-form complement -/
 
 /-- `255 − e` as a dense expression. Mirrors `complExpr`
-    (`OldVariableBased/ByteCheckPack.lean:37`). -/
+   . -/
 def denseComplExpr (e : DenseExpr p) : DenseExpr p := .add (.const 255) (.mul (.const (-1)) e)
 
 /-- Does `b` evaluate to the byte complement `255 − a` under every assignment? Decided by folding
     `b − (255 − a)` to a constant and checking it is `0`. Mirrors `isByteCompl`
-    (`OldVariableBased/ByteCheckPack.lean:42`). -/
+   . -/
 def denseIsByteCompl (a b : DenseExpr p) : Bool :=
   (DenseExpr.add b (.mul (.const (-1)) (denseComplExpr a))).normalize.constValue? == some 0
 
@@ -73,7 +72,7 @@ def denseIsByteCompl (a b : DenseExpr p) : Bool :=
     `r = 0`), the two XOR-with-zero mirrors (`o₂ = 0, o₁ = r` / `o₁ = 0, o₂ = r`), and the two NOT
     (XOR-with-255) forms (`o₂ = 255, r = 255 − o₁` / `o₁ = 255, r = 255 − o₂`, when `256 ≤ p`) all
     return the checked operand; `none` otherwise. Mirrors `svCheck?`
-    (`OldVariableBased/ByteCheckPack.lean:63`), same 7 branches in the same order (self-check, two
+   , same 7 branches in the same order (self-check, two
     XOR-with-zero mirrors, two NOT-form mirrors — each gated `256 ≤ p` — then the OR-identity mirror
     pair), and the same gate order (`bound = 256`, then multiplicity/op, then each shape). -/
 def denseSvCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -107,7 +106,7 @@ def denseSvCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-- Scan for the next single-value byte check on `busId`, returning the interior `mid`, the
     interaction `b`, its checked value `eB`, and the remainder `post`. Mirrors `findSecond`
-    (`OldVariableBased/ByteCheckPack.lean:231`). -/
+   . -/
 def denseFindSecond (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) :
     List (BusInteraction (DenseExpr p)) → List (BusInteraction (DenseExpr p)) →
     Option (List (BusInteraction (DenseExpr p)) × BusInteraction (DenseExpr p) ×
@@ -122,7 +121,7 @@ def denseFindSecond (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) 
 /-- Fused scan for the first packable pair, returning plain positionally-split pack data instead of
     a `PassResult` — see the module header for why the split equation needs no re-`decide` here and
     why `busId` is carried explicitly. Mirrors `findGo`
-    (`OldVariableBased/ByteCheckPack.lean:268`), same selection order: first `a` with a recognized
+   , same selection order: first `a` with a recognized
     single-value check, then the first same-bus match after it (`denseFindSecond`), then `a`'s
     `byteXorSpec` bus fact and its `bound = 256` gate. -/
 def denseFindGo (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -168,7 +167,7 @@ def denseDrainBytePacks (bs : BusSemantics p) (facts : BusFacts p bs) :
     | none => bis
 
 /-- The dense pack-until-fixpoint transform (`ofNative` shape: registry unchanged, no fresh
-    variables). Mirrors `byteCheckPackPass`'s (`OldVariableBased/ByteCheckPack.lean:315`) `hp1`
+    variables). Mirrors `byteCheckPackPass`'s `hp1`
     self-gate (VM-neutral: with a trivial `BusFacts`, `byteXorSpec` is `none` everywhere,
     `denseSvCheck?` returns `none`, and the drain is the identity in its first step) composed with
     the label's outer `iterateToFixpoint`, folded into `denseDrainBytePacks` (see its doc comment). -/
