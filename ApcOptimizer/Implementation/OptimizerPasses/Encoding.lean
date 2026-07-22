@@ -2,17 +2,16 @@ import ApcOptimizer.Implementation.OptimizerPasses.Registry
 
 set_option autoImplicit false
 
-/-! # Dense data model and encode/decode (Task 3, WP-B)
+/-! # Dense data model and encode/decode
 
 Implementation-only dense counterparts of the spec's recursive circuit values, with `VarId` leaves.
 `decode` resolves IDs through a registry to recover the spec value; `encode` threads a registry
 left-to-right, registering each variable occurrence and emitting dense leaves in one traversal.
 
 The correspondence results (`decode ∘ encode = id`, extension agreement, degree/eval/vars
-preservation) are the bridge every dense pass proof rides on: a pass is proved correct by showing
-its dense transform *decodes to* the existing spec pass's output. All evidence is `Prop` (erases);
-no proof wrapper is stored at expression nodes — a single coverage invariant is threaded and local
-validity derived when needed.
+preservation) are the bridge a dense pass proved by decode-commutation with a `Variable`-based
+pass (via `ofSpec`) rides on. All evidence is `Prop` (erases); no proof wrapper is stored at
+expression nodes — a single coverage invariant is threaded and local validity derived when needed.
 
 Dense bus interactions reuse the spec's polymorphic `BusInteraction` at `DenseExpr p`, so the
 generic `BusInteraction` machinery composes directly. -/

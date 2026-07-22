@@ -4,36 +4,31 @@ import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelIndexProof
 
 set_option autoImplicit false
 
-/-! # Native soundness of the dense region tests + emit slice for `busPairCancel` (Task 3, chunk C5 — prover)
+/-! # Soundness of the dense region tests + emit slice for `busPairCancel`
 
-Native, `VarId`-native soundness layer for the *region tests + emitted checks* machinery defined
-(impl-only) in `Dense/BusPairCancelCheck.lean` — the dense mirror of the spec chain
-`firstMatchAt_spec` / `midRefuted_sound` / `preRefuted_sound` / `provRecv_sound` /
-`shieldScan_hasRecv` / `shieldOk_sound` / `emitOk_sound` / `checkCancel_sound`
-(`OptimizerPasses/BusPairCancel.lean` :1752-2103) plus the `mkByteCheck_*` lemmas
-(`OptimizerPasses/BytePack.lean` :43-153). Everything here is native over `VarId → ZMod p`
-environments; no `decode` appears in the runtime pipeline and no permanent dependency on the
-reference `Variable` pass is introduced. The representation-independent `BusFacts` fields
-(`byteXorSpec_sound`, `slotBound_sound`) and the polymorphic `ByteXorSpec` methods
-(`encode`/`decode`/`encode_map`/`decode_encode`/`decode_eq_encode`/`encode_mem`) apply at the value
-/ `DenseExpr` level exactly as the spec applies them, unqualified.
+Soundness layer for the *region tests + emitted checks* machinery defined
+(impl-only) in `Dense/BusPairCancelCheck.lean`. Everything here is proved over `VarId → ZMod p`
+environments; no `decode` appears in the runtime pipeline. The representation-independent
+`BusFacts` fields (`byteXorSpec_sound`, `slotBound_sound`) and the polymorphic `ByteXorSpec`
+methods (`encode`/`decode`/`encode_map`/`decode_encode`/`decode_eq_encode`/`encode_mem`) apply at
+the value / `DenseExpr` level, unqualified.
 
-## What C7 (the loop) consumes
+## What the cancellation loop consumes
 
 The capstone `denseCheckCancel_sound` is shaped to discharge, given `Sound` facts for the threaded
 maps/certs (`DenseAddrCerts`, `DenseEqConstraintMap`) and a registry-coverage invariant
 (`d.CoveredBy reg`, the same shape `Dense/BusUnifyNativeProof.lean`'s `denseCheckPair_sound` takes),
-the full hypothesis list of C2's `denseDropPair_correct` (`Dense/BusPairCancelCore.lean` :193):
+the full hypothesis list of `denseDropPair_correct` (`Dense/BusPairCancelCore.lean` :193):
 
 * `hchecks` — from `denseEmitOk_sound` (per emitted check: stateless ∧ implied-by-`R` ∧
   invariant-free ∧ vars ⊆ `R`'s);
-* `hbyte` — from C1's `denseRecvSlotsJustified_sound`;
-* `hpayEval` — from C3's `densePayloadEntailedEq_sound`;
+* `hbyte` — from `denseRecvSlotsJustified_sound`;
+* `hpayEval` — from `densePayloadEntailedEq_sound`;
 * `hmidEval` — from `denseMidRefuted_sound`;
 * `hpreEval` — from `denseShieldOk_sound` + `densePreRefuted_sound` + `denseProvRecv_sound`;
 * `hSm`/`hRm`/`hshape`/`hslots`/`hRmatch`/`hsplit` — read off directly.
 
-The region-test soundness lemmas take `reg` + coverage because the M1 address-disequality
+The region-test soundness lemmas take `reg` + coverage because the address-disequality
 certificates (`denseAddrAffineNeq`/`denseAddrTwoRootNeq`/`denseAddrNonzeroNeq`) are proved through
 the registry (`Dense/AddrDiseqProof.lean`); the resulting `hmidEval`/`hpreEval` obligations of
 `denseDropPair_correct` are themselves reg-free (pure `denseBIEval`/`shape.address` statements), so
@@ -41,7 +36,7 @@ the registry (`Dense/AddrDiseqProof.lean`); the resulting `hmidEval`/`hpreEval` 
 `hTtworoot : T.get.tworoot.Sound d.algebraicConstraints` and
 `hTnonzero : T.get.nonzero = DenseNonzeroWits.build d.algebraicConstraints` — exactly what a
 `Thunk.pure (DenseAddrCerts.build d.algebraicConstraints)` provides (`DenseTwoRootMap.build_sound`
-and `rfl`), so C7 can discharge them cheaply. -/
+and `rfl`), so the cancellation loop can discharge them cheaply. -/
 
 namespace ApcOptimizer.Dense
 
@@ -50,8 +45,7 @@ variable {p : ℕ}
 /-! ## The receive-candidate scan (`denseFirstMatchAt_spec`) -/
 
 /-- A match at `j` is strictly after `i` and live — recovered from the search's own guard, so the
-    caller need not re-look-up `alive[j]`. Native mirror of `firstMatchAt_spec`
-    (`OptimizerPasses/BusPairCancel.lean:1752`). -/
+    caller need not re-look-up `alive[j]`. -/
 theorem denseFirstMatchAt_spec (M : Thunk (DenseEqConstraintMap p))
     (arr : Array (BusInteraction (DenseExpr p))) (alive : Array Bool) (busId : Nat)
     (S : BusInteraction (DenseExpr p)) (i : Nat) :
@@ -78,8 +72,7 @@ theorem denseFirstMatchAt_spec (M : Thunk (DenseEqConstraintMap p))
 
 /-- **`denseMidRefuted` is sound.** No active same-address message on `busId` survives the
     between-region test (given the constraints the certs were built from and registry coverage of
-    the interactions). Native mirror of `midRefuted_sound`
-    (`OptimizerPasses/BusPairCancel.lean:1791`). -/
+    the interactions). -/
 theorem denseMidRefuted_sound (reg : VarRegistry) (shape : MemoryBusShape)
     {dcs : List (DenseExpr p)} (T : Thunk (DenseAddrCerts p))
     (hTtworoot : T.get.tworoot.Sound dcs)
@@ -104,8 +97,7 @@ theorem denseMidRefuted_sound (reg : VarRegistry) (shape : MemoryBusShape)
     exact denseAddrNonzeroNeq_sound reg shape dcs hdcov S m hScov hmcov h denv hcon hmaddr.symm
 
 /-- **`densePreRefuted` is sound.** An active same-address message on `busId` not refuted by the
-    before-region test has multiplicity `≠ shape.setNewMult` (it is not a `setNew` send). Native
-    mirror of `preRefuted_sound` (`OptimizerPasses/BusPairCancel.lean:1807`). -/
+    before-region test has multiplicity `≠ shape.setNewMult` (it is not a `setNew` send). -/
 theorem densePreRefuted_sound (reg : VarRegistry) (shape : MemoryBusShape)
     {dcs : List (DenseExpr p)} (T : Thunk (DenseAddrCerts p))
     (hTtworoot : T.get.tworoot.Sound dcs)
@@ -132,8 +124,7 @@ theorem densePreRefuted_sound (reg : VarRegistry) (shape : MemoryBusShape)
       exact of_decide_eq_true h
 
 /-- **`denseProvRecv` is sound.** A provable active same-address receive on `busId` really is
-    on-bus, active, same-address, and multiplicity `-shape.setNewMult`. Native mirror of
-    `provRecv_sound` (`OptimizerPasses/BusPairCancel.lean:1831`). -/
+    on-bus, active, same-address, and multiplicity `-shape.setNewMult`. -/
 theorem denseProvRecv_sound (shape : MemoryBusShape) (busId : Nat) (hp1 : (1 : ZMod p) ≠ 0)
     (S m : BusInteraction (DenseExpr p)) (h : denseProvRecv shape busId S m = true)
     (denv : VarId → ZMod p) :
@@ -150,8 +141,7 @@ theorem denseProvRecv_sound (shape : MemoryBusShape) (busId : Nat) (hp1 : (1 : Z
 
 /-! ## The before-region shield scan (`denseShieldScan_hasRecv` / `denseShieldOk_sound`) -/
 
-/-- If the scan's `hasRecv` flag is set, the list contains a provable receive. Native mirror of
-    `shieldScan_hasRecv` (`OptimizerPasses/BusPairCancel.lean:1867`). -/
+/-- If the scan's `hasRecv` flag is set, the list contains a provable receive. -/
 theorem denseShieldScan_hasRecv (shape : MemoryBusShape) (T : Thunk (DenseAddrCerts p)) (busId : Nat)
     (S : BusInteraction (DenseExpr p)) :
     ∀ (l : List (BusInteraction (DenseExpr p))), (denseShieldScan shape T busId S l).1 = true →
@@ -167,8 +157,7 @@ theorem denseShieldScan_hasRecv (shape : MemoryBusShape) (T : Thunk (DenseAddrCe
 
 /-- From a passing `denseShieldOk` and a syntactic split `A_pre ++ m0 :: A_suf` whose `m0` is not
     provably excluded (`¬densePreRefuted`), the suffix `A_suf` carries a provable active
-    same-address receive. Native mirror of `shieldOk_sound`
-    (`OptimizerPasses/BusPairCancel.lean:1884`). -/
+    same-address receive. -/
 theorem denseShieldOk_sound (shape : MemoryBusShape) (T : Thunk (DenseAddrCerts p)) (busId : Nat)
     (S m0 : BusInteraction (DenseExpr p)) (A_suf : List (BusInteraction (DenseExpr p))) :
     ∀ (A_pre : List (BusInteraction (DenseExpr p))),
@@ -190,10 +179,9 @@ theorem denseShieldOk_sound (shape : MemoryBusShape) (T : Thunk (DenseAddrCerts 
       rw [Bool.and_eq_true] at h
       exact denseShieldOk_sound shape T busId S m0 A_suf A_pre' h.1 hpre
 
-/-! ## Emitted byte checks (`denseMkByteCheck_*`, native mirrors of the `mkByteCheck_*` lemmas) -/
+/-! ## Emitted byte checks (`denseMkByteCheck_*`) -/
 
-/-- The evaluation of an emitted single-value byte check. Native mirror of `mkByteCheck_eval`
-    (`OptimizerPasses/BytePack.lean:28`). -/
+/-- The evaluation of an emitted single-value byte check. -/
 theorem denseMkByteCheck_eval (spec : ByteXorSpec p) (busId : Nat) (e : DenseExpr p)
     (denv : VarId → ZMod p) :
     denseBIEval (denseMkByteCheck spec busId e) denv
@@ -201,8 +189,7 @@ theorem denseMkByteCheck_eval (spec : ByteXorSpec p) (busId : Nat) (e : DenseExp
           payload := spec.encode spec.xorOp (e.eval denv) (e.eval denv) 0 } := by
   simp only [denseMkByteCheck, denseBIEval, spec.encode_map, DenseExpr.eval]
 
-/-- An emitted single-value byte check breaks no invariant. Native mirror of `mkByteCheck_breaks`
-    (`OptimizerPasses/BytePack.lean:48`). -/
+/-- An emitted single-value byte check breaks no invariant. -/
 theorem denseMkByteCheck_breaks (bs : BusSemantics p) (facts : BusFacts p bs)
     (spec : ByteXorSpec p) (busId : Nat) (hspec : facts.byteXorSpec busId = some spec)
     (e : DenseExpr p) (denv : VarId → ZMod p) :
@@ -210,8 +197,7 @@ theorem denseMkByteCheck_breaks (bs : BusSemantics p) (facts : BusFacts p bs)
   obtain ⟨_, hbreak, _⟩ := facts.byteXorSpec_sound busId spec hspec
   rw [denseMkByteCheck_eval]; exact hbreak _
 
-/-- A single-value byte check is accepted exactly when its operand is a byte. Native mirror of
-    `mkByteCheck_accepted` (`OptimizerPasses/BytePack.lean:64`). -/
+/-- A single-value byte check is accepted exactly when its operand is a byte. -/
 theorem denseMkByteCheck_accepted (bs : BusSemantics p) (facts : BusFacts p bs)
     (spec : ByteXorSpec p) (busId : Nat) (hspec : facts.byteXorSpec busId = some spec)
     (e : DenseExpr p) (denv : VarId → ZMod p) :
@@ -228,8 +214,7 @@ theorem denseMkByteCheck_accepted (bs : BusSemantics p) (facts : BusFacts p bs)
   · exact fun h => h.1
   · exact fun h => ⟨h, h, hx⟩
 
-/-- An emitted byte check introduces no variable beyond its operand's. Native mirror of
-    `mkByteCheck_payload_vars` (`OptimizerPasses/BytePack.lean:151`). -/
+/-- An emitted byte check introduces no variable beyond its operand's. -/
 theorem denseMkByteCheck_payload_vars (spec : ByteXorSpec p) (busId : Nat) (e : DenseExpr p)
     {x : VarId} (pe : DenseExpr p) (hpe : pe ∈ (denseMkByteCheck spec busId e).payload)
     (hx : x ∈ pe.vars) : x ∈ e.vars := by
@@ -239,8 +224,7 @@ theorem denseMkByteCheck_payload_vars (spec : ByteXorSpec p) (busId : Nat) (e : 
 
 /-- **`denseEmitOk` is sound.** A passing emit certificate makes the check a faithful carrier of
     `R`'s byte obligation: stateless, implied by `R`'s own accepted receive, invariant-free, and
-    adding no `VarId`s. Native mirror of `emitOk_sound`
-    (`OptimizerPasses/BusPairCancel.lean:1938`); the conclusion is C2's per-check `hchecks` element. -/
+    adding no `VarId`s. The conclusion is `denseDropPair_correct`'s per-check `hchecks` element. -/
 theorem denseEmitOk_sound (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat)
     (shape : MemoryBusShape) (slots : List Nat) (R ck : BusInteraction (DenseExpr p))
     (h : denseEmitOk bs facts busId shape slots R ck = true)
@@ -331,10 +315,9 @@ theorem denseEmitOk_sound (bs : BusSemantics p) (facts : BusFacts p bs) (busId :
 
 /-- **A passing `denseCheckCancel` — with the split equation, the region hypotheses the scan
     established, the witness/index membership facts, registry coverage, and `Sound` facts for the
-    threaded certs/maps — yields `DensePassCorrect` via `denseDropPair_correct`.** Native mirror of
-    `checkCancel_sound` (`OptimizerPasses/BusPairCancel.lean:2052`), stated over a plain
-    `DenseConstraintSystem` with plain-list hypotheses so C7's `cancelLoop` composes single steps
-    through `DensePassCorrect.andThen`. -/
+    threaded certs/maps — yields `DensePassCorrect` via `denseDropPair_correct`.** Stated over a
+    plain `DenseConstraintSystem` with plain-list hypotheses so the cancellation loop composes
+    single steps through `DensePassCorrect.andThen`. -/
 theorem denseCheckCancel_sound (isInput : VarId → Bool)
     (d : DenseConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)

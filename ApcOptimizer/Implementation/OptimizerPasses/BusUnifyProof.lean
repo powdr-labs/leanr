@@ -4,13 +4,11 @@ import ApcOptimizer.Implementation.MemoryBusDrop
 
 set_option autoImplicit false
 
-/-! # Native soundness for the dense `busUnify` pass (Task 3, busUnify cluster, chunk M2 — prover)
+/-! # Soundness for the dense `busUnify` pass
 
-Native `DensePassCorrect` for `denseBusUnifyF` (`Dense/BusUnifyNative.lean`), lifted to the audited
-`Variable` spec through `DenseVerifiedPassW.of` (`Dense/Bridge.lean`). **This is the first
-native pass that consumes `BusFacts` at runtime** (`facts.memShape` in the transform,
-`facts.admissible_sound` in the proof), so it also establishes the template later fact-consuming
-ports copy.
+`DensePassCorrect` for `denseBusUnifyF` (`BusUnify.lean`), lifted to the audited spec through
+`DenseVerifiedPassW.of` (`Bridge.lean`). This pass consumes `BusFacts` at runtime
+(`facts.memShape` in the transform, `facts.admissible_sound` in the proof).
 
 ## Refinement shape
 
@@ -18,26 +16,26 @@ ports copy.
 new variable is introduced (`z ∈ d.occ`). Soundness (output-satisfying ⇒ input-satisfying) is a
 constraint-superset argument, packaged once as the reusable
 `DensePassCorrect.denseAddConstraints`. The substance is **real-trace completeness**: every
-admissible satisfying assignment already fulfils the added equalities. That is proved natively over
-dense environments `VarId → ZMod p` by re-deriving the spec's entailment chain densely:
+admissible satisfying assignment already fulfils the added equalities. That is proved over dense
+environments `VarId → ZMod p` by deriving the entailment chain directly:
 
 * `denseConsecutivePayloadEq` — **the load-bearing fact application.** From dense admissibility, the
   VM memory discipline (`admissibleMemoryBus.consecutive`) applied through `facts.admissible_sound`
   forces `S.payload = R.payload` for a consecutive same-address send→receive pair on a declared bus.
-* `denseCheckPair_sound` — composes the M1 (`Dense/AddrDiseqProof.lean`) address-disequality
-  certificates (which rule out every `mid` message as a same-address active blocker) with
+* `denseCheckPair_sound` — composes the address-disequality certificates (`AddrDiseqProof.lean`,
+  which rule out every `mid` message as a same-address active blocker) with
   `denseConsecutivePayloadEq`, concluding every slot equality (`denseMemEqConstraints`) evaluates to
   zero.
 * `denseCandidateSplitsSweep_split` (via `denseSweepGo_split`) recovers the split equation
-  `filter busId = pre ++ S :: mid ++ R :: post` that the dense sweep enumerator dropped (the spec
-  carried it in a `Subtype`); `denseCollectForBus_sound`/`denseCollectAllBuses_sound` fold the
-  entailment over the candidate list and every declared bus.
+  `filter busId = pre ++ S :: mid ++ R :: post` that the dense sweep enumerator does not carry
+  directly; `denseCollectForBus_sound`/`denseCollectAllBuses_sound` fold the entailment over the
+  candidate list and every declared bus.
 
-**Fact-consumption template** (for later chunks): (1) apply `BusFacts` soundness fields at the
-*value* level over `denseBIEval` from dense satisfaction — no `BusFacts`-map correspondence, no
-decode; (2) reuse the M1 certificate soundness lemmas (already reduced to spec `_sound` via decode),
-so no per-certificate representation reasoning appears here; (3) the pass's runtime `facts.memShape`
-call and the proof's `facts.admissible_sound` both take the *original* `facts` unchanged. -/
+**Fact-consumption template**: (1) apply `BusFacts` soundness fields at the *value* level over
+`denseBIEval` from dense satisfaction — no decode; (2) reuse the `AddrDiseqProof.lean` certificate
+soundness lemmas directly, so no per-certificate representation reasoning appears here; (3) the
+pass's runtime `facts.memShape` call and the proof's `facts.admissible_sound` both take the
+*original* `facts` unchanged. -/
 
 namespace ApcOptimizer.Dense
 
@@ -45,8 +43,8 @@ variable {p : ℕ}
 
 /-! ## Small value-level helpers -/
 
-/-- A dense constant-folded expression evaluates to its recognized constant (native analogue of
-    `Expression.constValue?_sound`; kept file-local to avoid a heavy cross-pass import). -/
+/-- A dense constant-folded expression evaluates to its recognized constant (kept file-local to
+    avoid a heavy cross-pass import). -/
 private theorem denseConstValueEval (e : DenseExpr p) (c : ZMod p) (h : e.constValue? = some c)
     (denv : VarId → ZMod p) : e.eval denv = c := by
   rw [← DenseExpr.fold_eval e denv]
@@ -57,13 +55,13 @@ private theorem denseConstValueEval (e : DenseExpr p) (c : ZMod p) (h : e.constV
   | add a b => rw [hf] at h; simp at h
   | mul a b => rw [hf] at h; simp at h
 
-/-- `denseEqExpr e₂ e₁` evaluates to `e₂ − e₁` (mirrors `eqExpr_eval`). -/
+/-- `denseEqExpr e₂ e₁` evaluates to `e₂ − e₁`. -/
 theorem denseEqExpr_eval (e2 e1 : DenseExpr p) (denv : VarId → ZMod p) :
     (denseEqExpr e2 e1).eval denv = e2.eval denv - e1.eval denv := by
   show e2.eval denv + (-1) * e1.eval denv = _
   ring
 
-/-- Both entries of equal-under-`denv` payloads evaluate equally (mirrors `payloadSlot_eval_eq`). -/
+/-- Both entries of equal-under-`denv` payloads evaluate equally. -/
 theorem densePayloadSlot_eval_eq (P Q : List (DenseExpr p)) (denv : VarId → ZMod p)
     (h : P.map (fun e => e.eval denv) = Q.map (fun e => e.eval denv)) (i : Nat) :
     ((P[i]?).getD (.const 0)).eval denv = ((Q[i]?).getD (.const 0)).eval denv := by
@@ -73,7 +71,7 @@ theorem densePayloadSlot_eval_eq (P Q : List (DenseExpr p)) (denv : VarId → ZM
 
 /-! ## The constant-address (dis)equality certificates -/
 
-/-- **`denseAddrConstsEq` is sound** (mirrors `addrConstsEq_sound`). -/
+/-- **`denseAddrConstsEq` is sound.** -/
 theorem denseAddrConstsEq_sound (shape : MemoryBusShape) (S S' : BusInteraction (DenseExpr p))
     (h : denseAddrConstsEq shape S S' = true) (denv : VarId → ZMod p) :
     shape.address (denseBIEval S denv) = shape.address (denseBIEval S' denv) := by
@@ -98,7 +96,7 @@ theorem denseAddrConstsEq_sound (shape : MemoryBusShape) (S S' : BusInteraction 
       all_goals exact absurd hs (by simp)
   all_goals exact absurd hs (by simp)
 
-/-- **`denseAddrConstsNeq` is sound** (mirrors `addrConstsNeq_sound`). -/
+/-- **`denseAddrConstsNeq` is sound.** -/
 theorem denseAddrConstsNeq_sound (shape : MemoryBusShape) (S bi : BusInteraction (DenseExpr p))
     (h : denseAddrConstsNeq shape S bi = true) (denv : VarId → ZMod p) :
     shape.address (denseBIEval S denv) ≠ shape.address (denseBIEval bi denv) := by
@@ -124,7 +122,7 @@ theorem denseAddrConstsNeq_sound (shape : MemoryBusShape) (S bi : BusInteraction
 /-! ## The load-bearing fact application -/
 
 /-- Filtering evaluated dense messages by bus id equals evaluating the bus-filtered interactions
-    (mirrors `map_eval_filter_busId`; `denseBIEval` preserves `busId`). -/
+    (`denseBIEval` preserves `busId`). -/
 theorem dense_map_eval_filter_busId (l : List (BusInteraction (DenseExpr p))) (busId : Nat)
     (denv : VarId → ZMod p) :
     (l.map (fun bi => denseBIEval bi denv)).filter (fun m => m.busId = busId)
@@ -141,7 +139,7 @@ theorem dense_map_eval_filter_busId (l : List (BusInteraction (DenseExpr p))) (b
 /-- **The consecutive-payload equality (dense).** From dense admissibility, `facts.admissible_sound`
     delivers the memory discipline `admissibleMemoryBus` on the bus's active messages, and
     `admissibleMemoryBus.consecutive` forces a consecutive same-address send→receive pair to carry
-    equal payloads. Native mirror of `consecutivePayloadEq` — the load-bearing `BusFacts` use. -/
+    equal payloads — the load-bearing `BusFacts` use. -/
 theorem denseConsecutivePayloadEq (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (denv : VarId → ZMod p)
     (hadm : d.admissible bs denv)
@@ -172,11 +170,11 @@ theorem denseConsecutivePayloadEq (d : DenseConstraintSystem p) (bs : BusSemanti
 
 /-! ## The checked pair and its entailment (dense) -/
 
-/-- **`denseCheckPair` entails the slot equalities.** Native mirror of `checkPair_sound`: the M1
-    address-disequality certificates rule out every `mid` message as a same-address active blocker,
-    so `denseConsecutivePayloadEq` forces `S.payload = R.payload`, whence every
-    `denseMemEqConstraints` slot equality evaluates to zero. The nonzero-witness table is fixed to
-    the pass's `DenseNonzeroWits.build d.algebraicConstraints`. -/
+/-- **`denseCheckPair` entails the slot equalities.** The address-disequality certificates rule out
+    every `mid` message as a same-address active blocker, so `denseConsecutivePayloadEq` forces
+    `S.payload = R.payload`, whence every `denseMemEqConstraints` slot equality evaluates to zero.
+    The nonzero-witness table is fixed to the pass's `DenseNonzeroWits.build
+    d.algebraicConstraints`. -/
 theorem denseCheckPair_sound (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (reg : VarRegistry) (hcov : d.CoveredBy reg)
     (T : DenseTwoRootMap p) (hT : T.Sound d.algebraicConstraints)
@@ -231,13 +229,12 @@ theorem denseCheckPair_sound (d : DenseConstraintSystem p) (bs : BusSemantics p)
   have hPQ : R.payload.map (fun e => e.eval denv) = S.payload.map (fun e => e.eval denv) := hpay.symm
   rw [densePayloadSlot_eval_eq R.payload S.payload denv hPQ i, sub_self]
 
-/-! ## The consumer sweep recovers the split equation (#165 delta, chunk C2)
+/-! ## The consumer sweep recovers the split equation
 
-Native mirror of the spec sweep's proof layer (`OptimizerPasses/BusUnify.lean:307-506`). The dense
-sweep defs are plain data, so the `OpenRec.hi`/`hsplit` invariants and `sweepGo`'s `hsplit`/`hj`
-arguments are reconstructed externally: `OpenWF`/`SplitEqC` state them, and `denseSweepGo_split`
-threads them across `insert`/`erase`/`getElem?`/`toList` as an all-values-satisfy-P HashMap
-invariant. -/
+The dense sweep defs are plain data, so the `OpenRec.hi`/`hsplit` invariants and `sweepGo`'s
+`hsplit`/`hj` arguments are reconstructed externally: `OpenWF`/`SplitEqC` state them, and
+`denseSweepGo_split` threads them across `insert`/`erase`/`getElem?`/`toList` as an
+all-values-satisfy-P HashMap invariant. -/
 
 private abbrev SplitEqC (L : List (BusInteraction (DenseExpr p))) (cand : DenseSplitCand p) : Prop :=
   L = cand.1 ++ cand.2.1 :: cand.2.2.1 ++ cand.2.2.2.1 :: cand.2.2.2.2
@@ -450,8 +447,7 @@ theorem denseCandidateSplitsSweep_split {shape : MemoryBusShape} {T : Thunk (Den
     (by intro w hw; simp at hw)
     (by intro ic hic; simp at hic) ic hic
 
-/-- Every var of an entailed slot equality comes from the send's or receive's payload. Native mirror
-    of `memEqConstraints_vars`. -/
+/-- Every var of an entailed slot equality comes from the send's or receive's payload. -/
 theorem denseMemEqConstraints_vars (shape : MemoryBusShape) (S Rt : BusInteraction (DenseExpr p))
     {c : DenseExpr p} (hc : c ∈ denseMemEqConstraints shape S Rt) {z : VarId} (hz : z ∈ c.vars) :
     (∃ e ∈ Rt.payload, z ∈ e.vars) ∨ (∃ e ∈ S.payload, z ∈ e.vars) := by
@@ -466,8 +462,7 @@ theorem denseMemEqConstraints_vars (shape : MemoryBusShape) (S Rt : BusInteracti
     | none => rw [hS] at hz; simp [DenseExpr.vars] at hz
     | some e => rw [hS] at hz; exact Or.inr ⟨e, List.mem_of_getElem? hS, hz⟩
 
-/-- A var of a bus interaction's payload occurs in `d`. Native mirror of
-    `ConstraintSystem.mem_vars_of_payload`. -/
+/-- A var of a bus interaction's payload occurs in `d`. -/
 theorem DenseConstraintSystem.mem_occ_of_payload {d : DenseConstraintSystem p}
     {bi : BusInteraction (DenseExpr p)} {e : DenseExpr p} {z : VarId}
     (hbi : bi ∈ d.busInteractions) (he : e ∈ bi.payload) (hz : z ∈ e.vars) : z ∈ d.occ :=
@@ -477,7 +472,7 @@ theorem DenseConstraintSystem.mem_occ_of_payload {d : DenseConstraintSystem p}
 
 /-- Every var of an equality collected for one bus is an occurrence of `d`, by construction — the
     split equation gives `S, R ∈ d.busInteractions`, and `denseMemEqConstraints_vars` traces each var
-    back to a payload slot. Native mirror of `collectForBus`'s "no new variable" conjunct. -/
+    back to a payload slot. -/
 theorem denseCollectForBus_vars (d : DenseConstraintSystem p)
     (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p)) (shape : MemoryBusShape)
     (busId : Nat) :
@@ -516,8 +511,7 @@ theorem denseCollectForBus_vars (d : DenseConstraintSystem p)
       · exact ih hrest c h z hz
     · exact ih hrest c hc z hz
 
-/-- Every var of an equality collected across all declared buses is an occurrence of `d`. Native
-    mirror of `collectAllBuses`'s "no new variable" conjunct. -/
+/-- Every var of an equality collected across all declared buses is an occurrence of `d`. -/
 theorem denseCollectAllBuses_vars (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p)) :
     ∀ (busIds : List Nat),
@@ -542,8 +536,7 @@ theorem denseCollectAllBuses_vars (d : DenseConstraintSystem p) (bs : BusSemanti
 /-! ## The per-bus / all-bus entailment -/
 
 /-- Every entailed equality collected for one bus evaluates to zero on admissible satisfying
-    assignments. Mirrors `collectForBus`'s `Subtype` proof, feeding each candidate's split equation
-    to `denseCheckPair_sound`. -/
+    assignments, feeding each candidate's split equation to `denseCheckPair_sound`. -/
 theorem denseCollectForBus_sound (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (reg : VarRegistry) (hcov : d.CoveredBy reg)
     (T : DenseTwoRootMap p) (hT : T.Sound d.algebraicConstraints)
@@ -605,13 +598,12 @@ theorem denseCollectAllBuses_sound (d : DenseConstraintSystem p) (bs : BusSemant
           (d.busInteractions.filter (fun bi => bi.busId = busId)) cand hcand
       · exact ih c hc
 
-/-! ## The reusable native "add entailed constraints" correctness -/
+/-! ## The reusable "add entailed constraints" correctness -/
 
 /-- Adding constraints that every admissible satisfying assignment already fulfils (and that
-    introduce no new occurring variable) is `DensePassCorrect`. Native mirror of
-    `ConstraintSystem.addConstraints_correct`; reusable by every "append entailed equalities" dense
-    pass. Soundness is a constraint superset (drop `new`); the added constraints touch no bus
-    interaction, so admissibility and side effects are unchanged. -/
+    introduce no new occurring variable) is `DensePassCorrect`; reusable by every "append entailed
+    equalities" dense pass. Soundness is a constraint superset (drop `new`); the added constraints
+    touch no bus interaction, so admissibility and side effects are unchanged. -/
 theorem DensePassCorrect.denseAddConstraints {isInput : VarId → Bool} (d : DenseConstraintSystem p)
     (bs : BusSemantics p) (new : List (DenseExpr p))
     (hnv : ∀ c ∈ new, ∀ z ∈ c.vars, z ∈ d.occ)
@@ -716,9 +708,8 @@ theorem denseBusUnifyF_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     exact outer_isEmpty_collapse _ _ d _
   · rw [if_neg hp1, if_neg hp1]
 
-/-- Every variable of an appended equality is an occurrence of `d` — now purely by construction
-    (`denseCollectAllBuses_vars`), the `dVarSet` filter clause having been dropped with the #165
-    flip. -/
+/-- Every variable of an appended equality is an occurrence of `d`, purely by construction
+    (`denseCollectAllBuses_vars`). -/
 theorem denseBusUnifyNew_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     ∀ c ∈ denseBusUnifyNew bs facts d, ∀ z ∈ c.vars, z ∈ d.occ := by
@@ -762,12 +753,11 @@ theorem denseBusUnifyF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts 
       (fun denv hadm hsat => denseBusUnifyNew_sound bs facts reg d hcov hp1 denv hadm hsat)
   · exact dpcRefl reg.isInput d bs
 
-/-! ## The native dense `busUnify` pass -/
+/-! ## The dense `busUnify` pass -/
 
-/-- **The native dense `busUnify` pass.** Threads the original `facts` unchanged (real
+/-- **The dense `busUnify` pass.** Threads the original `facts` unchanged (real
     `facts.memShape` calls at runtime), connects to the audited spec via `DensePassCorrect.lift`
-    (through `of`) on the native `DensePassCorrect` proof — no commutation with the reference
-    pass. -/
+    (through `of`) on the `DensePassCorrect` proof. -/
 def denseBusUnifyPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of denseBusUnifyF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseBusUnifyF_covered reg bs facts d hcov)

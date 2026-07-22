@@ -2,17 +2,15 @@ import ApcOptimizer.Implementation.OptimizerPasses.Measure
 
 set_option autoImplicit false
 
-/-! # Dense simultaneous substitution + `mentions` (Task 3, Gauss foundation, part 4a)
+/-! # Dense simultaneous substitution + `mentions`
 
-The dense mirror of the *batch* substitution machinery `Expression.substF` /
-`ConstraintSystem.substF` (`OptimizerPasses/SubstMap.lean`) and of the syntactic occurrence test
-`Expression.mentions` (`OptimizerPasses/Gauss.lean`). These are the dense substitution primitives
+The *batch* substitution machinery `DenseExpr.substF` / `DenseConstraintSystem.substF` and the
+syntactic occurrence test `DenseExpr.mentions`. These are the dense substitution primitives
 the Gauss / domain / flag / rootPair passes consume: `DenseExpr.substF` / `denseBIsubstF` /
 `DenseConstraintSystem.substF`, their variable-bound and coverage-preservation lemmas
-(`substF_vars` / `substF_covered`), and `DenseExpr.mentions`. All pure/equational and `VarId`-native.
+(`substF_vars` / `substF_covered`), and `DenseExpr.mentions`. All pure/equational, over `VarId`.
 
-The decode-commutation lemmas that the commutation-era Gauss proof consumed have been removed; the
-native Gauss proof (`GaussProof.lean`) needs only these dense cores. -/
+`GaussProof.lean`'s correctness proof needs only these dense cores. -/
 
 namespace ApcOptimizer.Dense
 
@@ -21,7 +19,7 @@ variable {p : ℕ}
 /-! ## Simultaneous substitution on dense expressions -/
 
 /-- Substitute every `VarId` `i` with `df i = some t` by `t` (one traversal; inserted solutions are
-    not re-visited). The dense mirror of `Expression.substF`. -/
+    not re-visited). -/
 def DenseExpr.substF (df : VarId → Option (DenseExpr p)) : DenseExpr p → DenseExpr p
   | .const n => .const n
   | .var j => match df j with | some t => t | none => .var j
@@ -29,9 +27,8 @@ def DenseExpr.substF (df : VarId → Option (DenseExpr p)) : DenseExpr p → Den
   | .mul a b => .mul (a.substF df) (b.substF df)
 
 /-- Simultaneous substitution introduces no variable outside `e` and the mapped solutions; each new
-    variable comes from a solution `df i = some t` for some `i` *occurring in* `e`. The occurrence of
-    `i` in `e` (stronger than the spec `substF_vars`) is what makes coverage preservation gate `df`
-    only on valid ids. -/
+    variable comes from a solution `df i = some t` for some `i` *occurring in* `e`. The occurrence
+    of `i` in `e` is what makes coverage preservation gate `df` only on valid ids. -/
 theorem DenseExpr.substF_vars (df : VarId → Option (DenseExpr p)) (e : DenseExpr p) :
     ∀ k ∈ (e.substF df).vars,
       k ∈ e.vars ∨ ∃ i ∈ e.vars, ∃ t, df i = some t ∧ k ∈ t.vars := by
@@ -121,7 +118,7 @@ theorem DenseConstraintSystem.substF_covered {reg : VarRegistry} {d : DenseConst
 
 /-! ## The syntactic occurrence test -/
 
-/-- Does the dense expression mention `VarId` `i`? Mirrors `Expression.mentions`. -/
+/-- Does the dense expression mention `VarId` `i`? -/
 def DenseExpr.mentions (i : VarId) : DenseExpr p → Bool
   | .const _ => false
   | .var j => j == i

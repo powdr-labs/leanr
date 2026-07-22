@@ -3,23 +3,21 @@ import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
-/-! # Dense syntactic-duplicate removal (Task 3)
+/-! # Dense syntactic-duplicate removal
 
-The dense mirror of `OptimizerPasses/Dedup.lean`: drop structurally-duplicate algebraic constraints
-and stateless bus interactions (keep-first), keeping the first occurrence. Because dedup compares
-whole values structurally (equality of `DenseExpr`/`BusInteraction (DenseExpr p)`), it only shrinks
-the constraint/interaction sets — the satisfying set, the stateful-only side effects and
-`admissible` are all unchanged.
+Drops structurally-duplicate algebraic constraints and stateless bus interactions (keep-first),
+keeping the first occurrence. Because dedup compares whole values structurally (equality of
+`DenseExpr`/`BusInteraction (DenseExpr p)`), it only shrinks the constraint/interaction sets — the
+satisfying set, the stateful-only side effects and `admissible` are all unchanged.
 
 Correctness rests on the exact structural comparison (`denseDedupStateless`, `List.dedup`); the
 hash-bucketed twins — `denseDedupStatelessFast` (interactions) and `denseDedupConstraintsFast`
 (constraints, via `HashedDedup.hashedDedup`) — are proven to return the *identical* lists
 (`denseDedupStatelessFast_eq`, `denseDedupConstraintsFast_eq`, both hash-agnostic), so the pass runs
-the fast versions (`DenseConstraintSystem.dedupN`) yet the proof is stated over the reference
-version. The **native** `DensePassCorrect` proof and the pass itself live in
-`Dense/DedupNativeProof.lean` (which imports `Dense/Bridge`); this module stays `Bridge`-free so its
-runtime defs and structural helpers can be reused by other dense modules
-(`DenseExpr.bHash`, `denseDedupStateless`). -/
+the fast versions (`DenseConstraintSystem.dedupN`) while its correctness is stated over the exact
+version. The `DensePassCorrect` proof and the pass itself live in `DedupProof.lean` (which imports
+`Bridge`); this module stays `Bridge`-free so its runtime defs and structural helpers can be reused
+by other dense modules (`DenseExpr.bHash`, `denseDedupStateless`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -32,7 +30,7 @@ deriving instance DecidableEq for DenseExpr
 /-! ## Dense keep-first stateless dedup (reference version) -/
 
 /-- Drop a stateless interaction if an identical one was already kept; keep every stateful
-    interaction unconditionally (mirrors `dedupStateless`). -/
+    interaction unconditionally. -/
 def denseDedupStateless (bs : BusSemantics p) :
     (seen : List (BusInteraction (DenseExpr p))) → List (BusInteraction (DenseExpr p)) →
     List (BusInteraction (DenseExpr p))
@@ -42,7 +40,7 @@ def denseDedupStateless (bs : BusSemantics p) :
     else if bi ∈ seen then denseDedupStateless bs seen rest
     else bi :: denseDedupStateless bs (bi :: seen) rest
 
-/-- Every kept interaction was in the input (mirrors `dedupStateless_subset`). -/
+/-- Every kept interaction was in the input. -/
 theorem denseDedupStateless_subset (bs : BusSemantics p) :
     ∀ (seen l : List (BusInteraction (DenseExpr p))),
       ∀ bi ∈ denseDedupStateless bs seen l, bi ∈ l := by
@@ -61,8 +59,7 @@ theorem denseDedupStateless_subset (bs : BusSemantics p) :
       · exact List.mem_cons_self ..
       · exact List.mem_cons_of_mem _ (ih (b :: seen) bi h')
 
-/-- Every original interaction is either kept or was already in `seen` (mirrors
-    `dedupStateless_covers`). -/
+/-- Every original interaction is either kept or was already in `seen`. -/
 theorem denseDedupStateless_covers (bs : BusSemantics p) :
     ∀ (seen l : List (BusInteraction (DenseExpr p))),
       ∀ bi ∈ l, bi ∈ denseDedupStateless bs seen l ∨ bi ∈ seen := by
@@ -87,7 +84,7 @@ theorem denseDedupStateless_covers (bs : BusSemantics p) :
           · exact Or.inl (List.mem_cons_self ..)
           · exact Or.inr hs'
 
-/-- The stateful sublist is untouched (syntactically) (mirrors `dedupStateless_statefulFilter`). -/
+/-- The stateful sublist is untouched (syntactically). -/
 theorem denseDedupStateless_statefulFilter (bs : BusSemantics p) :
     ∀ (seen l : List (BusInteraction (DenseExpr p))),
       (denseDedupStateless bs seen l).filter (fun bi => bs.isStateful bi.busId)
@@ -104,7 +101,7 @@ theorem denseDedupStateless_statefulFilter (bs : BusSemantics p) :
     · rw [List.filter_cons_of_neg (by simpa using h1),
           List.filter_cons_of_neg (by simpa using h1), ih]
 
-/-! ## Hash-bucketed stateless dedup (VarId-based, mirrors `dedupStatelessFast`) -/
+/-! ## Hash-bucketed stateless dedup -/
 
 /-- A structural hash of a dense expression (for bucketing; VarId-based at the leaves). -/
 def DenseExpr.bHash : DenseExpr p → UInt64
@@ -119,7 +116,7 @@ def denseBIbHash (bi : BusInteraction (DenseExpr p)) : UInt64 :=
     (mixHash bi.multiplicity.bHash (bi.payload.foldl (fun h e => mixHash h e.bHash) 7))
 
 /-- `denseDedupStateless` with the `seen` set bucketed by `denseBIbHash`: each membership test
-    scans only the matching bucket (mirrors `dedupStatelessFast`). -/
+    scans only the matching bucket. -/
 def denseDedupStatelessFast (bs : BusSemantics p)
     (seen : Std.HashMap UInt64 (List (BusInteraction (DenseExpr p)))) :
     List (BusInteraction (DenseExpr p)) → List (BusInteraction (DenseExpr p))
@@ -131,7 +128,7 @@ def denseDedupStatelessFast (bs : BusSemantics p)
       (seen.insert (denseBIbHash bi) (bi :: seen.getD (denseBIbHash bi) [])) rest
 
 /-- The bucketed dedup returns the identical list to `denseDedupStateless`, given a `seen` hash-map
-    that agrees with the `seen` list on membership (mirrors `dedupStatelessFast_eq`). -/
+    that agrees with the `seen` list on membership. -/
 theorem denseDedupStatelessFast_eq (bs : BusSemantics p)
     (bis : List (BusInteraction (DenseExpr p))) :
     ∀ (seenL : List (BusInteraction (DenseExpr p)))
@@ -168,7 +165,7 @@ theorem denseDedupStatelessFast_eq_nil (bs : BusSemantics p)
     denseDedupStatelessFast bs ∅ bis = denseDedupStateless bs [] bis :=
   denseDedupStatelessFast_eq bs bis [] ∅ (by intro bi; simp [Std.HashMap.getD_empty])
 
-/-! ## Hash-bucketed constraint dedup (VarId-based, mirrors `dedupConstraintsFast`)
+/-! ## Hash-bucketed constraint dedup
 
 `List.dedup` on the constraint list is O(C²·E) structural comparisons; `HashedDedup.hashedDedup`
 is its proven-identical bucketed twin (the identity `hashedDedup_eq` is hash-agnostic, so the

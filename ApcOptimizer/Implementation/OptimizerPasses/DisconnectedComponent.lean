@@ -2,32 +2,24 @@ import ApcOptimizer.Implementation.OptimizerPasses.Bridge
 
 set_option autoImplicit false
 
-/-! # Disconnected-component removal — dense `VarId` port (impl-only)
+/-! # Disconnected-component removal
 
-Dense, `VarId`-native transliteration of the *runtime* definitions of
-the reference `DisconnectedComponent` pass (`Variable`/`Expression`-based). A
-*disconnected component* is a set of algebraic constraints and stateless bus interactions whose
+A *disconnected component* is a set of algebraic constraints and stateless bus interactions whose
 variables never touch any **stateful** bus interaction. The pass finds such a component by
 connectivity from the stateful buses, tries the all-zero witness, and drops the component only if
 the witness provably certifies it (the same run-time re-check `guardDegree` uses).
 
-Only the connectivity search's *representation* changes: `Variable`→`VarId`, `Expression`→
-`DenseExpr`, `BusInteraction.vars`→`denseBIVars`, `Std.HashMap Variable`/`Std.HashSet Variable`→
-their `VarId`-keyed twins, `Std.HashSet Nat`/`Array (List Variable)` unchanged in shape. Control
-flow, candidate/traversal order, the co-occurrence graph, the seeds, the per-component certification,
-and the final re-checked partition are all preserved verbatim.
+The correctness argument (`dropComponent_correct`) and the run-time re-check that discharges it are
+proved in `DisconnectedComponentProof.lean`. Nothing here states or proves anything beyond the
+runtime computation.
 
-This is **impl-only**: the correctness argument (`dropComponent_correct`) and the run-time re-check
-that discharges it are native-proved in `DisconnectedComponentProof.lean`. Nothing here states or
-proves anything beyond the runtime computation.
+## A terminating closure
 
-## The one non-transliteration: a terminating closure
-
-The spec's `bfsClosure` is a `partial def` (correctness never depends on it — the pass re-checks the
-partition it induces). New `partial def`s are forbidden on this branch, so `denseBfsClosure` runs the
-**same** algorithm — same visited `HashSet`, same worklist stack, same group-processed `HashSet`,
-same per-step work (one `v2g` lookup, one `filter`, two `foldl`s) — as a **well-founded** recursion
-on a genuine decreasing measure, with no step counter.
+New `partial def`s are forbidden on this branch (correctness never depends on the closure's
+result — the pass re-checks the partition it induces), so `denseBfsClosure` runs its worklist
+algorithm — one visited `HashSet`, one worklist stack, one group-processed `HashSet`, and per-step
+work of one `v2g` lookup, one `filter`, and two `foldl`s — as a **well-founded** recursion on a
+genuine decreasing measure, with no step counter.
 
 **The measure.** Each step pops one stack element, so the recursion decreases the lexicographic pair
 `(unprocessed-groups-in-range, stack.length)`, where the first component is the number of group
@@ -37,8 +29,7 @@ however many variables that group pushes — or it triggers only out-of-range gr
 `groups.getD g []` are all empty, so nothing is pushed and `stack.length` strictly shrinks with the
 first component fixed. A step that skips an already-visited `x`, and the terminal empty stack, also
 shrink `stack.length`. Every recursive call therefore decreases the pair: the search terminates with
-no fuel argument, and its runtime complexity is exactly the spec's `bfsClosure` (identical algorithm,
-identical per-step work). Correctness never depends on the result. -/
+no fuel argument. Correctness never depends on the result. -/
 
 namespace ApcOptimizer.Dense
 
@@ -48,7 +39,7 @@ variable {p : ℕ}
 
 /-- The co-occurrence graph of the dense system: for each item (constraint, then interaction) its
     list of `VarId`s (`groups`), and a map from each `VarId` to the indices of the items it occurs in
-    (`v2g`). Dense mirror of `buildGraph`. -/
+    (`v2g`). -/
 def denseBuildGraph (d : DenseConstraintSystem p) :
     Array (List VarId) × Std.HashMap VarId (List Nat) :=
   let groups : Array (List VarId) :=
@@ -146,10 +137,9 @@ private theorem denseBfsMeasureDecreasing (groups : Array (List VarId))
     · show (gids.foldl (fun acc g => groups.getD g [] ++ acc) rest).length < rest.length + 1
       rw [denseFoldOutOfRange groups gids hcase' rest]; omega
 
-/-- Variables reachable from a seed via co-occurrence in a constraint or interaction. Dense,
-    well-founded mirror of the spec's `partial def bfsClosure`; the algorithm and per-step work are
-    identical (see the module header for the termination measure). Correctness never depends on this
-    result — the pass re-checks the partition it induces. -/
+/-- Variables reachable from a seed via co-occurrence in a constraint or interaction, computed by a
+    well-founded recursion (see the module header for the termination measure). Correctness never
+    depends on this result — the pass re-checks the partition it induces. -/
 def denseBfsClosure (groups : Array (List VarId)) (v2g : Std.HashMap VarId (List Nat))
     (visited : Std.HashSet VarId) (procGroups : Std.HashSet Nat) (stack : List VarId) :
     Std.HashSet VarId :=
@@ -173,13 +163,11 @@ def denseBfsClosure (groups : Array (List VarId)) (v2g : Std.HashMap VarId (List
 
 /-! ## Keep predicates -/
 
-/-- Keep a constraint unless *all* of its variables are removable (and it has at least one). Dense
-    mirror of `keepConWith`. -/
+/-- Keep a constraint unless *all* of its variables are removable (and it has at least one). -/
 def denseKeepConWith (remV : VarId → Bool) (c : DenseExpr p) : Bool :=
   c.vars.isEmpty || !(c.vars.all remV)
 
-/-- Keep an interaction if it is stateful or has a non-removable variable (or no variables). Dense
-    mirror of `keepBiWith`. -/
+/-- Keep an interaction if it is stateful or has a non-removable variable (or no variables). -/
 def denseKeepBiWith (bs : BusSemantics p) (remV : VarId → Bool)
     (bi : BusInteraction (DenseExpr p)) : Bool :=
   bs.isStateful bi.busId || (denseBIVars bi).isEmpty || !((denseBIVars bi).all remV)
@@ -190,14 +178,12 @@ def denseKeepBiWith (bs : BusSemantics p) (remV : VarId → Bool)
 a def whose result type is a function is eta-expanded to maximal arity, which would re-run the
 graph build and both closures on *every* `remV x` application (the `lean-arity-expansion-trap`). The
 `remV` predicate is instead built once, at the single use site in `denseDisconnectedF`, capturing
-the already-computed sets. The spec pass keeps `conn`/`bad` as `let`s inside its (data-returning)
-pass body for exactly this reason. -/
+the already-computed sets. -/
 
 /-- The two reachable sets the pass computes: `conn` (variables connected to a stateful bus
     interaction) and `bad` (the co-occurrence closure of any disconnected item the all-zero witness
-    fails on). Dense mirror of the spec pass's `conn`/`disc`/`badSeeds`/`bad` computation. Returns
-    data — the `remV` predicate is derived at the use site. Treated **opaquely** by the correctness
-    proof (which re-checks the partition the derived `remV` induces). -/
+    fails on). Returns data — the `remV` predicate is derived at the use site. Treated **opaquely**
+    by the correctness proof (which re-checks the partition the derived `remV` induces). -/
 def denseConnBad (bs : BusSemantics p) (d : DenseConstraintSystem p) :
     Std.HashSet VarId × Std.HashSet VarId :=
   let (groups, v2g) := denseBuildGraph d
@@ -223,8 +209,7 @@ def denseConnBad (bs : BusSemantics p) (d : DenseConstraintSystem p) :
 
 /-- The run-time re-check: the induced partition is a genuine drop, the all-zero witness satisfies
     every removed constraint and non-violates every removed interaction, and every kept item uses
-    only non-removable variables. Dense mirror of the spec pass's `hchk` formula, stated for an
-    arbitrary `remV`. -/
+    only non-removable variables. Stated for an arbitrary `remV`. -/
 def denseDropCheck (bs : BusSemantics p) (d : DenseConstraintSystem p) (remV : VarId → Bool) : Bool :=
   (d.algebraicConstraints.any (fun c => !denseKeepConWith remV c) ||
     d.busInteractions.any (fun bi => !denseKeepBiWith bs remV bi)) &&
@@ -237,8 +222,7 @@ def denseDropCheck (bs : BusSemantics p) (d : DenseConstraintSystem p) (remV : V
     !denseKeepBiWith bs remV bi || (denseBIVars bi).all (fun x => !remV x))
 
 /-- Drop the removable component if the re-check passes; otherwise the identity. Stated for an
-    arbitrary `remV` so the correctness proof is generic in the connectivity search (mirrors how the
-    spec's `dropComponent_correct` is generic in `remV`/`keepCon`/`keepBi`). -/
+    arbitrary `remV` so the correctness proof is generic in the connectivity search. -/
 def denseDropGuarded (bs : BusSemantics p) (d : DenseConstraintSystem p) (remV : VarId → Bool) :
     DenseConstraintSystem p :=
   if denseDropCheck bs d remV then
@@ -247,9 +231,9 @@ def denseDropGuarded (bs : BusSemantics p) (d : DenseConstraintSystem p) (remV :
   else d
 
 /-- The dense disconnected-component transform: compute the reachable sets once, derive the
-    removable predicate as a closure over them, then run the guarded drop. Dense mirror of
-    `disconnectedComponentPass`'s data. Returns data (a `DenseConstraintSystem`), so the `let cb`
-    runs once per invocation — the `remV` closure captures it, never recomputes it. -/
+    removable predicate as a closure over them, then run the guarded drop. Returns data (a
+    `DenseConstraintSystem`), so the `let cb` runs once per invocation — the `remV` closure captures
+    it, never recomputes it. -/
 def denseDisconnectedF (bs : BusSemantics p) (d : DenseConstraintSystem p) :
     DenseConstraintSystem p :=
   let cb := denseConnBad bs d

@@ -4,21 +4,20 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
 
 set_option autoImplicit false
 
-/-! # Dense interval forcing: native proof and wiring (Task 3)
+/-! # Dense interval forcing: proof and wiring
 
-Native `DensePassCorrect` proof for the dense `intervalForce` transform (`IntervalForce.lean`),
-lifted to the audited spec via `DenseVerifiedPassW.of`. No dependency on the reference
-`IntervalForce.intervalForcePass` — the pass is a single-shot **append of entailed constraints**, so
-its correctness rides on the reusable `DensePassCorrect.denseAddConstraints` (`BusUnifyProof.lean`)
-once every appended seed is shown to evaluate to `0` on any satisfying dense assignment.
+`DensePassCorrect` proof for the dense `intervalForce` transform (`IntervalForce.lean`),
+lifted to the audited spec via `DenseVerifiedPassW.of`. The pass is a single-shot **append of
+entailed constraints**, so its correctness rides on the reusable
+`DensePassCorrect.denseAddConstraints` (`BusUnifyProof.lean`) once every appended seed is shown to
+evaluate to `0` on any satisfying dense assignment.
 
-The seed soundness is a direct transliteration of the spec's integer-window argument
-(`slotSeeds_sound`/`walk_sound`/`interactionSeeds_sound`/`allSeeds_sound`) to `DensePTerm`/`DenseExpr`
-over `VarId → ZMod p`. The variable-type-independent `Int`/`ZMod` lemmas
+The seed soundness is an integer-window argument over `DensePTerm`/`DenseExpr` and dense
+`VarId → ZMod p` environments. The variable-type-independent `Int`/`ZMod` lemmas
 (`IntervalForce.srep_cast`/`term_window`/`int_window`) are reused unqualified; the per-invocation
-bounds index's soundness (dropped as a structure field in the dense `Std.HashMap VarId Nat` port) is
-re-established here as an external fold invariant, discharged value-level by
-`denseInteractionBound_sound` (`DomainBatchProof.lean`). -/
+bounds index's soundness is established here as an external fold invariant over the dense
+`Std.HashMap VarId Nat`, discharged value-level by `denseInteractionBound_sound`
+(`DomainBatchProof.lean`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -28,7 +27,7 @@ variable {p : ℕ}
 
 /-! ## The integer value of a dense processed-term list (proof-side only) -/
 
-/-- The integer value of a dense processed-term list under an assignment (mirrors `intEval`; not
+/-- The integer value of a dense processed-term list under an assignment (not
     part of the runtime — used only to state the window lemmas). -/
 def denseIntEval (denv : VarId → ZMod p) (pts : List DensePTerm) : Int :=
   (pts.map (fun t => t.sc * ((denv t.v).val : Int))).sum
@@ -282,7 +281,7 @@ theorem denseSlotSeeds_sound (bnd : VarId → Option Nat) (B : Nat) (e : DenseEx
 /-! ## The per-invocation bounds index soundness (external fold invariant) -/
 
 /-- The witnessing invariant on the dense bounds map: every entry is produced by some member
-    interaction's `denseInteractionBound` (native mirror of the dropped `BoundIdx.sound` field). -/
+    interaction's `denseInteractionBound`. -/
 def DenseBoundIdxWitnessed {bs : BusSemantics p} (facts : BusFacts p bs)
     (bis : List (BusInteraction (DenseExpr p))) (I : Std.HashMap VarId Nat) : Prop :=
   ∀ (x : VarId) (B : Nat), I[x]? = some B →
@@ -434,7 +433,7 @@ theorem denseAllSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs)
 
 /-! ## The pass -/
 
-/-- The appended list of entailed seeds (mirrors `denseIntervalForceF`'s internal `new`). -/
+/-- The appended list of entailed seeds (reconstructs `denseIntervalForceF`'s internal `new`). -/
 def denseIntervalForceNew (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     List (DenseExpr p) :=
   let idx := denseBoundIdxBuild bs facts d.busInteractions
@@ -495,8 +494,8 @@ theorem denseIntervalForceF_correct (reg : VarRegistry) (bs : BusSemantics p) (f
       (denseIntervalForceNew_vars bs facts d)
       (fun denv _ hsat => denseIntervalForceNew_sound bs facts d denv hsat)
 
-/-- **The native dense `intervalForce` pass.** Threads the original `facts` unchanged, connected to
-    the audited spec via `DensePassCorrect.lift` (through `of`) — no reference-pass dependency. -/
+/-- **The dense `intervalForce` pass.** Threads the original `facts` unchanged, connected to
+    the audited spec via `DensePassCorrect.lift` (through `of`). -/
 def denseIntervalForcePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of denseIntervalForceF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseIntervalForceF_covered reg bs facts d hcov)

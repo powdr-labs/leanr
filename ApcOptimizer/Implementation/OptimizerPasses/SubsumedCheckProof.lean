@@ -5,11 +5,11 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
 
 set_option autoImplicit false
 
-/-! # Native soundness for the dense subsumed pure-range-check drop (Task 3)
+/-! # Soundness for the dense subsumed pure-range-check drop
 
-Native `DensePassCorrect` — over `VarId → ZMod p` environments, with no dependency on the reference
-`Variable` pass — for the dense subsumed pure-range-check dropper (`SubsumedCheck.lean`), lifted once
-to the audited `Variable` spec through `DenseVerifiedPassW.of`.
+`DensePassCorrect` — over `VarId → ZMod p` environments — for the dense subsumed pure-range-check
+dropper (`SubsumedCheck.lean`), lifted once to the audited `Variable` spec through
+`DenseVerifiedPassW.of`.
 
 The pass drops a recognised pure single-value range check (`facts.rangeCheckAt` at multiplicity `1`,
 value slot a bare variable) whose variable is already bounded `< bound` by a retained interaction
@@ -17,23 +17,22 @@ that this pass never drops (the non-circular justification base). The dropped in
 accepted under every assignment satisfying the FILTERED system, so it is entailed and its removal is
 sound and side-effect-neutral.
 
-Two proven ingredients, both native and reused rather than re-derived:
+Two proven ingredients, both reused rather than re-derived:
 
 * `DensePassCorrect.denseFilterBusEntailed` (`FlagFoldDropsProof.lean`) — dropping a stateless
   interaction accepted under every assignment satisfying the filtered system;
 * `denseFindVarBound_sound` (`RootPairUnifyProof.lean`) — the base bound holds under every assignment
   satisfying the retained (base) interactions' obligations.
 
-The recognition-soundness chain `denseSubsumedCheckOf_spec → _stateless → _accepted` is a native
-re-derivation of the spec `checkOf_spec/checkOf_stateless/checkOf_accepted`, built directly from
-`facts.rangeCheckAt_sound` and `denseMatches_evalPattern` (`DomainBatchProof.lean`). -/
+The recognition-soundness chain `denseSubsumedCheckOf_spec → _stateless → _accepted` is built
+directly from `facts.rangeCheckAt_sound` and `denseMatches_evalPattern` (`DomainBatchProof.lean`). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
 /-- Recognition unfolds to its three facts: a matching `rangeCheckAt`, unit multiplicity, and a bare
-    variable in the value slot. Native mirror of `SubsumedCheck.checkOf_spec`. -/
+    variable in the value slot. -/
 theorem denseSubsumedCheckOf_spec (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (x : VarId) (valSlot bound : Nat)
     (h : denseSubsumedCheckOf bs facts bi = some (x, valSlot, bound)) :
@@ -51,7 +50,7 @@ theorem denseSubsumedCheckOf_spec (bs : BusSemantics p) (facts : BusFacts p bs)
     · exact absurd h (by simp)
   · exact absurd h (by simp)
 
-/-- A recognised check lives on a stateless bus. Native mirror of `SubsumedCheck.checkOf_stateless`. -/
+/-- A recognised check lives on a stateless bus. -/
 theorem denseSubsumedCheckOf_stateless (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (x : VarId) (valSlot bound : Nat)
     (h : denseSubsumedCheckOf bs facts bi = some (x, valSlot, bound)) :
@@ -59,8 +58,7 @@ theorem denseSubsumedCheckOf_stateless (bs : BusSemantics p) (facts : BusFacts p
   (facts.rangeCheckAt_sound bi.busId (bi.payload.map DenseExpr.constValue?) valSlot bound
     (denseSubsumedCheckOf_spec bs facts bi x valSlot bound h).1).1
 
-/-- If the checked variable is in range (`< bound`), the recognised message is accepted. Native
-    mirror of `SubsumedCheck.checkOf_accepted`. -/
+/-- If the checked variable is in range (`< bound`), the recognised message is accepted. -/
 theorem denseSubsumedCheckOf_accepted (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (x : VarId) (valSlot bound : Nat)
     (h : denseSubsumedCheckOf bs facts bi = some (x, valSlot, bound)) (denv : VarId → ZMod p)
@@ -77,10 +75,10 @@ theorem denseSubsumedCheckOf_accepted (bs : BusSemantics p) (facts : BusFacts p 
     rw [List.getElem?_map, hxp]; rfl
   exact (hiff (denv x) hget).mpr hlt
 
-/-- **Native subsumed pure-range-check removal correctness.** Every dropped interaction is a
-    recognised pure check whose variable is already bounded `< bound` by the retained base, so it is
-    accepted under every assignment satisfying the filtered system — equivalence- and
-    invariant-preserving. Native mirror of `SubsumedCheck.subsumedCheckDropPass`'s correctness. -/
+/-- **Subsumed pure-range-check removal correctness.** Every dropped interaction is a recognised
+    pure check whose variable is already bounded `< bound` by the retained base, so it is accepted
+    under every assignment satisfying the filtered system — equivalence- and
+    invariant-preserving. -/
 theorem denseSubsumedCheckDropF_correct (bs : BusSemantics p) (facts : BusFacts p bs)
     (isInput : VarId → Bool) (d : DenseConstraintSystem p) :
     DensePassCorrect isInput d (denseSubsumedCheckDropF bs facts d) [] bs := by
@@ -119,8 +117,8 @@ theorem denseSubsumedCheckDropF_correct (bs : BusSemantics p) (facts : BusFacts 
         exact denseSubsumedCheckOf_accepted bs facts bi x valSlot bound hr denv
           (lt_of_lt_of_le hbase hble)
 
-/-- **The native dense subsumed pure-range-check drop pass.** Consumes `facts` directly (through
-    `rangeCheckAt`); unconditional in `p`. Runtime transform unchanged from `SubsumedCheck.lean`. -/
+/-- **The dense subsumed pure-range-check drop pass.** Consumes `facts` directly (through
+    `rangeCheckAt`); unconditional in `p`. -/
 def denseSubsumedCheckDropPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun bs facts d => denseSubsumedCheckDropF bs facts d)

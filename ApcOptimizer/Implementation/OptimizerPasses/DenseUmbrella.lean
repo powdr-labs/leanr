@@ -73,7 +73,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.IntervalForceProof
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapseProof
 
-/-! # Dense `VarId` internal representation — umbrella import (Task 3)
+/-! # Dense `VarId` internal representation — umbrella import
 
 Imports every dense `VarId` module now living flat under `OptimizerPasses/`, so that a plain
 `lake build` compiles them all — even those not yet reachable from a scheduled pass (e.g. shared

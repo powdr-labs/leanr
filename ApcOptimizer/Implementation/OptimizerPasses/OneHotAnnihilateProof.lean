@@ -3,28 +3,26 @@ import ApcOptimizer.Implementation.OptimizerPasses.BusUnifyProof
 
 set_option autoImplicit false
 
-/-! # Dense one-hot annihilation: native proof and wiring (Task 3)
+/-! # Dense one-hot annihilation: proof and wiring
 
-Native `DensePassCorrect` proof for the dense `oneHotAnnihilate` transform
-(`OneHotAnnihilate.lean`), lifted to the audited spec via `DenseVerifiedPassW.of`. No
-dependency on the reference `OneHotAnnihilate.oneHotAnnihilatePass` — the transform appends `x = 0`
-for every one-hot-annihilated variable `x` via `DensePassCorrect.denseAddConstraints`, a single-shot
+`DensePassCorrect` proof for the dense `oneHotAnnihilate` transform (`OneHotAnnihilate.lean`),
+lifted to the audited spec via `DenseVerifiedPassW.of`: the transform appends `x = 0` for every
+one-hot-annihilated variable `x` via `DensePassCorrect.denseAddConstraints`, a single-shot
 "add entailed constraints" step.
 
 Every recogniser structure lemma (`denseAffineCloser_spec`/`denseReadCloser_spec`), the annihilation
 algebra (`denseSum_mul_eq_zero`/`denseSum_map_mul_left`/`denseAnnihilate`/`denseCofactor_eval` via
-`denseLinearize_eval`), and the entailment (`denseDeadVars_entailed`, against native
-`DenseConstraintSystem.satisfies`) are line-parallel mirrors of the reference `OneHotAnnihilate` pass
-over `VarId`/`DenseExpr` — `eq_of_beq` on the `==` comparisons goes through the `DecidableEq`-derived
-lawful `BEq` on `DenseExpr`. The added `.var x`'s occurrence is discharged directly from the closer
-`.mul A (.var x) ∈ algebraicConstraints` (`mem_occ_of_constraint`), not through `denseLinearize_vars`
-(kept unused so the duplicate copies die in the deletion sweep). -/
+`denseLinearize_eval`), and the entailment (`denseDeadVars_entailed`, against
+`DenseConstraintSystem.satisfies`) are proved directly over `VarId`/`DenseExpr` — `eq_of_beq` on the
+`==` comparisons goes through the `DecidableEq`-derived lawful `BEq` on `DenseExpr`. The added
+`.var x`'s occurrence is discharged directly from the closer `.mul A (.var x) ∈
+algebraicConstraints` (`mem_occ_of_constraint`), not through `denseLinearize_vars`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Recogniser structure (native mirrors of `affineCloser_spec` / `readCloser_spec`) -/
+/-! ## Recogniser structure -/
 
 /-- The affine-closer recogniser's guarantee: the cofactor is `Σ mᵢ − 1` (`k = 1`) or `1 − Σ mᵢ`
     (`k = −1`); in both, `const = −k` and every coefficient is `k`. -/
@@ -69,7 +67,7 @@ theorem denseReadCloser_spec (c : DenseExpr p) (x : VarId) (la : DenseLinExpr p)
     | add e1 e2 => simp [denseReadCloser] at h
     | mul e1 e2 => simp [denseReadCloser] at h
 
-/-! ## The annihilation algebra (native mirrors of `sum_mul_eq_zero` … `annihilate`) -/
+/-! ## The annihilation algebra -/
 
 /-- `Σ (denv mᵢ) · x = 0` from `denv mᵢ · x = 0` for every marker. -/
 theorem denseSum_mul_eq_zero (terms : List (VarId × ZMod p)) (denv : VarId → ZMod p) (xe : ZMod p)
@@ -112,8 +110,8 @@ theorem denseCofactor_eval {A : DenseExpr p} {la : DenseLinExpr p}
 
 /-! ## The entailment: every dead variable is forced to `0` -/
 
-/-- Every `x ∈ denseDeadVars d` is forced to `0` by the system's constraints (native mirror of
-    `deadVars_entailed`, against `DenseConstraintSystem.satisfies`). -/
+/-- Every `x ∈ denseDeadVars d` is forced to `0` by the system's constraints, against
+    `DenseConstraintSystem.satisfies`. -/
 theorem denseDeadVars_entailed (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (denv : VarId → ZMod p) (hsat : d.satisfies bs denv) (x : VarId)
     (hx : x ∈ denseDeadVars d) : (DenseExpr.var x).eval denv = 0 := by
@@ -201,8 +199,8 @@ theorem denseOneHotAnnihilateF_correct (reg : VarRegistry) (bs : BusSemantics p)
       obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hc
       exact denseDeadVars_entailed d bs denv hsat x hx)
 
-/-- **The native dense one-hot annihilation pass.** Fact-free; connected to the audited spec via
-    `DensePassCorrect.lift` (through `of`) — no reference-pass dependency. -/
+/-- **The dense one-hot annihilation pass.** Fact-free; connected to the audited spec via
+    `DensePassCorrect.lift` (through `of`). -/
 def denseOneHotAnnihilatePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (fun _ _ d => denseOneHotAnnihilateF d) (fun _ _ _ => [])
     (fun reg _ _ d hcov => denseOneHotAnnihilateF_covered reg d hcov)

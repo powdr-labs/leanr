@@ -8,22 +8,17 @@ import ApcOptimizer.Implementation.OptimizerPasses.Rewrite
 
 set_option autoImplicit false
 
-/-! # Dense finite-domain-table construction (Task 3 — DomainBatch, part 1)
+/-! # Dense finite-domain-table construction
 
-Dense, `VarId`-native port of the domain-derivation layer of
-`OptimizerPasses/DomainBatch.lean`: the table of finite domains derived from product-of-affine-factor
-constraints (`rootsIn`) and from fact-bounded bus payload slots (`interactionDomainF`).
+The domain-derivation layer: the table of finite domains derived from product-of-affine-factor
+constraints (`denseRootsIn`) and from fact-bounded bus payload slots (`denseInteractionDomainF`).
 
-`FiniteDomain p` is variable-free, so it is reused verbatim (values are *equal*, not decoded). The
-runtime dense table is a plain `Std.HashMap VarId (FiniteDomain p)` (no soundness field); its
-correctness flows through the correspondence proved here: the dense table decodes, value-for-value
-under `resolve`, to the spec `DomainTable`'s `map` on the decoded system. The fact-consuming
-`interactionDomainF` reuses the *unchanged* `facts : BusFacts p bs` (keyed by bus IDs + field
+`FiniteDomain p` is variable-free. The runtime dense table is a plain
+`Std.HashMap VarId (FiniteDomain p)` (no soundness field); its correctness flows through a
+correspondence proof, established elsewhere, to the decoded system's domain table. The
+fact-consuming `denseInteractionDomainF` uses `facts : BusFacts p bs` (keyed by bus IDs + field
 patterns, VM-neutral) via `denseInteractionBound` from `Dense/DigitFold.lean` — the DigitFold
-fact-layer template.
-
-Only the domain-derivation layer is ported here; the joint enumeration (`collectForced`/`forcedOver`/
-`compileE`/`scanBox`) and the pass itself are later chunks. Nothing is wired into the pipeline. -/
+fact-layer template. -/
 
 namespace ApcOptimizer.Dense
 
@@ -31,12 +26,10 @@ variable {p : ℕ}
 
 /-! ## Dense `rootsIn`
 
-`rootsIn` returns a variable-free `List (ZMod p)`, so the dense mirror produces the *same* value; the
-correspondence is `rootsIn (resolve i) (decodeExpr e) = denseRootsIn i e`. The only variable
-comparison is `y = x` in the single-term case, decided identically by `resolve`-injectivity on valid
-ids. -/
+`denseRootsIn` returns a variable-free `List (ZMod p)`. The only variable comparison is `y = x` in
+the single-term case. -/
 
-/-- Dense `rootsOfTerms` (mirrors `rootsOfTerms`). -/
+/-- Find the affine root of `c * v + i` if `[(j, a)]` is a single term `j = i` with `a ≠ 0`. -/
 def denseRootsOfTerms (i : VarId) (c : ZMod p) :
     List (VarId × ZMod p) → Option (List (ZMod p))
   | [] => if c = 0 then none else some []
@@ -45,11 +38,11 @@ def denseRootsOfTerms (i : VarId) (c : ZMod p) :
       if j = i ∧ a ≠ 0 ∧ a * r + c = 0 then some [r] else none
   | _ :: _ :: _ => none
 
-/-- Dense `affineRootsIn` (mirrors `affineRootsIn`), through `denseLinearize` + `DenseLinExpr.norm`. -/
+/-- The affine root of `i` in `e`, through `denseLinearize` + `DenseLinExpr.norm`. -/
 def denseAffineRootsIn (i : VarId) (e : DenseExpr p) : Option (List (ZMod p)) :=
   (denseLinearize e).bind (fun l => denseRootsOfTerms i l.norm.const l.norm.terms)
 
-/-- Dense `rootsIn` (mirrors `rootsIn`): affine roots, recursing into a product's factors. -/
+/-- The roots of `i` in `e`: affine roots, recursing into a product's factors. -/
 def denseRootsIn (i : VarId) : DenseExpr p → Option (List (ZMod p))
   | .const n => denseAffineRootsIn i (.const n)
   | .var j => denseAffineRootsIn i (.var j)
@@ -74,8 +67,7 @@ structure DenseDomainTable (p : ℕ) where
 /-- The empty dense domain table. -/
 def DenseDomainTable.empty : DenseDomainTable p := ⟨∅⟩
 
-/-- Insert an entailed domain, keeping the smaller of two candidate domains (mirrors
-    `DomainTable.insertEntry`'s keep-smaller data logic). -/
+/-- Insert an entailed domain, keeping the smaller of two candidate domains. -/
 def DenseDomainTable.insertEntry (T : DenseDomainTable p) (i : VarId) (d : FiniteDomain p) :
     DenseDomainTable p :=
   let keep : Bool := match T.map[i]? with
@@ -83,7 +75,7 @@ def DenseDomainTable.insertEntry (T : DenseDomainTable p) (i : VarId) (d : Finit
     | none => true
   if keep then ⟨T.map.insert i d⟩ else T
 
-/-- The table's domains for a `VarId` list, all-or-nothing (mirrors `DomainTable.doms`). -/
+/-- The table's domains for a `VarId` list, all-or-nothing. -/
 def DenseDomainTable.doms (T : DenseDomainTable p) :
     List VarId → Option (List (VarId × FiniteDomain p))
   | [] => some []
@@ -105,7 +97,7 @@ theorem DenseDomainTable.insertEntry_map (T : DenseDomainTable p) (i : VarId) (d
 
 /-! ## Constraint-sourced domains -/
 
-/-- Dense inner `addVars` for constraints (mirrors `addConstraintDoms.addVars`). -/
+/-- Insert `c`'s entailed domain for each variable in a given list. -/
 def denseAddConstraintVars (c : DenseExpr p) :
     List VarId → DenseDomainTable p → DenseDomainTable p
   | [], T => T
@@ -114,7 +106,8 @@ def denseAddConstraintVars (c : DenseExpr p) :
     | some d => denseAddConstraintVars c is (T.insertEntry i (.explicit d))
     | none => denseAddConstraintVars c is T
 
-/-- Dense constraint-sourced domains (mirrors `addConstraintDoms`). -/
+/-- Constraint-sourced domains: for each constraint with at most 3 distinct variables, insert the
+    entailed domain of each. -/
 def denseAddConstraintDoms : List (DenseExpr p) → DenseDomainTable p → DenseDomainTable p
   | [], T => T
   | c :: rest, T =>
@@ -123,19 +116,19 @@ def denseAddConstraintDoms : List (DenseExpr p) → DenseDomainTable p → Dense
 
 /-! ## Bus-sourced range domains -/
 
-/-- The raw-variable payload entries of a dense interaction (mirrors `payloadRawVars`). -/
+/-- The raw-variable payload entries of a dense interaction. -/
 def densePayloadRawVars (bi : BusInteraction (DenseExpr p)) : List VarId :=
   bi.payload.filterMap (fun e => match e with | .var i => some i | _ => none)
 
-/-- A bus obligation's range domain for `i`, kept symbolically (mirrors `interactionDomainF`), using
-    the DigitFold fact-layer `denseInteractionBound` on the unchanged `facts`. -/
+/-- A bus obligation's range domain for `i`, kept symbolically, using the DigitFold fact-layer
+    `denseInteractionBound` on `facts`. -/
 def denseInteractionDomainF (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (i : VarId) : Option (FiniteDomain p) :=
   match denseInteractionBound bs facts bi i with
   | none => none
   | some bound => if bound ≤ maxDomainBound then some (.range bound) else none
 
-/-- Dense inner `addVars` for bus obligations (mirrors `addBusDoms.addVars`). -/
+/-- Insert `bi`'s entailed domain for each variable in a given list. -/
 def denseAddBusVars (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) :
     List VarId → DenseDomainTable p → DenseDomainTable p
@@ -145,31 +138,28 @@ def denseAddBusVars (bs : BusSemantics p) (facts : BusFacts p bs)
     | some d => denseAddBusVars bs facts bi is (T.insertEntry i d)
     | none => denseAddBusVars bs facts bi is T
 
-/-- Dense bus-sourced domains (mirrors `addBusDoms`). -/
+/-- Bus-sourced domains: for each interaction, insert the entailed domain of each raw-variable
+    payload entry. -/
 def denseAddBusDoms (bs : BusSemantics p) (facts : BusFacts p bs) :
     List (BusInteraction (DenseExpr p)) → DenseDomainTable p → DenseDomainTable p
   | [], T => T
   | bi :: rest, T =>
     denseAddBusDoms bs facts rest (denseAddBusVars bs facts bi (densePayloadRawVars bi).dedup T)
 
-/-! ## Dense enumeration engine (Task 3 — DomainBatch, part 2)
+/-! ## Dense enumeration engine
 
-The joint box-scan enumeration, re-instantiated over `VarId` keys / `List (VarId × ZMod p)` points.
-The compiled predicates (`IExpr`/`CBi`) and the symbolic `FiniteDomain` enumeration are
-*variable-free* and reused verbatim from the spec; only the *key type* of the enumerated points and
-the environment/compile leaves change. Every dense def here is ID-native (no `Variable` materialized
-on the scan's hot path). Its correspondence to the spec engine — the survivor point's *values* agree
-and its *keys map by `resolve`* — is proved for chunk 3's `forcedOver` to consume.
+The joint box-scan enumeration, instantiated over `VarId` keys / `List (VarId × ZMod p)` points. The
+compiled predicates (`IExpr`/`CBi`) and the symbolic `FiniteDomain` enumeration are variable-free;
+only the *key type* of the enumerated points and the environment/compile leaves are `VarId`-typed.
+Every dense def here operates directly on `VarId` (no `Variable` materialized on the scan's hot path). -/
 
-Throughout, a dense point `pt : List (VarId × ZMod p)` decodes to the spec point
-`pt.map (fun kv => (reg.resolve kv.1, kv.2))` (keys resolved, values unchanged). -/
-
-/-- Enumeration-time `VarId` lookup, mirroring `envOfFast`; compares `VarId`s directly. -/
+/-- Enumeration-time `VarId` lookup; compares `VarId`s directly. -/
 def denseEnvOfFast : List (VarId × ZMod p) → VarId → ZMod p
   | [], _ => 0
   | (x, v) :: rest, y => if (y == x) = true then v else denseEnvOfFast rest y
 
-/-- `containsFast`, over `VarId`s (the `envOfFast` discriminator trick), for the covered-item scans. -/
+/-- Whether `y` occurs in `xs`, using the same discriminator-fold trick as `denseEnvOfFast`, for the
+    covered-item scans. -/
 def denseContainsFast (xs : List VarId) (y : VarId) : Bool :=
   match xs with
   | [] => false
@@ -177,17 +167,16 @@ def denseContainsFast (xs : List VarId) (y : VarId) : Bool :=
 
 /-! ### Index-compiled evaluation over dense points
 
-`IExpr`/`CBi` are variable-free, so the *same* compiled term is produced dense and spec; only its
-*evaluation* changes key type. `lookupIx` ignores keys, so the dense evaluators agree with the spec
-ones on the decoded point. -/
+`IExpr`/`CBi` are variable-free; the compiled term's evaluation over a dense point ignores keys and
+reads positionally. -/
 
-/-- Positional lookup in a dense assignment (mirrors `lookupIx`; ignores keys). -/
+/-- Positional lookup in a dense assignment; ignores keys. -/
 def denseLookupIx : List (VarId × ZMod p) → Nat → ZMod p
   | [], _ => 0
   | (_, v) :: _, 0 => v
   | _ :: rest, i + 1 => denseLookupIx rest i
 
-/-- `IExpr.evalWith` over a dense point (mirrors `IExpr.evalWith`; positional). -/
+/-- Evaluate a compiled `IExpr` over a dense point; positional. -/
 def denseIExprEvalWith (add mul : ZMod p → ZMod p → ZMod p) (pt : List (VarId × ZMod p)) :
     IExpr p → ZMod p
   | .const n => n
@@ -195,19 +184,15 @@ def denseIExprEvalWith (add mul : ZMod p → ZMod p → ZMod p) (pt : List (VarI
   | .add a b => add (denseIExprEvalWith add mul pt a) (denseIExprEvalWith add mul pt b)
   | .mul a b => mul (denseIExprEvalWith add mul pt a) (denseIExprEvalWith add mul pt b)
 
-/-! ### Compiling dense items to `IExpr`/`CBi`
+/-! ### Compiling dense items to `IExpr`/`CBi` -/
 
-The compiled term is *identical* to the spec's on the decoded item, provided the keys are valid: the
-only variable-typed step is `denseVarIx`, which finds the same position as `varIx` on the resolved
-keys by `resolve`-injectivity. -/
-
-/-- First position of `y` in dense `keys` (mirrors `varIx`). -/
+/-- First position of `y` in dense `keys`. -/
 def denseVarIx (keys : List VarId) (y : VarId) : Option Nat :=
   match keys with
   | [] => none
   | x :: rest => if (y == x) = true then some 0 else (denseVarIx rest y).map (· + 1)
 
-/-- Compile a dense expression against dense `keys` (mirrors `compileE`). -/
+/-- Compile a dense expression against dense `keys`. -/
 def denseCompileE (keys : List VarId) : DenseExpr p → Option (IExpr p)
   | .const n => some (.const n)
   | .var y => (denseVarIx keys y).map .ix
@@ -220,7 +205,7 @@ def denseCompileE (keys : List VarId) : DenseExpr p → Option (IExpr p)
     | some ia, some ib => some (.mul ia ib)
     | _, _ => none
 
-/-- Compile a list of dense expressions, all-or-nothing (mirrors `compileEs`). -/
+/-- Compile a list of dense expressions, all-or-nothing. -/
 def denseCompileEs (keys : List VarId) : List (DenseExpr p) → Option (List (IExpr p))
   | [] => some []
   | e :: rest =>
@@ -228,13 +213,13 @@ def denseCompileEs (keys : List VarId) : List (DenseExpr p) → Option (List (IE
     | some ie, some irest => some (ie :: irest)
     | _, _ => none
 
-/-- Compile a dense bus interaction (mirrors `compileBi`). -/
+/-- Compile a dense bus interaction. -/
 def denseCompileBi (keys : List VarId) (bi : BusInteraction (DenseExpr p)) : Option (CBi p) :=
   match denseCompileE keys bi.multiplicity, denseCompileEs keys bi.payload with
   | some m, some pl => some ⟨bi.busId, m, pl⟩
   | _, _ => none
 
-/-- Compile a list of dense interactions, all-or-nothing (mirrors `compileBis`). -/
+/-- Compile a list of dense interactions, all-or-nothing. -/
 def denseCompileBis (keys : List VarId) : List (BusInteraction (DenseExpr p)) →
     Option (List (CBi p))
   | [] => some []
@@ -246,7 +231,7 @@ def denseCompileBis (keys : List VarId) : List (BusInteraction (DenseExpr p)) �
 /-! ### `DenseExpr.eval` congruence
 
 `DenseExpr.eval` depends only on the values of the variables that occur — reused by the value-only
-enumeration engine (`DomainBatchRuntime`) and its correspondence proofs. -/
+enumeration engine (`DomainBatchRuntime`) and its correctness proofs. -/
 
 /-- `DenseExpr.eval` depends only on the values of the variables that occur. -/
 theorem DenseExpr.eval_congr (e : DenseExpr p) (f g : VarId → ZMod p)
@@ -261,29 +246,29 @@ theorem DenseExpr.eval_congr (e : DenseExpr p) (f g : VarId → ZMod p)
       simp only [DenseExpr.vars, List.mem_append] at h
       simp only [DenseExpr.eval, iha (fun i hi => h i (Or.inl hi)), ihb (fun i hi => h i (Or.inr hi))]
 
-/-! ## Dense `varsInF` (Task 3 — DomainBatch, part 3)
+/-! ## Dense `varsInF`
 
-The covered-set predicates that `forcedOver` filters items by. Their only variable comparisons go
-through `denseContainsFast`, so a decoded item's `varsInF` on the resolved target set agrees with the
-dense item's `varsInF` on the dense target set. -/
+The covered-set predicates the enumeration engine filters items by. Their only variable comparisons
+go through `denseContainsFast`. -/
 
-/-- `Expression.varsInF`, over `VarId`s (mirrors `Expression.varsInF`). -/
+/-- Whether every variable of the expression lies in `xs`. -/
 def DenseExpr.varsInF (xs : List VarId) : DenseExpr p → Bool
   | .const _ => true
   | .var y => denseContainsFast xs y
   | .add a b => a.varsInF xs && b.varsInF xs
   | .mul a b => a.varsInF xs && b.varsInF xs
 
-/-- `BusInteraction.varsInF`, over `VarId`s (mirrors `BusInteraction.varsInF`). -/
+/-- Whether every variable of the bus interaction's multiplicity and payload lies in `xs`. -/
 def denseBIVarsInF (xs : List VarId) (bi : BusInteraction (DenseExpr p)) : Bool :=
   bi.multiplicity.varsInF xs && bi.payload.all (fun e => e.varsInF xs)
 
-/-! ## Dense `biInformative` (mirrors `biInformative`)
+/-! ## Dense `biInformative`
 
-The informativeness gate on a covered obligation, through `DenseExpr.isVar`/`.constValue?` (both
-decode-invariant, unconditionally) and the DigitFold fact-layer `denseInteractionBound`. -/
+The informativeness gate on a covered obligation, through `DenseExpr.isVar`/`.constValue?` and the
+DigitFold fact-layer `denseInteractionBound`. -/
 
-/-- Dense `biInformative` (mirrors `biInformative`). -/
+/-- Whether a bus interaction is informative: some payload entry is neither a variable nor a known
+    constant, or is a variable whose interaction bound is unknown. -/
 def denseBiInformative (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Bool :=
   bi.payload.any (fun e => !(e.isVar || e.constValue?.isSome)) ||
@@ -291,36 +276,33 @@ def denseBiInformative (bs : BusSemantics p) (facts : BusFacts p bs)
     | .var i => (denseInteractionBound bs facts bi i).isNone
     | _ => false)
 
-/-! ## Dense inverted index (mirrors `CoveredIndex`)
+/-! ## Dense inverted index
 
-The `VarId`-keyed inverted index `forcedOver` uses to find covered items in O(local). Its correctness
-flows through the correspondence proved here: the dense candidate list (buckets under a target's
-variables, plus the variable-less positions) is the *same* `List Nat` as the spec's on the resolved
-target, so the dedup `HashSet` and its `toList` are identical, and the per-position `Q` re-check maps
-decode-for-decode. Bucket/varless correspondence is the DigitFold/Gauss "HashMap-fold-under-`resolve`"
-pattern over the `build` fold. -/
+The `VarId`-keyed inverted index the enumeration engine uses to find covered items in O(local): the
+candidate list for a target is the union of the buckets under its variables plus the variable-less
+positions. -/
 
-/-- The dense inverted index (mirrors `CoveredIndex.CovIndex`). -/
+/-- The dense inverted index. -/
 structure DenseCovIndex where
   buckets : Std.HashMap VarId (List Nat)
   varless : List Nat
 
-/-- One dense index-build step (mirrors `CoveredIndex.buildStep`). -/
+/-- One dense index-build step. -/
 def denseBuildStep {α : Type} (varsOf : α → List VarId) (ai : α × Nat) (idx : DenseCovIndex) :
     DenseCovIndex :=
   match varsOf ai.1 with
   | [] => ⟨idx.buckets, ai.2 :: idx.varless⟩
   | vs => ⟨vs.foldl (fun m v => m.insert v (ai.2 :: m.getD v [])) idx.buckets, idx.varless⟩
 
-/-- Build the dense inverted index (mirrors `CoveredIndex.build`). -/
+/-- Build the dense inverted index. -/
 def denseCovBuild {α : Type} (varsOf : α → List VarId) (items : List α) : DenseCovIndex :=
   items.zipIdx.foldr (denseBuildStep varsOf) ⟨∅, []⟩
 
-/-- The dense candidate positions for target `xs` (mirrors `CoveredIndex.candidates`). -/
+/-- The dense candidate positions for target `xs`. -/
 def denseCandidates (idx : DenseCovIndex) (xs : List VarId) : List Nat :=
   (xs.flatMap (fun v => idx.buckets.getD v [])) ++ idx.varless
 
-/-- The dense covered items for target `xs`, unordered (mirrors `CoveredIndex.coveredIdxUnord`). -/
+/-- The dense covered items for target `xs`, unordered. -/
 def denseCoveredIdxUnord {α : Type} (idx : DenseCovIndex) (arr : Array α) (Q : α → Bool)
     (xs : List VarId) : List α :=
   (((denseCandidates idx xs).foldl (·.insert ·) (∅ : Std.HashSet Nat)).toList).filterMap
@@ -340,8 +322,8 @@ theorem denseBuildStep_buckets_cons {α : Type} (varsOf : α → List VarId) (ai
 
 /-! ### Dense `ForcedIdx` and its correspondence -/
 
-/-- The dense analog of `ForcedIdx` (plain data — no soundness witnesses; correctness rides on the
-    correspondence + inherited `PassCorrect`). -/
+/-- The dense per-target index bundle (plain data — no soundness witnesses; correctness is
+    established by a correspondence proof elsewhere). -/
 structure DenseForcedIdx (p : ℕ) where
   csIdx : DenseCovIndex
   arrCs : Array (DenseExpr p)
@@ -350,7 +332,7 @@ structure DenseForcedIdx (p : ℕ) where
   activeIdx : DenseCovIndex
   arrActive : Array (DenseExpr p)
 
-/-- The dense domain-table `doms` list has keys `xs` (mirrors `DomainTable.doms_fst`). -/
+/-- The dense domain-table `doms` list has keys `xs`. -/
 theorem DenseDomainTable.doms_fst (T : DenseDomainTable p) :
     ∀ (xs : List VarId) (ds : List (VarId × FiniteDomain p)),
       T.doms xs = some ds → ds.map Prod.fst = xs := by
@@ -426,8 +408,7 @@ private def egB : VarId := egRegB.2
 -- (d) set semantics: duplicate ids collapse
 #guard denseVarSetKey [egA, egA, egB] == denseVarSetKey [egA, egB]
 
-/-- Apply a dense solution map to a system, unless it is empty (mirrors the spec pass's
-    `if σ.map.isEmpty then cs else cs.substF σ.fn`). Kept as a standalone function so the solution
-    map is computed exactly once (as the argument). -/
+/-- Apply a dense solution map to a system, unless it is empty. Kept as a standalone function so
+    the solution map is computed exactly once (as the argument). -/
 def applyσ (dσ : DenseSolved p) (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if dσ.map.isEmpty then d else d.substF dσ.fn

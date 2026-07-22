@@ -2,40 +2,33 @@ import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 
 set_option autoImplicit false
 
-/-! # Dense monic scaling of constraint factors (Task 3 — impl)
+/-! # Dense monic scaling of constraint factors
 
-Dense, `VarId`-native transliteration of the reference `MonicScale` pass's *runtime* definitions
-(`monicScaleAffine`, `monicScale`, `ConstraintSystem.mapConstraints`, and the pass's computed
-output). This file is **impl-only**: no theorem/lemma from the spec file is ported
-(`monicScaleAffine_eval`, `monicScaleAffine_unit`, `monicScaleAffine_vars`, `monicScale_eval`,
-`monicScale_unit`, `monicScale_zero_iff`, `monicScale_vars`, and the
-`ConstraintSystem.mapConstraintsIff_correct`-built `PassCorrect` term are all proof-side, the
-prover's job), and no `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here.
+Canonicalizes every constraint's affine factors to monic form (`denseMonicScaleAffine`,
+`denseMonicScale`, `DenseConstraintSystem.mapConstraints`, and the pass's computed output
+`denseMonicScaleF`). This file is **impl-only**: it carries no `DensePassCorrect`/
+`DenseVerifiedPassW` wrapper here.
 
-The scheduled pass is `monicScalePass.withFacts` — `VerifiedPass.withFacts` (`FactPass.lean`) just
-discards the `facts` argument (`fun cs bs _ => f cs bs`), and `monicScalePass` itself never
-consults `bs` either, so the pass is fully fact-free and `bs`-free. The dense transform below is
-correspondingly a plain `DenseConstraintSystem p → DenseConstraintSystem p`; the prover wraps it
+The scheduled pass is fully fact-free and `bs`-free (it never consults either), so the dense
+transform below is a plain `DenseConstraintSystem p → DenseConstraintSystem p`; the prover wraps it
 with `DenseVerifiedPassW.of` under a `fun _ _ d => denseMonicScaleF d` that ignores its
-`bs`/`facts` arguments, mirroring the `.withFacts` discard exactly.
+`bs`/`facts` arguments.
 
 Soundness of the scaling is field-free (works over any commutative ring, unconditional in `p`):
 each scaling carries a *checked* unit certificate (`k * k⁻¹ = 1`, with `ZMod p`'s junk `Inv` only
-ever *proposed* and then verified before use), matching the reference's gate `k * k⁻¹ = 1 ∧ k ≠ 1`
-exactly — no `PrimeWitness` needed, none used.
+ever *proposed* and then verified before use), gated by `k * k⁻¹ = 1 ∧ k ≠ 1` — no `PrimeWitness`
+needed, none used.
 
-## Reuse map (not re-derived)
+## Notes
 
-* `denseLinearize`/`DenseLinExpr` (`Dense/Affine.lean`) are the dense `linearize`/`LinExpr` this
-  pass's affine view of a product factor is built from; `DenseLinExpr.scale`/`.toExpr` are its
-  `LinExpr.scale`/`.toExpr`.
-* `DenseLinExpr.norm` (`Dense/Normalize.lean`) is the dense `LinExpr.norm` — merge like terms, drop
-  zero-coefficient ones — this pass reads the leading term's coefficient from.
+* `denseLinearize`/`DenseLinExpr` (`Dense/Affine.lean`) are what this pass's affine view of a
+  product factor is built from; `DenseLinExpr.scale`/`.toExpr` scale and rebuild it.
+* `DenseLinExpr.norm` (`Dense/Normalize.lean`) merges like terms and drops zero-coefficient ones —
+  this pass reads the leading term's coefficient from the normalized form.
 
-`ConstraintSystem.mapConstraints` (touching only `algebraicConstraints`, unlike `ExprOps.lean`'s
-`mapExpr`, which also rewrites bus multiplicities/payloads) has no existing dense analogue, so
-`DenseConstraintSystem.mapConstraints` is transliterated locally here — exactly where the reference
-defines its own `mapConstraints`, not in the shared `Rewrite.lean`. -/
+`DenseConstraintSystem.mapConstraints` (touching only `algebraicConstraints`, unlike
+`ExprOps.lean`'s `mapExpr`, which also rewrites bus multiplicities/payloads) is defined locally
+here rather than in the shared `Rewrite.lean`, since this is its only consumer. -/
 
 namespace ApcOptimizer.Dense
 
@@ -44,8 +37,7 @@ variable {p : ℕ}
 /-! ## Scaling with a unit certificate -/
 
 /-- Scale an affine dense expression to monic form. Returns `(e', u, v)` with the intended
-    invariants `e'.eval denv = u * e.eval denv` and `u * v = 1`; `(e, 1, 1)` when not applicable.
-    Mirrors `monicScaleAffine`. -/
+    invariants `e'.eval denv = u * e.eval denv` and `u * v = 1`; `(e, 1, 1)` when not applicable. -/
 def denseMonicScaleAffine (e : DenseExpr p) : DenseExpr p × ZMod p × ZMod p :=
   match denseLinearize e with
   | none => (e, 1, 1)
@@ -57,7 +49,7 @@ def denseMonicScaleAffine (e : DenseExpr p) : DenseExpr p × ZMod p × ZMod p :=
     | [] => (e, 1, 1)
 
 /-- Scale the affine factors of a product tree to monic form, with the accumulated unit
-    certificate. Mirrors `monicScale`. -/
+    certificate. -/
 def denseMonicScale : DenseExpr p → DenseExpr p × ZMod p × ZMod p
   | .mul a b =>
       match denseLinearize (.mul a b) with
@@ -70,8 +62,7 @@ def denseMonicScale : DenseExpr p → DenseExpr p × ZMod p × ZMod p
 
 /-! ## The correctness core's runtime shape: constraint-only rewrites -/
 
-/-- Rewrite only the algebraic constraints; bus interactions untouched. Mirrors
-    `ConstraintSystem.mapConstraints`. -/
+/-- Rewrite only the algebraic constraints; bus interactions untouched. -/
 def DenseConstraintSystem.mapConstraints (d : DenseConstraintSystem p)
     (g : DenseExpr p → DenseExpr p) : DenseConstraintSystem p :=
   { d with algebraicConstraints := d.algebraicConstraints.map g }
@@ -79,7 +70,7 @@ def DenseConstraintSystem.mapConstraints (d : DenseConstraintSystem p)
 /-! ## The pass -/
 
 /-- The monic-scaling pass's computed output: canonicalize every constraint's affine factors to
-    monic form. Mirrors `monicScalePass`'s `.out` (dropping its `PassCorrect` term). -/
+    monic form. -/
 def denseMonicScaleF (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   d.mapConstraints (fun c => (denseMonicScale c).1)
 

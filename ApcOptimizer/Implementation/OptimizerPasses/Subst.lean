@@ -2,13 +2,13 @@ import ApcOptimizer.Implementation.OptimizerPasses.Measure
 
 set_option autoImplicit false
 
-/-! # Dense substitution (Task 3, WP-E)
+/-! # Dense substitution
 
-The dense mirror of `Expression.subst`/`ConstraintSystem.subst` — the core variable-elimination
-machinery Gauss and the domain passes build on. The runtime cores (`DenseExpr.subst`,
-`denseBIsubst`, `DenseConstraintSystem.subst`) and their variable-bound / coverage-preservation
-lemmas (`subst_vars`, `subst_covered`) are `VarId`-native; the decode-commutation lemmas the
-commutation-era ports used have been removed (their consumers converted to native proofs). -/
+Substitution over `DenseExpr`/`DenseConstraintSystem` — the core variable-elimination machinery
+Gauss and the domain passes build on. The runtime cores (`DenseExpr.subst`, `denseBIsubst`,
+`DenseConstraintSystem.subst`) and their variable-bound / coverage-preservation lemmas
+(`DenseExpr.subst_vars`, `DenseExpr.subst_covered`, `DenseConstraintSystem.subst_covered`) are
+proved directly over `VarId`. -/
 
 namespace ApcOptimizer.Dense
 

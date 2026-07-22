@@ -4,16 +4,14 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagUnifyProof
 
 set_option autoImplicit false
 
-/-! # Native correctness for the dense Gauss-elimination pass (Task 3, equivalence pile)
+/-! # Correctness for the dense Gauss-elimination pass
 
 `DensePassCorrect` for the value-only dense Gauss pass (`denseGaussElim`, `Gauss.lean`) proved
-**natively** over dense environments `VarId → ZMod p`, with no commutation to the reference
-`Variable` pass and no `decode` in the discharged obligations. It replaces the commutation-era
-`Corr` bisimulation that inherited `gaussElimPass`'s `PassCorrect`.
+over dense environments `VarId → ZMod p`, with no `decode` in the discharged obligations.
 
 The pass eliminates variables via a resolved solution map (`DenseSolved`) and one final
 `DenseConstraintSystem.substF`, so it is *substitution-shaped* like `rootPairUnify`/`flagUnify`: its
-whole correctness rides on the native substitution core `DenseConstraintSystem.substF_denseCorrect`
+whole correctness rides on the substitution core `DenseConstraintSystem.substF_denseCorrect`
 (`DomainBatchProof.lean`), which needs only two facts about the final solution map:
 
 1. **entailment** — every satisfying assignment forces every stored `x = t`;
@@ -21,23 +19,21 @@ whole correctness rides on the native substitution core `DenseConstraintSystem.s
 
 Both are established by `denseGaussLoop_sound`, a plain structural induction over the pending
 constraint list threading the `DenseSolved` accumulator (a proof-free struct). Per adopted pivot the
-entailment is the native affine soundness (`densePm1PivotsOf_sound`/`denseUnitPivotsOf_sound`) applied
+entailment is the affine soundness (`densePm1PivotsOf_sound`/`denseUnitPivotsOf_sound`) applied
 to the reduced constraint (which evaluates to zero because the current solution map is entailed); the
 touched stored solutions stay entailed because the pivot equality makes the rewriting substitution a
 no-op (`DenseExpr.eval_subst`). The list update is handled by `DenseSolved.insertAll_preserves`.
 
-The native affine soundness/vars lemmas here transliterate the audited spec lemmas
- over `DenseLinExpr`/`DenseExpr`/`VarId`, reusing the dense eval
-identities already proved at their definitions' home (`Affine.lean`). -/
+The affine soundness/vars lemmas here are proved over `DenseLinExpr`/`DenseExpr`/`VarId`, reusing the
+dense eval identities already proved at their definitions' home (`Affine.lean`). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Substitution semantics (native mirror of `Expression.eval_subst`) -/
+/-! ## Substitution semantics -/
 
-/-- Substituting `i := t` and evaluating equals evaluating with `i` rebound to `t.eval denv`. Native
-    mirror of `Expression.eval_subst`. -/
+/-- Substituting `i := t` and evaluating equals evaluating with `i` rebound to `t.eval denv`. -/
 theorem DenseExpr.eval_subst (e : DenseExpr p) (i : VarId) (t : DenseExpr p)
     (denv : VarId → ZMod p) :
     (e.subst i t).eval denv = e.eval (Function.update denv i (t.eval denv)) := by
@@ -51,10 +47,9 @@ theorem DenseExpr.eval_subst (e : DenseExpr p) (i : VarId) (t : DenseExpr p)
   | add a b iha ihb => simp only [DenseExpr.subst, DenseExpr.eval, iha, ihb]
   | mul a b iha ihb => simp only [DenseExpr.subst, DenseExpr.eval, iha, ihb]
 
-/-! ## Native affine soundness (mirrors `LinExpr.trySolve_sound`/`trySolveUnit_sound`) -/
+/-! ## Affine soundness -/
 
-/-- If `l.trySolve v` returns `(x, t)` and `l` evaluates to zero, then `x = t` under `denv`. Native
-    mirror of `LinExpr.trySolve_sound`. -/
+/-- If `l.trySolve v` returns `(x, t)` and `l` evaluates to zero, then `x = t` under `denv`. -/
 theorem DenseLinExpr.trySolve_sound (l : DenseLinExpr p) (v x : VarId) (t : DenseExpr p)
     (h : l.trySolve v = some (x, t)) (denv : VarId → ZMod p) (hl : l.eval denv = 0) :
     denv x = t.eval denv := by
@@ -73,8 +68,7 @@ theorem DenseLinExpr.trySolve_sound (l : DenseLinExpr p) (v x : VarId) (t : Dens
     rw [h2] at hs; rw [hs] at hl
     linear_combination -hl
 
-/-- If `l.trySolveUnit v` returns `(x, t)` and `l` evaluates to zero, then `x = t` under `denv`.
-    Native mirror of `LinExpr.trySolveUnit_sound`. -/
+/-- If `l.trySolveUnit v` returns `(x, t)` and `l` evaluates to zero, then `x = t` under `denv`. -/
 theorem DenseLinExpr.trySolveUnit_sound (l : DenseLinExpr p) (v x : VarId) (t : DenseExpr p)
     (h : l.trySolveUnit v = some (x, t)) (denv : VarId → ZMod p) (hl : l.eval denv = 0) :
     denv x = t.eval denv := by
@@ -87,8 +81,7 @@ theorem DenseLinExpr.trySolveUnit_sound (l : DenseLinExpr p) (v x : VarId) (t : 
   have h0 : l.coeff v * denv v + (l.others v).eval denv = 0 := by rw [← hs]; exact hl
   linear_combination (l.coeff v)⁻¹ * h0 - denv v * h1
 
-/-- Every `±1`-pivot of a dense constraint entails its equality. Native mirror of
-    `pm1PivotsOf_sound`. -/
+/-- Every `±1`-pivot of a dense constraint entails its equality. -/
 theorem densePm1PivotsOf_sound (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
     (h : (x, t) ∈ densePm1PivotsOf c) (denv : VarId → ZMod p) (hc : c.eval denv = 0) :
     denv x = t.eval denv := by
@@ -100,8 +93,7 @@ theorem densePm1PivotsOf_sound (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
     obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
     exact DenseLinExpr.trySolve_sound l v x t hv denv hl
 
-/-- Every unit-pivot of a dense constraint entails its equality. Native mirror of
-    `unitPivotsOf_sound`. -/
+/-- Every unit-pivot of a dense constraint entails its equality. -/
 theorem denseUnitPivotsOf_sound (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
     (h : (x, t) ∈ denseUnitPivotsOf c) (denv : VarId → ZMod p) (hc : c.eval denv = 0) :
     denv x = t.eval denv := by
@@ -117,10 +109,9 @@ theorem denseUnitPivotsOf_sound (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
         rw [htr] at hv
         exact DenseLinExpr.trySolveUnit_sound l v x t hv denv hl
 
-/-! ## Native pivot-vars bounds (mirrors `pm1PivotsOf_vars`/`unitPivotsOf_vars`) -/
+/-! ## Pivot-vars bounds -/
 
-/-- A `±1`-pivot solution mentions only the constraint's variables. Native mirror of
-    `pm1PivotsOf_vars`. -/
+/-- A `±1`-pivot solution mentions only the constraint's variables. -/
 theorem densePm1PivotsOf_vars (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
     (h : (x, t) ∈ densePm1PivotsOf c) : ∀ y ∈ t.vars, y ∈ c.vars := by
   intro y hy
@@ -132,8 +123,7 @@ theorem densePm1PivotsOf_vars (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
       obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
       exact denseLinearize_mem_vars c l hL y (denseTrySolve_vars_subset l v (x, t) hv y hy)
 
-/-- A unit-pivot solution mentions only the constraint's variables. Native mirror of
-    `unitPivotsOf_vars`. -/
+/-- A unit-pivot solution mentions only the constraint's variables. -/
 theorem denseUnitPivotsOf_vars (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
     (h : (x, t) ∈ denseUnitPivotsOf c) : ∀ y ∈ t.vars, y ∈ c.vars := by
   intro y hy
@@ -250,7 +240,7 @@ theorem denseGaussLoop_sound (bs : BusSemantics p) (d : DenseConstraintSystem p)
             · rw [List.mem_singleton] at hin; subst hin
               exact htocc
 
-/-! ## The pass, natively correct -/
+/-! ## The pass's correctness -/
 
 /-- The final Gauss-loop solution map (from the pass's initial accumulators) is entailed and
     occurrence-closed. -/
@@ -284,9 +274,9 @@ theorem denseGaussElim_covered (reg : VarRegistry) (bs : BusSemantics p)
     exact DenseConstraintSystem.occ_valid hcov z
       ((denseGaussElim_loop_invariant bs d).2 i t hti z hz)
 
-/-- **Native correctness of `denseGaussElim`.** The empty-map branch is the identity (`refl`); the
+/-- **Correctness of `denseGaussElim`.** The empty-map branch is the identity (`refl`); the
     substitution branch is `substF_denseCorrect`, fed the entailment and occurrence-closure of the
-    final solution map. No commutation with the reference pass. -/
+    final solution map. -/
 theorem denseGaussElim_correct (reg : VarRegistry) (bs : BusSemantics p)
     (d : DenseConstraintSystem p) :
     DensePassCorrect reg.isInput d (denseGaussElim bs d) [] bs := by
@@ -298,11 +288,11 @@ theorem denseGaussElim_correct (reg : VarRegistry) (bs : BusSemantics p)
       (fun denv hsat i t hti => hinv.1 denv hsat i t hti)
       (fun i t hti z hz => hinv.2 i t hti z hz)
 
-/-- **The dense Gauss-elimination pass, natively proved.** Batch linear elimination over `VarId`,
+/-- **The dense Gauss-elimination pass.** Batch linear elimination over `VarId`,
     proved `DensePassCorrect` directly over `VarId → ZMod p` (substitution-shaped: the entailed
     equalities are adopted into a `DenseSolved` map and applied by one
     `DenseConstraintSystem.substF`), connected to the audited spec once via `DensePassCorrect.lift`
-    (through `of`). No dependency on the reference `gaussElimPass`. -/
+    (through `of`). -/
 def denseGaussElimPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun bs _ d => denseGaussElim bs d)

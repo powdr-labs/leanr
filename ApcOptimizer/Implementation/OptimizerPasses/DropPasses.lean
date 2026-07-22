@@ -3,10 +3,10 @@ import ApcOptimizer.Implementation.OptimizerPasses.Adapter
 
 set_option autoImplicit false
 
-/-! # Dense drop-pass runtime transforms (Task 3): trivial-constraint, zero-multiplicity-bus, and
+/-! # Dense drop-pass runtime transforms: trivial-constraint, zero-multiplicity-bus, and
     tautology-lookup removal
 
-The three drop passes' *runtime* recognizers and predicates. The passes themselves (with their native
+The three drop passes' *runtime* recognizers and predicates. The passes themselves (with their
 `DensePassCorrect` proofs) live in `DropPassesProof.lean`. -/
 
 namespace ApcOptimizer.Dense

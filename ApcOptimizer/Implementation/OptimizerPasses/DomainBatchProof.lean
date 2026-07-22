@@ -4,32 +4,29 @@ import Mathlib.Tactic.LinearCombination
 
 set_option autoImplicit false
 
-/-! # Native correctness for the value-only dense `domainBatch` (Task 3)
+/-! # Correctness for the value-only dense `domainBatch`
 
 This module proves `DensePassCorrect` for the value-only rebuild of `domainBatch`
-(`Dense/DomainBatchNative.lean`) **natively** over dense environments `VarId → ZMod p`, with no
-commutation to the spec pass and no decode in the discharged obligations. The spec pass's own
-`PassCorrect` proof (`OptimizerPasses/DomainBatch.lean`) is only the roadmap: its argument structure
-is mirrored here over the native dense semantics of `Dense/Bridge.lean`.
+(`Dense/DomainBatchNative.lean`) over dense environments `VarId → ZMod p`, with no decode in the
+discharged obligations.
 
 The pass output is `applyσ dσ d` — a batch substitution of forced *constants* into `d`. The proof has
-two native halves:
+two halves:
 
-* a native simultaneous-substitution correctness lemma (`substF_denseCorrect`): substituting an
-  *entailed* map of constants yields `DensePassCorrect` (mirrors `ConstraintSystem.substF_correct`);
-* a native entailment for the collected forced map (`denseDomainBatchσV`): every forced pair
-  `(i, .const c)` satisfies `denv i = c` for every satisfying `denv`, established through native
-  domain-table soundness (`rootsIn` roots, fact-bounded payload slots) and a native value-only
-  box-scan certificate over the fixed-length candidate mask. -/
+* a simultaneous-substitution correctness lemma (`substF_denseCorrect`): substituting an *entailed*
+  map of constants yields `DensePassCorrect`;
+* an entailment for the collected forced map (`denseDomainBatchσV`): every forced pair
+  `(i, .const c)` satisfies `denv i = c` for every satisfying `denv`, established through
+  domain-table soundness (`rootsIn` roots, fact-bounded payload slots) and a value-only box-scan
+  certificate over the fixed-length candidate mask. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Native simultaneous substitution semantics -/
+/-! ## Simultaneous substitution semantics -/
 
-/-- The dense environment with every mapped `VarId` rebound to its solution's value (mirrors
-    `envF`). -/
+/-- The dense environment with every mapped `VarId` rebound to its solution's value. -/
 def denseEnvF (df : VarId → Option (DenseExpr p)) (denv : VarId → ZMod p) : VarId → ZMod p :=
   fun j => match df j with | some t => t.eval denv | none => denv j
 
@@ -44,7 +41,7 @@ theorem DenseExpr.eval_substF (e : DenseExpr p) (df : VarId → Option (DenseExp
   | add a b iha ihb => simp only [DenseExpr.substF, DenseExpr.eval, iha, ihb]
   | mul a b iha ihb => simp only [DenseExpr.substF, DenseExpr.eval, iha, ihb]
 
-/-- If every mapped pair is respected by `denv`, rebinding changes nothing (mirrors `envF_eq_self`). -/
+/-- If every mapped pair is respected by `denv`, rebinding changes nothing. -/
 theorem denseEnvF_eq_self (df : VarId → Option (DenseExpr p)) (denv : VarId → ZMod p)
     (H : ∀ j t, df j = some t → denv j = t.eval denv) : denseEnvF df denv = denv := by
   funext j
@@ -128,10 +125,10 @@ theorem DenseConstraintSystem.substF_occ_subset (d : DenseConstraintSystem p)
           exact Or.inr ⟨e0, he0, h⟩)
       · exact hfv j t hft i hit
 
-/-- **Native simultaneous-substitution correctness.** If every satisfying assignment of `d` forces
+/-- **Simultaneous-substitution correctness.** If every satisfying assignment of `d` forces
     `denv j = t.eval denv` for each mapped pair `df j = some t`, and every solution mentions only
     `d`'s occurring variables, then substituting the whole map at once satisfies `DensePassCorrect`
-    (no derivations). The native mirror of `ConstraintSystem.substF_correct`. -/
+    (no derivations). -/
 theorem DenseConstraintSystem.substF_denseCorrect (d : DenseConstraintSystem p)
     (df : VarId → Option (DenseExpr p)) (bs : BusSemantics p) (isInput : VarId → Bool)
     (H : ∀ denv, d.satisfies bs denv → ∀ j t, df j = some t → denv j = t.eval denv)
@@ -169,12 +166,12 @@ theorem DenseConstraintSystem.substF_denseCorrect (d : DenseConstraintSystem p)
       show i ∈ d.occ ∧ denv i = denv i
       exact ⟨d.substF_occ_subset df hfv i hi, rfl⟩
 
-/-! ## Native root soundness (mirrors `rootsOfTerms_sound`/`affineRootsIn_sound`/`rootsIn_sound`)
+/-! ## Root soundness
 
 The affine-form / term-merge / normalize eval-preservation lemmas this section builds on
 (`DenseLinExpr.add_eval`/`scale_eval`/`toExpr_eval`/`norm_eval`, `denseLinearize_eval`,
-`denseMergeTerms_eval`, `denseDropZero_eval`, `DenseExpr.normalize_eval`) now live at their
-definitions' home in `Dense/Affine.lean` and `Dense/Normalize.lean` (shared, proved once). -/
+`denseMergeTerms_eval`, `denseDropZero_eval`, `DenseExpr.normalize_eval`) live at their definitions'
+home in `Dense/Affine.lean` and `Dense/Normalize.lean` (shared, proved once). -/
 
 theorem denseRootsOfTerms_sound [Fact p.Prime] (i : VarId) (c : ZMod p)
     (ts : List (VarId × ZMod p)) (roots : List (ZMod p))
@@ -232,7 +229,7 @@ theorem denseRootsIn_sound [Fact p.Prime] (i : VarId) (e : DenseExpr p) (roots :
         · exact List.mem_append.2 (Or.inr (ihb rb hrb hz))
       all_goals exact absurd h (by simp)
 
-/-! ## Native constant / fact soundness -/
+/-! ## Constant / fact soundness -/
 
 theorem DenseExpr.constValue?_sound (e : DenseExpr p) (c : ZMod p) (h : e.constValue? = some c)
     (denv : VarId → ZMod p) : e.eval denv = c := by
@@ -324,9 +321,9 @@ theorem denseInteractionDomainF_sound [NeZero p] (bs : BusSemantics p) (facts : 
     exact mem_range_cast (denv i) bound
       (denseInteractionBound_sound bs facts bi i bound hB denv hob)
 
-/-! ## Native domain-table soundness -/
+/-! ## Domain-table soundness -/
 
-/-- Native soundness of a dense domain table at a fixed environment: every stored domain contains the
+/-- Soundness of a dense domain table at a fixed environment: every stored domain contains the
     environment's value for its variable. -/
 def DenseTableSoundAt (denv : VarId → ZMod p) (T : DenseDomainTable p) : Prop :=
   ∀ i dm, T.map[i]? = some dm → denv i ∈ dm.toList
@@ -423,7 +420,7 @@ theorem denseAddBusDoms_soundAt [NeZero p] {denv : VarId → ZMod p} (bs : BusSe
       unfold denseAddBusDoms
       exact ih hrest _ (denseAddBusVars_soundAt bs facts bi hbi _ T hT)
 
-/-- **Native domain-table soundness.** Building the domain table from a system `d` satisfied by
+/-- **Domain-table soundness.** Building the domain table from a system `d` satisfied by
     `denv` yields a table every stored domain of which contains `denv`'s value for its variable. -/
 theorem denseDomainTable_soundAt [Fact p.Prime] [NeZero p] (bs : BusSemantics p)
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) (denv : VarId → ZMod p)
@@ -437,12 +434,12 @@ theorem denseDomainTable_soundAt [Fact p.Prime] [NeZero p] (bs : BusSemantics p)
 
 /-! ## Value-only lazy enumeration = eager fold over the value-only assignment product -/
 
-/-- All value-only assignments in the Cartesian product of the domains (mirrors `assignments`). -/
+/-- All value-only assignments in the Cartesian product of the domains. -/
 def assignmentsV : List (FiniteDomain p) → List (List (ZMod p))
   | [] => [[]]
   | d :: rest => (assignmentsV rest).flatMap (fun a => d.toList.map (fun v => v :: a))
 
-/-- `denseBoxFoldV` streams exactly the eager fold over `assignmentsV` (mirrors `boxFold_eq`). -/
+/-- `denseBoxFoldV` streams exactly the eager fold over `assignmentsV`. -/
 theorem denseBoxFoldV_eq {β : Type} (f : β → List (ZMod p) → β) (stop : β → Bool)
     (doms : List (FiniteDomain p)) (acc : β) :
     denseBoxFoldV f stop doms acc = foldlStop f stop (assignmentsV doms) acc := by
@@ -462,8 +459,8 @@ theorem denseBoxFoldV_eq {β : Type} (f : β → List (ZMod p) → β) (stop : �
       = foldlStop f stop (d.toList.map (fun v => v :: a)) acc'
     rw [FiniteDomain.foldElts_eq, foldlStop_map]
 
-/-- The restriction of a satisfying `denv` to a keyed domain list is one of the value-only enumerated
-    assignments (mirrors `mem_assignments`). -/
+/-- The restriction of a satisfying `denv` to a keyed domain list is one of the value-only
+    enumerated assignments. -/
 theorem mem_assignmentsV (denv : VarId → ZMod p) :
     ∀ (fdoms : List (VarId × FiniteDomain p)), (∀ kd ∈ fdoms, denv kd.1 ∈ kd.2.toList) →
       (fdoms.map (fun kd => denv kd.1)) ∈ assignmentsV (fdoms.map Prod.snd) := by
@@ -479,7 +476,7 @@ theorem mem_assignmentsV (denv : VarId → ZMod p) :
 
 /-! ## The value-only scan as a plain (no-stop) fold, and its intersection certificate -/
 
-/-- One value-only scan step from a *tracking* state (mirrors `denseScanStepV`'s `some` branch). -/
+/-- One value-only scan step from a *tracking* state (`denseScanStepV`'s `some` branch). -/
 def denseStepSomeV (surv : List (ZMod p) → Bool) (cands : DenseCandsV p) (pt : List (ZMod p)) :
     DenseCandsV p :=
   if surv pt = true then
@@ -1147,7 +1144,7 @@ theorem denseCollectForcedV_entailed (bs : BusSemantics p) (facts : BusFacts p b
   rw [denseCollectForcedV_eq_serial]
   exact hfold (denseDedupTargetsV targets seen) dσ h
 
-/-! ## Reflexive (identity) native correctness -/
+/-! ## Reflexive (identity) correctness -/
 
 theorem DensePassCorrect_refl (isInput : VarId → Bool) (d : DenseConstraintSystem p)
     (bs : BusSemantics p) : DensePassCorrect isInput d d [] bs := by
@@ -1223,7 +1220,7 @@ theorem denseDomainBatchσV_entailed [Fact p.Prime] [NeZero p]
       rw [Bool.and_eq_true] at hQ
       exact ⟨hsat.2 bi hmem, denseBIVarsInF_mem xs bi hQ.1⟩
 
-/-! ## The native value-only domain-batch pass -/
+/-! ## The value-only domain-batch pass -/
 
 theorem denseDomainBatchTransformV_covered (pw : PrimeWitness p) (reg : VarRegistry)
     (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p)
@@ -1263,9 +1260,8 @@ theorem denseDomainBatchTransformV_correct (pw : PrimeWitness p) (reg : VarRegis
         from by simp only [denseDomainBatchTransformV, if_neg hpB]]
     exact DensePassCorrect_refl reg.isInput d bs
 
-/-- **The native value-only dense domain-batch pass.** Threads `reg`/`pw`, connects to the audited
-    spec via `DensePassCorrect.lift` on the native `DensePassCorrect` proof (no commutation with the
-    reference pass). -/
+/-- **The value-only dense domain-batch pass.** Threads `reg`/`pw`, connects to the audited spec
+    via `DensePassCorrect.lift` on the `DensePassCorrect` proof above. -/
 def denseDomainBatchPassV (pw : PrimeWitness p) : DenseVerifiedPassW p := fun reg d hcov bs facts =>
   { reg' := reg
     out := denseDomainBatchTransformV pw bs facts d

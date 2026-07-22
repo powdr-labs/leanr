@@ -3,26 +3,24 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDropsProof
 
 set_option autoImplicit false
 
-/-! # Native soundness for the dense drop passes (Task 3, equivalence pile)
+/-! # Soundness for the dense drop passes
 
-Native `DensePassCorrect` proofs — over `VarId → ZMod p` environments, with no dependency on the
-reference `Variable` passes — for the three dense drop passes previously built by `ofTransform`:
+`DensePassCorrect` proofs — over `VarId → ZMod p` environments — for the three dense drop passes:
 
 * `denseTrivialConstraintDropPass` — drop algebraic constraints whose fold is literal `0`;
 * `denseZeroMultBusDropPass` — drop bus interactions whose multiplicity folds to `0`;
 * `denseTautoBusDropPass` — drop stateless interactions with an accepted constant message.
 
-The runtime transforms are unchanged (they still live in `DropPasses.lean`); only the correctness
-argument moves from "decode the dense filter to the spec filter, inherit the spec `PassCorrect`" to a
-direct native argument, lifted once to the audited `Variable` spec by `DenseVerifiedPassW.of`.
+The runtime transforms are unchanged (they still live in `DropPasses.lean`); the correctness
+argument is proved directly and lifted once to the audited `Variable` spec by
+`DenseVerifiedPassW.of`.
 
-The reusable core is `DensePassCorrect.denseFilterConstraintsEntailed` (native mirror of
-`ConstraintSystem.filterConstraints_correct`) for constraint drops, and — for the two bus drops —
-`DensePassCorrect.denseFilterBusEntailed` (already in `FlagFoldDropsProof.lean`, reused directly by
-`tautoBus`) plus a fresh `DensePassCorrect.denseFilterBusZeroMult` (native mirror of
-`ConstraintSystem.filterBus_correct`) whose net-multiplicity and admissibility invariance are proved
-by `denseMultiplicitySum_filterBus` and the disjunctive `DenseConstraintSystem.admissible_filterBus`
-(`multiplicity = 0 ∨ stateless`). -/
+The reusable core is `DensePassCorrect.denseFilterConstraintsEntailed` for constraint drops, and
+— for the two bus drops — `DensePassCorrect.denseFilterBusEntailed` (already in
+`FlagFoldDropsProof.lean`, reused directly by `tautoBus`) plus a fresh
+`DensePassCorrect.denseFilterBusZeroMult` whose net-multiplicity and admissibility invariance are
+proved by `denseMultiplicitySum_filterBus` and the disjunctive
+`DenseConstraintSystem.admissible_filterBus` (`multiplicity = 0 ∨ stateless`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -30,8 +28,7 @@ variable {p : ℕ}
 
 /-! ## Occurrence subset for `filterConstraints` -/
 
-/-- Filtered algebraic constraints carry only input occurrences. Native mirror of
-    `ConstraintSystem.filterConstraints_vars_subset` (companion to
+/-- Filtered algebraic constraints carry only input occurrences (companion to
     `FlagFoldDropsProof`'s `filterBus_occ_subset`). -/
 theorem DenseConstraintSystem.filterConstraints_occ_subset (d : DenseConstraintSystem p)
     (keep : DenseExpr p → Bool) : ∀ i ∈ (d.filterConstraints keep).occ, i ∈ d.occ := by
@@ -44,10 +41,9 @@ theorem DenseConstraintSystem.filterConstraints_occ_subset (d : DenseConstraintS
 
 /-! ## Reusable core: dropping identically-zero constraints -/
 
-/-- **Native trivial-constraint removal correctness.** Dropping algebraic constraints that are
+/-- **Trivial-constraint removal correctness.** Dropping algebraic constraints that are
     identically zero (under every dense assignment) is equivalence- and invariant-preserving; bus
-    interactions are untouched so side effects and admissibility are literally unchanged. Native
-    mirror of `ConstraintSystem.filterConstraints_correct` over `VarId → ZMod p`. -/
+    interactions are untouched so side effects and admissibility are literally unchanged. -/
 theorem DensePassCorrect.denseFilterConstraintsEntailed (d : DenseConstraintSystem p)
     (bs : BusSemantics p) (isInput : VarId → Bool) (keep : DenseExpr p → Bool)
     (h : ∀ c ∈ d.algebraicConstraints, keep c = false → ∀ denv, c.eval denv = 0) :
@@ -73,14 +69,14 @@ theorem DensePassCorrect.denseFilterConstraintsEntailed (d : DenseConstraintSyst
   · intro denv hadmd hsat
     exact ⟨(hiff denv).2 hsat, hadmd, by rw [hside denv]; exact BusState.equiv_refl _⟩
 
-/-- Native mirror of `Expression.isConstZero_sound`: the const-zero test is sound (only `const 0`
-    passes it), so a passing dense expression evaluates to `0` under every assignment. -/
+/-- The const-zero test is sound (only `const 0` passes it), so a passing dense expression
+    evaluates to `0` under every assignment. -/
 theorem DenseExpr.isConstZero_sound (e : DenseExpr p) (h : e.isConstZero = true)
     (denv : VarId → ZMod p) : e.eval denv = 0 := by
   cases e <;> simp_all [DenseExpr.isConstZero, DenseExpr.eval]
 
-/-- **The native dense trivial-constraint drop pass.** Fact-free — the `of` transform ignores
-    `facts`. Runtime transform unchanged from the `ofTransform` version in `DropPasses.lean`. -/
+/-- **The dense trivial-constraint drop pass.** Fact-free — the `of` transform ignores
+    `facts`. -/
 def denseTrivialConstraintDropPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun _ _ d => d.filterConstraints (fun c => !c.fold.isConstZero))
@@ -99,7 +95,7 @@ def denseTrivialConstraintDropPass : DenseVerifiedPassW p :=
 
 /-- Net multiplicity is unchanged by dropping bus interactions whose evaluated multiplicity is `0`:
     such an interaction contributes `0` to every message's net multiplicity, so the two bus states
-    are `≈`-equal. Native mirror of `multiplicitySum_filterBus`. -/
+    are `≈`-equal. -/
 theorem denseMultiplicitySum_filterBus (bs : BusSemantics p) (denv : VarId → ZMod p)
     (keep : BusInteraction (DenseExpr p) → Bool) (message : BusMessage p)
     (bis : List (BusInteraction (DenseExpr p)))
@@ -138,9 +134,8 @@ theorem denseMultiplicitySum_filterBus (bs : BusSemantics p) (denv : VarId → Z
 
 /-- Dropping interactions that are (under `denv`) either inactive (multiplicity `0`) or on a
     stateless bus preserves `admissible`: `admissible` only inspects the active *stateful* evaluated
-    messages, which such a drop leaves unchanged. Native mirror of
-    `ConstraintSystem.admissible_filterBus` (the disjunctive form used by both the zero-multiplicity
-    and tautology drops). -/
+    messages, which such a drop leaves unchanged (the disjunctive form used by both the
+    zero-multiplicity and tautology drops). -/
 theorem DenseConstraintSystem.admissible_filterBus (d : DenseConstraintSystem p)
     (bs : BusSemantics p) (keep : BusInteraction (DenseExpr p) → Bool) (denv : VarId → ZMod p)
     (h : ∀ bi ∈ d.busInteractions, keep bi = false →
@@ -175,11 +170,11 @@ theorem DenseConstraintSystem.admissible_filterBus (d : DenseConstraintSystem p)
         exact hrest
   rw [key d.busInteractions h]
 
-/-- **Native zero-multiplicity bus removal correctness.** Dropping bus interactions whose evaluated
+/-- **Zero-multiplicity bus removal correctness.** Dropping bus interactions whose evaluated
     multiplicity is identically `0` is equivalence- and invariant-preserving: their
     `violatesConstraint` obligation is vacuous, and a `0`-multiplicity stateful entry adds `0` to
-    every net multiplicity. Sound for arbitrary bus semantics — the spec's unused `(1 : ZMod p) ≠ 0`
-    hypothesis is omitted. Native mirror of `ConstraintSystem.filterBus_correct`. -/
+    every net multiplicity. Sound for arbitrary bus semantics — no `(1 : ZMod p) ≠ 0` hypothesis is
+    needed. -/
 theorem DensePassCorrect.denseFilterBusZeroMult (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (isInput : VarId → Bool) (keep : BusInteraction (DenseExpr p) → Bool)
     (h : ∀ bi ∈ d.busInteractions, keep bi = false → ∀ denv,
@@ -213,7 +208,7 @@ theorem DensePassCorrect.denseFilterBusZeroMult (d : DenseConstraintSystem p) (b
       (d.admissible_filterBus bs keep denv (fun bi hbi hkf => Or.inl (h bi hbi hkf denv))).2 hadmd,
       hside denv⟩
 
-/-- **The native dense zero-multiplicity bus drop pass.** Keeps the runtime `ite` gate exactly as in
+/-- **The dense zero-multiplicity bus drop pass.** Keeps the runtime `ite` gate exactly as in
     `DropPasses.lean`: in the degenerate `1 = 0` ring the pass is the identity (`refl`), else it drops
     zero-multiplicity interactions. Fact-free. -/
 def denseZeroMultBusDropPass : DenseVerifiedPassW p :=
@@ -241,8 +236,7 @@ def denseZeroMultBusDropPass : DenseVerifiedPassW p :=
 /-! ## Tautology-lookup removal -/
 
 /-- The constant value of a dense expression is its actual value under every assignment (the fold is
-    a literal). Native mirror of `Expression.constValue?_sound` (file-local to avoid clashing with the
-    `DomainBatchProof` copy). -/
+    a literal). Kept file-local to avoid clashing with the `DomainBatchProof` copy. -/
 private theorem denseConstValue?_sound (e : DenseExpr p) (c : ZMod p)
     (h : e.constValue? = some c) (denv : VarId → ZMod p) : e.eval denv = c := by
   rw [← DenseExpr.fold_eval e denv]
@@ -253,8 +247,7 @@ private theorem denseConstValue?_sound (e : DenseExpr p) (c : ZMod p)
   | add a b => rw [hf] at h; simp at h
   | mul a b => rw [hf] at h; simp at h
 
-/-- A dense payload's constant values are its actual values under every assignment. Native mirror of
-    `constValues?_sound`. -/
+/-- A dense payload's constant values are its actual values under every assignment. -/
 theorem denseConstValues?_sound (es : List (DenseExpr p)) (vs : List (ZMod p))
     (h : denseConstValues? es = some vs) (denv : VarId → ZMod p) :
     es.map (fun e => e.eval denv) = vs := by
@@ -274,8 +267,7 @@ theorem denseConstValues?_sound (es : List (DenseExpr p)) (vs : List (ZMod p))
         simp [denseConstValue?_sound e v hv denv, ih vs' hvs]
 
 /-- A dense interaction's constant message equals its evaluated message under every assignment (the
-    multiplicity and all payload entries fold to constants). Native mirror of
-    `BusInteraction.constMessage?_sound`. -/
+    multiplicity and all payload entries fold to constants). -/
 theorem denseConstMessage?_sound (bi : BusInteraction (DenseExpr p))
     (msg : BusInteraction (ZMod p)) (h : denseConstMessage? bi = some msg)
     (denv : VarId → ZMod p) : denseBIEval bi denv = msg := by
@@ -292,7 +284,7 @@ theorem denseConstMessage?_sound (bi : BusInteraction (DenseExpr p))
       simp [denseBIEval, denseConstValue?_sound bi.multiplicity m hm denv,
             denseConstValues?_sound bi.payload vs hvs denv]
 
-/-- **The native dense tautology-lookup drop pass.** Dropping a stateless interaction whose constant
+/-- **The dense tautology-lookup drop pass.** Dropping a stateless interaction whose constant
     message the bus accepts is sound under every assignment (the acceptance is unconditional — a
     strictly stronger fact than `denseFilterBusEntailed` needs). Fact-free. -/
 def denseTautoBusDropPass : DenseVerifiedPassW p :=

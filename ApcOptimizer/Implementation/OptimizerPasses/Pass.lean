@@ -2,7 +2,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Measure
 
 set_option autoImplicit false
 
-/-! # Dense pass results, composition, degree guard, and fixpoint (Task 3, WP-C)
+/-! # Dense pass results, composition, degree guard, and fixpoint
 
 An implementation-only dense analogue of the `VerifiedPass`/`PassResult` framework. A dense pass
 maps a registry + covered dense system to an extended registry, a dense output, and dense
@@ -12,12 +12,13 @@ derivations, **bundled with**:
 * `covered`/`dcovered` — every ID in the output/derivations is valid in the new registry;
 * `correct` — a `PassCorrect` on the *decoded* systems.
 
-Because `correct` is stated on decodes, a dense pass is discharged by showing its dense transform
-*decodes to* an existing spec pass (done per pass, later). Composition here is pure plumbing: it
+Because `correct` is stated on decodes, a dense pass is discharged by proving `PassCorrect`
+between the decoded input and output systems, either directly or (for a `Variable`-based pass
+wrapped via `ofSpec`) by decode-commuting with that pass. Composition here is pure plumbing: it
 threads the registry, concatenates dense derivations, and composes the `PassCorrect` certificates
 using registry-stability to align intermediate decodes — no `decode` runs between passes at runtime
 (the `ext`/`covered`/`correct` fields are `Prop` and erase). The dense degree guard and fixpoint use
-the dense measures (`Dense/Measure.lean`), which equal the spec measures on the decoded system, so
+the dense measures (`Measure.lean`), which equal the spec measures on the decoded system, so
 degree and stopping decisions match the spec pipeline. -/
 
 namespace ApcOptimizer.Dense
@@ -159,10 +160,9 @@ theorem denseSizeKey_wf :
   InvImage.wf DenseConstraintSystem.sizeKey wellFounded_lt
 
 /-- The dense fixpoint worker, with the input's already-computed size key threaded through (`_hk`):
-    each cycle computes only the *output*'s key, mirroring the spec `iterateToFixpointFrom` — the old
-    dense loop recomputed the input's key (`d.sizeKey`, a fresh occurrence-list walk plus `HashSet`
-    build) every cycle, and on recursion recomputed the previous output's key as well. Same
-    comparisons, same results. Correct by construction (each kept step is `PassCorrect`, derivations
+    each cycle computes only the *output*'s key (`d.sizeKey`, a fresh occurrence-list walk plus
+    `HashSet` build), never recomputing the input's, which is already available from the previous
+    cycle's output. Correct by construction (each kept step is `PassCorrect`, derivations
     concatenating; stopping returns the input by reflexivity). -/
 def denseIterateToFixpointFrom (f : DenseVerifiedPassW p) (reg : VarRegistry)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (bs : BusSemantics p)

@@ -3,54 +3,51 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagUnifyProof
 
 set_option autoImplicit false
 
-/-! # Native soundness for the dense `fxSubst` pass (Task 3, busUnify cluster, chunk S4a — prover)
+/-! # Soundness for the dense `fxSubst` pass
 
-Native `DensePassCorrect` for `denseFxSubstF` (`Dense/FxSubstNative.lean`, part A of the four
-sub-pass `flagFold` composite), lifted to the audited `Variable` spec through
-`DenseVerifiedPassW.of` (`Dense/Bridge.lean`). **This is the third SUBSTITUTION-shaped native
-pass in the busUnify cluster** and a direct parallel of chunk S2 (`Dense/FlagUnifyNativeProof.lean`):
-the entailed nonlinear interpolations are adopted into a `DenseSolved` map and applied by one
-`DenseConstraintSystem.substF`, so correctness rides on the reusable native substitution core
-`DenseConstraintSystem.substF_denseCorrect` (`Dense/DomainBatchNativeProof.lean`).
+`DensePassCorrect` for `denseFxSubstF` (`FxSubst.lean`, part A of the four sub-pass `flagFold`
+composite), lifted to the audited spec through `DenseVerifiedPassW.of` (`Bridge.lean`). Like
+`rootPairUnify` and `flagUnify`, this is a **substitution-shaped** pass: the entailed nonlinear
+interpolations are adopted into a `DenseSolved` map and applied by one
+`DenseConstraintSystem.substF`, so correctness rides on the reusable substitution core
+`DenseConstraintSystem.substF_denseCorrect` (`DomainBatchProof.lean`).
 
-## What is reused verbatim from the S1/S2 templates (imported, not re-derived)
+## What is reused from `flagUnify` (imported, not re-derived)
 
 * `DenseConstraintSystem.substF_denseCorrect` — the substitution core (entailment `H` + occurrence
   closure `hfv` ⇒ `DensePassCorrect`, no derivations).
-* `dpcRefl`, `DenseExpr.splitAt_eval`, `mem_denseAssignments`, `denseEnvOfFast_map` (S1);
+* `dpcRefl`, `DenseExpr.splitAt_eval`, `mem_denseAssignments`, `denseEnvOfFast_map`;
   `denseFindDomainAlg_sound`, `denseMatches_evalPattern`, `DenseExpr.constValue?_sound`,
   `DenseExpr.eval_congr`, the pure-`Nat` `residue_uniq` — the dense finite-domain/decomposition
   infrastructure and the value-level `facts.slotBound_sound`.
 * **`DenseFuData`/`denseFuPairData?`/`DenseFUSeen`/`denseFuInsertAll`/`denseFuKeyHash`/
-  `denseFuCandidates`** (`Dense/FlagUnifyNative.lean`) — `fxSubst` shares the *pair-level*
-  machinery of `flagUnify` wholesale (the spec file itself calls these directly), so the S2 scan
-  lemmas `denseFuInsertAll_seen`, `DenseSolved.insertAll_preserves`, `foldl_insert_getElem` apply
-  unchanged (imported from S2).
+  `denseFuCandidates`** (`FlagUnify.lean`) — `fxSubst` shares the *pair-level* machinery of
+  `flagUnify` wholesale, so `flagUnify`'s scan lemmas `denseFuInsertAll_seen`,
+  `DenseSolved.insertAll_preserves`, `foldl_insert_getElem` apply unchanged.
 
 ## What is new here (the `fxCheck` certificate — the `buildE` interpolation swapped in)
 
-* `denseFxCheck_vars` — payload-membership extraction, native mirror of `fxCheck_vars`. Unlike S2's
-  single-variable `denseFuCheck_vars`, it closes *every* variable of the built expression `E` into
-  `biX`'s payload (needed for occurrence closure of a var-to-expression substitution).
-* `denseFxCheck_sound` — certificate soundness, a **native** re-derivation of the spec
-  `fxCheck_sound` over dense expressions/environments. Its pair-level residue-class argument (through
+* `denseFxCheck_vars` — payload-membership extraction. Unlike `flagUnify`'s single-variable
+  `denseFuCheck_vars`, it closes *every* variable of the built expression `E` into `biX`'s payload
+  (needed for occurrence closure of a var-to-expression substitution).
+* `denseFxCheck_sound` — certificate soundness. Its pair-level residue-class argument (through
   `denseFuPairData?`, `facts.slotBound_sound`, `residue_uniq`, and the enumerated finite-domain box)
-  is identical to S2's `denseFuCheck_sound`; only the certificate's target differs — the interpolated
-  `E.eval denv` in place of the twin flag `denv vx`. No reference *pass* proof is consulted.
+  is the same shape as `flagUnify`'s `denseFuCheck_sound`; only the certificate's target differs —
+  the interpolated `E.eval denv` in place of the twin flag `denv vx`.
 * `denseFxLoop_sound` — the scan over the *bus interactions* (algebraic constraints threaded as
   `domCs`), adopting a *list* of certified `vy := E` interpolations per matched pair. Same
-  loop-invariant shape as S2 (entailment + occurrence closure + `seen`-membership via
+  loop-invariant shape as `flagUnify` (entailment + occurrence closure + `seen`-membership via
   `denseFuInsertAll_seen`), with `DenseSolved.insertAll_preserves` handling the list update. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## The certificate is sound (native re-derivation of `fxCheck_vars`/`fxCheck_sound`) -/
+/-! ## The certificate is sound -/
 
-/-- **`denseFxCheck` exposes payload membership of the built expression.** Native mirror of
-    `fxCheck_vars`: a passed certificate forces every variable of `E` into `biX`'s payload variables
-    (needed for occurrence closure of the adopted `vy := E`). -/
+/-- **`denseFxCheck` exposes payload membership of the built expression**: a passed certificate
+    forces every variable of `E` into `biX`'s payload variables (needed for occurrence closure of
+    the adopted `vy := E`). -/
 theorem denseFxCheck_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (domCs : List (DenseExpr p)) (biX biY : BusInteraction (DenseExpr p))
     (x : VarId) (E : DenseExpr p) (vy : VarId)
@@ -104,13 +101,12 @@ theorem denseFxCheck_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     simp only [Bool.and_eq_true, decide_eq_true_eq] at h
     exact hpay ▸ of_decide_eq_true (List.all_eq_true.mp h.1.2 v hv)
 
-/-- **`denseFxCheck` entails the interpolation.** Native mirror of `fxCheck_sound`: at every
-    offset-compatible point of the shared scaled range checks the target flag `vy` equals the built
-    interpolation `E`, so on satisfying assignments `vy = E`. Re-derived natively over
-    `VarId → ZMod p` — the pair-level residue argument is identical to S2's `denseFuCheck_sound`
-    (`facts.slotBound_sound`, `residue_uniq`, the dense finite-domain mirrors), only the certificate's
-    target is the interpolation `E.eval denv` rather than the twin flag. Never a reference *pass*
-    proof. -/
+/-- **`denseFxCheck` entails the interpolation**: at every offset-compatible point of the shared
+    scaled range checks the target flag `vy` equals the built interpolation `E`, so on satisfying
+    assignments `vy = E`. Proved over `VarId → ZMod p` — the pair-level residue argument is the same
+    shape as `flagUnify`'s `denseFuCheck_sound` (`facts.slotBound_sound`, `residue_uniq`, the dense
+    finite-domain lemmas), only the certificate's target is the interpolation `E.eval denv` rather
+    than the twin flag. -/
 theorem denseFxCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFacts p bs)
     (domCs : List (DenseExpr p)) (biX biY : BusInteraction (DenseExpr p))
     (x : VarId) (E : DenseExpr p) (vy : VarId)
@@ -318,15 +314,15 @@ theorem denseFxCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFact
                         ← hEagree]
                     exact horb
 
-/-! ## The scan-loop invariant (mirrors S2's `denseFuLoop_sound`, list-of-interpolations update) -/
+/-! ## The scan-loop invariant (list-of-interpolations update) -/
 
-/-- **The fxSubst scan loop is sound.** Native mirror of S2's `denseFuLoop_sound`: the final solution
-    map is entailed (a) and occurrence-closed (b). Per matched pair a *list* of certified
-    interpolations `vy := E` (`E = denseBuildE d vy`) is adopted; the certificate
-    `denseFxCheck_sound` forces each on satisfying assignments, and `denseFxCheck_vars` closes each
-    `E`'s variables into the interaction's payload. The bucketed `seen` scan's membership is recovered
-    by `denseFuInsertAll_seen` (S2). Loops over the *bus interactions*, threading the algebraic
-    constraints as `domCs`. -/
+/-- **The fxSubst scan loop is sound**: the final solution map is entailed (a) and
+    occurrence-closed (b). Per matched pair a *list* of certified interpolations `vy := E`
+    (`E = denseBuildE d vy`) is adopted; the certificate `denseFxCheck_sound` forces each on
+    satisfying assignments, and `denseFxCheck_vars` closes each `E`'s variables into the
+    interaction's payload. The bucketed `seen` scan's membership is recovered by
+    `denseFuInsertAll_seen` (`flagUnify`). Loops over the *bus interactions*, threading the
+    algebraic constraints as `domCs`. -/
 theorem denseFxLoop_sound [Fact p.Prime] (bs : BusSemantics p)
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     ∀ (pending : List (BusInteraction (DenseExpr p)))
@@ -422,7 +418,7 @@ theorem denseFxLoop_sound [Fact p.Prime] (bs : BusSemantics p)
               · rw [if_neg hk] at hif
                 exact absurd hif (by simp)
 
-/-! ## The native dense `fxSubst` pass -/
+/-! ## The dense `fxSubst` pass -/
 
 /-- The dense `fxSubst` transform re-expressed with the loop's solution map named, for the
     correctness/coverage proofs. -/
@@ -481,12 +477,12 @@ theorem denseFxSubstF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : Bu
       (fun i t hti z hz => hinv.2 i t hti z hz)
   · exact dpcRefl reg.isInput d bs
 
-/-- **The native dense `fxSubst` pass** (part A of `flagFold`). The entailed nonlinear
+/-- **The dense `fxSubst` pass** (part A of `flagFold`). The entailed nonlinear
     interpolations `vy := E` (`E` interpolated over the survivor-side flags) are adopted into a
-    `DenseSolved` map and applied by one `DenseConstraintSystem.substF`, proved correct natively over
+    `DenseSolved` map and applied by one `DenseConstraintSystem.substF`, proved correct over
     `VarId → ZMod p` and connected to the audited spec via `DensePassCorrect.lift` (through
-    `of`) — no commutation with the reference pass. Directly parallels `denseFlagUnifyPass`
-    (chunk S2). Not wired here: the selector swap lands with boxRewrite (S4b) in chunk S5. -/
+    `of`). Directly parallels `denseFlagUnifyPass`. Not wired here: combined with `boxRewrite` in
+    `FlagFold.lean`. -/
 def denseFxSubstPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (denseFxSubstF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseFxSubstF_covered pw reg bs facts d hcov)

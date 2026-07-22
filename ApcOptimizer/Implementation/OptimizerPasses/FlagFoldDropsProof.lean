@@ -3,16 +3,13 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagUnifyProof
 
 set_option autoImplicit false
 
-/-! # Native soundness for the dense flagFold drop sub-passes (Task 3, busUnify cluster, chunk
-    S3 — prover)
+/-! # Soundness for the dense flagFold drop sub-passes
 
-Native `DensePassCorrect` for the two flagFold drop transforms
-(`Dense/FlagFoldDropsNative.lean`), lifted to the audited `Variable` spec through
-`DenseVerifiedPassW.of` (`Dense/Bridge.lean`). NO WIRING here — the scheduled `flagFold`
-label is a four-sub-pass composite (`fxSubstPass → boxRewritePass → boxTautoDropPass →
-pointwiseDupDropPass`); only parts B/C exist densely so far, and the selector swap happens in a
-later chunk (S5) once all four are ready. This file delivers the two proofs plus their
-`DenseVerifiedPassW` values, ready for chain assembly.
+`DensePassCorrect` for the two flagFold drop transforms (`FlagFoldDrops.lean`), lifted to the
+audited `Variable` spec through `DenseVerifiedPassW.of` (`Bridge.lean`). These are parts B and C of
+the `flagFold` composite (`fxSubstPass → boxRewritePass → boxTautoDropPass →
+pointwiseDupDropPass`, assembled in `FlagFold.lean`'s `denseFlagFoldPass'`); this file delivers the
+two proofs plus their `DenseVerifiedPassW` values.
 
 ## Part B: box-tautology replacement (`denseBoxTautoDropF`)
 
@@ -21,32 +18,29 @@ finite-domain box is replaced by the literal `0`; bus interactions untouched. Th
 rides on the single-variable constraints (the `denseFindDomainAlg` sources), which are never
 replaced (they fail the `≥ 2` distinct-variable guard) and survive verbatim into the output. So
 `out.satisfies ↔ d.satisfies` on the SAME environment, and side effects/admissibility are
-unchanged (bus interactions identical) — `DensePassCorrect.ofEnvEq`. Native re-derivation of the
-spec `ConstraintSystem.boxTautoReplace_correct` chain over `VarId → ZMod p` (reusing
-`denseFindDomainAlg_sound`/`mem_denseAssignments`/`denseEnvOfFast_map`/`DenseExpr.eval_congr`).
+unchanged (bus interactions identical) — `DensePassCorrect.ofEnvEq`, over `VarId → ZMod p`
+(reusing `denseFindDomainAlg_sound`/`mem_denseAssignments`/`denseEnvOfFast_map`/
+`DenseExpr.eval_congr`).
 
 ## Part C: pointwise-duplicate stateless-check removal (`densePointwiseDupDropF`)
 
 A bus-**filter** pass dropping stateless interactions whose message is pointwise equal to a
 retained one on the box. The dropped interaction is accepted under every assignment satisfying the
 FILTERED system, because its first-of-class earlier twin is provably kept and evaluates equally —
-the depth-1 `densePdFirst_keep` rule, fed to a native `DensePassCorrect.denseFilterBusEntailed`
-(the native mirror of `ConstraintSystem.filterBusEntailed_correct`). The certificate soundness
-chain `denseBoxAgree_sound → denseSlotEqCert_sound → denseMsgEqCert_sound` is a native
-re-derivation of the spec `boxAgree_sound/slotEqCert_sound/msgEqCert_sound`. The pass is stated
-over an **arbitrary keep-predicate** `keep` that only ever drops certified-droppable interactions
-(`hkeep`: dropped ⟹ `densePdKeep … = false`), instantiated at runtime with the verdict map
-(`densePdVerdictKeep` over `densePdDropSet`) whose entries carry their `densePdKeep = false`
-proofs, so the mutable sweep carries no proof — dropping more is always sound — and the
-`densePdDropSet` loop is NOT reasoned about, exactly as the spec never reasons about `pdDropSet`
-beyond the verdict entries' carried certificates.
+the depth-1 `densePdFirst_keep` rule, fed to `DensePassCorrect.denseFilterBusEntailed`. The
+certificate soundness chain `denseBoxAgree_sound → denseSlotEqCert_sound → denseMsgEqCert_sound`
+proves this. The pass is stated over an **arbitrary keep-predicate** `keep` that only ever drops
+certified-droppable interactions (`hkeep`: dropped ⟹ `densePdKeep … = false`), instantiated at
+runtime with the verdict map (`densePdVerdictKeep` over `densePdDropSet`) whose entries carry their
+`densePdKeep = false` proofs, so the mutable sweep carries no proof — dropping more is always
+sound — and the `densePdDropSet` loop itself is not reasoned about beyond the verdict entries'
+carried certificates.
 
 ## Fact-free `of` wrapping
 
-Both spec passes are `VerifiedPass p` (no `BusFacts`); the dense transforms drop `facts` entirely.
-`DenseVerifiedPassW.of` expects a `(bs) (facts) (d)` transform, so each is wrapped
-`fun bs _ d => denseXxxF pw bs d`, ignoring `facts` — the same shape `denseConstantFoldPass` uses
-for its `bs`/`facts`-ignoring transform. -/
+Neither transform consumes `BusFacts`; `DenseVerifiedPassW.of` expects a `(bs) (facts) (d)`
+transform, so each is wrapped `fun bs _ d => denseXxxF pw bs d`, ignoring `facts` — the same shape
+`denseConstantFoldPass` uses for its `bs`/`facts`-ignoring transform. -/
 
 namespace ApcOptimizer.Dense
 
@@ -54,7 +48,7 @@ variable {p : ℕ}
 
 /-! ## Part B: box-tautology replacement -/
 
-/-- `denseBtKeep` implies its certificate (mirrors `btKeep_cert`). -/
+/-- `denseBtKeep` implies its certificate. -/
 theorem denseBtKeep_cert {singles : List (DenseExpr p)}
     {domOf : VarId → Option (List (ZMod p))} {c : DenseExpr p}
     (h : denseBtKeep singles domOf c = true) : denseBtCert singles c = true := by
@@ -62,7 +56,7 @@ theorem denseBtKeep_cert {singles : List (DenseExpr p)}
   rw [Bool.and_eq_true] at h
   exact h.2
 
-/-- A false certificate falsifies `denseBtKeep` (mirrors `btKeep_of_cert_false`). -/
+/-- A false certificate falsifies `denseBtKeep`. -/
 theorem denseBtKeep_of_cert_false {singles : List (DenseExpr p)}
     {domOf : VarId → Option (List (ZMod p))} {c : DenseExpr p}
     (h : denseBtCert singles c = false) : denseBtKeep singles domOf c = false := by
@@ -70,8 +64,7 @@ theorem denseBtKeep_of_cert_false {singles : List (DenseExpr p)}
   rw [h, Bool.and_false]
 
 /-- A single-variable constraint is never replaced (it fails the `≥ 2` guard), so it survives
-    verbatim into the output — the box justification stands on the output's own satisfaction.
-    Native mirror of `singleVar_mem_boxTautoReplace`. -/
+    verbatim into the output — the box justification stands on the output's own satisfaction. -/
 theorem denseSingleVar_mem_boxTautoReplace (d : DenseConstraintSystem p)
     (domOf : VarId → Option (List (ZMod p))) (c : DenseExpr p)
     (hc : c ∈ d.algebraicConstraints) (hs : (c.vars.eraseDups.length == 1) = true) :
@@ -87,11 +80,10 @@ theorem denseSingleVar_mem_boxTautoReplace (d : DenseConstraintSystem p)
   rw [denseBtKeep_of_cert_false hcf]
   simp
 
-/-- **Native box-tautology replacement correctness.** Every replaced constraint is a tautology over
+/-- **Box-tautology replacement correctness.** Every replaced constraint is a tautology over
     its variables' finite-domain box, justified from the (never-replaced) single-variable
     constraints, so the map preserves satisfaction on the same environment and leaves bus
-    effects/admissibility untouched. Native mirror of `ConstraintSystem.boxTautoReplace_correct`
-    for an arbitrary domain oracle. -/
+    effects/admissibility untouched. Stated for an arbitrary domain oracle. -/
 theorem DenseConstraintSystem.boxTautoReplace_denseCorrect [Fact p.Prime]
     (d : DenseConstraintSystem p) (bs : BusSemantics p) (isInput : VarId → Bool)
     (domOf : VarId → Option (List (ZMod p))) :
@@ -201,7 +193,7 @@ theorem denseBoxTautoDropF_covered (pw : PrimeWitness p) (reg : VarRegistry) (bs
   · exact DenseConstraintSystem.boxTautoReplaceWith_covered _ _ hcov
   · exact hcov
 
-/-- The part-B transform is `DensePassCorrect` (native). -/
+/-- The part-B transform is `DensePassCorrect`. -/
 theorem denseBoxTautoDropF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : BusSemantics p)
     (d : DenseConstraintSystem p) (_hcov : d.CoveredBy reg) :
     DensePassCorrect reg.isInput d (denseBoxTautoDropF pw bs d) [] bs := by
@@ -211,8 +203,8 @@ theorem denseBoxTautoDropF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs
     exact DenseConstraintSystem.boxTautoReplace_denseCorrect d bs reg.isInput _
   · exact dpcRefl reg.isInput d bs
 
-/-- **The native dense box-tautology drop pass** (part B of the flagFold composite). Fact-free —
-    the `of` transform ignores `facts`. Ready for S5 chain assembly. -/
+/-- **The dense box-tautology drop pass** (part B of the flagFold composite). Fact-free —
+    the `of` transform ignores `facts`. -/
 def denseBoxTautoDropPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (fun bs _ d => denseBoxTautoDropF pw bs d) (fun _ _ _ => [])
     (fun reg bs _ d hcov => denseBoxTautoDropF_covered pw reg bs d hcov)
@@ -221,9 +213,9 @@ def denseBoxTautoDropPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
 
 /-! ## Part C: pointwise-duplicate stateless-check removal -/
 
-/-- **Joint-box agreement soundness** (mirrors `boxAgree_sound`): two expressions agreeing at every
-    point of their offset variables' proven finite-domain box agree on every assignment zeroing the
-    single-variable constraints. -/
+/-- **Joint-box agreement soundness**: two expressions agreeing at every point of their offset
+    variables' proven finite-domain box agree on every assignment zeroing the single-variable
+    constraints. -/
 theorem denseBoxAgree_sound [Fact p.Prime] (singles : List (DenseExpr p)) (R R' : DenseExpr p)
     (h : denseBoxAgree singles R R' = true) (denv : VarId → ZMod p)
     (hdom : ∀ c ∈ singles, c.eval denv = 0) : R.eval denv = R'.eval denv := by
@@ -266,7 +258,7 @@ theorem denseBoxAgree_sound [Fact p.Prime] (singles : List (DenseExpr p)) (R R' 
       hagree v (List.mem_eraseDups.2 (List.mem_append_right _ hv)))
   rw [← hRa, ← hRa', hRR]
 
-/-- **Slot-pair certificate soundness** (mirrors `slotEqCert_sound`): syntactically equal, or the
+/-- **Slot-pair certificate soundness:** syntactically equal, or the
     same-carrier same-coefficient decomposition whose offsets agree on the box. -/
 theorem denseSlotEqCert_sound [Fact p.Prime] (singles : List (DenseExpr p)) (e e' : DenseExpr p)
     (h : denseSlotEqCert singles e e' = true) (denv : VarId → ZMod p)
@@ -292,7 +284,7 @@ theorem denseSlotEqCert_sound [Fact p.Prime] (singles : List (DenseExpr p)) (e e
                 DenseExpr.splitAt_eval x e' k2 R' hsY denv, eq_of_beq hk2,
                 denseBoxAgree_sound singles R R' hba denv hdom]
 
-/-- **Full-message certificate soundness** (mirrors `msgEqCert_sound`): same bus, same constant
+/-- **Full-message certificate soundness:** same bus, same constant
     multiplicity, pointwise-equal payloads ⇒ the two interactions evaluate to the same message. -/
 theorem denseMsgEqCert_sound [Fact p.Prime] (singles : List (DenseExpr p))
     (bi bi' : BusInteraction (DenseExpr p)) (h : denseMsgEqCert singles bi bi' = true)
@@ -330,8 +322,7 @@ theorem denseMsgEqCert_sound [Fact p.Prime] (singles : List (DenseExpr p))
   unfold denseBIEval
   rw [eq_of_beq hbus, hmm, hpay]
 
-/-- A first-of-class interaction is always kept — the depth-1 justification for `densePdKeep`.
-    Native mirror of `pdFirst_keep`. -/
+/-- A first-of-class interaction is always kept — the depth-1 justification for `densePdKeep`. -/
 theorem densePdFirst_keep (bs : BusSemantics p) (singles : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) (b : BusInteraction (DenseExpr p))
     (h : densePdFirst bs singles bis b = true) : densePdKeep bs singles bis b = true := by
@@ -365,8 +356,7 @@ theorem densePdFirst_keep (bs : BusSemantics p) (singles : List (DenseExpr p))
         rw [hcert] at hnc
         exact absurd hnc (by simp)
 
-/-- Filtered bus interactions carry only input occurrences. Native mirror of
-    `filterBus_vars_subset`. -/
+/-- Filtered bus interactions carry only input occurrences. -/
 theorem DenseConstraintSystem.filterBus_occ_subset (d : DenseConstraintSystem p)
     (keep : BusInteraction (DenseExpr p) → Bool) :
     ∀ i ∈ (d.filterBus keep).occ, i ∈ d.occ := by
@@ -377,10 +367,9 @@ theorem DenseConstraintSystem.filterBus_occ_subset (d : DenseConstraintSystem p)
   · exact Or.inl ⟨c, hc, hic⟩
   · exact Or.inr ⟨bi, List.mem_of_mem_filter hbi, hib⟩
 
-/-- **Native "drop entailed stateless interactions" correctness.** Dropping bus interactions that
+/-- **"Drop entailed stateless interactions" correctness.** Dropping bus interactions that
     are (a) stateless and (b) accepted under every assignment satisfying the FILTERED system is
-    equivalence- and invariant-preserving. Native mirror of
-    `ConstraintSystem.filterBusEntailed_correct` over `VarId → ZMod p`. -/
+    equivalence- and invariant-preserving. Proved over `VarId → ZMod p`. -/
 theorem DensePassCorrect.denseFilterBusEntailed (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (isInput : VarId → Bool) (keep : BusInteraction (DenseExpr p) → Bool)
     (hstateless : ∀ bi ∈ d.busInteractions, keep bi = false → bs.isStateful bi.busId = false)
@@ -466,12 +455,12 @@ theorem DensePassCorrect.denseFilterBusEntailed (d : DenseConstraintSystem p) (b
   · intro denv hadmd hsat
     exact ⟨(hiff denv).2 hsat, (hadm denv).2 hadmd, by rw [hside denv]; exact BusState.equiv_refl _⟩
 
-/-- **Native pointwise-duplicate drop correctness.** Stated over an **arbitrary keep-predicate**
+/-- **Pointwise-duplicate drop correctness.** Stated over an **arbitrary keep-predicate**
     that only ever drops certified-droppable interactions (`hkeep`: dropped ⟹ `densePdKeep … =
     false`) — keeping more is always sound, and a dropped interaction's first-of-class twin is kept
     because `densePdKeep` would keep it (the contrapositive of `hkeep`). `densePointwiseDupDropF`
     instantiates `keep` with the verdict map (`densePdVerdictKeep`), whose entries carry their
-    `densePdKeep = false` proofs. Native mirror of `ConstraintSystem.pointwiseDupDrop_correct`. -/
+    `densePdKeep = false` proofs. -/
 theorem DensePassCorrect.densePointwiseDupDrop [Fact p.Prime]
     (d : DenseConstraintSystem p) (bs : BusSemantics p) (isInput : VarId → Bool)
     (keep : BusInteraction (DenseExpr p) → Bool)
@@ -526,7 +515,7 @@ theorem densePointwiseDupDropF_covered (pw : PrimeWitness p) (reg : VarRegistry)
   · exact DenseConstraintSystem.filterBus_covered hcov
   · exact hcov
 
-/-- The part-C transform is `DensePassCorrect` (native). -/
+/-- The part-C transform is `DensePassCorrect`. -/
 theorem densePointwiseDupDropF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : BusSemantics p)
     (d : DenseConstraintSystem p) (_hcov : d.CoveredBy reg) :
     DensePassCorrect reg.isInput d (densePointwiseDupDropF pw bs d) [] bs := by
@@ -538,8 +527,8 @@ theorem densePointwiseDupDropF_correct (pw : PrimeWitness p) (reg : VarRegistry)
     exact densePdVerdictKeep_false _ bi hkf
   · exact dpcRefl reg.isInput d bs
 
-/-- **The native dense pointwise-duplicate drop pass** (part C of the flagFold composite). Fact-free
-    — the `of` transform ignores `facts`. Ready for S5 chain assembly. -/
+/-- **The dense pointwise-duplicate drop pass** (part C of the flagFold composite). Fact-free
+    — the `of` transform ignores `facts`. -/
 def densePointwiseDupDropPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (fun bs _ d => densePointwiseDupDropF pw bs d) (fun _ _ _ => [])
     (fun reg bs _ d hcov => densePointwiseDupDropF_covered pw reg bs d hcov)

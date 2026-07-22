@@ -2,7 +2,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Bridge
 
 set_option autoImplicit false
 
-/-! # Shared dense expression operations (Task 3, WP-E) + the dense constant-fold pass
+/-! # Shared dense expression operations + the dense constant-fold pass
 
 The reusable machinery for building dense passes as *eval-preserving expression maps*, and the first
 concrete pass (constant folding) built on it.
@@ -10,10 +10,9 @@ concrete pass (constant folding) built on it.
 `DenseConstraintSystem.mapExpr g` applies a dense expression transform to every expression. When `g`
 is *eval-preserving* (`(g e).eval denv = e.eval denv`) and introduces no new variables, `mapExpr g`
 preserves the dense semantics — satisfaction, admissibility, stateful-bus effects, invariant
-preservation, and the occurrence set — proved natively here (`mapExpr_satisfies` etc.). The dense
-constant-fold pass then discharges its `DensePassCorrect` **natively** (no dependency on the spec
-`constantFoldPass`) and is lifted to the spec `PassCorrect` once, at the pipeline edge, by
-`DenseVerifiedPassW.of`. -/
+preservation, and the occurrence set (`mapExpr_satisfies` etc.). The dense constant-fold pass
+discharges its `DensePassCorrect` directly from these facts and is lifted to the spec `PassCorrect`
+once, at the pipeline edge, by `DenseVerifiedPassW.of`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -47,7 +46,7 @@ theorem DenseConstraintSystem.mapExpr_covered {reg : VarRegistry} {g : DenseExpr
     obtain ⟨e0, he0, rfl⟩ := he
     exact fun i hi => hp e0 he0 i (hgv e0 i hi)
 
-/-! ## Dense constant folding (mirrors `Expression.foldAdd`/`foldMul`/`fold`) -/
+/-! ## Dense constant folding -/
 
 /-- Smart addition on dense expressions. -/
 def DenseExpr.foldAdd (a b : DenseExpr p) : DenseExpr p :=
@@ -104,7 +103,7 @@ theorem DenseExpr.fold_vars (e : DenseExpr p) : ∀ i ∈ e.fold.vars, i ∈ e.v
       · exact List.mem_append.2 (Or.inl (iha i h))
       · exact List.mem_append.2 (Or.inr (ihb i h))
 
-/-! ## Native eval-preservation of the dense fold -/
+/-! ## Eval-preservation of the dense fold -/
 
 /-- Dense `foldAdd` preserves value. -/
 theorem DenseExpr.foldAdd_eval (a b : DenseExpr p) (denv : VarId → ZMod p) :
@@ -118,7 +117,7 @@ theorem DenseExpr.foldMul_eval (a b : DenseExpr p) (denv : VarId → ZMod p) :
   unfold DenseExpr.foldMul
   split <;> (try split_ifs) <;> simp_all [DenseExpr.eval]
 
-/-- **Dense `fold` preserves value** (the native analogue of `Expression.fold_eval`). -/
+/-- **Dense `fold` preserves value.** -/
 theorem DenseExpr.fold_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
     e.fold.eval denv = e.eval denv := by
   induction e with
@@ -129,7 +128,7 @@ theorem DenseExpr.fold_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
 
 /-! ## `mapExpr` with an eval-preserving map preserves the dense semantics
 
-These are the native, reusable ingredients a dense eval-preserving pass discharges its
+These are the reusable ingredients a dense eval-preserving pass discharges its
 `DensePassCorrect` with. `hg` is value-preservation of `g`; `hgv` is "introduces no new variables". -/
 
 variable {g : DenseExpr p → DenseExpr p}
@@ -216,12 +215,11 @@ theorem DenseConstraintSystem.mapExpr_occ_subset
     · exact Or.inl (hgv bi0.multiplicity i hm)
     · exact Or.inr ⟨e0, he0, hgv e0 i hie⟩
 
-/-! ## The dense constant-fold pass (native proof) -/
+/-! ## The dense constant-fold pass -/
 
 /-- The dense constant-folding pass: normalize every dense expression. Its correctness is proved
-    **natively** as a `DensePassCorrect` (the fold is eval-preserving and introduces no variables) and
-    lifted to the spec `PassCorrect` by `DenseVerifiedPassW.of` — no dependency on the spec
-    `constantFoldPass`. -/
+    as a `DensePassCorrect` (the fold is eval-preserving and introduces no variables) and lifted to
+    the spec `PassCorrect` by `DenseVerifiedPassW.of`. -/
 def denseConstantFoldPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun _ _ d => d.mapExpr DenseExpr.fold)

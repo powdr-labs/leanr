@@ -2,13 +2,12 @@ import ApcOptimizer.Implementation.OptimizerPasses.ExprOps
 
 set_option autoImplicit false
 
-/-! # Dense constraint/bus filtering + small predicates (Task 3, WP-E)
+/-! # Dense constraint/bus filtering + small predicates
 
-Dense mirrors of `ConstraintSystem.filterConstraints`/`filterBus` (`OptimizerPasses/Rewrite.lean`),
-plus the small expression predicates the drop passes key on. Filtering only drops, so it preserves
-coverage trivially. The native `DensePassCorrect` proofs for the drop passes built on these live in
-`DropPassesProof.lean`; the former decode-commutation lemmas were removed with the commutation-era
-scaffolding. -/
+Filtering out algebraic constraints or bus interactions by a keep-predicate, plus the small
+expression predicates the drop passes key on. Filtering only drops, so it preserves coverage
+trivially. The `DensePassCorrect` proofs for the drop passes built on these live in
+`DropPassesProof.lean`. -/
 
 namespace ApcOptimizer.Dense
 

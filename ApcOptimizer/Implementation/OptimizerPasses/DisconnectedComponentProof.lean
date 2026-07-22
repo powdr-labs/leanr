@@ -2,22 +2,20 @@ import ApcOptimizer.Implementation.OptimizerPasses.DisconnectedComponent
 
 set_option autoImplicit false
 
-/-! # Disconnected-component removal — native dense correctness (Task 3, prover)
+/-! # Disconnected-component removal — dense correctness
 
-Native `DensePassCorrect` for the dense disconnected-component transform (`denseDisconnectedF`,
+`DensePassCorrect` for the dense disconnected-component transform (`denseDisconnectedF`,
 `DisconnectedComponent.lean`), lifted to the audited `Variable` spec through
 `DenseVerifiedPassW.of` (`Bridge.lean`), and wired at the `disconnected` cleanup label.
 
-The proof is a direct native re-derivation of the spec's `dropComponent_correct`
- over `VarId → ZMod p` environments — **it does not
-depend on the spec pass**. Exactly as in the spec, correctness is *generic in the removable set*
-(`DensePassCorrect.denseDropComponent`, stated for an arbitrary `remV`/`keepCon`/`keepBi`), so the
-well-founded connectivity search (`denseBfsClosure`/`denseConnBad`) is never reasoned about: the
-pass re-checks the induced partition at run time (`denseDropCheck`) and the seven hypotheses of
-`denseDropComponent` are read off that check. This is the mandated route for a `partial def` spec
-helper (no equational lemmas): prove correctness over the checked property, not over the search.
+Correctness is *generic in the removable set* (`DensePassCorrect.denseDropComponent`, stated for an
+arbitrary `remV`/`keepCon`/`keepBi`), so the connectivity search (`denseBfsClosure`/`denseConnBad`)
+is never reasoned about: the pass re-checks the induced partition at run time (`denseDropCheck`) and
+the seven hypotheses of `denseDropComponent` are read off that check. This is the natural route
+around a `partial def` connectivity search (no equational lemmas): prove correctness over the
+checked property, not over the search.
 
-## The argument (mirrors `dropComponent_correct`)
+## The argument
 
 The drop keeps `env` on kept variables and substitutes the all-zero witness `w` on removed ones
 (`m env`). Soundness (`out.implies d`) extends an output assignment by `w`: removed constraints
@@ -51,9 +49,9 @@ private theorem dcExprEvalCongr (e : DenseExpr p) (f g : VarId → ZMod p)
 
 /-! ## Side effects are unchanged when dropping stateless interactions
 
-Native mirror of `sideEffects_drop_eq`: the evaluated stateful interactions of the filtered system
-(under `e1`) equal those of the original (under `e2`), given every dropped interaction is stateless
-and every *stateful* interaction evaluates the same under `e1` and `e2`. -/
+The evaluated stateful interactions of the filtered system (under `e1`) equal those of the original
+(under `e2`), given every dropped interaction is stateless and every *stateful* interaction
+evaluates the same under `e1` and `e2`. -/
 theorem denseSideEffects_drop_eq (bs : BusSemantics p) (keepBi : BusInteraction (DenseExpr p) → Bool)
     (e1 e2 : VarId → ZMod p) (L : List (BusInteraction (DenseExpr p)))
     (hst : ∀ bi ∈ L, keepBi bi = false → bs.isStateful bi.busId = false)
@@ -87,9 +85,8 @@ theorem denseSideEffects_drop_eq (bs : BusSemantics p) (keepBi : BusInteraction 
       · rw [List.filter_cons_of_neg hkeep]
         exact ihr
 
-/-- Admissibility is unchanged when dropping stateless interactions: the stateful-non-zero filter of
-    the mapped, filtered list equals that of the mapped full list. Native mirror of the effect of
-    `admissible_filterBus`. -/
+/-- Admissibility is unchanged when dropping stateless interactions: the stateful-non-zero filter
+    of the mapped, filtered list equals that of the mapped full list. -/
 theorem denseAdmissibleFilter_eq (bs : BusSemantics p) (keepBi : BusInteraction (DenseExpr p) → Bool)
     (denv : VarId → ZMod p) (L : List (BusInteraction (DenseExpr p)))
     (hst : ∀ bi ∈ L, keepBi bi = false → bs.isStateful bi.busId = false) :
@@ -115,11 +112,11 @@ theorem denseAdmissibleFilter_eq (bs : BusSemantics p) (keepBi : BusInteraction 
 
 /-! ## The general correctness lemma -/
 
-/-- **Native disconnected-component drop correctness.** Dropping a disconnected, witness-satisfiable
-    component preserves correctness. Native mirror of `dropComponent_correct`, generic in the
-    removable set `remV` and the keep predicates `keepCon`/`keepBi`: removed items have all-removable
-    variables, the witness `w` zeroes removed constraints and non-violates removed interactions,
-    removed interactions are stateless, and kept items use only non-removable variables. -/
+/-- **Disconnected-component drop correctness.** Dropping a disconnected, witness-satisfiable
+    component preserves correctness, generic in the removable set `remV` and the keep predicates
+    `keepCon`/`keepBi`: removed items have all-removable variables, the witness `w` zeroes removed
+    constraints and non-violates removed interactions, removed interactions are stateless, and kept
+    items use only non-removable variables. -/
 theorem DensePassCorrect.denseDropComponent (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (isInput : VarId → Bool) (w : VarId → ZMod p) (remV : VarId → Bool)
     (keepCon : DenseExpr p → Bool) (keepBi : BusInteraction (DenseExpr p) → Bool)
@@ -236,10 +233,9 @@ theorem denseDropGuarded_covered {reg : VarRegistry} (bs : BusSemantics p)
            fun bi hbi => hc.2 bi (List.mem_of_mem_filter hbi)⟩
   · exact hc
 
-/-- **The guarded drop is natively correct** for *any* `remV` — the run-time re-check
-    (`denseDropCheck`) supplies exactly the seven `denseDropComponent` hypotheses, so correctness is
-    independent of the connectivity search that produced `remV`. Native mirror of the spec pass's
-    `hchk`-guarded body. -/
+/-- **The guarded drop is correct** for *any* `remV` — the run-time re-check (`denseDropCheck`)
+    supplies exactly the seven `denseDropComponent` hypotheses, so correctness is independent of the
+    connectivity search that produced `remV`. -/
 theorem denseDropGuarded_correct (bs : BusSemantics p) (isInput : VarId → Bool)
     (d : DenseConstraintSystem p) (remV : VarId → Bool) :
     DensePassCorrect isInput d (denseDropGuarded bs d remV) [] bs := by
@@ -300,9 +296,8 @@ theorem denseDisconnectedF_correct (bs : BusSemantics p) (isInput : VarId → Bo
   unfold denseDisconnectedF
   exact denseDropGuarded_correct bs isInput d _
 
-/-- **The native dense disconnected-component pass.** Fact-free — the `of` transform ignores
-    `facts` (the spec pass is a `VerifiedPass`). Registry unchanged (no fresh variables), no
-    derivations. -/
+/-- **The dense disconnected-component pass.** Fact-free — the `of` transform ignores `facts`.
+    Registry unchanged (no fresh variables), no derivations. -/
 def denseDisconnectedPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (fun bs _ d => denseDisconnectedF bs d) (fun _ _ _ => [])
     (fun reg bs _ d hcov => denseDisconnectedF_covered bs d hcov)

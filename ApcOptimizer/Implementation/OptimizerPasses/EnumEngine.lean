@@ -6,12 +6,11 @@ set_option autoImplicit false
 
 The value-only, variable-free core of the finite-domain enumeration used by the domain-propagation
 passes: the symbolic `FiniteDomain` and its `Nat`-loop element fold, and the interned, index-compiled
-expression / bus-interaction types `IExpr` / `CBi`. None of these mentions a `Variable` or a `VarId`
-— their leaves are positions (`IExpr.ix`) and their domains carry only `ZMod p` values — so they are
-shared verbatim between the `Variable`-keyed reference passes and their dense (`VarId`-keyed) ports;
-each consumer produces the *same* compiled term and enumerates the *same* element stream, differing
-only in the key type of the point it evaluates against. This home imports nothing legacy; the generic
-early-exit list fold `foldlStop` it builds on lives in `ListSplit.lean`.
+expression / bus-interaction types `IExpr` / `CBi`. None of these mentions a `VarId` — their leaves
+are positions (`IExpr.ix`) and their domains carry only `ZMod p` values — so the same compiled term
+and enumerated element stream serve every consumer, differing only in the key type of the point it
+evaluates against. The generic early-exit list fold `foldlStop` it builds on lives in
+`ListSplit.lean`.
 
 Collected here:
 
@@ -32,8 +31,8 @@ with a `Nat` loop (`FiniteDomain.foldElts`) that never builds an element list �
 `toList` — `(List.range bound).map Nat.cast`, the `2^16`-element list a 16-bit limb would have
 materialized eagerly — is the **specification only**: it appears in the equivalence/soundness proofs
 (`foldElts_eq` and the enumeration bridge) and never on the runtime path. Every table/box decision
-that used `List.length` on the old eagerly-materialized list reads `size`; `size_eq` proves them
-equal. -/
+that would otherwise use `List.length` on the eagerly-materialized list instead reads `size`;
+`size_eq` proves them equal. -/
 
 /-- A finite domain, kept symbolically: an explicit element list, or the range `[0, bound)`. -/
 inductive FiniteDomain (p : ℕ) where
@@ -98,8 +97,8 @@ theorem FiniteDomain.foldElts_eq {β : Type} (f : β → ZMod p → β) (stop : 
 
 `IExpr` is an expression with variable leaves compiled to positions (`ix`); `CBi` is a bus
 interaction with compiled multiplicity and payload. Both are variable-free — the *same* compiled term
-is produced whatever the source key type — so they are shared between the reference passes and their
-dense ports. -/
+is produced whatever the source key type — so they are shared by every consumer of the
+domain-propagation passes. -/
 
 /-- An expression with variable leaves compiled to positions. -/
 inductive IExpr (p : ℕ) where

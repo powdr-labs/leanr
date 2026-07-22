@@ -3,37 +3,36 @@ import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnifyProof
 
 set_option autoImplicit false
 
-/-! # Native soundness for the dense `flagUnify` pass (Task 3, busUnify cluster, chunk S2 — prover)
+/-! # Soundness for the dense `flagUnify` pass
 
-Native `DensePassCorrect` for `denseFlagUnifyF` (`Dense/FlagUnifyNative.lean`), lifted to the audited
-`Variable` spec through `DenseVerifiedPassW.of` (`Dense/Bridge.lean`). **This is the second
-SUBSTITUTION-shaped native pass in the busUnify cluster** and a direct parallel of chunk S1
-(`Dense/RootPairUnifyNativeProof.lean`): the entailed flag equalities are adopted into a `DenseSolved`
-map and applied by one `DenseConstraintSystem.substF`, so correctness rides on the reusable native
-substitution core `DenseConstraintSystem.substF_denseCorrect` (`Dense/DomainBatchNativeProof.lean`).
+`DensePassCorrect` for `denseFlagUnifyF` (`FlagUnify.lean`), lifted to the audited
+`Variable` spec through `DenseVerifiedPassW.of` (`Bridge.lean`). This is a
+substitution-shaped pass, directly parallel in structure to `denseRootPairUnifyF`
+(`RootPairUnifyProof.lean`): the entailed flag equalities are adopted into a `DenseSolved`
+map and applied by one `DenseConstraintSystem.substF`, so correctness rides on the reusable
+substitution core `DenseConstraintSystem.substF_denseCorrect` (`DomainBatchProof.lean`).
 
-## What is reused from the S1 template (`Dense/RootPairUnifyNativeProof.lean`)
+## What is reused from `RootPairUnifyProof.lean`
 
 * `DenseConstraintSystem.substF_denseCorrect` — the substitution core (entailment `H` + occurrence
   closure `hfv` ⇒ `DensePassCorrect`, no derivations). Unchanged.
-* `DenseExpr.splitAt_eval`, `mem_denseAssignments`, `denseEnvOfFast_map`, `dpcRefl` — the S1 dense
-  enumeration/decomposition mirrors, reused verbatim (imported, not re-derived).
-* `denseFindDomainAlg_sound` (`Dense/DomainFoldNativeProof.lean`), `denseMatches_evalPattern`,
-  `DenseExpr.constValue?_sound` (`Dense/DomainBatchNativeProof.lean`), `DenseExpr.eval_congr`
-  (`Dense/DomainBatch.lean`) — the dense finite-domain/eval infrastructure.
-* The scan-loop invariant SHAPE (three interlocking invariants — stored-solution entailment,
+* `DenseExpr.splitAt_eval`, `mem_denseAssignments`, `denseEnvOfFast_map`, `dpcRefl` — the same dense
+  enumeration/decomposition lemmas, reused verbatim (imported, not re-derived).
+* `denseFindDomainAlg_sound` (`DomainFoldProof.lean`), `denseMatches_evalPattern`,
+  `DenseExpr.constValue?_sound` (`DomainBatchProof.lean`), `DenseExpr.eval_congr`
+  (`DomainBatch.lean`) — the dense finite-domain/eval infrastructure.
+* The scan-loop invariant shape (three interlocking invariants — stored-solution entailment,
   occurrence closure, and a `seen`-membership invariant recovering the dropped `mem` field), and the
   `denseRpInsertAll_seen`-style bucket lemma.
 
 ## What is new here (the flagUnify certificate)
 
-* `denseFuCheck_sound` — the certificate soundness, a **native** re-derivation of the spec
-  `fuCheck_sound` (~190L) over dense expressions/environments. It uses `facts.slotBound_sound` at the
-  value level, forces the two flag polynomials into the same residue class of `x.val` under
-  `m = k⁻¹.val` (`residue_uniq`, reused as a pure `Nat` lemma from the spec), and reads off the flag
-  agreement from the enumerated finite domain box. No reference *pass* proof is consulted.
-* `denseFuCheck_vars` — the payload-membership extraction, native mirror of `fuCheck_vars`.
-* `DenseSolved.insertAll_preserves` — a list-generalisation of S1's single-pair update
+* `denseFuCheck_sound` — the certificate soundness, proved directly over dense
+  expressions/environments. It uses `facts.slotBound_sound` at the value level, forces the two flag
+  polynomials into the same residue class of `x.val` under `m = k⁻¹.val` (`residue_uniq`, a pure
+  `Nat` lemma), and reads off the flag agreement from the enumerated finite domain box.
+* `denseFuCheck_vars` — the payload-membership extraction.
+* `DenseSolved.insertAll_preserves` — a list-generalisation of the single-pair update
   (`insertAll_map` + `Std.HashMap.getElem?_insert`), because a matched flag pair adopts a *list* of
   solutions at once rather than a single one.
 * `denseFuInsertAll_seen`, `denseFuLoop_sound` — the flagUnify scan over the *bus interactions* (with
@@ -43,9 +42,9 @@ namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## The certificate is sound (native re-derivation of `fuCheck_vars`/`fuCheck_sound`) -/
+/-! ## The certificate is sound -/
 
-/-- **`denseFuCheck` exposes the payload membership.** Native mirror of `fuCheck_vars`: a passed
+/-- **`denseFuCheck` exposes the payload membership.** A passed
     certificate forces `vx` into `biX`'s payload variables (needed for occurrence closure). -/
 theorem denseFuCheck_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (domCs : List (DenseExpr p)) (biX biY : BusInteraction (DenseExpr p))
@@ -98,11 +97,11 @@ theorem denseFuCheck_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     simp only [Bool.and_eq_true, decide_eq_true_eq] at h
     exact hpay ▸ h.1.2
 
-/-- **`denseFuCheck` entails flag-variable equality.** Native mirror of `fuCheck_sound`: two scaled
+/-- **`denseFuCheck` entails flag-variable equality.** Two scaled
     range checks of the same carrier `x` whose offset parts agree pointwise on their finite flag box
-    force `vy = vx` on satisfying assignments. Re-derived natively over `VarId → ZMod p` — reuses only
+    force `vy = vx` on satisfying assignments. Proved directly over `VarId → ZMod p` — reuses only
     value-level pieces (`facts.slotBound_sound`, the pure `Nat` `residue_uniq`) and the dense
-    finite-domain/decomposition mirrors, never a reference *pass* proof. -/
+    finite-domain/decomposition lemmas. -/
 theorem denseFuCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFacts p bs)
     (domCs : List (DenseExpr p)) (biX biY : BusInteraction (DenseExpr p))
     (x vx vy : VarId) (h : denseFuCheck bs facts domCs biX biY x vx vy = true)
@@ -300,10 +299,10 @@ theorem denseFuCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFact
                         ← hagree vx (List.mem_eraseDups.2 (List.mem_append_left _ hvxR'))]
                     exact horb
 
-/-! ## Solution-map list update (generalising S1's single-pair `insertAll`) -/
+/-! ## Solution-map list update (generalising the single-pair `insertAll`) -/
 
 /-- A left fold of `HashMap` inserts preserves any per-entry property `Q` that holds of the base map
-    and of every inserted pair. The `List`-of-pairs analogue of S1's single-pair update. -/
+    and of every inserted pair. The `List`-of-pairs analogue of a single-pair update. -/
 theorem foldl_insert_getElem {Q : VarId → DenseExpr p → Prop} :
     ∀ (pairs : List (VarId × DenseExpr p)) (m : Std.HashMap VarId (DenseExpr p)),
       (∀ i t, m[i]? = some t → Q i t) → (∀ pr ∈ pairs, Q pr.1 pr.2) →
@@ -325,7 +324,7 @@ theorem foldl_insert_getElem {Q : VarId → DenseExpr p → Prop} :
         exact hpairs (x, t0) (List.mem_cons_self ..)
       · exact hm j s hjs
 
-/-- Insertions preserve any per-entry property of the `DenseSolved` solution map. Generalises S1's
+/-- Insertions preserve any per-entry property of the `DenseSolved` solution map. Generalises the
     single-pair `DenseSolved.insertAll_map`/`getElem?_insert` step to a whole adopted pair list. -/
 theorem DenseSolved.insertAll_preserves {Q : VarId → DenseExpr p → Prop}
     (pairs : List (VarId × DenseExpr p)) (σ : DenseSolved p)
@@ -335,10 +334,11 @@ theorem DenseSolved.insertAll_preserves {Q : VarId → DenseExpr p → Prop}
   simp only [DenseSolved.fn, DenseSolved.insertAll_map] at ht
   exact foldl_insert_getElem pairs σ.map (fun i t h => hσ i t h) hpairs i t ht
 
-/-! ## The scan-loop invariant (mirrors S1's `denseRpInsertAll_seen`/`denseRpLoop_sound`) -/
+/-! ## The scan-loop invariant (same shape as `denseRpInsertAll_seen`/`denseRpLoop_sound` in
+    `RootPairUnifyProof.lean`) -/
 
 /-- The `seen`-bucket invariant is preserved by `denseFuInsertAll`. Recovers the `bi`-membership the
-    dense `DenseFUSeen` dropped (native mirror of S1's `denseRpInsertAll_seen`, now on `e.bi`). -/
+    dense `DenseFUSeen` dropped (same argument as `denseRpInsertAll_seen`, now on `e.bi`). -/
 theorem denseFuInsertAll_seen {S : List (BusInteraction (DenseExpr p))} :
     ∀ (es : List (DenseFUSeen p)) (seen : Std.HashMap UInt64 (List (DenseFUSeen p))),
       (∀ hsh e, e ∈ seen.getD hsh [] → e.bi ∈ S) → (∀ e ∈ es, e.bi ∈ S) →
@@ -361,7 +361,7 @@ theorem denseFuInsertAll_seen {S : List (BusInteraction (DenseExpr p))} :
         · exact hacc (denseFuKeyHash e0.key) e hmem'
       · exact hacc hsh e hmem
 
-/-- **The flagUnify scan loop is sound.** Native mirror of S1's `denseRpLoop_sound`: the final
+/-- **The flagUnify scan loop is sound**, same argument shape as `denseRpLoop_sound`: the final
     solution map is entailed (a) and occurrence-closed (b). The certificate `denseFuCheck_sound`
     forces each adopted `vy = vx` on satisfying assignments (using the *current* and the *seen*
     interaction's bus obligation); the bucketed `seen` scan's membership is recovered by
@@ -464,7 +464,7 @@ theorem denseFuLoop_sound [Fact p.Prime] (bs : BusSemantics p)
               · rw [if_neg hk] at hif
                 exact absurd hif (by simp)
 
-/-! ## The native dense `flagUnify` pass -/
+/-! ## The dense `flagUnify` pass -/
 
 /-- The dense `flagUnify` transform re-expressed with the loop's solution map named, for the
     correctness/coverage proofs. -/
@@ -523,11 +523,11 @@ theorem denseFlagUnifyF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : 
       (fun i t hti z hz => hinv.2 i t hti z hz)
   · exact dpcRefl reg.isInput d bs
 
-/-- **The native dense `flagUnify` pass.** Flag unification across duplicate scaled range checks
-    proved correct natively over `VarId → ZMod p` (substitution-shaped: the entailed flag equalities
+/-- **The dense `flagUnify` pass.** Flag unification across duplicate scaled range checks
+    proved correct directly over `VarId → ZMod p` (substitution-shaped: the entailed flag equalities
     are adopted into a `DenseSolved` map and applied by one `DenseConstraintSystem.substF`), connected
-    to the audited spec via `DensePassCorrect.lift` (through `of`) — no commutation with the
-    reference pass. Directly parallels `denseRootPairUnifyPass` (chunk S1). -/
+    to the audited spec via `DensePassCorrect.lift` (through `of`). Directly parallels
+    `denseRootPairUnifyPass`. -/
 def denseFlagUnifyPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (denseFlagUnifyF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseFlagUnifyF_covered pw reg bs facts d hcov)

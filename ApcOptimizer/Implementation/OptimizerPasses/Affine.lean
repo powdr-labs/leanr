@@ -3,15 +3,11 @@ import Mathlib.Tactic.Ring
 
 set_option autoImplicit false
 
-/-! # Dense affine forms (Task 3, WP-E — Gauss foundation)
+/-! # Dense affine forms (Gauss foundation)
 
-The dense mirror of `LinExpr`/`linearize` (`OptimizerPasses/Affine.lean`), the linear-form layer the
-Gauss elimination pass is built on. `linearize` never compares variables (it only appends and
-scales term lists), so its decode-commutation needs no validity hypothesis — unlike the solver layer
-(`coeff`/`trySolve`, which filter on `t.1 = x`), which comes next.
-
-`decodeLin` decodes a dense linear form by resolving each term's `VarId`; the commutation lemmas
-show the dense `eval`/`add`/`scale`/`linearize`/`toExpr` decode to their spec counterparts. -/
+`DenseLinExpr`/`denseLinearize`, the linear-form layer the Gauss elimination pass is built on.
+`denseLinearize` never compares variables — it only appends and scales term lists; the solver
+layer below (`coeff`/`trySolve`, which filter on `t.1 = x`) does. -/
 
 namespace ApcOptimizer.Dense
 
@@ -52,20 +48,18 @@ def denseLinearize : DenseExpr p → Option (DenseLinExpr p)
 def DenseLinExpr.toExpr (l : DenseLinExpr p) : DenseExpr p :=
   l.terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) (.const l.const)
 
-/-! # Dense affine solver (Task 3, WP-E — Gauss foundation, part 2)
+/-! # Dense affine solver (Gauss foundation, part 2)
 
-The dense mirror of the affine *solver* layer of `OptimizerPasses/Affine.lean` — `coeff`/`others`,
-`trySolve`/`trySolveUnit`, and the occurrence-aware pivot enumerators `pm1PivotsOf`/`unitPivotsOf`.
-These *compare variables* (they filter a term list on `t.1 = x`) and are `VarId`-native; the native
-Gauss proof (`GaussProof.lean`) consumes them directly (`densePm1PivotsOf`/`denseUnitPivotsOf` and
-their `_sound`/`_vars` lemmas). The commutation-era decode lemmas and the unused `solveAffineLin`/
-`solveAffine`/`solvableFrom` solver defs the old Gauss port relied on have been removed. -/
+The affine *solver* layer — `coeff`/`others`, `trySolve`/`trySolveUnit`, and the occurrence-aware
+pivot enumerators `densePm1PivotsOf`/`denseUnitPivotsOf`. These *compare variables* (they filter a
+term list on `t.1 = x`); the Gauss proof (`GaussProof.lean`) consumes them directly
+(`densePm1PivotsOf`/`denseUnitPivotsOf` and their `_sound`/`_vars` lemmas). -/
 
 /-! ## `denseLinearize` introduces no new variable
 
 Proved locally (independent of `Dense/Normalize.lean`, which sits *downstream* of this file): the
-term ids of a linearized dense expression are among the expression's variables. The native Gauss
-proof (`GaussProof.lean`) consumes this. -/
+term ids of a linearized dense expression are among the expression's variables. The Gauss proof
+(`GaussProof.lean`) consumes this. -/
 
 /-- Every term variable of `denseLinearize e` occurs in `e`. -/
 theorem denseLinearize_mem_vars (e : DenseExpr p) (l : DenseLinExpr p)
@@ -115,16 +109,16 @@ theorem denseLinearize_mem_vars (e : DenseExpr p) (l : DenseLinExpr p)
 
 /-! ## Coefficient / remainder of a dense linear form -/
 
-/-- Total coefficient of `x` in a dense linear form (mirrors `LinExpr.coeff`). -/
+/-- Total coefficient of `x` in a dense linear form. -/
 def DenseLinExpr.coeff (l : DenseLinExpr p) (x : VarId) : ZMod p :=
   ((l.terms.filter (fun t => t.1 = x)).map Prod.snd).sum
 
-/-- The dense linear form with all `x` terms removed (mirrors `LinExpr.others`). -/
+/-- The dense linear form with all `x` terms removed. -/
 def DenseLinExpr.others (l : DenseLinExpr p) (x : VarId) : DenseLinExpr p :=
   ⟨l.const, l.terms.filter (fun t => t.1 ≠ x)⟩
 
-/-- Partition a dense term-list evaluation by whether the variable is `x` (mirrors
-    `eval_terms_split`). Pure — no validity, since it never resolves. -/
+/-- Partition a dense term-list evaluation by whether the variable is `x`. Pure — no validity,
+    since it never resolves. -/
 theorem denseEval_terms_split (x : VarId) (denv : VarId → ZMod p)
     (terms : List (VarId × ZMod p)) :
     (terms.map (fun t => t.2 * denv t.1)).sum
@@ -143,8 +137,7 @@ theorem denseEval_terms_split (x : VarId) (denv : VarId → ZMod p)
             List.map_cons, List.sum_cons, List.map_cons, List.sum_cons, ih]
         ring
 
-/-- Coefficient/remainder decomposition of a dense linear form's evaluation (mirrors
-    `LinExpr.eval_split`). -/
+/-- Coefficient/remainder decomposition of a dense linear form's evaluation. -/
 theorem DenseLinExpr.eval_split (l : DenseLinExpr p) (x : VarId) (denv : VarId → ZMod p) :
     l.eval denv = l.coeff x * denv x + (l.others x).eval denv := by
   simp only [DenseLinExpr.eval, DenseLinExpr.coeff, DenseLinExpr.others,
@@ -153,15 +146,13 @@ theorem DenseLinExpr.eval_split (l : DenseLinExpr p) (x : VarId) (denv : VarId �
 
 /-! ## Solving for a unit-coefficient variable -/
 
-/-- Try to solve the dense linear form `= 0` for `v` when `v` has coefficient `±1`
-    (mirrors `LinExpr.trySolve`). -/
+/-- Try to solve the dense linear form `= 0` for `v` when `v` has coefficient `±1`. -/
 def DenseLinExpr.trySolve (l : DenseLinExpr p) (v : VarId) : Option (VarId × DenseExpr p) :=
   if l.coeff v = 1 then some (v, ((l.others v).scale (-1)).toExpr)
   else if l.coeff v = -1 then some (v, (l.others v).toExpr)
   else none
 
-/-- Try to solve the dense linear form `= 0` for `v` when `v`'s coefficient is a *unit*
-    (mirrors `LinExpr.trySolveUnit`). -/
+/-- Try to solve the dense linear form `= 0` for `v` when `v`'s coefficient is a *unit*. -/
 def DenseLinExpr.trySolveUnit (l : DenseLinExpr p) (v : VarId) : Option (VarId × DenseExpr p) :=
   if l.coeff v * (l.coeff v)⁻¹ = 1 then
     some (v, ((l.others v).scale (-(l.coeff v)⁻¹)).toExpr)
@@ -171,14 +162,13 @@ def DenseLinExpr.trySolveUnit (l : DenseLinExpr p) (v : VarId) : Option (VarId �
 
 /-! ## Occurrence-aware pivot enumeration -/
 
-/-- All `±1`-coefficient pivots of one dense constraint (mirrors `pm1PivotsOf`). -/
+/-- All `±1`-coefficient pivots of one dense constraint. -/
 def densePm1PivotsOf (c : DenseExpr p) : List (VarId × DenseExpr p) :=
   match denseLinearize c with
   | none => []
   | some l => (l.terms.map Prod.fst).filterMap l.trySolve
 
-/-- Unit-coefficient pivots of one dense constraint, for variables with no `±1` solution
-    (mirrors `unitPivotsOf`). -/
+/-- Unit-coefficient pivots of one dense constraint, for variables with no `±1` solution. -/
 def denseUnitPivotsOf (c : DenseExpr p) : List (VarId × DenseExpr p) :=
   match denseLinearize c with
   | none => []
@@ -188,12 +178,11 @@ def denseUnitPivotsOf (c : DenseExpr p) : List (VarId × DenseExpr p) :=
       | some _ => none
       | none => l.trySolveUnit v)
 
-/-! ## Native affine-form evaluation (mirrors `LinExpr.add_eval`/`scale_eval`/`linearize_eval`)
+/-! ## Affine-form evaluation
 
-The eval-preservation identities for the dense affine layer, proved natively over `VarId → ZMod p`
-environments (no `decode`, no prime hypothesis — pure algebra). Consolidated here at their
-definitions' home so every downstream native proof (normalization, domain passes, busPairCancel)
-shares one copy. -/
+The eval-preservation identities for the dense affine layer, proved directly over `VarId → ZMod p`
+environments (no prime hypothesis — pure algebra). Consolidated here at their definitions' home so
+every downstream proof (normalization, domain passes, busPairCancel) shares one copy. -/
 
 theorem DenseLinExpr.add_eval (a b : DenseLinExpr p) (denv : VarId → ZMod p) :
     (a.add b).eval denv = a.eval denv + b.eval denv := by
@@ -254,8 +243,7 @@ theorem denseLinearize_eval (e : DenseExpr p) (l : DenseLinExpr p) (h : denseLin
               rw [if_neg h1, if_neg h2] at h
               exact absurd h (by simp)
 
-/-- Evaluating the linear-form-rebuilt expression folds back to the affine sum. Dense mirror of
-    `toExpr_foldl_eval` (`OptimizerPasses/Affine.lean:148`). -/
+/-- Evaluating the linear-form-rebuilt expression folds back to the affine sum. -/
 theorem denseToExpr_foldl_eval (denv : VarId → ZMod p) (terms : List (VarId × ZMod p)) :
     ∀ init : DenseExpr p,
       (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init).eval denv
@@ -268,8 +256,7 @@ theorem denseToExpr_foldl_eval (denv : VarId → ZMod p) (terms : List (VarId ×
       simp only [DenseExpr.eval]
       ring
 
-/-- `DenseLinExpr.toExpr` is eval-preserving. Dense mirror of `LinExpr.toExpr_eval`
-    (`OptimizerPasses/Affine.lean:160`). -/
+/-- `DenseLinExpr.toExpr` is eval-preserving. -/
 theorem DenseLinExpr.toExpr_eval (l : DenseLinExpr p) (denv : VarId → ZMod p) :
     l.toExpr.eval denv = l.eval denv := by
   simp only [DenseLinExpr.toExpr, DenseLinExpr.eval, denseToExpr_foldl_eval, DenseExpr.eval]

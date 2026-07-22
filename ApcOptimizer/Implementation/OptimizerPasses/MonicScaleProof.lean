@@ -2,11 +2,11 @@ import ApcOptimizer.Implementation.OptimizerPasses.MonicScale
 
 set_option autoImplicit false
 
-/-! # Native soundness for the dense monic scaling of constraint factors (Task 3)
+/-! # Soundness for the dense monic scaling of constraint factors
 
-Native `DensePassCorrect` — over `VarId → ZMod p` environments, with no dependency on the reference
-`Variable` pass — for the dense monic-scaling canonicalizer (`MonicScale.lean`), lifted once to the
-audited `Variable` spec through `DenseVerifiedPassW.of`.
+`DensePassCorrect` — over `VarId → ZMod p` environments — for the dense monic-scaling
+canonicalizer (`MonicScale.lean`), lifted once to the audited `Variable` spec through
+`DenseVerifiedPassW.of`.
 
 An algebraic constraint matters only through its zero set, so it may be rescaled by any unit without
 changing satisfiability. This pass walks each constraint's product tree and scales each affine factor
@@ -25,8 +25,7 @@ variable {p : ℕ}
 
 /-! ## Scaling with a unit certificate: evaluation, unit, variable bounds -/
 
-/-- The monic-scaled affine expression evaluates to its unit multiplier times the original. Native
-    mirror of `monicScaleAffine_eval`. -/
+/-- The monic-scaled affine expression evaluates to its unit multiplier times the original. -/
 theorem denseMonicScaleAffine_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
     (denseMonicScaleAffine e).1.eval denv = (denseMonicScaleAffine e).2.1 * e.eval denv := by
   unfold denseMonicScaleAffine
@@ -42,7 +41,7 @@ theorem denseMonicScaleAffine_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
       · simp
     · simp
 
-/-- The affine scaling's certificate is a genuine unit. Native mirror of `monicScaleAffine_unit`. -/
+/-- The affine scaling's certificate is a genuine unit. -/
 theorem denseMonicScaleAffine_unit (e : DenseExpr p) :
     (denseMonicScaleAffine e).2.1 * (denseMonicScaleAffine e).2.2 = 1 := by
   unfold denseMonicScaleAffine
@@ -55,8 +54,7 @@ theorem denseMonicScaleAffine_unit (e : DenseExpr p) :
       · simp
     · simp
 
-/-- Monic scaling of an affine expression introduces no new variable. Native mirror of
-    `monicScaleAffine_vars`. -/
+/-- Monic scaling of an affine expression introduces no new variable. -/
 theorem denseMonicScaleAffine_vars (e : DenseExpr p) :
     ∀ z ∈ (denseMonicScaleAffine e).1.vars, z ∈ e.vars := by
   intro z hz
@@ -73,8 +71,7 @@ theorem denseMonicScaleAffine_vars (e : DenseExpr p) :
       · exact hz
     · exact hz
 
-/-- The monic-scaled product tree evaluates to its accumulated unit multiplier times the original.
-    Native mirror of `monicScale_eval`. -/
+/-- The monic-scaled product tree evaluates to its accumulated unit multiplier times the original. -/
 theorem denseMonicScale_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
     (denseMonicScale e).1.eval denv = (denseMonicScale e).2.1 * e.eval denv := by
   induction e with
@@ -89,8 +86,7 @@ theorem denseMonicScale_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
         rw [iha, ihb]
         ring
 
-/-- The product tree's accumulated certificate is a genuine unit. Native mirror of
-    `monicScale_unit`. -/
+/-- The product tree's accumulated certificate is a genuine unit. -/
 theorem denseMonicScale_unit (e : DenseExpr p) :
     (denseMonicScale e).2.1 * (denseMonicScale e).2.2 = 1 := by
   induction e with
@@ -109,8 +105,7 @@ theorem denseMonicScale_unit (e : DenseExpr p) :
               * ((denseMonicScale b).2.1 * (denseMonicScale b).2.2) := by ring
           _ = 1 := by rw [iha, ihb, one_mul]
 
-/-- Unit scaling preserves the zero set (over any commutative ring). Native mirror of
-    `monicScale_zero_iff`. -/
+/-- Unit scaling preserves the zero set (over any commutative ring). -/
 theorem denseMonicScale_zero_iff (e : DenseExpr p) (denv : VarId → ZMod p) :
     ((denseMonicScale e).1.eval denv = 0 ↔ e.eval denv = 0) := by
   rw [denseMonicScale_eval]
@@ -122,8 +117,7 @@ theorem denseMonicScale_zero_iff (e : DenseExpr p) (denv : VarId → ZMod p) :
   · intro h
     rw [h, mul_zero]
 
-/-- Monic scaling of a product tree introduces no new variable. Native mirror of
-    `monicScale_vars`. -/
+/-- Monic scaling of a product tree introduces no new variable. -/
 theorem denseMonicScale_vars (e : DenseExpr p) : ∀ z ∈ (denseMonicScale e).1.vars, z ∈ e.vars := by
   induction e with
   | const n => exact denseMonicScaleAffine_vars _
@@ -139,9 +133,9 @@ theorem denseMonicScale_vars (e : DenseExpr p) : ∀ z ∈ (denseMonicScale e).1
 
 /-! ## The pass correctness -/
 
-/-- **Native monic-scaling correctness.** Every constraint is rewritten to a unit multiple of
+/-- **Monic-scaling correctness.** Every constraint is rewritten to a unit multiple of
     itself, so the zero sets — hence the satisfying assignments — coincide, and the (bus-only) side
-    effects and admissibility are untouched. Native mirror of `monicScalePass`'s correctness. -/
+    effects and admissibility are untouched. -/
 theorem denseMonicScaleF_correct (bs : BusSemantics p) (isInput : VarId → Bool)
     (d : DenseConstraintSystem p) :
     DensePassCorrect isInput d (denseMonicScaleF d) [] bs := by
@@ -173,8 +167,8 @@ theorem denseMonicScaleF_correct (bs : BusSemantics p) (isInput : VarId → Bool
   · intro denv hadm hsat
     exact ⟨(hsatiff denv).2 hsat, hadm, BusState.equiv_refl _⟩
 
-/-- **The native dense monic-scaling pass.** Rewrites every constraint's affine factors to monic
-    form; unconditional in `p`. Runtime transform unchanged from `MonicScale.lean`; the pass is
+/-- **The dense monic-scaling pass.** Rewrites every constraint's affine factors to monic
+    form; unconditional in `p`. Runtime transform lives in `MonicScale.lean`; the pass is
     fully `facts`/`bs`-free. -/
 def denseMonicScalePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of

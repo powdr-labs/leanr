@@ -5,11 +5,11 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDropsProof
 
 set_option autoImplicit false
 
-/-! # Native soundness for the dense redundant byte-check drop (Task 3)
+/-! # Soundness for the dense redundant byte-check drop
 
-Native `DensePassCorrect` — over `VarId → ZMod p` environments, with no dependency on the reference
-`Variable` pass — for the dense redundant byte-check dropper (`RedundantByteDrop.lean`), lifted once
-to the audited `Variable` spec through `DenseVerifiedPassW.of`.
+`DensePassCorrect` — over `VarId → ZMod p` environments — for the dense redundant byte-check
+dropper (`RedundantByteDrop.lean`), lifted once to the audited `Variable` spec through
+`DenseVerifiedPassW.of`.
 
 The pass drops a recognised pure byte-check interaction (`denseByteCheckOperands?`, decoded through
 the VM-neutral `facts.byteXorSpec` at byte bound `256`) whose operands are all already byte-justified
@@ -17,7 +17,7 @@ from the constraints and a non-circular justification base — the interactions 
 drop (`denseByteDropBase`). Every dropped interaction is then accepted under every assignment
 satisfying the FILTERED system, so it is entailed and its removal is sound and side-effect-neutral.
 
-Three proven ingredients, all native and reused rather than re-derived:
+Three proven ingredients, reused rather than re-derived:
 
 * `DensePassCorrect.denseFilterBusEntailed` (`FlagFoldDropsProof.lean`) — dropping a stateless
   interaction accepted under every assignment satisfying the filtered system;
@@ -26,9 +26,8 @@ Three proven ingredients, all native and reused rather than re-derived:
 * `denseByteXorSpec_decode_iff`/`denseByteBoolSound_decode_iff`/`denseIsByteCompl_sound`
   (`ByteCheckPackProof.lean`) — the decoded-field acceptance characterizations.
 
-The recognition-soundness chain `denseByteCheckOperands?_stateless → _accepted` is a native
-re-derivation of the spec `byteCheckOperands?_stateless/_accepted`, built directly from those
-value-level `BusFacts` characterizations — no decode. -/
+The recognition-soundness chain `denseByteCheckOperands?_stateless → _accepted` is built directly
+from those value-level `BusFacts` characterizations — no decode. -/
 
 namespace ApcOptimizer.Dense
 
@@ -36,8 +35,7 @@ variable {p : ℕ}
 
 /-! ## Local wraparound-free byte facts -/
 
-/-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. Copy of the
-    spec's `val_255_sub`. -/
+/-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. -/
 private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
     (255 - a).val = Nat.xor a.val 255 := by
   haveI : NeZero p := ⟨by omega⟩
@@ -53,8 +51,7 @@ private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
 
 /-! ## The recognizer is sound -/
 
-/-- A recognized byte check lives on a stateless bus. Native mirror of
-    `byteCheckOperands?_stateless`. -/
+/-- A recognized byte check lives on a stateless bus. -/
 theorem denseByteCheckOperands?_stateless (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (ops : List (DenseExpr p))
     (h : denseByteCheckOperands? bs facts bi = some ops) : bs.isStateful bi.busId = false := by
@@ -64,8 +61,7 @@ theorem denseByteCheckOperands?_stateless (bs : BusSemantics p) (facts : BusFact
   · rename_i spec hspec
     exact (facts.byteXorSpec_sound bi.busId spec hspec).1
 
-/-- If every recognized operand evaluates to a byte, the evaluated message is accepted. Native mirror
-    of `byteCheckOperands?_accepted`. -/
+/-- If every recognized operand evaluates to a byte, the evaluated message is accepted. -/
 theorem denseByteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (ops : List (DenseExpr p))
     (h : denseByteCheckOperands? bs facts bi = some ops) (denv : VarId → ZMod p)
@@ -185,10 +181,9 @@ theorem denseByteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts
 
 /-! ## The pass -/
 
-/-- **Native redundant byte-check removal correctness.** Every dropped interaction is a recognised
+/-- **Redundant byte-check removal correctness.** Every dropped interaction is a recognised
     byte check whose operands are all byte-justified from the retained base, so it is accepted under
-    every assignment satisfying the filtered system — equivalence- and invariant-preserving. Native
-    mirror of `redundantByteDropPass`'s correctness. -/
+    every assignment satisfying the filtered system — equivalence- and invariant-preserving. -/
 theorem denseRedundantByteDropF_correct (pw : PrimeWitness p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (isInput : VarId → Bool) (d : DenseConstraintSystem p) :
     DensePassCorrect isInput d (denseRedundantByteDropF pw bs facts d) [] bs := by
@@ -224,8 +219,8 @@ theorem denseRedundantByteDropF_correct (pw : PrimeWitness p) (bs : BusSemantics
         rw [hnone]
       exact hsat.2 bi' (List.mem_filter.2 ⟨(List.mem_filter.1 hbi').1, hkeep⟩) hmult
 
-/-- **The native dense redundant byte-check drop pass.** Consumes `facts` directly (through
-    `byteXorSpec`) and the prime witness; unconditional in `p`. Runtime transform unchanged from
+/-- **The dense redundant byte-check drop pass.** Consumes `facts` directly (through
+    `byteXorSpec`) and the prime witness; unconditional in `p`. Runtime transform lives in
     `RedundantByteDrop.lean`. -/
 def denseRedundantByteDropPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of

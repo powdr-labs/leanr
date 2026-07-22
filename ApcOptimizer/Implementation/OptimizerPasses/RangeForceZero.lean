@@ -2,20 +2,17 @@ import ApcOptimizer.Implementation.OptimizerPasses.DropPasses
 
 set_option autoImplicit false
 
-/-! # Dense width-0 range check → equality (Task 3, impl-only)
+/-! # Dense width-0 range check → equality
 
-Dense, `VarId`-native transliteration of the reference `RangeForceZero` pass's *runtime*
-definitions: `forceZeroAt` (`:24`), `forceZeroSeeds` (`:93`), and the pass `rangeForceZeroPass`
-(`:99`). This is a **single-shot add-seeds** transform (`ConstraintSystem.addConstraints_correct`
-at `:99`), so its dense mirror `denseRangeForceZeroF` is one `if`-gated append, exactly the shape
-`DenseVerifiedPassW.of`/the DigitFold-style direct construction expects
-(`bs → facts → d → d'`). **Impl-only**: `forceZeroAt_spec`/`forceZeroAt_sound`/`forceZeroSeeds_sound`
-are proof-side and left for the prover. The native `DensePassCorrect` proof and the pass wiring
-(`denseRangeForceZeroPass`, scheduled as `"rangeForceZero"`) live in `RangeForceZeroProof.lean`.
+`denseForceZeroAt` recognizes a width-0 (`bound = 1`) range check and yields its forced-zero slot
+expression; `denseForceZeroSeeds` collects these across all bus interactions; the pass
+`denseRangeForceZeroF` is a single `if`-gated append of these seeds as new algebraic constraints —
+the shape `DenseVerifiedPassW.of`/the DigitFold-style direct construction expects
+(`bs → facts → d → d'`). The `DensePassCorrect` proof and the pass wiring (`denseRangeForceZeroPass`,
+scheduled as `"rangeForceZero"`) live in `RangeForceZeroProof.lean`.
 
 `facts.rangeCheckAt` is representation-independent (`(busId : Nat) → (pattern : List (Option (ZMod
-p))) → …`) and is consulted unqualified, exactly as the spec does — no dense twin needed.
-`Expression.constValue?` → `DenseExpr.constValue?` (`DropPasses.lean:64`). The membership filter
+p))) → …`) and is consulted unqualified — no dense twin needed. The membership filter
 `e.vars.all (fun z => cs.vars.contains z)` mirrors onto `d.occ` (`Measure.lean`), the dense analogue
 of `ConstraintSystem.vars` (established in `HintCollapse.lean`'s `denseIsFresh`). -/
 
@@ -24,8 +21,7 @@ namespace ApcOptimizer.Dense
 variable {p : ℕ}
 
 /-- The forced-zero expression of `bi`: its value-slot expression, when `bi` is a mult-1 range
-    check whose `rangeCheckAt` bound is `1` (`= 2⁰`, so the slot is `< 1`, i.e. `0`). Mirrors
-    `RangeForceZero.forceZeroAt`. -/
+    check whose `rangeCheckAt` bound is `1` (`= 2⁰`, so the slot is `< 1`, i.e. `0`). -/
 def denseForceZeroAt {bs : BusSemantics p} (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (DenseExpr p) :=
   match facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?) with
@@ -39,14 +35,13 @@ def denseForceZeroAt {bs : BusSemantics p} (facts : BusFacts p bs)
     else none
   | none => none
 
-/-- The seeds: the forced-zero expression of every recognised width-0 check. Mirrors
-    `RangeForceZero.forceZeroSeeds` (`:93`). -/
+/-- The seeds: the forced-zero expression of every recognised width-0 check. -/
 def denseForceZeroSeeds {bs : BusSemantics p} (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : List (DenseExpr p) :=
   d.busInteractions.filterMap (denseForceZeroAt facts)
 
-/-- The dense transform: seed `expr = 0` for every width-0 (`bound = 1`) range check. Mirrors
-    `RangeForceZero.rangeForceZeroPass` (`:99`), gated identically on `(1 : ZMod p) ≠ 0`. -/
+/-- The dense transform: seed `expr = 0` for every width-0 (`bound = 1`) range check. Gated on
+    `(1 : ZMod p) ≠ 0`. -/
 def denseRangeForceZeroF (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if (1 : ZMod p) ≠ 0 then

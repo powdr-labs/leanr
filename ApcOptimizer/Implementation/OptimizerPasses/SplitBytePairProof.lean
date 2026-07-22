@@ -4,12 +4,10 @@ import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancel
 
 set_option autoImplicit false
 
-/-! # Native correctness of the dense byte-check pair splitting pass (Task 3)
+/-! # Correctness of the dense byte-check pair splitting pass
 
-Native, `VarId`-native `DensePassCorrect` proof for `denseSplitBytePairF`
-(`OptimizerPasses/SplitBytePair.lean`), the dense transliteration of the reference
-`SplitBytePair.splitBytePairPass`. No decode transport
-into the reference `Variable` passes: every obligation is discharged over dense environments `VarId → ZMod p`.
+`DensePassCorrect` proof for `denseSplitBytePairF` (`SplitBytePair.lean`): every obligation is
+discharged over dense environments `VarId → ZMod p`.
 
 ## Why it is correct
 
@@ -38,8 +36,7 @@ namespace ApcOptimizer.Dense
 variable {p : ℕ}
 
 /-- A recognizer hit pins the whole interaction: `bi` is exactly `denseMkBytePair spec busId a b`, on
-    a `byteXorSpec` bus. Native mirror of `SplitBytePair.asBytePair_eq`
-   . -/
+    a `byteXorSpec` bus. -/
 theorem denseAsBytePair_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (busId : Nat) (spec : ByteXorSpec p) (a b : DenseExpr p)
     (h : denseAsBytePair bs facts bi = some (busId, spec, a, b)) :
@@ -65,18 +62,17 @@ theorem denseAsBytePair_eq (bs : BusSemantics p) (facts : BusFacts p bs)
       rw [hm', hpay]; rfl
     · exact absurd h (by simp)
 
-/-- The obligation predicate appearing in dense `satisfies` (native mirror of the spec `P`). -/
+/-- The obligation predicate appearing in dense `satisfies`. -/
 private def denseP (bs : BusSemantics p) (denv : VarId → ZMod p)
     (bi : BusInteraction (DenseExpr p)) : Prop :=
   (denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false
 
-/-- `[x].filter q ++ ys.filter q = (x :: ys).filter q`. Native copy of the spec `filter_cons_append`. -/
+/-- `[x].filter q ++ ys.filter q = (x :: ys).filter q`. -/
 private theorem filter_cons_append {α : Type} (q : α → Bool) (x : α) (ys : List α) :
     ([x].filter q) ++ ys.filter q = (x :: ys).filter q := by
   cases h : q x <;> simp [h]
 
-/-- Per-interaction obligation equivalence: the split list carries the same obligation as `bi`.
-    Native mirror of `SplitBytePair.splitOne_P`. -/
+/-- Per-interaction obligation equivalence: the split list carries the same obligation as `bi`. -/
 private theorem denseSplitOne_P (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (bi : BusInteraction (DenseExpr p)) (denv : VarId → ZMod p) :
     (∀ b ∈ denseSplitOne bs facts bi, denseP bs denv b) ↔ denseP bs denv bi := by
@@ -108,8 +104,7 @@ private theorem denseSplitOne_P (bs : BusSemantics p) (facts : BusFacts p bs)
     rw [hsaP, hsbP, hpairP]
     exact (denseMkBytePair_iff_singles bs facts spec busId hspec a b denv).symm
 
-/-- The bus-list-level obligation equivalence. Native mirror of `SplitBytePair.forall_P_flatMap`
-   . -/
+/-- The bus-list-level obligation equivalence. -/
 private theorem forall_denseP_flatMap (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (l : List (BusInteraction (DenseExpr p))) (denv : VarId → ZMod p) :
     (∀ b ∈ l.flatMap (denseSplitOne bs facts), denseP bs denv b) ↔
@@ -128,8 +123,7 @@ private theorem forall_denseP_flatMap (bs : BusSemantics p) (facts : BusFacts p 
       · exact ih.2 hrest b hb
 
 /-- Splitting a stateless byte-pair check yields only stateless interactions, so the
-    stateful-filtered bus list is unchanged (per interaction). Native mirror of
-    `SplitBytePair.splitOne_filter_stateful`. -/
+    stateful-filtered bus list is unchanged (per interaction). -/
 private theorem denseSplitOne_filter_stateful (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) :
     (denseSplitOne bs facts bi).filter (fun b => bs.isStateful b.busId)
@@ -144,8 +138,7 @@ private theorem denseSplitOne_filter_stateful (bs : BusSemantics p) (facts : Bus
     simp only [denseMkByteCheck, denseMkBytePair, List.filter_cons, List.filter_nil, hst,
       Bool.false_eq_true, if_false]
 
-/-- The stateful-filtered bus list is invariant under the whole split. Native mirror of
-    `SplitBytePair.filter_stateful_flatMap`. -/
+/-- The stateful-filtered bus list is invariant under the whole split. -/
 private theorem filter_stateful_flatMap (bs : BusSemantics p) (facts : BusFacts p bs)
     (l : List (BusInteraction (DenseExpr p))) :
     (l.flatMap (denseSplitOne bs facts)).filter (fun b => bs.isStateful b.busId)
@@ -156,8 +149,7 @@ private theorem filter_stateful_flatMap (bs : BusSemantics p) (facts : BusFacts 
     rw [List.flatMap_cons, List.filter_append, denseSplitOne_filter_stateful bs facts a, ih]
     exact filter_cons_append _ a rest
 
-/-- The active∧stateful evaluated messages are invariant under the split (per interaction). Native
-    mirror of `SplitBytePair.splitOne_map_filter`. -/
+/-- The active∧stateful evaluated messages are invariant under the split (per interaction). -/
 private theorem denseSplitOne_map_filter (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (denv : VarId → ZMod p) :
     ((denseSplitOne bs facts bi).map (fun b => denseBIEval b denv)).filter
@@ -174,8 +166,7 @@ private theorem denseSplitOne_map_filter (bs : BusSemantics p) (facts : BusFacts
     simp only [denseMkByteCheck, denseMkBytePair, List.map_cons, List.map_nil, denseBIEval,
       List.filter_cons, List.filter_nil, hst, Bool.and_false, Bool.false_eq_true, if_false]
 
-/-- The active∧stateful evaluated-message list is invariant under the whole split. Native mirror of
-    `SplitBytePair.map_filter_flatMap`. -/
+/-- The active∧stateful evaluated-message list is invariant under the whole split. -/
 private theorem map_filter_flatMap (bs : BusSemantics p) (facts : BusFacts p bs)
     (l : List (BusInteraction (DenseExpr p))) (denv : VarId → ZMod p) :
     ((l.flatMap (denseSplitOne bs facts)).map (fun b => denseBIEval b denv)).filter
@@ -190,8 +181,7 @@ private theorem map_filter_flatMap (bs : BusSemantics p) (facts : BusFacts p bs)
     simp only [List.map_cons, List.map_nil]
     exact filter_cons_append _ (denseBIEval a denv) (rest.map (fun b => denseBIEval b denv))
 
-/-- Variables of a split interaction come from the original. Native mirror of
-    `SplitBytePair.splitOne_vars`. -/
+/-- Variables of a split interaction come from the original. -/
 private theorem denseSplitOne_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi b : BusInteraction (DenseExpr p)) (hb : b ∈ denseSplitOne bs facts bi)
     {v : VarId} (hv : v ∈ denseBIVars b) : v ∈ denseBIVars bi := by
@@ -219,9 +209,7 @@ private theorem denseSplitOne_vars (bs : BusSemantics p) (facts : BusFacts p bs)
         exact denseMem_biVars_of_payload (denseMkBytePair spec busId a b') b' hmb
           (denseMkByteCheck_payload_vars spec busId b' pe hpe hx)
 
-/-- Every split interaction is either `bi` itself, or never breaks an invariant (a byte self-check).
-    Native mirror of `SplitBytePair.splitOne_breaksInvariant`
-   . -/
+/-- Every split interaction is either `bi` itself, or never breaks an invariant (a byte self-check). -/
 private theorem denseSplitOne_breaksInvariant (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi b : BusInteraction (DenseExpr p)) (hb : b ∈ denseSplitOne bs facts bi)
     (denv : VarId → ZMod p) :
@@ -257,7 +245,7 @@ private theorem denseSplitOne_covered (reg : VarRegistry) (bs : BusSemantics p) 
     · exact denseMkByteCheck_covered reg spec busId a ha
     · exact denseMkByteCheck_covered reg spec busId b' hb2
 
-/-- Native correctness of one full split (parameterised on the output system so the projections
+/-- Correctness of one full split (parameterised on the output system so the projections
     reduce by `rfl` at the call site). -/
 private theorem denseSplitBytePair_correct_aux (isInput : VarId → Bool) (bs : BusSemantics p)
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (d out : DenseConstraintSystem p)
@@ -317,7 +305,7 @@ theorem denseSplitBytePairF_covered (reg : VarRegistry) (bs : BusSemantics p) (f
     exact denseSplitOne_covered reg bs facts orig (hcov.2 orig horig) bi hbimem
   · exact hcov
 
-/-- Native `DensePassCorrect` of the whole split transform. -/
+/-- `DensePassCorrect` of the whole split transform. -/
 theorem denseSplitBytePairF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     DensePassCorrect reg.isInput d (denseSplitBytePairF bs facts d) [] bs := by
@@ -327,9 +315,8 @@ theorem denseSplitBytePairF_correct (reg : VarRegistry) (bs : BusSemantics p) (f
   next => exact DensePassCorrect.refl reg.isInput d bs
 
 /-- The dense byte-check pair splitting pass. Registry-preserving (`a`/`b` are existing operands, no
-    fresh variables): `of` over `denseSplitBytePairF`, lifted to the audited `Variable`
-    `PassCorrect` once by `DensePassCorrect.lift`. Native proof — no dependency on the reference
-    `splitBytePairPass`. -/
+    fresh variables): `of` over `denseSplitBytePairF`, lifted to the audited spec once by
+    `DensePassCorrect.lift`. -/
 def denseSplitBytePairPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun bs facts d => denseSplitBytePairF bs facts d)

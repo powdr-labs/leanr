@@ -4,20 +4,17 @@ import ApcOptimizer.Implementation.OptimizerPasses.BridgeSteps
 
 set_option autoImplicit false
 
-/-! # Native soundness of the dense `bytePack` recognizer and builders (Task 3, chunk BP-P1)
+/-! # Soundness of the dense `bytePack` recognizer and builders
 
-Native, `VarId`-native proofs for the recognizer and pair builder of the dense generalized
-single-value byte-check packing pass (`OptimizerPasses/ByteCheckPack.lean`, impl chunk BP-I1).
-These mirror the reference `ByteCheckPack` pass's `_sound` lemmas and
-`BytePack.lean`'s `mkBytePair_*` cluster, re-derived over dense environments `VarId → ZMod p`
-with no decode dependency (`denseBIEval`, `DenseExpr.eval`, and value-level `BusFacts` application).
+Proofs for the recognizer and pair builder of the dense generalized single-value byte-check
+packing pass (`ByteCheckPack.lean`), re-derived over dense environments `VarId → ZMod p` with no
+decode dependency (`denseBIEval`, `DenseExpr.eval`, and value-level `BusFacts` application).
 
 ## Reuse
 
 * `denseMkByteCheck` and its soundness (`denseMkByteCheck_eval`/`_accepted`/`_breaks`/
   `_payload_vars`, `BusPairCancelCheckProof.lean`) are reused verbatim: `denseMkBytePair`'s
-  acceptance is routed through `denseMkBytePair_iff_singles` (the dense mirror of
-  `mkBytePair_iff_singles`, `BytePack.lean:93`) so the merge key (chunk BP-P2) reuses
+  acceptance is routed through `denseMkBytePair_iff_singles` so the merge key reuses
   `denseMkByteCheck_accepted` rather than re-deriving pair acceptance inline.
 * `DenseExpr.normalize`/`DenseExpr.normalize_eval` (`Normalize.lean`) and
   `DenseExpr.constValue?`/`DenseExpr.constValue?_sound` (`DomainBatchProof.lean`) discharge
@@ -30,10 +27,9 @@ namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Emitted pair byte checks (`denseMkBytePair_*`, native mirrors of the `mkBytePair_*` lemmas) -/
+/-! ## Emitted pair byte checks (`denseMkBytePair_*`) -/
 
-/-- The evaluation of an emitted pair byte check. Native mirror of `mkBytePair_eval`
-    (`BytePack.lean:35`). -/
+/-- The evaluation of an emitted pair byte check. -/
 theorem denseMkBytePair_eval (spec : ByteXorSpec p) (busId : Nat) (e₁ e₂ : DenseExpr p)
     (denv : VarId → ZMod p) :
     denseBIEval (denseMkBytePair spec busId e₁ e₂) denv
@@ -41,8 +37,7 @@ theorem denseMkBytePair_eval (spec : ByteXorSpec p) (busId : Nat) (e₁ e₂ : D
           payload := spec.encode spec.pairOp (e₁.eval denv) (e₂.eval denv) 0 } := by
   simp only [denseMkBytePair, denseBIEval, spec.encode_map, DenseExpr.eval]
 
-/-- An emitted pair byte check breaks no invariant. Native mirror of `mkBytePair_breaks`
-    (`BytePack.lean:56`). -/
+/-- An emitted pair byte check breaks no invariant. -/
 theorem denseMkBytePair_breaks (bs : BusSemantics p) (facts : BusFacts p bs)
     (spec : ByteXorSpec p) (busId : Nat) (hspec : facts.byteXorSpec busId = some spec)
     (e₁ e₂ : DenseExpr p) (denv : VarId → ZMod p) :
@@ -50,8 +45,7 @@ theorem denseMkBytePair_breaks (bs : BusSemantics p) (facts : BusFacts p bs)
   obtain ⟨_, hbreak, _⟩ := facts.byteXorSpec_sound busId spec hspec
   rw [denseMkBytePair_eval]; exact hbreak _
 
-/-- A pair byte check is accepted exactly when both operands are bytes. Native mirror of
-    `mkBytePair_accepted` (`BytePack.lean:81`). -/
+/-- A pair byte check is accepted exactly when both operands are bytes. -/
 theorem denseMkBytePair_accepted (bs : BusSemantics p) (facts : BusFacts p bs)
     (spec : ByteXorSpec p) (busId : Nat) (hspec : facts.byteXorSpec busId = some spec)
     (e₁ e₂ : DenseExpr p) (denv : VarId → ZMod p) :
@@ -63,8 +57,7 @@ theorem denseMkBytePair_accepted (bs : BusSemantics p) (facts : BusFacts p bs)
       = some (spec.pairOp, e₁.eval denv, e₂.eval denv, (0 : ZMod p)) := spec.decode_encode _ _ _ _
   rw [(hsound _ spec.pairOp _ _ 0 1 hdec).2 rfl]; simp
 
-/-- A pair byte check is accepted exactly when both single-value checks are — the pack/split law.
-    Native mirror of `mkBytePair_iff_singles` (`BytePack.lean:93`). -/
+/-- A pair byte check is accepted exactly when both single-value checks are — the pack/split law. -/
 theorem denseMkBytePair_iff_singles (bs : BusSemantics p) (facts : BusFacts p bs)
     (spec : ByteXorSpec p) (busId : Nat) (hspec : facts.byteXorSpec busId = some spec)
     (e₁ e₂ : DenseExpr p) (denv : VarId → ZMod p) :
@@ -75,8 +68,7 @@ theorem denseMkBytePair_iff_singles (bs : BusSemantics p) (facts : BusFacts p bs
       denseMkByteCheck_accepted bs facts spec busId hspec,
       denseMkByteCheck_accepted bs facts spec busId hspec]
 
-/-- The two operands of an emitted pair check are payload entries. Native mirror of
-    `mkBytePair_operand_mem` (`BytePack.lean:165`). -/
+/-- The two operands of an emitted pair check are payload entries. -/
 theorem denseMkBytePair_operand_mem (spec : ByteXorSpec p) (busId : Nat) (e₁ e₂ : DenseExpr p) :
     e₁ ∈ (denseMkBytePair spec busId e₁ e₂).payload
       ∧ e₂ ∈ (denseMkBytePair spec busId e₁ e₂).payload := by
@@ -84,8 +76,7 @@ theorem denseMkBytePair_operand_mem (spec : ByteXorSpec p) (busId : Nat) (e₁ e
     (.const spec.pairOp) e₁ e₂ (.const 0) (spec.decode_encode _ _ _ _)
   exact ⟨h.1, h.2.1⟩
 
-/-- An emitted pair check introduces no variable beyond its operands'. Native mirror of
-    `mkBytePair_payload_vars` (`BytePack.lean:172`). -/
+/-- An emitted pair check introduces no variable beyond its operands'. -/
 theorem denseMkBytePair_payload_vars (spec : ByteXorSpec p) (busId : Nat) (e₁ e₂ : DenseExpr p)
     {x : VarId} (pe : DenseExpr p) (hpe : pe ∈ (denseMkBytePair spec busId e₁ e₂).payload)
     (hx : x ∈ pe.vars) : x ∈ e₁.vars ∨ x ∈ e₂.vars := by
@@ -96,11 +87,11 @@ theorem denseMkBytePair_payload_vars (spec : ByteXorSpec p) (busId : Nat) (e₁ 
   · exact Or.inr hx
   · simp only [DenseExpr.vars, List.not_mem_nil] at hx
 
-/-! ## Decoded-field acceptance characterizations (dense mirrors of `byte*_decode_iff`) -/
+/-! ## Decoded-field acceptance characterizations -/
 
 /-- Lift `byteXorSpec_sound` to a *symbolic* dense interaction whose payload decodes to
     `(op, o₁, o₂, r)`: acceptance of `denseBIEval bi denv` is characterized by the decoded fields'
-    evaluations. Native mirror of `byteXorSpec_decode_iff` (`BytePack.lean:107`). -/
+    evaluations. -/
 theorem denseByteXorSpec_decode_iff (bs : BusSemantics p) (facts : BusFacts p bs)
     (spec : ByteXorSpec p) (bi : BusInteraction (DenseExpr p))
     (hspec : facts.byteXorSpec bi.busId = some spec)
@@ -121,8 +112,7 @@ theorem denseByteXorSpec_decode_iff (bs : BusSemantics p) (facts : BusFacts p bs
   exact hsound (denseBIEval bi denv).payload (op.eval denv) (o1.eval denv) (o2.eval denv)
     (r.eval denv) (denseBIEval bi denv).multiplicity hdecEv
 
-/-- The `byteBoolSound` analog of `denseByteXorSpec_decode_iff`. Native mirror of
-    `byteBoolSound_decode_iff` (`BytePack.lean:130`). -/
+/-- The `byteBoolSound` analog of `denseByteXorSpec_decode_iff`. -/
 theorem denseByteBoolSound_decode_iff (bs : BusSemantics p) (facts : BusFacts p bs)
     (spec : ByteXorSpec p) (bi : BusInteraction (DenseExpr p))
     (hspec : facts.byteXorSpec bi.busId = some spec)
@@ -145,8 +135,7 @@ theorem denseByteBoolSound_decode_iff (bs : BusSemantics p) (facts : BusFacts p 
 
 /-! ## The NOT-form complement recognizer -/
 
-/-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. Copy of the
-    spec's `val_255_sub`. -/
+/-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. -/
 private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
     (255 - a).val = Nat.xor a.val 255 := by
   haveI : NeZero p := ⟨by omega⟩
@@ -160,14 +149,12 @@ private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
       _ = 255 - a.val := ZMod.val_natCast_of_lt (by omega)
   rw [hval]; exact (nat_xor_255 _ ha).symm
 
-/-- `(255 : ZMod p).val = 255` when `256 ≤ p`. Copy of the spec's `val_255`
-   . -/
+/-- `(255 : ZMod p).val = 255` when `256 ≤ p`. -/
 private theorem val_255 (hp : 256 ≤ p) : (255 : ZMod p).val = 255 := by
   have hc : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
   rw [← hc, ZMod.val_natCast_of_lt (by omega)]
 
-/-- Does `b` evaluate to the byte complement `255 − a` under every assignment. Native mirror of
-    `isByteCompl_sound`. -/
+/-- Does `b` evaluate to the byte complement `255 − a` under every assignment. -/
 theorem denseIsByteCompl_sound (a b : DenseExpr p) (h : denseIsByteCompl a b = true)
     (denv : VarId → ZMod p) : b.eval denv = 255 - a.eval denv := by
   unfold denseIsByteCompl at h
@@ -181,8 +168,7 @@ theorem denseIsByteCompl_sound (a b : DenseExpr p) (h : denseIsByteCompl a b = t
 
 /-! ## Membership helper -/
 
-/-- A variable of a payload expression is a variable of the dense interaction. Native mirror of
-    `mem_biVars_of_payload`. -/
+/-- A variable of a payload expression is a variable of the dense interaction. -/
 theorem denseMem_biVars_of_payload (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (he : e ∈ bi.payload) {v : VarId} (hv : v ∈ e.vars) : v ∈ denseBIVars bi := by
   rw [denseBIVars, List.mem_append]
@@ -191,8 +177,8 @@ theorem denseMem_biVars_of_payload (bi : BusInteraction (DenseExpr p)) (e : Dens
 /-! ## The single-value byte-check recognizer is sound -/
 
 /-- A recognized single-value byte check is stateless, has multiplicity 1, its value is a payload
-    entry, and its acceptance is exactly "the value is a byte". Native mirror of `svCheck?_sound`
-   , same 7 branches. -/
+    entry, and its acceptance is exactly "the value is a byte" (7 branches, one per recognized
+    shape). -/
 theorem denseSvCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (h : denseSvCheck? bs facts bi = some e) :
@@ -306,8 +292,7 @@ theorem denseSvCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     · exact absurd h (by simp)
 
 /-- If `denseFindSecond` returns `(mid, b, eB, post)` then `b` is a recognized single-value byte
-    check with value `eB`. Native mirror of `findSecond_sound`
-   . -/
+    check with value `eB`. -/
 theorem denseFindSecond_sound (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) :
     ∀ (revMid rest : List (BusInteraction (DenseExpr p)))
       (mid : List (BusInteraction (DenseExpr p))) (b : BusInteraction (DenseExpr p))
@@ -330,10 +315,9 @@ theorem denseFindSecond_sound (bs : BusSemantics p) (facts : BusFacts p bs) (bus
         rw [← hcb, ← hceb]; exact hc
       · exact ih (c :: revMid) mid b eB post h
 
-/-! ## Native correctness of one stateless two-for-one pack (chunk BP-P2)
+/-! ## Correctness of one stateless two-for-one pack
 
-`denseMergeStateless2_correct` is the dense mirror of `mergeStateless2_correct`
-: replacing two stateless multiplicity-1 interactions `D₁`,
+`denseMergeStateless2_correct`: replacing two stateless multiplicity-1 interactions `D₁`,
 `D₂` by one stateless multiplicity-1 interaction `C` whose obligation is exactly their conjunction is
 `DensePassCorrect`. Since every interaction involved is stateless, both the stateful-bus side effects
 and the active∧stateful admissibility argument collapse (the filtered lists coincide), so the
@@ -445,7 +429,7 @@ theorem denseMergeStateless2_correct (isInput : VarId → Bool) (d : DenseConstr
 /-! ## Coverage of an emitted pair check -/
 
 /-- An emitted pair check `denseMkBytePair spec busId e₁ e₂` mentions no variable beyond `e₁`'s and
-    `e₂`'s, so it is covered whenever both are. Native analogue of `denseMkByteCheck_covered`. -/
+    `e₂`'s, so it is covered whenever both are. Analogous to `denseMkByteCheck_covered`. -/
 theorem denseMkBytePair_covered (reg : VarRegistry) (spec : ByteXorSpec p) (busId : Nat)
     (e₁ e₂ : DenseExpr p) (he₁ : e₁.CoveredBy reg) (he₂ : e₂.CoveredBy reg) :
     denseBICovered reg (denseMkBytePair spec busId e₁ e₂) := by
@@ -458,12 +442,11 @@ theorem denseMkBytePair_covered (reg : VarRegistry) (spec : ByteXorSpec p) (busI
 
 /-! ## Scan invariants: reconstructing the split equation
 
-The dense `denseFindSecond`/`denseFindGo` return plain positionally-split data; the split equations
+`denseFindSecond`/`denseFindGo` return plain positionally-split data; the split equations
 `revMid.reverse ++ rest = mid ++ b :: post` and `revPre.reverse ++ bis = pre ++ a :: mid ++ b :: post`
-are recovered here as loop invariants of the scan (mirroring the spec `findGo`'s `dite`-carried
-`hsplit`, which never fails at runtime). Together with the selection facts (`denseSvCheck?` on the
-two chosen interactions, `a`'s `byteXorSpec` and its `bound = 256` gate) this is exactly the input to
-`denseMergeStateless2_correct`. -/
+are recovered here as loop invariants of the scan. Together with the selection facts
+(`denseSvCheck?` on the two chosen interactions, `a`'s `byteXorSpec` and its `bound = 256` gate)
+this is exactly the input to `denseMergeStateless2_correct`. -/
 
 /-- The positional split reconstructed from `denseFindSecond`. -/
 theorem denseFindSecond_split (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) :
@@ -544,7 +527,7 @@ theorem denseFindGo_split (bs : BusSemantics p) (facts : BusFacts p bs) :
             exact ⟨a', b',
               by simpa only [List.reverse_cons, List.append_assoc, List.singleton_append] using heq, rest'⟩
 
-/-! ## One pack step, as a native certified step
+/-! ## One pack step, as a certified step
 
 `denseBytePackStep_correct` packages one accepted `denseFindGo` pack into a `DensePassCorrect` via
 `denseMergeStateless2_correct`; `denseBytePackStep_covered` gives the output coverage. The merge key
@@ -626,12 +609,12 @@ theorem denseBytePackStep_covered (reg : VarRegistry) (bs : BusSemantics p) (fac
 Each drain step scans for the next packable pair (`denseFindGo`) and, on a hit, produces a
 non-extending certified step (`DenseNativeStep.ofSame`) whose correctness is `denseBytePackStep_correct`
 and whose coverage is `denseBytePackStep_covered`; the loop composes them via `DenseNativeStep.drain`
-(fuel = interaction-list length, a safe bound: each pack strictly drops that count by one). The
-runtime work per step is identical to the plain `denseDrainBytePacks` recursion (same `denseFindGo`
-scan, same `pre ++ denseMkBytePair … :: mid ++ post` rebuild); the loop carrier is the erasing
-combinator. The whole thing is closed into a `DenseVerifiedPassW` by `ofDenseStep`, folding the
-label's outer `iterateToFixpoint` into this single dense call (mirroring `denseByteCheckPackF`'s
-`(1 : ZMod p) ≠ 0` self-gate). -/
+(fuel = interaction-list length, a safe bound: each pack strictly drops that count by one). The loop
+carrier is the erasing combinator, so the runtime work per step is just the `denseFindGo` scan and
+the `pre ++ denseMkBytePair … :: mid ++ post` rebuild. The whole thing is closed into a
+`DenseVerifiedPassW` by `ofDenseStep`, folding the label's outer `iterateToFixpoint` into this
+single dense call, gated by the same `(1 : ZMod p) ≠ 0` self-check used by sibling passes in this
+cluster. -/
 
 /-- One drain step: on a `denseFindGo` hit, a non-extending certified pack step; otherwise `none`. -/
 def denseBytePackStep (bs : BusSemantics p) (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) :

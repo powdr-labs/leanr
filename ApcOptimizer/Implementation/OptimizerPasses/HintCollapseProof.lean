@@ -3,14 +3,11 @@ import ApcOptimizer.Implementation.OptimizerPasses.DigitFoldProof
 
 set_option autoImplicit false
 
-/-! # Collapsing a multi-limb reciprocal-witness group to one hint — native dense proof (Task 3)
+/-! # Collapsing a multi-limb reciprocal-witness group to one hint — proof
 
-Native `VarId` correctness for the dense `hintCollapse` port (`OptimizerPasses/HintCollapse.lean`),
-proved over dense environments `VarId → ZMod p` with no permanent dependency on the reference
-`Variable` pass. The spec pass `HintCollapse` is the roadmap only: its
-`collapse_correct` / `tryOne` / `tryOneSq` / `tryList` argument structure is mirrored here over the
-native semantics of `Bridge.lean` (satisfaction / admissibility / stateful-bus side effects /
-`DensePassCorrect` / `DenseOutReconstructs`).
+`VarId` correctness for the dense `hintCollapse` transform (`HintCollapse.lean`), proved over
+dense environments `VarId → ZMod p`, using the semantics of `Bridge.lean` (satisfaction /
+admissibility / stateful-bus side effects / `DensePassCorrect` / `DenseOutReconstructs`).
 
 The transport is the dense analogue of `collapse_correct`: substituting the once-occurring witnesses
 `D` to a common value (or `coeffᵢ·w`, for the sum-of-squares shape), the target constraint `E`
@@ -19,12 +16,11 @@ minted (registered with `powdrId? = none`, so `isInput` is preserved pointwise),
 of `inv` on the completeness side reads only the (input-column) coefficient/remainder variables.
 
 The **field-level** wrap-free-sum lemmas (`sum_val_eq` / `sum_zero_all_zero` / `sq_diff_val_lt`) are
-representation-independent and reused verbatim from the spec file. The **bounds map**
-(`denseBuild`, `DigitFold.lean`) is consumed through its native value-level soundness
-`denseBuild_sound` (`DigitFoldProof.lean`) — no `decode`, no reference-pass dependency. Everything
-else — peel / `extractLinear` / `sumExpr` eval
+representation-independent, defined in `HintCollapse.lean`. The **bounds map** (`denseBuild`,
+`DigitFold.lean`) is consumed through its value-level soundness `denseBuild_sound`
+(`DigitFoldProof.lean`) — no `decode`. Everything else — peel / `extractLinear` / `sumExpr` eval
 structure, the coefficient recognizers, `occursOnlyInTarget` soundness, the reassignment frames — is
-reproved natively over `DenseExpr`. -/
+proved directly over `DenseExpr`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -32,8 +28,7 @@ variable {p : ℕ}
 
 /-! ## Dense expression evaluation congruence and occurrence facts -/
 
-/-- Dense expression evaluation depends only on the variables that occur (file-local, mirrors the
-    spec's `Expression.eval_congr`). -/
+/-- Dense expression evaluation depends only on the variables that occur (file-local). -/
 private theorem hcEvalCongr (e : DenseExpr p) (d1 d2 : VarId → ZMod p)
     (h : ∀ i ∈ e.vars, d1 i = d2 i) : e.eval d1 = e.eval d2 := by
   induction e with
@@ -48,7 +43,7 @@ private theorem hcEvalCongr (e : DenseExpr p) (d1 d2 : VarId → ZMod p)
       rw [iha (fun i hi => h i (by simp [DenseExpr.vars, hi])),
           ihb (fun i hi => h i (by simp [DenseExpr.vars, hi]))]
 
-/-- `mentions i e = false` ⟹ `i ∉ e.vars` (native, mirrors `mentions_false_not_mem_vars`). -/
+/-- `mentions i e = false` ⟹ `i ∉ e.vars`. -/
 theorem denseMentions_false_not_mem (i : VarId) (e : DenseExpr p) (h : e.mentions i = false) :
     i ∉ e.vars := by
   induction e with
@@ -72,7 +67,7 @@ theorem denseMentions_false_not_mem (i : VarId) (e : DenseExpr p) (h : e.mention
       · exact iha h.1 ha
       · exact ihb h.2 hb
 
-/-! ## Splitting off the linear part in one variable (native `extractLinear`/`peel`/`sumExpr`) -/
+/-! ## Splitting off the linear part in one variable (`extractLinear`/`peel`/`sumExpr`) -/
 
 theorem denseExtractLinear_eval (wv : VarId) (E : DenseExpr p) (denv : VarId → ZMod p) :
     E.eval denv
@@ -174,7 +169,7 @@ theorem densePeel_fst_vars (D : List VarId) (E : DenseExpr p) :
 
 /-! ## The plain reassignment frame -/
 
-/-- Reassign every variable of `D` to `w`, leaving the rest at `denv`. Mirrors `reassign`. -/
+/-- Reassign every variable of `D` to `w`, leaving the rest at `denv`. -/
 def denseReassign (D : List VarId) (w : ZMod p) (denv : VarId → ZMod p) : VarId → ZMod p :=
   fun v => if v ∈ D then w else denv v
 
@@ -233,8 +228,7 @@ theorem denseFoldr_zero (pairs : List (DenseExpr p × VarId)) (denv : VarId → 
 
 /-! ## The weighted (sum-of-squares) reassignment frame -/
 
-/-- Set each witness `cd.2` to `cd.1.eval denv * w`, leaving the rest at `denv`. Mirrors
-    `assocReassign`. -/
+/-- Set each witness `cd.2` to `cd.1.eval denv * w`, leaving the rest at `denv`. -/
 def denseAssocReassign (P : List (DenseExpr p × VarId)) (denv : VarId → ZMod p) (w : ZMod p) :
     VarId → ZMod p :=
   fun v => match P.find? (fun cd => cd.2 == v) with
@@ -315,7 +309,7 @@ theorem densePeel_sqReassign_eval (D : List VarId) (E : DenseExpr p) (hnd : D.No
     rw [denseSumExpr_eval, List.map_map]; rfl
   rw [hLHS, hRHS]
 
-/-! ## Coefficient recognizers (native soundness) -/
+/-! ## Coefficient recognizers (soundness) -/
 
 theorem denseCoeffVar_sound {c : DenseExpr p} {a : VarId} (h : denseCoeffVar c = some a) :
     (∀ denv, c.eval denv = denv a) ∧ (∀ x ∈ c.vars, x = a) ∧ a ∈ c.vars := by
@@ -412,7 +406,7 @@ theorem denseSqCoeffsOK_sound (reg : VarRegistry) (B : Std.HashMap VarId Nat) (D
               | some bb => intro hbb; exact ⟨bb, rfl, of_decide_eq_true hbb⟩
       · exact ih hrec c hcs
 
-/-! ## Once-in-target soundness (native) -/
+/-! ## Once-in-target soundness -/
 
 theorem denseOccursOnlyInTarget_constr {d : DenseConstraintSystem p} {E : DenseExpr p} {v : VarId}
     (h : denseOccursOnlyInTarget d E v = true) :
@@ -501,13 +495,13 @@ theorem denseIsFresh_notMem {reg : VarRegistry} {d : DenseConstraintSystem p} {v
       have hv := DenseConstraintSystem.occ_valid hcov _ hmem
       exact absurd hv (by simp [VarRegistry.Valid])
 
-/-! ## The native collapse transport (dense mirror of `collapse_correct`) -/
+/-! ## The collapse transport -/
 
-/-- Native dense correctness of the hint collapse: replacing target `E` by `denom·inv + rest`
+/-- Correctness of the hint collapse: replacing target `E` by `denom·inv + rest`
     (with `inv = QuotientOrZero(−rest, denom)` a fresh derived witness) is `DensePassCorrect`. The
-    hypotheses mirror `collapse_correct` (`hEeq` — the reciprocal-witness collapse identity; `hbyte` —
-    a vanishing denominator forces the remainder to vanish; the rest are framing: freshness, the
-    witnesses occurring only in `E`, and the new expressions reading only input columns). -/
+    hypotheses: `hEeq` — the reciprocal-witness collapse identity; `hbyte` — a vanishing denominator
+    forces the remainder to vanish; the rest are framing: freshness, the witnesses occurring only in
+    `E`, and the new expressions reading only input columns. -/
 theorem dense_collapse_correct [Fact p.Prime] (isInput : VarId → Bool)
     (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (E denom rest : DenseExpr p) (D : List VarId) (invId : VarId)
@@ -710,7 +704,7 @@ theorem dense_collapse_correct [Fact p.Prime] (isInput : VarId → Bool)
 
 /-! ## Coverage helpers -/
 
-/-- Occurrence-validity gives coverage (mirror of `ReencodeProof.coveredBy_of_occ`). -/
+/-- Occurrence-validity gives coverage. -/
 theorem hcCoveredByOfOcc {r : VarRegistry} {d : DenseConstraintSystem p}
     (h : ∀ i ∈ d.occ, r.Valid i) : d.CoveredBy r := by
   refine ⟨fun e he i hi => h i ?_, fun bi hbi => ⟨fun i hi => h i ?_, fun e he i hi => h i ?_⟩⟩
@@ -738,7 +732,7 @@ theorem hcOutOcc {d : DenseConstraintSystem p} {E E' : DenseExpr p} {i : VarId}
     · exact Or.inr (hcMemOcc.2 (Or.inl ⟨c', hcs, hic⟩))
   · exact Or.inr (hcMemOcc.2 (Or.inr ⟨bi, hbi, hbiv⟩))
 
-/-! ## The full collapse bundle (extends + coverage + native correctness) at the minted registry -/
+/-! ## The full collapse bundle (extends + coverage + correctness) at the minted registry -/
 
 /-- The complete `ofExtending` obligation bundle for one accepted collapse: mint `invVar`
     (`powdrId? = none`, so `isInput` is preserved pointwise), extend the registry, and combine coverage
@@ -814,7 +808,7 @@ theorem dense_collapse_bundle [Fact p.Prime] (reg : VarRegistry) (invVar : Varia
       (reg.register invVar).1
     exact ⟨DenseExpr.coveredBy_mul.mpr ⟨DenseExpr.coveredBy_const _ (-1), hrestCov⟩, hdenCov⟩
 
-/-! ## The two collapse attempts (native correctness) -/
+/-! ## The two collapse attempts (correctness) -/
 
 set_option maxHeartbeats 1000000 in
 /-- Plain-sum collapse attempt correctness. -/
@@ -1022,7 +1016,7 @@ theorem denseTryList_correct [Fact p.Prime] {bs : BusSemantics p} (facts : BusFa
         · rename_i heq2
           exact ih (fun E' h => hmem E' (List.mem_cons_of_mem _ h)) r hr
 
-/-! ## The pass, as a registry-extending native transform -/
+/-! ## The pass, as a registry-extending transform -/
 
 theorem denseHintCollapseF_props (pw : PrimeWitness p) (reg : VarRegistry) (bs : BusSemantics p)
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
@@ -1050,7 +1044,7 @@ theorem denseHintCollapseF_props (pw : PrimeWitness p) (reg : VarRegistry) (bs :
     exact ⟨VarRegistry.Extends.refl reg, hcov, (by intro x hx; simp at hx),
       DensePassCorrect.refl reg.isInput d bs⟩
 
-/-- The native, registry-extending hint-collapse pass. -/
+/-- The registry-extending hint-collapse pass. -/
 def denseHintCollapsePass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.ofExtending (denseHintCollapseF pw)
     (fun reg bs facts d hcov => (denseHintCollapseF_props pw reg bs facts d hcov).1)

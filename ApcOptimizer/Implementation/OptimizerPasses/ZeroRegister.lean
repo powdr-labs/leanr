@@ -3,18 +3,16 @@ import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 
 set_option autoImplicit false
 
-/-! # Dense fixed-zero-register pinning (Task 3, impl-only)
+/-! # Dense fixed-zero-register pinning (impl-only)
 
-Dense, `VarId`-native transliteration of the *runtime* recognisers of
-the reference `ZeroRegister` pass: the per-interaction fixed-zero data-limb recogniser
-`cellZeroExprs` (`:30`) and the filter predicate inside `zeroRegisterPass` (`:113`). The
-proof-carrying candidate collection (`denseCollectZeroCells`), the transform (`denseZeroRegisterF`),
-the native `DensePassCorrect` proof, and the pass wiring live in `ZeroRegisterProof.lean` (the
-collection is the `collectZeroCells` shape fix and the entailment proof in one object).
+Runtime recognisers for `zeroRegister`: the per-interaction fixed-zero data-limb recogniser
+`denseCellZeroExprs` and the filter predicate `denseZeroPred`. The proof-carrying candidate
+collection (`denseCollectZeroCells`), the transform (`denseZeroRegisterF`), the `DensePassCorrect`
+proof, and the pass wiring live in `ZeroRegisterProof.lean` (the collection is the
+candidate-collection shape and the entailment proof in one object).
 
 `denseZeroPred` takes the occurrence list `dVars` as an explicit argument so the caller can hoist
-`d.occ` ONCE (mirroring the spec's `let csVars := cs.vars` closure capture) rather than recomputing
-the full-system occurrence flatMap per candidate/variable. -/
+`d.occ` ONCE rather than recomputing the full-system occurrence flatMap per candidate/variable. -/
 
 namespace ApcOptimizer.Dense
 
@@ -22,7 +20,10 @@ variable {p : ℕ}
 
 /-! ## Dense per-interaction fixed-zero data limbs -/
 
-/-- Dense `cellZeroExprs` (see `cellZeroExprs`). -/
+/-- The fixed-zero data limbs of one interaction: empty unless the bus has a declared zero-cell
+    shape, the multiplicity is a nonzero constant, and every fixed-address field matches — in which
+    case the data slots' payload expressions (each defaulting to the constant `0` if missing) are
+    returned. -/
 def denseCellZeroExprs (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : List (DenseExpr p) :=
   match facts.zeroCell bi.busId with
@@ -38,9 +39,9 @@ def denseCellZeroExprs (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-! ## The dense filter predicate -/
 
-/-- Dense fixed-zero filter predicate (see the filter inside `zeroRegisterPass`). The occurrence
-    list `dVars` is hoisted and captured by the caller (`denseZeroRegisterF`), mirroring the spec's
-    `let csVars := cs.vars`; it is NOT recomputed per candidate. -/
+/-- Keep a candidate constraint iff it is non-trivial, not already present, and every one of its
+    variables occurs somewhere in the system. The occurrence list `dVars` is hoisted and captured
+    by the caller (`denseZeroRegisterF`); it is NOT recomputed per candidate. -/
 def denseZeroPred (d : DenseConstraintSystem p) (dVars : List VarId) (c : DenseExpr p) : Bool :=
   !c.normalize.fold.isConstZero && !d.algebraicConstraints.contains c
     && c.vars.all (fun z => decide (z ∈ dVars))

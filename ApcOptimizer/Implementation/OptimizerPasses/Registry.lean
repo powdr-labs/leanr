@@ -3,7 +3,7 @@ import ApcOptimizer.Implementation.Variable
 
 set_option autoImplicit false
 
-/-! # Dense variable identifiers and the canonical registry (Task 3, WP-A)
+/-! # Dense variable identifiers and the canonical registry
 
 An implementation-only dense representation of circuit variables. A `VarId` is a one-field newtype
 around a `Nat` index; a `VarRegistry` is a bijection between valid `VarId`s and the complete
@@ -77,7 +77,7 @@ def resolve (r : VarRegistry) (i : VarId) : Variable := (r.byId[i.index]?).getD 
 def idOf? (r : VarRegistry) (v : Variable) : Option VarId := r.toId[v]?
 
 /-- An ID is *valid* in `r` when its index is in range. Every ID appearing in a covered dense value
-    is valid (see `Dense/Encoding.lean`). -/
+    is valid (see `Encoding.lean`). -/
 def Valid (r : VarRegistry) (i : VarId) : Prop := i.index < r.byId.size
 
 /-! ## Round-trip and injectivity -/

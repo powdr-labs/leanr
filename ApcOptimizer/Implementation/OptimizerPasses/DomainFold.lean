@@ -3,33 +3,22 @@ import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 
 set_option autoImplicit false
 
-/-! # Dense domain-constant subexpression folding — shared foundation (Task 3)
+/-! # Dense domain-constant subexpression folding — shared foundation
 
-This file used to hold a *commutation-era* dense port of `DomainFold.domainFoldPass`
-(`decodeCS (denseF …) = domainFoldPass … ∘ decodeCS`, the "landing tactic" pattern), built directly
-against a `VarRegistry` so its cold target-building path could resolve `VarId`s back to `Variable`s
-for the spec's `mergeSort`/`dedupHash` canonicalisation. That whole cluster (the rewrite
-`denseFoldRewriteGo`/`denseFoldRewrite`/`denseFoldOut`, the no-op gates `hasFoldable`/
-`systemHasFoldable`(`Idx`), the direct/indexed fold loops `denseFoldStepWith`/`denseFoldStep`/
-`denseFoldLoopDirect`/`denseFoldLoop`, `denseTargets`, and every `_decode`/`_corr` commutation lemma
-about them) is now **dead**: the pass is proven and wired **natively** in
-`Dense/DomainFoldNative.lean` (runtime, value-only compiled evaluation, no `VarRegistry` threaded
-through the algorithm at all) and `Dense/DomainFoldNativeProof.lean` (native `DensePassCorrect`, no
-decode in any discharged obligation) — see those files' headers for the current pass. Deleted
-2026-07-19 as chunk C0 of the domainFold delta re-port (pure removal of superseded scaffolding, no
-algorithm change).
+The domain-fold pass itself is defined and proved in `Dense/DomainFoldNative.lean` (runtime) and
+`Dense/DomainFoldNativeProof.lean` (correctness) — see those files' headers.
 
-What remains here is the **shared foundation** the native pass (and several other native passes —
+What remains here is the **shared foundation** the domain-fold pass (and several other passes —
 `rootPairUnify`, `flagUnify`, `flagFold`, `boxRewrite`, `fxSubst`, `busPairCancel`'s justification
-layer) still builds on: the variable-free domain/assignment enumeration primitives
+layer) build on: the variable-free domain/assignment enumeration primitives
 (`denseFindDomainAlg`, `denseGroupDoms`, `denseAssignments`, `denseGroupDoms_fst`), the covered-set
 predicate/filter (`denseCoveredBy`, `denseCoveredCsOf`), the ordered inverted covered-index
 (`denseCoveredIdx` + its completeness/`_eq_filter` lemmas, reused unchanged by
 `Dense/DomainFoldNative.lean`'s indexed loop), the fold index (`DenseFoldIdx`/`.mk'`/`.refresh`), the
-single-variable-constraint set (`denseSvSet`, reused by `denseTargetsV`), and the two small
-containment soundness lemmas (`denseVarsInF_sound`/`denseCoveredBy_shares_var`) the native proof
-consumes directly. The domain-enumeration primitives these build on (`denseRootsIn`, `denseEnvOfFast`,
-the box scan) are themselves reused verbatim from `Dense/DomainBatch.lean`. -/
+single-variable-constraint set (`denseSvSet`, reused by `denseTargetsV`), and two small containment
+soundness lemmas (`denseVarsInF_sound`/`denseCoveredBy_shares_var`) the correctness proof consumes
+directly. The domain-enumeration primitives these build on (`denseRootsIn`, `denseEnvOfFast`, the
+box scan) are themselves reused verbatim from `Dense/DomainBatch.lean`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -44,8 +33,8 @@ def DenseExpr.hasVar : DenseExpr p → Bool
   | .add a b => a.hasVar || b.hasVar
   | .mul a b => a.hasVar || b.hasVar
 
-/-- Dense `Expression.anyVarIn` (mirrors `Expression.anyVarIn`, through `denseContainsFast`). Kept as
-    shared infrastructure: consumed by `Dense/DomainFoldNative.lean`'s value-only no-op gates
+/-- Whether any variable of `xs` occurs in the expression, via `denseContainsFast`. Kept as
+    shared infrastructure: consumed by `Dense/DomainFoldNative.lean`'s no-op gates
     (`denseFoldRewriteV`'s top gate, `denseSystemHasFoldableIdxV`'s const-foldable-item scan). -/
 def DenseExpr.anyVarIn (xs : List VarId) : DenseExpr p → Bool
   | .const _ => false
@@ -53,7 +42,8 @@ def DenseExpr.anyVarIn (xs : List VarId) : DenseExpr p → Bool
   | .add a b => a.anyVarIn xs || b.anyVarIn xs
   | .mul a b => a.anyVarIn xs || b.anyVarIn xs
 
-/-- Dense `Expression.hasConstFoldableNode` (mirrors `Expression.hasConstFoldableNode`). -/
+/-- Whether `e` contains a node that is itself variable-free, or has such a node further down its
+    subterms — signals there is a constant subexpression left to fold. -/
 def DenseExpr.hasConstFoldableNode : DenseExpr p → Bool
   | .const _ => false
   | .var _ => false
@@ -62,8 +52,9 @@ def DenseExpr.hasConstFoldableNode : DenseExpr p → Bool
 
 /-! ## Dense `findDomainAlg`, `coveredBy`, `coveredCsOf` -/
 
-/-- Dense `findDomainAlg` (mirrors `findDomainAlg`). Returns a variable-free `List (ZMod p)`, so the
-    dense result is *identical* to the spec one on decoded inputs. -/
+/-- Find `i`'s finite domain: scan `all` for the first constraint mentioning `i`, and read off its
+    roots via `denseRootsIn`, continuing past any that fail to yield one. Returns a variable-free
+    `List (ZMod p)`. -/
 def denseFindDomainAlg (all : List (DenseExpr p)) (i : VarId) : Option (List (ZMod p)) :=
   match all with
   | [] => none
@@ -74,17 +65,17 @@ def denseFindDomainAlg (all : List (DenseExpr p)) (i : VarId) : Option (List (ZM
       | none => denseFindDomainAlg rest i
     else denseFindDomainAlg rest i
 
-/-- Dense `coveredBy` (mirrors `coveredBy`). -/
+/-- Whether `c` mentions a variable, and every variable it mentions lies in `xs`. -/
 def denseCoveredBy (xs : List VarId) (c : DenseExpr p) : Bool :=
   c.hasVar && c.varsInF xs
 
-/-- Dense `coveredCsOf` (mirrors `coveredCsOf`). -/
+/-- The algebraic constraints covered by (contained wholly within) the variable set `xs`. -/
 def denseCoveredCsOf (d : DenseConstraintSystem p) (xs : List VarId) : List (DenseExpr p) :=
   d.algebraicConstraints.filter (denseCoveredBy xs)
 
 /-! ## Dense `groupDoms` -/
 
-/-- Dense `groupDoms` (mirrors `groupDoms`). -/
+/-- Look up each variable's finite domain in `es`, all-or-nothing over the whole key list. -/
 def denseGroupDoms (es : List (DenseExpr p)) :
     List VarId → Option (List (VarId × List (ZMod p)))
   | [] => some []
@@ -95,14 +86,14 @@ def denseGroupDoms (es : List (DenseExpr p)) :
 
 /-! ## Dense enumeration of assignments -/
 
-/-- Dense `assignments` (mirrors `assignments`). -/
+/-- The Cartesian product of a list of `(variable, domain)` pairs, as a list of full assignments. -/
 def denseAssignments : List (VarId × List (ZMod p)) → List (List (VarId × ZMod p))
   | [] => [[]]
   | (i, d) :: rest => (denseAssignments rest).flatMap (fun a => d.map (fun v => (i, v) :: a))
 
 /-! ## `denseGroupDoms` key structure -/
 
-/-- Dense `groupDoms` yields the target keys, in order (mirrors `groupDoms_fst`). -/
+/-- `denseGroupDoms` yields the target keys, in order. -/
 theorem denseGroupDoms_fst (es : List (DenseExpr p)) :
     ∀ (xs : List VarId) (doms : List (VarId × List (ZMod p))),
       denseGroupDoms es xs = some doms → doms.map Prod.fst = xs := by
@@ -123,16 +114,18 @@ theorem denseGroupDoms_fst (es : List (DenseExpr p)) :
               subst h
               simp [ih ds hr]
 
-/-! ## Ordered dense inverted index (mirrors `CoveredIndex.coveredIdx` + `coveredIdx_eq_filter`)
+/-! ## Ordered dense inverted index
 
 The indexed fold path needs the covered set **exactly** (ordered), so `denseCoveredIdx` restores the
 items' original order (via `mergeSort` on positions) and equals the plain filter whenever every
-`Q`-item shares a variable with `xs`. The `Nat`/`HashSet Nat` combinatorics are reused verbatim from
-the spec `CoveredIndex`; only the bucket key type (`VarId`) changes. -/
+`Q`-item shares a variable with `xs`. The underlying index (`DenseCovIndex`, `denseCandidates`,
+`denseBuildStep`, `denseCovBuild`) is defined in `Dense/DomainBatch.lean`; only the bucket key type
+(`VarId`) matters here. -/
 
 variable {α : Type}
 
-/-- Ordered dense covered items for target `xs` (mirrors `CoveredIndex.coveredIdx`). -/
+/-- Ordered covered items for target `xs`: the in-range, `Q`-satisfying elements at the index's
+    candidate positions for `xs`, restored to original order. -/
 def denseCoveredIdx (idx : DenseCovIndex) (arr : Array α) (Q : α → Bool) (xs : List VarId) :
     List α :=
   let uniq := ((denseCandidates idx xs).foldl (·.insert ·) (∅ : Std.HashSet Nat)).toList
@@ -172,8 +165,8 @@ theorem denseInner_getD_self (i : Nat) (vs : List VarId) (v : VarId) :
       exact List.mem_cons_self
     · exact ih _ hv
 
-/-- **Dense index completeness (buckets).** Every item at position `i` with variable `v` bucketed
-    under `v` (mirrors `CoveredIndex.buildStep_bucket_complete`). -/
+/-- **Index completeness (buckets).** Every item at position `i` with variable `v` is bucketed
+    under `v`. -/
 theorem denseBuildStep_bucket_complete (varsOf : α → List VarId) :
     ∀ (l : List (α × Nat)) (a : α) (i : Nat), (a, i) ∈ l → ∀ (v : VarId), v ∈ varsOf a →
       i ∈ (l.foldr (denseBuildStep varsOf) ⟨∅, []⟩).buckets.getD v [] := by
@@ -207,9 +200,7 @@ theorem denseMem_candidates (idx : DenseCovIndex) (xs : List VarId) (v : VarId) 
     candidate positions are harmless because every candidate is re-checked against the in-range
     bound and `Q`. All the fold/sort machinery collapses: the `HashSet` dedup and `mergeSort`
     reorder the candidates into ascending (i.e. original list) order, and the per-position `Q`
-    re-check reproduces `items.filter Q` exactly. Mirrors
-    `CoveredIndex.coveredIdx_eq_filter_of_complete`; `denseCoveredIdx_eq_filter` below is the
-    fresh-`build` instance. -/
+    re-check reproduces `items.filter Q` exactly. -/
 theorem denseCoveredIdx_eq_filter_of_complete (idx : DenseCovIndex) (items : List α)
     (Q : α → Bool) (xs : List VarId)
     (hcomplete : ∀ (i : Nat) (hi : i < items.length),
@@ -297,7 +288,7 @@ theorem denseCoveredIdx_eq_filter_of_complete (idx : DenseCovIndex) (items : Lis
     _ = items.filter Q := claim1
 
 /-- **Completeness of a fresh dense `build`**: every item position is bucketed under each variable
-    `varsOf` yields for it (mirrors `CoveredIndex.build_complete`). -/
+    `varsOf` yields for it. -/
 theorem denseBuild_complete (varsOf : α → List VarId) (items : List α)
     (i : Nat) (hi : i < items.length) (v : VarId) (hv : v ∈ varsOf items[i]) :
     i ∈ (denseCovBuild varsOf items).buckets.getD v [] := by
@@ -307,48 +298,41 @@ theorem denseBuild_complete (varsOf : α → List VarId) (items : List α)
 
 /-! ## The dense fold index
 
-Kept as shared infrastructure: `Dense/DomainFoldNative.lean` and its native proof
-(`Dense/DomainFoldNativeProof.lean`) build/refresh/index-scan this structure exactly as here; only
-the index-local *no-op gate* (`systemHasFoldableIdx`, part of the dead commutation-era cluster
-described above) moved to the value-only `denseSystemHasFoldableIdxV` in that file. -/
+Kept as shared infrastructure: `Dense/DomainFoldNative.lean` and its correctness proof
+(`Dense/DomainFoldNativeProof.lean`) build/refresh/index-scan this structure exactly as here; the
+index-local no-op gate lives as `denseSystemHasFoldableIdxV` in that file. -/
 
-/-- The dense analogue of `FoldIdx` (plain data — no proof fields; completeness is threaded
-    externally through the native proofs, mirroring #165's data-only `FoldIdx` at
-    `OptimizerPasses/DomainFold.lean:727` minus the `cfCs`/`cfBis` const-foldable-item caches #165
-    dropped when it made `systemHasFoldableIdx` purely a two-bucket scan). -/
+/-- The dense fold index (plain data — no proof fields; completeness is threaded externally
+    through the correctness proofs). -/
 structure DenseFoldIdx (p : ℕ) where
   idx : DenseCovIndex
   arr : Array (DenseExpr p)
   bisIdx : DenseCovIndex
   arrBis : Array (BusInteraction (DenseExpr p))
 
-/-- Per-item variable list with duplicates removed (mirrors `dedupVarsOf`,
-    `OptimizerPasses/DomainFold.lean:711`): the index build otherwise inserts one bucket entry per
-    *occurrence* (and the per-target gathers then re-deduplicate them). Same membership, so bucket
-    completeness is unchanged (`hashedEraseDups_eq` + `mem_eraseDups`). -/
+/-- Per-item variable list with duplicates removed: the index build otherwise inserts one bucket
+    entry per *occurrence* (and the per-target gathers then re-deduplicate them). Same membership,
+    so bucket completeness is unchanged (`hashedEraseDups_eq` + `mem_eraseDups`). -/
 def denseDedupVarsOf (c : DenseExpr p) : List VarId :=
   HashedDedup.hashedEraseDups (hash ·) c.vars
 
-/-- `denseDedupVarsOf` for interactions (multiplicity + payload occurrences, mirrors
-    `dedupBiVarsOf`, `OptimizerPasses/DomainFold.lean:715`). -/
+/-- `denseDedupVarsOf` for interactions (multiplicity + payload occurrences). -/
 def denseDedupBiVarsOf (bi : BusInteraction (DenseExpr p)) : List VarId :=
   HashedDedup.hashedEraseDups (hash ·) (denseBIVars bi)
 
-/-- Build the dense fold index for a system (mirrors `FoldIdx.mk'`); buckets by the per-item deduped
-    variable list, one entry per *distinct* variable (mirrors `FoldIdx.mk'`'s `dedupVarsOf`/
-    `dedupBiVarsOf`). -/
+/-- Build the dense fold index for a system; buckets by the per-item deduped variable list, one
+    entry per *distinct* variable. -/
 def DenseFoldIdx.mk' (d : DenseConstraintSystem p) : DenseFoldIdx p where
   idx := denseCovBuild denseDedupVarsOf d.algebraicConstraints
   arr := d.algebraicConstraints.toArray
   bisIdx := denseCovBuild denseDedupBiVarsOf d.busInteractions
   arrBis := d.busInteractions.toArray
 
-/-- Refresh the dense fold index after an accepted fold — **no rebuild** (mirrors #165's
-    `FoldIdx.refresh` at `OptimizerPasses/DomainFold.lean:777`, minus its proof arguments): the
-    in-place fold (`denseFoldOutInPlaceV`) is order- and length-preserving and only ever shrinks an
-    expression's variable set, so both bucket maps stay complete exactly as they are; only the item
-    arrays are re-materialized (O(n) pointer work). Completeness survival is proved separately (the
-    dense struct carries no proof fields). -/
+/-- Refresh the dense fold index after an accepted fold — **no rebuild**: the in-place fold
+    (`denseFoldOutInPlaceV`) is order- and length-preserving and only ever shrinks an expression's
+    variable set, so both bucket maps stay complete exactly as they are; only the item arrays are
+    re-materialized (O(n) pointer work). Completeness survival is proved separately (the dense
+    struct carries no proof fields). -/
 def DenseFoldIdx.refresh (old : DenseFoldIdx p) (ro : DenseConstraintSystem p) : DenseFoldIdx p where
   idx := old.idx
   arr := ro.algebraicConstraints.toArray
@@ -357,7 +341,7 @@ def DenseFoldIdx.refresh (old : DenseFoldIdx p) (ro : DenseConstraintSystem p) :
 
 /-! ## Foundational soundness lemmas
 
-Kept as shared infrastructure: consumed directly by `Dense/DomainFoldNativeProof.lean`'s native
+Kept as shared infrastructure: consumed directly by `Dense/DomainFoldNativeProof.lean`'s
 correctness proof (`denseCoveredBy_shares_var`/`denseVarsInF_sound` via `denseFoldStepV_es_eq`). -/
 
 /-- A dense expression with a variable has a nonempty `vars` list. -/
@@ -426,11 +410,12 @@ theorem denseCoveredBy_shares_var (xs : List VarId) (c : DenseExpr p) (h : dense
 
 /-! ## Dense `svSet`
 
-The single-variable-constraint set is already `VarId`-native (no `Variable` resolution needed to
-build it) — kept as shared infrastructure: `Dense/DomainFoldNative.lean`'s `denseTargetsV` reuses it
-verbatim (bound once, per its restored `let`-hoist fix) to build the candidate fold-target groups. -/
+The single-variable-constraint set — kept as shared infrastructure: `Dense/DomainFoldNative.lean`'s
+`denseTargetsV` reuses it verbatim (bound once, via a `let`-hoist) to build the candidate
+fold-target groups. -/
 
-/-- The single-variable-constraint set (mirrors the spec pass's inline `svSet`). -/
+/-- The single-variable-constraint set: variables occurring in exactly one algebraic constraint
+    (as their constraint's sole occurring variable). -/
 def denseSvSet (d : DenseConstraintSystem p) : Std.HashSet VarId :=
   d.algebraicConstraints.foldl (init := ∅) fun s c =>
     match c.vars.dedup with

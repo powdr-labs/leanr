@@ -3,21 +3,19 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
 
 set_option autoImplicit false
 
-/-! # Native soundness of the dense fact-derived bounds map (Task 3)
+/-! # Soundness of the dense fact-derived bounds map
 
-Native, `VarId`-level soundness for the dense bounds map built by `denseBuild` (`DigitFold.lean`),
-proved over dense environments `VarId → ZMod p` with no decode and no dependency on the reference
-`BoundsMap` proof. This is the shared bounds-map fact consumed by both `digitFold` and `carryBranch`
-(and, via the swap below, `hintCollapse`): a value bound `denv i < b` holds for every assignment
-`denv` whose bus interactions are non-violating (the second half of dense satisfaction).
+`VarId`-level soundness for the dense bounds map built by `denseBuild` (`DigitFold.lean`), proved
+over dense environments `VarId → ZMod p`. This is the shared bounds-map fact consumed by both
+`digitFold` and `carryBranch` (and, via the swap below, `hintCollapse`): a value bound `denv i < b`
+holds for every assignment `denv` whose bus interactions are non-violating (the second half of
+dense satisfaction).
 
-The argument mirrors the spec `BoundsMap.build`'s `sound` field (`MemoryUnify.lean`) and the
-`probedSlotBoundAt_sound` / `interactionBound_sound` value bounds (`DomainProp.lean`), transliterated
-onto `denseBIEval` and threaded through the build recursion as a fixed-`denv` invariant
-`DenseBMSoundAt` — the value-level `DomainBatchProof.DenseTableSoundAt` pattern. The per-interaction
+The value bounds are threaded through the build recursion as a fixed-`denv` invariant
+`DenseBMSoundAt` — the same pattern as `DomainBatchProof.DenseTableSoundAt`. The per-interaction
 `denseInteractionBound_sound` and the constant/pattern soundness lemmas are reused from
-`DomainBatchProof.lean`; the probed-bound soundness (`denseProbedSlotBoundAt_sound`) is proved here as
-the dense twin of `probedSlotBoundAt_sound`. -/
+`DomainBatchProof.lean`; the probed-bound soundness (`denseProbedSlotBoundAt_sound`) is proved
+here. -/
 
 namespace ApcOptimizer.Dense
 
@@ -25,11 +23,10 @@ open DigitFold
 
 variable {p : ℕ}
 
-/-! ## Native probe-payload characterization (dense twin of `probeBase_eq_set`) -/
+/-! ## Probe-payload characterization -/
 
 /-- With slot `i` a raw variable, slot `j` arbitrary, and every other slot a constant, the evaluated
-    payload with slot `j` zeroed *is* the dense probe payload at `denv x`. Dense twin of
-    `probeBase_eq_set` (`DomainProp.lean`). -/
+    payload with slot `j` zeroed *is* the dense probe payload at `denv x`. -/
 theorem denseProbeBase_eq_set (payload : List (DenseExpr p)) (denv : VarId → ZMod p)
     (i j : Nat) (hij : i ≠ j) (x : VarId)
     (hi : payload[i]? = some (.var x))
@@ -63,7 +60,7 @@ theorem denseProbeBase_eq_set (payload : List (DenseExpr p)) (denv : VarId → Z
         rw [e'.constValue?_sound cv hcveq denv, hcveq]
         rfl
 
-/-! ## Native probed-bound soundness (dense twin of `probedSlotBoundAt_sound`) -/
+/-! ## Probed-bound soundness -/
 
 theorem denseProbedSlotBoundAt_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (i : VarId) (j : Nat) (bound : Nat)
@@ -169,7 +166,7 @@ theorem denseProbedSlotBoundAt_sound (bs : BusSemantics p) (facts : BusFacts p b
 
 /-! ## The fixed-`denv` build invariant and its induction -/
 
-/-- Native soundness of a dense bounds map at a fixed environment: every stored bound is a strict
+/-- Soundness of a dense bounds map at a fixed environment: every stored bound is a strict
     upper bound on the environment's value for its variable (value-level, no decode). -/
 def DenseBMSoundAt (denv : VarId → ZMod p) (T : Std.HashMap VarId Nat) : Prop :=
   ∀ i b, T[i]? = some b → (denv i).val < b
@@ -264,11 +261,10 @@ theorem denseAddAll_soundAt (bs : BusSemantics p) (facts : BusFacts p bs) (denv 
       exact ih hrest _ (denseAddVars_soundAt bs facts bi denv hbi (denseProbeCandidatesOf bi)
         (denseRawVarsOf bi) T hT)
 
-/-! ## The native bounds-map soundness capstone -/
+/-! ## The bounds-map soundness capstone -/
 
-/-- **Native bounds-map soundness.** A bound stored by `denseBuild` for `i` is a strict upper bound
-    on `denv i` for every assignment whose bus interactions are non-violating — the dense mirror of
-    the spec `BoundsMap.build`'s carried `sound` field, proved value-level with no decode. -/
+/-- **Bounds-map soundness.** A bound stored by `denseBuild` for `i` is a strict upper bound
+    on `denv i` for every assignment whose bus interactions are non-violating. -/
 theorem denseBuild_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (DenseExpr p))) (i : VarId) (b : Nat)
     (hlk : (denseBuild bs facts bis)[i]? = some b) (denv : VarId → ZMod p)
@@ -277,29 +273,26 @@ theorem denseBuild_sound (bs : BusSemantics p) (facts : BusFacts p bs)
   unfold denseBuild at hlk
   exact denseAddAll_soundAt bs facts denv bis hbus ∅ (DenseBMSoundAt.empty denv) i b hlk
 
-/-! # Native correctness of the dense digit-fold pass (Task 3)
+/-! # Correctness of the dense digit-fold pass
 
-Native `VarId`-level correctness for `denseDigitFoldPass` (`DigitFold.lean`), proved over dense
-environments `VarId → ZMod p` with no decode and no dependency on the reference `Variable` pass. The
-spec pass `DigitFold` is the roadmap only: the recognizer soundness
-(`pairByteOps?_bytes`), the ladder soundness chain (`isLadder_sum` / `env_forced` / `tryLadder_spec`
-/ `lookupBounds_spec` / `attemptLadder_sound` / `solveOperand_sound`) and the scan (`findFold`'s
-`Fold.sound`) are transliterated here over the dense defs. The representation-independent ℕ-side layer
-(`ladderVal` / `unpack?` / `solutions` / `solutions_complete` / `solutions_forced` / `coeffNat` /
-`tval` / `signum` / `ladderVal_le_box`) is reused unqualified via `open DigitFold`. The fact-derived
-value bounds are consumed through the native `denseBuild_sound` (above); the byte recognizer's
+`VarId`-level correctness for `denseDigitFoldPass` (`DigitFold.lean`), proved over dense
+environments `VarId → ZMod p`. The recognizer soundness (`densePairByteOps?_bytes`), the ladder
+soundness chain (`denseIsLadder_sum` / `denseEnv_forced` / `denseTryLadder_spec` /
+`denseLookupBounds_spec` / `denseAttemptLadder_sound` / `denseSolveOperand_sound`) and the scan
+(`denseFindFold_sound`) are proved directly over the dense defs. The representation-independent
+ℕ-side layer (`ladderVal` / `unpack?` / `solutions` / `solutions_complete` / `solutions_forced` /
+`coeffNat` / `tval` / `signum` / `ladderVal_le_box`) is reused unqualified via `open DigitFold`. The
+fact-derived value bounds are consumed through `denseBuild_sound` (above); the byte recognizer's
 operand bounds through `BusFacts.byteXorSpec_sound`/`ByteXorSpec.decode_map` applied value-level to
-`denseBIEval` (inlined below — the dense mirror of `byteXorSpec_decode_iff`, kept off the
-`ByteCheckPackProof` import path so `HintCollapseProof`, which imports this file, is unaffected). The
-pass correctness reduces the forced substitution to `DenseConstraintSystem.substF_denseCorrect`
-(`DomainBatchProof.lean`). -/
+`denseBIEval` (inlined below, kept off the `ByteCheckPackProof` import path so `HintCollapseProof`,
+which imports this file, is unaffected). The pass correctness reduces the forced substitution to
+`DenseConstraintSystem.substF_denseCorrect` (`DomainBatchProof.lean`). -/
 
-/-! ## Native byte-pair recognizer soundness (dense twin of `pairByteOps?_bytes`) -/
+/-! ## Byte-pair recognizer soundness -/
 
-/-- Acceptance of a recognized pair check bounds both operands below 256. Dense twin of
-    `pairByteOps?_bytes`; the acceptance characterization is
-    the value-level `BusFacts.byteXorSpec_sound` applied to the decoded payload (the inline dense
-    mirror of `byteXorSpec_decode_iff`'s `pairOp` half). -/
+/-- Acceptance of a recognized pair check bounds both operands below 256: the acceptance
+    characterization is the value-level `BusFacts.byteXorSpec_sound` applied to the decoded
+    payload. -/
 theorem densePairByteOps?_bytes (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (x y : DenseExpr p)
     (h : densePairByteOps? bs facts bi = some (x, y))
@@ -334,10 +327,9 @@ theorem densePairByteOps?_bytes (bs : BusSemantics p) (facts : BusFacts p bs)
       exact ⟨hb1, hb2⟩
     · exact absurd h (by simp)
 
-/-! ## Native ladder soundness chain -/
+/-! ## Ladder soundness chain -/
 
-/-- A dense ladder's ZMod sum is the cast of its ℕ positional value (up to sign). Dense twin of
-    `isLadder_sum`. -/
+/-- A dense ladder's ZMod sum is the cast of its ℕ positional value (up to sign). -/
 theorem denseIsLadder_sum [NeZero p] (pos : Bool) :
     ∀ (g : ℕ) (l : List (VarId × ZMod p)), denseIsLadder pos g l = true →
     ∀ (denv : VarId → ZMod p),
@@ -372,8 +364,7 @@ theorem denseIsLadder_sum [NeZero p] (pos : Bool) :
       ring
 
 /-- The env-side forcing theorem: if the solution grid for a byte-checked dense ladder is the
-    singleton `[ds]`, any satisfying assignment's digit vector is exactly `ds`. Dense twin of
-    `env_forced`. -/
+    singleton `[ds]`, any satisfying assignment's digit vector is exactly `ds`. -/
 theorem denseEnv_forced [NeZero p] (hp : 256 < p) (pos : Bool) (g : ℕ) (hg : 0 < g) (K : ZMod p)
     (l : List (VarId × ZMod p)) (hlad : denseIsLadder pos g l = true)
     (Bs : List ℕ) (hB : ∀ B ∈ Bs, B ≤ 256)
@@ -415,8 +406,7 @@ theorem denseEnv_forced [NeZero p] (hp : 256 < p) (pos : Bool) (g : ℕ) (hg : 0
     ((K + (l.map (fun t => t.2 * denv t.1)).sum).val) hbyte hmod hle
 
 /-- Recognizing a dense ladder yields a permutation of the input terms with the leading coefficient
-    positive and the ladder shape confirmed. Dense twin of `tryLadder_spec`
-   . -/
+    positive and the ladder shape confirmed. -/
 theorem denseTryLadder_spec (pos : Bool) (terms : List (VarId × ZMod p))
     (g : ℕ) (sorted : List (VarId × ZMod p))
     (h : denseTryLadder pos terms = some (g, sorted)) :
@@ -433,8 +423,7 @@ theorem denseTryLadder_spec (pos : Bool) (terms : List (VarId × ZMod p))
     rw [hms] at hperm
     exact ⟨hperm.symm, hcond.1, hcond.2⟩
 
-/-- Bound lookup returns byte-sized (`≤ 256`) bounds paired to the terms in order. Dense twin of
-    `lookupBounds_spec`. -/
+/-- Bound lookup returns byte-sized (`≤ 256`) bounds paired to the terms in order. -/
 theorem denseLookupBounds_spec (bounds : Std.HashMap VarId Nat) :
     ∀ (l : List (VarId × ZMod p)) (Bs : List ℕ), denseLookupBounds bounds l = some Bs →
     (∀ B ∈ Bs, B ≤ 256) ∧
@@ -463,7 +452,7 @@ theorem denseLookupBounds_spec (bounds : Std.HashMap VarId Nat) :
     · exact absurd h (by simp)
 
 /-- One sign interpretation forces the lowest-coefficient variable's value, using fact bounds valid
-    at the assignment. Dense twin of `attemptLadder_sound`. -/
+    at the assignment. -/
 theorem denseAttemptLadder_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap VarId Nat)
     (pos : Bool) (l : DenseLinExpr p) (v : VarId) (d : ℕ)
     (h : denseAttemptLadder pos bounds l = some (v, d))
@@ -506,8 +495,7 @@ theorem denseAttemptLadder_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap
         · exact absurd h (by simp)
       · exact absurd h (by simp)
 
-/-- Solving one byte-checked operand forces the returned variable's value. Dense twin of
-    `solveOperand_sound`. -/
+/-- Solving one byte-checked operand forces the returned variable's value. -/
 theorem denseSolveOperand_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap VarId Nat)
     (E : DenseExpr p) (v : VarId) (d : ℕ)
     (h : denseSolveOperand bounds E = some (v, d))
@@ -529,7 +517,7 @@ theorem denseSolveOperand_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap 
       exact denseAttemptLadder_sound hp bounds true l v d hr denv hB hbyte
     · exact denseAttemptLadder_sound hp bounds false l v d h denv hB hbyte
 
-/-! ## The scan entailment (dense twin of `findFold`'s `Fold.sound`) -/
+/-! ## The scan entailment -/
 
 /-- Scanning the dense interactions for a byte-checked ladder operand with a forced digit: on a hit
     `(i, dd)`, every satisfying assignment forces `denv i = dd`. The value bounds are threaded as a
@@ -614,7 +602,7 @@ theorem denseSubst_eq_substF (d : DenseConstraintSystem p) (i : VarId) (t : Dens
   simp only [DenseConstraintSystem.subst, DenseConstraintSystem.substF, DenseExpr.subst_eq_substF,
     denseBIsubst_eq_substF]
 
-/-! ## The native pass -/
+/-! ## The pass -/
 
 /-- Coverage preservation of the dense digit-fold transform (extracted from the pass's `covered`
     field): a constant substitution keeps every mentioned variable registered. -/
@@ -631,11 +619,11 @@ theorem denseDigitFoldF_covered (reg : VarRegistry) (bs : BusSemantics p) (facts
         exact DenseConstraintSystem.subst_covered hcov (DenseExpr.coveredBy_const reg _)
   · rw [if_neg hp]; exact hcov
 
-/-- **Native digit-fold correctness.** When `256 < p`, the fired constant substitution preserves the
+/-- **Digit-fold correctness.** When `256 < p`, the fired constant substitution preserves the
     satisfying set (the forced digit holds for every satisfying assignment via
     `denseDigitFoldFindFold_entails`), so it is `DensePassCorrect` through
     `DenseConstraintSystem.substF_denseCorrect`; the no-fire and small-`p` branches are the identity
-    (`DensePassCorrect.refl`). Native over `VarId`, no decode. -/
+    (`DensePassCorrect.refl`). -/
 theorem denseDigitFoldF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     DensePassCorrect reg.isInput d (denseDigitFoldF bs facts d) [] bs := by
@@ -671,8 +659,8 @@ theorem denseDigitFoldF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts
   · rw [if_neg hp]; exact DensePassCorrect.refl reg.isInput d bs
 
 /-- The dense bounded-payload digit fold pass. Substitutes one fact-forced witness limb per
-    invocation (the cleanup fixpoint re-solves the shrunken ladder on the next iteration). Native
-    correctness over `VarId` via `denseDigitFoldF_correct`; no dependency on the reference pass. -/
+    invocation (the cleanup fixpoint re-solves the shrunken ladder on the next iteration).
+    Correctness over `VarId` via `denseDigitFoldF_correct`. -/
 def denseDigitFoldPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     denseDigitFoldF

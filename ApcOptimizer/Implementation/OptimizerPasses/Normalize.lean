@@ -4,25 +4,25 @@ import ApcOptimizer.Implementation.OptimizerPasses.Adapter
 
 set_option autoImplicit false
 
-/-! # Dense affine normalization (Task 3, native proof)
+/-! # Dense affine normalization
 
-The dense mirror of `Expression.normalize` (`OptimizerPasses/Normalize.lean`): replace every maximal
-affine subexpression by its **merged** normal form (`denseLinearize`, combine coefficients of equal
-`VarId`s, drop zeros, rebuild via `DenseLinExpr.toExpr`).
+`DenseExpr.normalize` replaces every maximal affine subexpression by its **merged** normal form
+(`denseLinearize`, combine coefficients of equal `VarId`s, drop zeros, rebuild via
+`DenseLinExpr.toExpr`).
 
 The pass (`denseNormalizePass`) computes through the fused walk `denseNormalizeFused` — one bottom-up
-traversal returning both the normalized expression and the node's linear form, killing
-`Expression.normalize`'s O(size × depth) `denseLinearize` re-walks (mirrors #165's spec
-`normalizeFused`). Its correctness is proved **natively** as a `DensePassCorrect` over
-`VarId → ZMod p` environments (the walk is eval-preserving and introduces no variables) and lifted to
-the spec `PassCorrect` once, at the pipeline edge, by `DenseVerifiedPassW.of` — no dependency on
-the reference `normalizePass`. Mirrors the native `denseConstantFoldPass` (`Dense/ExprOps.lean`). -/
+traversal returning both the normalized expression and the node's linear form, avoiding
+`DenseExpr.normalize`'s own O(size × depth) `denseLinearize` re-walks along non-affine paths. Its
+correctness is proved as a `DensePassCorrect` over `VarId → ZMod p` environments (the walk is
+eval-preserving and introduces no variables) and lifted to the spec `PassCorrect` once, at the
+pipeline edge, by `DenseVerifiedPassW.of`. Same shape as `denseConstantFoldPass`
+(`Dense/ExprOps.lean`). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Merging a dense linear form's terms (mirrors `addCoeff`/`mergeTerms`) -/
+/-! ## Merging a dense linear form's terms -/
 
 /-- Add coefficient `c` to `VarId` `v` in a dense term list, merging into an existing entry. -/
 def denseAddCoeff (v : VarId) (c : ZMod p) :
@@ -31,7 +31,7 @@ def denseAddCoeff (v : VarId) (c : ZMod p) :
   | (v', c') :: rest => if v' = v then (v', c' + c) :: rest else (v', c') :: denseAddCoeff v c rest
 
 /-- Merge a dense term list, combining coefficients of equal `VarId`s (`foldl`, first-occurrence
-    order preserved — mirrors `mergeTerms`). -/
+    order preserved). -/
 def denseMergeTerms (ts : List (VarId × ZMod p)) : List (VarId × ZMod p) :=
   ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) []
 
@@ -45,13 +45,11 @@ recorded order — O(terms) expected. Below a small constant threshold the list 
 setup), so a hybrid keeps the tiny-form path (asymptotically still linear: the bounded branch is
 O(1)). Proven `= denseMergeTerms` and installed via `@[csimp]`, so every call site
 (`DenseLinExpr.norm`, hence the fused normalize walk and gauss's per-constraint reduce) uses it at
-runtime with **no proof churn** and the byte-identical result. Dense twin of the spec's #153
-`mergeTermsFast`/`mergeTerms_eq_fast`; the proof structure
-transfers line-by-line since `VarId` has `DecidableEq`/`Hashable`/`LawfulBEq` like `Variable`. -/
+runtime with no further proof obligation. -/
 
 /-- The coefficient the first-occurrence-ordered accumulator holds for `v` after merging (the
-    coefficient of the unique accumulator entry for `v`, if any). Mirrors `denseAddCoeff`'s structure
-    so its update lemmas are one-line inductions. Dense twin of `assocCoeff`. -/
+    coefficient of the unique accumulator entry for `v`, if any). Follows `denseAddCoeff`'s
+    structure so its update lemmas are one-line inductions. -/
 def denseAssocCoeff : List (VarId × ZMod p) → VarId → Option (ZMod p)
   | [], _ => none
   | (v', c') :: rest, v => if v' = v then some c' else denseAssocCoeff rest v
@@ -82,7 +80,7 @@ theorem denseMem_of_assocCoeff_some (acc : List (VarId × ZMod p)) (v : VarId) (
       · next hne => exact Or.inr (ih h)
 
 /-- The effect of one `denseAddCoeff` on `denseAssocCoeff`: bump `v`'s coefficient (0 if absent),
-    leave every other variable untouched. Dense twin of `assocCoeff_addCoeff`. -/
+    leave every other variable untouched. -/
 theorem denseAssocCoeff_addCoeff (v : VarId) (c : ZMod p) (acc : List (VarId × ZMod p))
     (w : VarId) :
     denseAssocCoeff (denseAddCoeff v c acc) w
@@ -142,15 +140,14 @@ theorem denseAddCoeff_append_of_not_mem (v : VarId) (c : ZMod p) (acc : List (Va
       simp [ih hrest]
 
 /-- One step of the fast merge: bump `t.1`'s coefficient in the map, appending `t.1` to the order
-    array on first occurrence. Dense twin of `mtStep`. -/
+    array on first occurrence. -/
 def denseMtStep (st : Array VarId × Std.HashMap VarId (ZMod p)) (t : VarId × ZMod p) :
     Array VarId × Std.HashMap VarId (ZMod p) :=
   match st.2[t.1]? with
   | some c0 => (st.1, st.2.insert t.1 (c0 + t.2))
   | none => (st.1.push t.1, st.2.insert t.1 t.2)
 
-/-- Correspondence invariant tying the fast `(order, map)` state to the `denseAddCoeff`-fold list.
-    Dense twin of `MergeCorr`. -/
+/-- Correspondence invariant tying the fast `(order, map)` state to the `denseAddCoeff`-fold list. -/
 def DenseMergeCorr (acc : List (VarId × ZMod p)) (order : Array VarId)
     (m : Std.HashMap VarId (ZMod p)) : Prop :=
   order.toList = acc.map Prod.fst ∧ (acc.map Prod.fst).Nodup ∧ ∀ v, m[v]? = denseAssocCoeff acc v
@@ -240,8 +237,7 @@ theorem denseRecon (acc : List (VarId × ZMod p)) (order : Array VarId)
     funext (fun v => by rw [hm v])]
   exact denseReconAssoc acc hnod
 
-/-- The dense linear like-term merge. Proven `= denseMergeTerms` and installed via `@[csimp]`.
-    Dense twin of `mergeTermsFast`. -/
+/-- The dense linear like-term merge. Proven `= denseMergeTerms` and installed via `@[csimp]`. -/
 def denseMergeTermsFast (ts : List (VarId × ZMod p)) : List (VarId × ZMod p) :=
   if ts.length ≤ 32 then
     ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) []
@@ -265,7 +261,7 @@ def denseMergeTermsFast (ts : List (VarId × ZMod p)) : List (VarId × ZMod p) :
 def DenseLinExpr.norm (l : DenseLinExpr p) : DenseLinExpr p :=
   ⟨l.const, (denseMergeTerms l.terms).filter (fun t => t.2 ≠ 0)⟩
 
-/-! ## The dense normalization traversal (mirrors `Expression.normalize`) -/
+/-! ## The dense normalization traversal -/
 
 /-- Recursively collect like terms: replace each maximal affine subexpression by its merged linear
     form; recurse into genuine variable×variable products. -/
@@ -281,12 +277,11 @@ def DenseExpr.normalize : DenseExpr p → DenseExpr p
       | some l => l.norm.toExpr
       | none => .mul a.normalize b.normalize
 
-/-! ## Native eval-preservation of the merge / normal form (mirrors `mergeTerms_eval`/
-    `LinExpr.norm_eval`/`Expression.normalize_eval`)
+/-! ## Eval-preservation of the merge / normal form
 
-Proved natively over `VarId → ZMod p` environments (no `decode`, no prime hypothesis). Consolidated
-here at their definitions' home so every downstream native proof shares one copy; the affine-form
-eval lemmas (`denseLinearize_eval`, `DenseLinExpr.norm_eval`'s `add`/`scale`/`toExpr` pieces) live in
+Proved over `VarId → ZMod p` environments (no prime hypothesis needed). Consolidated here at their
+definitions' home so every downstream proof shares one copy; the affine-form eval lemmas
+(`denseLinearize_eval`, `DenseLinExpr.norm_eval`'s `add`/`scale`/`toExpr` pieces) live in
 `Dense/Affine.lean`. -/
 
 theorem denseAddCoeff_eval (v : VarId) (c : ZMod p) (ts : List (VarId × ZMod p))
@@ -327,13 +322,12 @@ theorem denseDropZero_eval (ts : List (VarId × ZMod p)) (denv : VarId → ZMod 
       · rw [List.filter_cons_of_pos (by simpa using h), List.map_cons, List.sum_cons, ih,
             List.map_cons, List.sum_cons]
 
-/-- **The dense normal form is eval-preserving.** Dense mirror of `LinExpr.norm_eval`. -/
+/-- **The dense normal form is eval-preserving.** -/
 theorem DenseLinExpr.norm_eval (l : DenseLinExpr p) (denv : VarId → ZMod p) :
     l.norm.eval denv = l.eval denv := by
   simp only [DenseLinExpr.norm, DenseLinExpr.eval, denseDropZero_eval, denseMergeTerms_eval]
 
-/-- **`DenseExpr.normalize` is eval-preserving.** Dense mirror of `Expression.normalize_eval`
-    (`OptimizerPasses/Normalize.lean:318`); no prime hypothesis needed. -/
+/-- **`DenseExpr.normalize` is eval-preserving.** No prime hypothesis needed. -/
 theorem DenseExpr.normalize_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
     e.normalize.eval denv = e.eval denv := by
   induction e with
@@ -430,7 +424,7 @@ theorem DenseLinExpr.scale_terms_fst (k : ZMod p) (l : DenseLinExpr p) :
     (l.scale k).terms.map Prod.fst = l.terms.map Prod.fst := by
   simp [DenseLinExpr.scale, List.map_map, Function.comp_def]
 
-/-- `denseLinearize` introduces no variable outside the expression (mirrors `linearize_vars`). -/
+/-- `denseLinearize` introduces no variable outside the expression. -/
 theorem denseLinearize_vars (e : DenseExpr p) (l : DenseLinExpr p) (h : denseLinearize e = some l) :
     ∀ i ∈ l.terms.map Prod.fst, i ∈ e.vars := by
   induction e generalizing l with
@@ -472,7 +466,7 @@ theorem denseLinearize_vars (e : DenseExpr p) (l : DenseLinExpr p) (h : denseLin
               rw [if_neg h1, if_neg h2] at h
               exact absurd h (by simp)
 
-/-- `DenseExpr.normalize` introduces no new variable (mirrors `Expression.normalize_vars`). -/
+/-- `DenseExpr.normalize` introduces no new variable. -/
 theorem DenseExpr.normalize_vars (e : DenseExpr p) : ∀ i ∈ e.normalize.vars, i ∈ e.vars := by
   induction e with
   | const n => intro i hi; simpa [DenseExpr.normalize] using hi
@@ -494,7 +488,7 @@ theorem DenseExpr.normalize_vars (e : DenseExpr p) : ∀ i ∈ e.normalize.vars,
       · simp only [DenseExpr.vars, List.mem_append] at hi ⊢
         exact hi.imp (iha i) (ihb i)
 
-/-! ## Fused normalization walk (mirrors `normalizeFused`, `OptimizerPasses/Normalize.lean:406`)
+/-! ## Fused normalization walk
 
 One bottom-up pass returning the normalized expression *and* the node's dense linear form
 (`denseLinearize`'s value). `DenseExpr.normalize` re-runs `denseLinearize` — a full subtree walk — at
@@ -526,7 +520,7 @@ def denseNormalizeFused : DenseExpr p → DenseExpr p × Option (DenseLinExpr p)
           else (.mul ra.1 rb.1, none)
       | _, _ => (.mul ra.1 rb.1, none)
 
-/-- The fused pass computes exactly (`normalize`, `denseLinearize`). Mirrors `normalizeFused_eq`. -/
+/-- The fused pass computes exactly (`normalize`, `denseLinearize`). -/
 theorem denseNormalizeFused_eq (e : DenseExpr p) :
     denseNormalizeFused e = (e.normalize, denseLinearize e) := by
   induction e with
@@ -567,15 +561,14 @@ theorem denseNormalizeFused_fst_vars (e : DenseExpr p) :
     ∀ i ∈ ((denseNormalizeFused e).1).vars, i ∈ e.vars := by
   rw [denseNormalizeFused_fst]; exact DenseExpr.normalize_vars e
 
-/-! ## The dense normalization pass (native proof)
+/-! ## The dense normalization pass
 
 The affine-normalization pass, computing through the fused walk. Its correctness is proved
-**natively** as a `DensePassCorrect` (the fused walk is eval-preserving and introduces no variables)
-and lifted to the spec `PassCorrect` by `DenseVerifiedPassW.of` — no dependency on the spec
-`normalizePass`. Mirrors `denseConstantFoldPass` (`Dense/ExprOps.lean`), the closest native mapExpr
-precedent. -/
+as a `DensePassCorrect` (the fused walk is eval-preserving and introduces no variables)
+and lifted to the spec `PassCorrect` by `DenseVerifiedPassW.of`. Same shape as
+`denseConstantFoldPass` (`Dense/ExprOps.lean`). -/
 
-/-- The dense affine-normalization pass, native proof (wired into `normalize1`/`normalize2`). -/
+/-- The dense affine-normalization pass (wired into `normalize1`/`normalize2`). -/
 def denseNormalizePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun _ _ d => d.mapExpr (fun e => (denseNormalizeFused e).1))

@@ -2,17 +2,17 @@ import ApcOptimizer.Implementation.OptimizerPasses.Pass
 
 set_option autoImplicit false
 
-/-! # Native dense correctness and the central lift bridge (Task 3)
+/-! # Dense correctness and the central lift bridge
 
-The mandated end state (see `VarId.md` / `VarIdAddendum.md`) is a `VarId`-only pipeline whose passes
-are proved correct **natively** over dense environments `VarId → ZMod p`, connected to the audited
-`Variable`-level spec **once**, at the optimizer boundary. This module builds that connection.
+The pipeline is `VarId`-only: passes are proved correct over dense environments `VarId → ZMod p`,
+connected to the audited `Variable`-level spec **once**, at the optimizer boundary. This module
+builds that connection.
 
-It defines the native dense semantic notions — dense expression/bus evaluation, satisfaction,
+It defines the dense semantic notions — dense expression/bus evaluation, satisfaction,
 admissibility, stateful-bus side effects, invariant preservation, refinement (`implies`),
 computation-method evaluation and dense derivations — all over `VarId → ZMod p`, entirely
-`Variable`-free and decode-free. On top of them it defines `DensePassCorrect`, the native mirror of
-the spec `PassCorrect` (soundness, completeness-with-derivations, stateful-bus effects, and dense
+`Variable`-free and decode-free. On top of them it defines `DensePassCorrect`, the dense analogue
+of the spec `PassCorrect` (soundness, completeness-with-derivations, stateful-bus effects, and dense
 derivations), parameterised only by an abstract `isInput : VarId → Bool` predicate (which the lift
 instantiates with "resolves to a powdr-ID column").
 
@@ -27,25 +27,25 @@ runtime pipeline.
 
 `DenseVerifiedPassW.of` packages the whole thing: given a dense transform, coverage
 preservation, and a `DensePassCorrect` proof, it yields the existing `DensePassResult` by applying
-the lift — so a native pass slots into the current `denseChain`/selector with no change to
+the lift — so a dense pass slots into the current `denseChain`/selector with no change to
 composition, the fixpoint, or the other passes.
 
 ## Proof-architecture defaults
 
-New dense ports mirror the spec's proof-carrying structures with **native-`Prop`-carrying dense
-twins** — `Prop` fields about dense data only, which erase (precedent: `DenseDropResult`, and the
-`DenseNativeStep` of `BridgeSteps.lean`) — instead of externalising invariants into threaded
-inductions. Data-only dense records remain correct only where a carried proof would force
-representation correspondence. Internal loops compose via the `DenseNativeStep` combinators
-(`BridgeSteps.lean`); each pass lifts once, here, to the audited spec. -/
+Dense ports use `Prop`-carrying dense structures — `Prop` fields about dense data only, which erase
+(precedent: `DenseDropResult`, and the `DenseNativeStep` of `BridgeSteps.lean`) — instead of
+externalising invariants into threaded inductions, wherever a carried proof would otherwise force
+representation correspondence. Data-only dense records remain correct without one everywhere else.
+Internal loops compose via the `DenseNativeStep` combinators (`BridgeSteps.lean`); each pass lifts
+once, here, to the audited spec. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Native dense computation methods: evaluation, variables, `methodFor` -/
+/-! ## Dense computation methods: evaluation, variables, `methodFor` -/
 
-/-- Evaluate a dense computation method under a dense environment (mirrors `ComputationMethod.eval`). -/
+/-- Evaluate a dense computation method under a dense environment. -/
 def DenseComputationMethod.eval : DenseComputationMethod p → (VarId → ZMod p) → ZMod p
   | .const c, _ => c
   | .quotientOrZero num den, denv =>
@@ -53,29 +53,28 @@ def DenseComputationMethod.eval : DenseComputationMethod p → (VarId → ZMod p
   | .ifEqZero cond thenM elseM, denv =>
       if cond.eval denv = 0 then thenM.eval denv else elseM.eval denv
 
-/-- The `VarId`s a dense computation method may read (mirrors `ComputationMethod.vars`). -/
+/-- The `VarId`s a dense computation method may read. -/
 def DenseComputationMethod.vars : DenseComputationMethod p → List VarId
   | .const _ => []
   | .quotientOrZero num den => num.vars ++ den.vars
   | .ifEqZero cond thenM elseM => cond.vars ++ thenM.vars ++ elseM.vars
 
-/-- The dense computation method `dd` uses for `i`: the **last** one listed (mirrors
-    `Derivations.methodFor`). -/
+/-- The dense computation method `dd` uses for `i`: the **last** one listed. -/
 def DenseDerivations.methodFor : DenseDerivations p → VarId → Option (DenseComputationMethod p)
   | [], _ => none
   | (u, cm) :: rest, v =>
       (DenseDerivations.methodFor rest v).orElse (fun _ => if u = v then some cm else none)
 
-/-! ## Native dense semantics over `VarId → ZMod p` environments -/
+/-! ## Dense semantics over `VarId → ZMod p` environments -/
 
-/-- Evaluate a dense bus interaction under a dense environment (mirrors `BusInteraction.eval`). -/
+/-- Evaluate a dense bus interaction under a dense environment. -/
 def denseBIEval (bi : BusInteraction (DenseExpr p)) (denv : VarId → ZMod p) :
     BusInteraction (ZMod p) :=
   { busId := bi.busId,
     multiplicity := bi.multiplicity.eval denv,
     payload := bi.payload.map (fun e => e.eval denv) }
 
-/-- Dense side effects: the stateful-bus messages sent (mirrors `ConstraintSystem.sideEffects`). -/
+/-- Dense side effects: the stateful-bus messages sent. -/
 def DenseConstraintSystem.sideEffects (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (denv : VarId → ZMod p) : BusState p :=
   d.busInteractions.filter (fun bi => bs.isStateful bi.busId)
@@ -83,7 +82,7 @@ def DenseConstraintSystem.sideEffects (d : DenseConstraintSystem p) (bs : BusSem
       let m := denseBIEval bi denv
       ((m.busId, m.payload), m.multiplicity))
 
-/-- Dense satisfaction (mirrors `ConstraintSystem.satisfies`). -/
+/-- Dense satisfaction: all algebraic constraints vanish and every fired bus message is unconstrained. -/
 def DenseConstraintSystem.satisfies (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (denv : VarId → ZMod p) : Prop :=
   (∀ c ∈ d.algebraicConstraints, c.eval denv = 0) ∧
@@ -91,20 +90,20 @@ def DenseConstraintSystem.satisfies (d : DenseConstraintSystem p) (bs : BusSeman
     let message := denseBIEval bi denv
     message.multiplicity ≠ 0 → bs.violatesConstraint message = false)
 
-/-- Dense admissibility (mirrors `ConstraintSystem.admissible`). -/
+/-- Dense admissibility: the fired stateful-bus messages satisfy the bus admissibility predicate. -/
 def DenseConstraintSystem.admissible (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (denv : VarId → ZMod p) : Prop :=
   bs.admissible ((d.busInteractions.map (fun bi => denseBIEval bi denv)).filter
     (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId))
 
-/-- Dense invariant preservation (mirrors `ConstraintSystem.guaranteesInvariants`). -/
+/-- Dense invariant preservation: every fired bus message on a satisfying assignment breaks no invariant. -/
 def DenseConstraintSystem.guaranteesInvariants (d : DenseConstraintSystem p) (bs : BusSemantics p) :
     Prop :=
   ∀ denv, d.satisfies bs denv → ∀ bi ∈ d.busInteractions,
     let message := denseBIEval bi denv
     message.multiplicity ≠ 0 → bs.breaksInvariant message = false
 
-/-- Dense sound-replacement half (mirrors `ConstraintSystem.implies`). -/
+/-- Dense sound-replacement half: every satisfying assignment has a matching one for `other` with equivalent side effects. -/
 def DenseConstraintSystem.implies (self other : DenseConstraintSystem p) (bs : BusSemantics p) :
     Prop :=
   ∀ denv, self.satisfies bs denv →
@@ -205,7 +204,8 @@ theorem filter_map_busId_comm (l : List (BusInteraction (DenseExpr p)))
 
 /-! ## Environment transfer: extend a dense env to a spec env -/
 
-/-- Whether a `VarId` resolves to a powdr-ID column (the native reading of the spec's `powdrId?`). -/
+/-- Whether a `VarId` resolves to a powdr-ID column (reads the spec's `powdrId?` at the resolved
+    `Variable`). -/
 def VarRegistry.isInput (reg : VarRegistry) (i : VarId) : Bool := (reg.resolve i).powdrId?.isSome
 
 /-- Extend a dense environment to a spec environment: registered variables read their dense value,
@@ -390,15 +390,15 @@ theorem VarRegistry.mem_decodeCS_vars (reg : VarRegistry) (d : DenseConstraintSy
     {v : Variable} : v ∈ (reg.decodeCS d).vars ↔ ∃ i ∈ d.occ, reg.resolve i = v := by
   rw [show (reg.decodeCS d).vars = d.occ.map reg.resolve from reg.decodeCS_occ d, List.mem_map]
 
-/-! ## `DensePassCorrect`: the native mirror of `PassCorrect`
+/-! ## `DensePassCorrect`: the dense analogue of `PassCorrect`
 
 `isInput : VarId → Bool` abstractly marks the powdr-ID columns; the lift instantiates it with
-`reg.isInput`. `DenseOutReconstructs` is the native reconstruction obligation for a pass's output:
-each output derived variable is either derived locally (a method in `dd`, reading only input columns)
+`reg.isInput`. `DenseOutReconstructs` is the reconstruction obligation for a pass's output: each
+output derived variable is either derived locally (a method in `dd`, reading only input columns)
 or inherited from the input (present in `d`, value preserved) — deferring the inherited case to the
 spec-side incoming derivations at the lift, avoiding any decode of arbitrary threaded derivations. -/
 
-/-- The native reconstruction obligation for a pass's output. -/
+/-- The reconstruction obligation for a pass's output. -/
 def DenseOutReconstructs (isInput : VarId → Bool) (inputVarIds : List VarId)
     (d out : DenseConstraintSystem p) (dd : DenseDerivations p) (denv denv' : VarId → ZMod p) :
     Prop :=
@@ -409,7 +409,7 @@ def DenseOutReconstructs (isInput : VarId → Bool) (inputVarIds : List VarId)
           dcm.eval denv' = denv' i
     | none => i ∈ d.occ ∧ denv' i = denv i
 
-/-- The per-pass native correctness obligation over dense environments: the native mirror of
+/-- The per-pass correctness obligation over dense environments: the dense analogue of
     `PassCorrect`. Fully `Variable`-free and decode-free; all evidence is `Prop` (erases). -/
 def DensePassCorrect (isInput : VarId → Bool) (d out : DenseConstraintSystem p)
     (dd : DenseDerivations p) (bs : BusSemantics p) : Prop :=
@@ -495,17 +495,16 @@ private theorem specMethodFor_append (a b : Derivations p) (v : Variable) :
       simp only [List.cons_append, Derivations.methodFor, ih]
       cases Derivations.methodFor b v <;> rfl
 
-/-! ## Native dense composition: `refl` and `andThen`
+/-! ## Dense composition: `refl` and `andThen`
 
 The dense analogues of `PassCorrect.refl`/`PassCorrect.andThen` (`OptimizerPasses/Basic.lean`),
-proved natively over `VarId → ZMod p` environments — no `decode`, no reference pass. These let a
-`VarId`-native pass with an internal fixpoint (e.g. `busPairCancel`'s `cancelLoop`, which threads a
-single-step `PassCorrect` across intermediate `mkCs` systems via `PassCorrect.andThen` with a
-`PassCorrect.refl` base) mirror that composition entirely in the dense layer, before the one lift to
-the audited spec. `andThen` is the **general** derivation-concatenating form (`dd1 ++ dd2`);
-specialising both sides to `[]` recovers the shape the `busPairCancel` port needs (`[] ++ [] = []`),
-and it subsumes the ad-hoc `DensePassCorrect_refl`/`DensePassCorrect.trans` shortcuts the domain
-passes carry. -/
+proved directly over `VarId → ZMod p` environments — no `decode`. These let a pass with an internal
+fixpoint (e.g. `busPairCancel`'s `denseCancelLoop`, which threads a single-step `DensePassCorrect`
+across intermediate `mkCs` systems via `DensePassCorrect.andThen` with a `DensePassCorrect.refl`
+base) compose entirely in the dense layer, before the one lift to the audited spec. `andThen` is the
+**general** derivation-concatenating form (`dd1 ++ dd2`); specialising both sides to `[]` recovers
+the shape `busPairCancel` needs (`[] ++ [] = []`), and it subsumes the ad-hoc
+`DensePassCorrect_refl`/`DensePassCorrect.trans` shortcuts the domain passes carry. -/
 
 /-- `DenseDerivations.methodFor` over an append: the second list wins, falling back to the first
     (last-entry-wins, mirroring `specMethodFor_append`). -/
@@ -519,8 +518,8 @@ theorem DenseDerivations.methodFor_append (a b : DenseDerivations p) (v : VarId)
       simp only [List.cons_append, DenseDerivations.methodFor, ih]
       cases DenseDerivations.methodFor b v <;> rfl
 
-/-- **Reflexivity.** The identity transform (same system, no new derivations) is natively correct.
-    Mirrors `PassCorrect.refl`; the base case of a native drop-loop. -/
+/-- **Reflexivity.** The identity transform (same system, no new derivations) is correct. The
+    dense analogue of `PassCorrect.refl`; the base case of a drop-loop. -/
 theorem DensePassCorrect.refl (isInput : VarId → Bool) (d : DenseConstraintSystem p)
     (bs : BusSemantics p) : DensePassCorrect isInput d d [] bs := by
   refine ⟨fun denv hsat => ⟨denv, hsat, BusState.equiv_refl _⟩, _root_.id, fun i hi _ => hi, ?_⟩
@@ -529,11 +528,11 @@ theorem DensePassCorrect.refl (isInput : VarId → Bool) (d : DenseConstraintSys
   intro inputVarIds _ i hi _
   exact ⟨hi, rfl⟩
 
-/-- **Sequential composition.** Given native correctness `d → mid` (local derivations `dd1`) and
-    `mid → out` (local derivations `dd2`), conclude native correctness `d → out` with derivations
-    `dd1 ++ dd2`. Mirrors `PassCorrect.andThen` clause by clause: transitive `implies`, invariant
-    preservation, occurrence-shrink chaining, side-effect chaining, and the reconstruction clause
-    across the middle dense system.
+/-- **Sequential composition.** Given correctness `d → mid` (local derivations `dd1`) and
+    `mid → out` (local derivations `dd2`), conclude correctness `d → out` with derivations
+    `dd1 ++ dd2`. The dense analogue of `PassCorrect.andThen` clause by clause: transitive
+    `implies`, invariant preservation, occurrence-shrink chaining, side-effect chaining, and the
+    reconstruction clause across the middle dense system.
 
     The reconstruction composition (the hard `∃ denv'` direction): `methodFor (dd1 ++ dd2) i` prefers
     `dd2`, falling back to `dd1` (`methodFor_append`). If `dd2` locally derives `i`, `hrec23` gives
@@ -613,10 +612,10 @@ theorem DensePassCorrect.andThen {isInput : VarId → Bool} {d mid out : DenseCo
               obtain ⟨hiD, he1denv⟩ := B12
               exact ⟨hiD, by rw [he2e1, he1denv]⟩
 
-/-! ## Native `DensePassCorrect` shortcuts (env'=env, and composition) -/
+/-! ## `DensePassCorrect` shortcuts (env'=env, and composition) -/
 
-/-- The env'=env native correctness shape (mirrors `PassCorrect.ofEnvEq`): the fold's completeness
-    witness is the input assignment and it introduces no variable. -/
+/-- The env'=env correctness shape (the dense analogue of `PassCorrect.ofEnvEq`): the fold's
+    completeness witness is the input assignment and it introduces no variable. -/
 theorem DensePassCorrect.ofEnvEq {isInput : VarId → Bool} {d out : DenseConstraintSystem p}
     {bs : BusSemantics p}
     (hsound : out.implies d bs)
@@ -634,7 +633,7 @@ theorem DensePassCorrect.ofEnvEq {isInput : VarId → Bool} {d out : DenseConstr
   show i ∈ d.occ ∧ denv i = denv i
   exact ⟨hsub i hi, rfl⟩
 
-/-- `DensePassCorrect` composes (derivations empty on both sides). Mirrors `PassCorrect.andThen`
+/-- `DensePassCorrect` composes (derivations empty on both sides); `PassCorrect.andThen`
     specialised to no derivations. -/
 theorem DensePassCorrect.trans {isInput : VarId → Bool} {d1 d2 d3 : DenseConstraintSystem p}
     {bs : BusSemantics p} (h12 : DensePassCorrect isInput d1 d2 [] bs)
@@ -664,8 +663,8 @@ theorem DensePassCorrect.trans {isInput : VarId → Bool} {d1 d2 d3 : DenseConst
 /-! ### Sanity check: the new lemmas compose
 
 A drop-shaped step (a trivial bus filter that keeps everything) chained after `refl` through
-`andThen`, plus the fully general `andThen` over hypothetical native steps with non-empty
-derivations. Both are erased `example`s — they only witness that the API type-checks and composes. -/
+`andThen`, plus the fully general `andThen` over hypothetical steps with non-empty derivations. Both
+are erased `example`s — they only witness that the API type-checks and composes. -/
 
 private def keepAllBus (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   { d with busInteractions := d.busInteractions.filter (fun _ => true) }
@@ -683,7 +682,7 @@ private example (isInput : VarId → Bool) (d : DenseConstraintSystem p) (bs : B
     DensePassCorrect isInput d (keepAllBus d) [] bs :=
   (DensePassCorrect.refl isInput d bs).andThen (keepAllBus_correct isInput d bs)
 
-/-- The general `andThen` composes any two native steps, concatenating their derivations. -/
+/-- The general `andThen` composes any two steps, concatenating their derivations. -/
 private example (isInput : VarId → Bool) (d mid out : DenseConstraintSystem p)
     (dd1 dd2 : DenseDerivations p) (bs : BusSemantics p)
     (h1 : DensePassCorrect isInput d mid dd1 bs) (h2 : DensePassCorrect isInput mid out dd2 bs) :
@@ -692,7 +691,7 @@ private example (isInput : VarId → Bool) (d mid out : DenseConstraintSystem p)
 
 /-! ## The lift theorem -/
 
-/-- **Lift.** Under the registry coverage invariants, a native `DensePassCorrect` (with `isInput`
+/-- **Lift.** Under the registry coverage invariants, a `DensePassCorrect` (with `isInput`
     instantiated as "resolves to a powdr column") implies the spec `PassCorrect` for the decoded
     input/output/derivations. This is the one place representation correspondence is discharged. -/
 theorem DensePassCorrect.lift {reg : VarRegistry} {d out : DenseConstraintSystem p}
@@ -885,11 +884,11 @@ theorem denseCS_coveredBy_mono {r r' : VarRegistry} (h : r.Extends r')
   obtain ⟨hm, hp⟩ := hbi bi hbimem
   exact ⟨hm.mono h, fun e he => (hp e he).mono h⟩
 
-/-- Build a `DenseVerifiedPassW` from a registry-**extending** native dense transform — the sibling
+/-- Build a `DenseVerifiedPassW` from a registry-**extending** dense transform — the sibling
     of `of` for passes that mint fresh variables (`Reencode`/`HintCollapse`/`SeqzCollapse`).
     The `transform` takes the incoming registry and returns the extended registry together with the
     dense output and dense derivations; the obligations are the registry extension (`hext`), coverage
-    of the output and the derivations at the **extended** registry (`hcov`/`hdcov`), and a native
+    of the output and the derivations at the **extended** registry (`hcov`/`hdcov`), and a
     `DensePassCorrect` proof stated at the extended registry's `isInput` (`hcorrect`).
 
     The spec `PassCorrect`-on-decode field is discharged by `DensePassCorrect.lift` instantiated at

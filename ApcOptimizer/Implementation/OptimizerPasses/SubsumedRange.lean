@@ -2,30 +2,24 @@ import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
 
 set_option autoImplicit false
 
-/-! # Dense subsumed range-check removal (Task 3 — impl)
+/-! # Dense subsumed range-check removal
 
-Dense, `VarId`-native transliteration of the reference `SubsumedRange` pass's *runtime*
-definitions (`rangeCheck?`, `dropBase`, `dropKeep`, and the pass's computed output). This file is
-**impl-only**: no theorem/lemma from the spec file is ported (`rangeCheck?_spec`,
-`rangeCheck?_stateless`, `rangeCheck?_accepted`, and the pass's `filterBusEntailed_correct`-built
-`PassCorrect` proof are all proof-side, the prover's job), and no `DenseVerifiedPassW`/
-`DensePassCorrect` wrapper is built here — the runtime transform `denseSubsumedRangeDropF` is
-shaped like `denseSubsumedCheckDropF` (`SubsumedCheck.lean`): this pass, like its spec counterpart,
-is unconditional in `p` and consumes `facts` directly, so the prover wraps it directly with
-`DenseVerifiedPassW.of`.
+Runtime definitions for `subsumedRangeDrop`: `denseSubsumedRangeCheck?`, `denseSubsumedRangeDropBase`,
+`denseSubsumedRangeDropKeep`, and the pass's computed output `denseSubsumedRangeDropF`. This file is
+**impl-only**: it carries no soundness lemma, and no `DenseVerifiedPassW`/`DensePassCorrect` wrapper
+is built here — the runtime transform is shaped like `denseSubsumedCheckDropF`
+(`SubsumedCheck.lean`): unconditional in `p`, consuming `facts` directly, so the prover wraps it
+directly with `DenseVerifiedPassW.of`.
 
-## Reuse map (not re-derived)
+## Reuse map
 
-* `denseFindVarBound` (`Dense/RootPairUnify.lean`, itself built from `denseInteractionBound` /
-  `Dense/DigitFold.lean`) is *exactly* the dense `findVarBound` (`DomainProp.lean:590`) the spec
-  `dropKeep` consumes for its non-circular justification base — reused unchanged, not re-derived.
-* `DenseExpr.constValue?` (`Dense/DropPasses.lean`) is the dense `Expression.constValue?`, used
-  exactly as the spec `rangeCheck?` uses it.
-* `DenseConstraintSystem.filterBus` (`Dense/Rewrite.lean`) is the dense `ConstraintSystem.filterBus`
-  the pass's `.out` is built from.
+* `denseFindVarBound` (`RootPairUnify.lean`, itself built from `denseInteractionBound`,
+  `DigitFold.lean`) is the non-circular justification base `denseSubsumedRangeDropKeep` consumes,
+  reused unchanged.
+* `DenseExpr.constValue?` (`DropPasses.lean`).
+* `DenseConstraintSystem.filterBus` (`Rewrite.lean`) is what the pass's output is built from.
 * `BusFacts`/`BusSemantics` are representation-independent (their signatures only mention `Nat`/
-  `ZMod p`/patterns, never `Variable`/`Expression`), so `facts.varRangeBus` is consumed directly,
-  unchanged, exactly as the spec pass does. -/
+  `ZMod p`/patterns), so `facts.varRangeBus` is consumed directly, unchanged. -/
 
 namespace ApcOptimizer.Dense
 
@@ -33,7 +27,7 @@ variable {p : ℕ}
 
 /-- Recognize a single-variable range check `[x, width]` (multiplicity `1`) on a `varRangeBus`
     bus whose width is a *satisfiable* constant (`width.val ≤ 17`), returning the checked variable
-    and the width constant. Mirrors `SubsumedRange.rangeCheck?`. -/
+    and the width constant. -/
 def denseSubsumedRangeCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (VarId × ZMod p) :=
   match bi.payload with
@@ -49,13 +43,13 @@ def denseSubsumedRangeCheck? (bs : BusSemantics p) (facts : BusFacts p bs)
   | _ => none
 
 /-- The justification base: interactions this pass can never drop (not recognized as
-    single-variable range checks). Mirrors `SubsumedRange.dropBase`. -/
+    single-variable range checks). -/
 def denseSubsumedRangeDropBase (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : List (BusInteraction (DenseExpr p)) :=
   d.busInteractions.filter (fun bi => (denseSubsumedRangeCheck? bs facts bi).isNone)
 
 /-- Keep `bi` unless it is a recognized range check `[x, w]` whose variable is already bounded
-    `< 2^w` by a retained (base) interaction. Mirrors `SubsumedRange.dropKeep`. -/
+    `< 2^w` by a retained (base) interaction. -/
 def denseSubsumedRangeDropKeep (bs : BusSemantics p) (facts : BusFacts p bs)
     (base : List (BusInteraction (DenseExpr p))) (bi : BusInteraction (DenseExpr p)) : Bool :=
   match denseSubsumedRangeCheck? bs facts bi with
@@ -66,8 +60,7 @@ def denseSubsumedRangeDropKeep (bs : BusSemantics p) (facts : BusFacts p bs)
   | none => true
 
 /-- The runtime transform: drop every variable range check whose bound is already entailed by a
-    stronger-or-equal retained stateless check on the same variable. Mirrors
-    `SubsumedRange.subsumedRangeDropPass`'s computed output (dropping its `PassCorrect` term). -/
+    stronger-or-equal retained stateless check on the same variable. -/
 def denseSubsumedRangeDropF (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   d.filterBus (denseSubsumedRangeDropKeep bs facts (denseSubsumedRangeDropBase bs facts d))

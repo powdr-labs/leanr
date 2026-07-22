@@ -3,43 +3,33 @@ import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelJustify
 
 set_option autoImplicit false
 
-/-! # Dense redundant byte-check removal (Task 3 — impl)
+/-! # Dense redundant byte-check removal
 
-Dense, `VarId`-native transliteration of the reference `RedundantByteDrop` pass's *runtime*
-definitions (`byteCheckOperands?` :88, `byteDropBase` :245, `byteDropKeep` :251, and
-`redundantByteDropPass`'s computed output :260). This file is **impl-only**: no `_sound`/soundness
-lemma is ported (`isByteCompl_sound`, `byteCheckOperands?_stateless`, `byteCheckOperands?_accepted`,
-and the pass's `filterBusEntailed_correct`-built `PassCorrect` term are all proof-side, the
-prover's job), and no `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the runtime
-transform `denseRedundantByteDropF` is shaped exactly like `denseSubsumedCheckDropF`
-(`SubsumedCheck.lean`): a `PrimeWitness`-threading, unconditional-in-`p` filter, so the prover wraps
-it directly with `DenseVerifiedPassW.of`.
+Recognizes byte-check bus interactions whose operands are already byte-justified elsewhere in the
+system, and drops them. No `DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the
+runtime transform `denseRedundantByteDropF` is shaped exactly like `denseSubsumedCheckDropF`
+(`SubsumedCheck.lean`): a `PrimeWitness`-threading, unconditional-in-`p` filter, wrapped directly
+with `DenseVerifiedPassW.of`.
 
 ## Reuse map (not re-derived)
 
-* `denseComplExpr`/`denseIsByteCompl` (`ByteCheckPack.lean`) are *exactly* the `complExpr`/
-  `isByteCompl` this pass's own reference file redefines at `RedundantByteDrop.lean:46,52` (a
-  byte-for-byte duplicate of `ByteCheckPack.lean`'s copy — the two spec files each keep a private
-  copy under their own namespace). The dense side has one shared `ApcOptimizer.Dense` namespace, so
-  the existing `ByteCheckPack.lean` copy is reused unchanged rather than re-declared here.
-* `denseByteJustified` (`BusPairCancelJustify.lean`) is *exactly* the `byteJustified` this pass's
-  `byteDropKeep` calls (`BusPairCancel.lean:744`) — its doc comment already names this very pass as
-  its consumer ("used by the coda's `RedundantByteDrop`"). Reused unchanged; it internally threads
-  the plain full-scan witness lookup (`fun _ => rest`) and disables the basis-reduction arm
-  (`fwits := fun _ => []`), exactly as the spec `byteJustified` does.
-* `DenseExpr.constValue?` (`DropPasses.lean`) is the dense `Expression.constValue?`.
-* `DenseConstraintSystem.filterBus` (`Rewrite.lean`) is the dense `ConstraintSystem.filterBus` the
-  pass's `.out` is built from.
+* `denseComplExpr`/`denseIsByteCompl` (`ByteCheckPack.lean`) are reused unchanged rather than
+  redeclared here, since the dense side keeps one shared `ApcOptimizer.Dense` namespace.
+* `denseByteJustified` (`BusPairCancelJustify.lean`) is reused unchanged; it internally threads the
+  plain full-scan witness lookup (`fun _ => rest`) and disables the basis-reduction arm
+  (`fwits := fun _ => []`).
+* `DenseExpr.constValue?` (`DropPasses.lean`).
+* `DenseConstraintSystem.filterBus` (`Rewrite.lean`) is what the pass's `.out` is built from.
 * `BusFacts`/`BusSemantics`/`ByteXorSpec` are representation-independent (`decode`/`encode` are
-  `{α : Type} → …`), consulted unqualified exactly as the spec does.
+  `{α : Type} → …`), consulted unqualified.
 
 ## `byteCheckOperands?` is not `denseSvCheck?`
 
 `ByteCheckPack.lean`'s `denseSvCheck?` looks similar (same `byteXorSpec` recognition tower) but is a
-genuinely different function, so it is transliterated locally here as `denseByteCheckOperands?`
-rather than reused: it drops `denseSvCheck?`'s multiplicity-`1` gate (this pass justifies an
-interaction's *acceptance* regardless of the dropped check's own multiplicity — soundness never
-reads it), returns a *list* of justified operands (one for the XOR/OR-identity shapes, two for the
+genuinely different function, so it is defined separately here as `denseByteCheckOperands?` rather
+than reused: it drops `denseSvCheck?`'s multiplicity-`1` gate (this pass justifies an interaction's
+*acceptance* regardless of the dropped check's own multiplicity — soundness never reads it),
+returns a *list* of justified operands (one for the XOR/OR-identity shapes, two for the
 packed-pair shape) instead of a single expression, and adds the packed-pair (`pairOp`, `r = 0`)
 recognition branch that `denseSvCheck?` has no use for. -/
 
@@ -54,10 +44,9 @@ variable {p : ℕ}
     `(op, o₁, o₂, r)`: for `op = xorOp` the self-check `o₁ = o₂`, `r = 0` (`[x, x, 0]`), the two
     XOR-with-zero mirrors (`o₂ = 0, o₁ = r` / `o₁ = 0, o₂ = r`), and the two NOT forms
     (`o₂ = 255, r = 255 − o₁` / `o₁ = 255, r = 255 − o₂`, when `256 ≤ p`); for the OR-identity op(s)
-    the same zero mirrors; for `op = pairOp` the packed pair `r = 0`. `none` otherwise. Mirrors
-    `byteCheckOperands?`, same gate order (`bound =
-    256`, then decode, then each shape in the same order) and the same `==`/`&&` (Bool) recognition
-    style as the reference (not `denseSvCheck?`'s `=`/`∧` style). -/
+    the same zero mirrors; for `op = pairOp` the packed pair `r = 0`. `none` otherwise. Gates on
+    `bound = 256` before decoding, then checks each shape in order, using the same `==`/`&&` (Bool)
+    recognition style throughout (not `denseSvCheck?`'s `=`/`∧` style). -/
 def denseByteCheckOperands? (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (List (DenseExpr p)) :=
   match facts.byteXorSpec bi.busId with
@@ -88,15 +77,13 @@ def denseByteCheckOperands? (bs : BusSemantics p) (facts : BusFacts p bs)
 /-! ## The pass -/
 
 /-- The justification base: the interactions this pass can never drop (not recognized as byte
-    checks). Justifying only against these makes the drop non-circular. Mirrors `byteDropBase`
-   . -/
+    checks). Justifying only against these makes the drop non-circular. -/
 def denseByteDropBase (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     List (BusInteraction (DenseExpr p)) :=
   d.busInteractions.filter (fun bi => (denseByteCheckOperands? bs facts bi).isNone)
 
 /-- Keep `bi` unless it is a recognized byte check whose operands are all byte-justified from the
-    constraints and the justification base. Mirrors `byteDropKeep`
-   . -/
+    constraints and the justification base. -/
 def denseByteDropKeep (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (all : List (DenseExpr p)) (rest : List (BusInteraction (DenseExpr p)))
     (bi : BusInteraction (DenseExpr p)) : Bool :=
@@ -105,8 +92,7 @@ def denseByteDropKeep (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFa
   | none => true
 
 /-- Drop every stateless byte-check interaction whose operands are all byte-justified from the
-    parts of the system this pass can never remove. Mirrors `redundantByteDropPass`'s computed
-    output, dropping its `PassCorrect` term. -/
+    parts of the system this pass can never remove. -/
 def denseRedundantByteDropF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   d.filterBus (denseByteDropKeep pw bs facts d.algebraicConstraints (denseByteDropBase bs facts d))

@@ -4,23 +4,21 @@ import ApcOptimizer.Implementation.OptimizerPasses.HintCollapseProof
 
 set_option autoImplicit false
 
-/-! # Collapsing the `sltu x, 1` (seqz) gadget — native dense proof (Task 3)
+/-! # Collapsing the `sltu x, 1` (seqz) gadget — correctness proof
 
-Native `VarId` correctness for the dense `seqzCollapse` port (`OptimizerPasses/SeqzCollapse.lean`),
-proved over dense environments `VarId → ZMod p` with no permanent dependency on the reference
-`Variable` pass. The spec pass `SeqzCollapse` is the roadmap: its
-`seqzCollapse_correct` / `tryList` argument structure is mirrored here over the native semantics of
-`Bridge.lean` (satisfaction / admissibility / stateful-bus side effects / `DensePassCorrect`).
+Correctness for the dense `seqzCollapse` port (`SeqzCollapse.lean`), proved over dense environments
+`VarId → ZMod p` (satisfaction / admissibility / stateful-bus side effects / `DensePassCorrect`, all
+over `Bridge.lean`'s dense semantics).
 
 The **value-level engines** are representation-independent (they quantify over `ZMod p` values only,
-with no `Variable` / `Expression` / decode) and are reused verbatim from the spec file: the
+with no `VarId`/decode) and are reused verbatim from `SeqzCollapseCore.lean`: the
 range-check byte facts `bus_accepts_byte_zero` / `bus_byte_of_accepts`, the booleanity split `zbool`,
 and the completeness / soundness cores `seqz_forward` / `seqz_reconstruct` (which internally use
 `oneHot`, `neg_byte_val_big`, `byte_sub_one_val`, `byte_sub_two_val`, `val_add_one`, `val_one_eq`,
-`small_natCast_ne_zero`, `sum_zero_all_zero`). Everything representation-bound — the template↔value
+`small_natCast_ne_zero`, `sum_zero_all_zero`). Everything else — the template↔value
 bridge `denseClusterEval_iff`, the witness reassignment `denseSetFive`, the bus evaluation, purity /
-framing / side-effect reasoning, freshness and coverage of the minted `inv` — is reproved natively
-over `DenseExpr` / `VarId`. The fact-derived byte bounds come through the native `denseBuild_sound`
+framing / side-effect reasoning, freshness and coverage of the minted `inv` — is proved directly
+over `DenseExpr` / `VarId`. The fact-derived byte bounds come through `denseBuild_sound`
 (`DigitFoldProof.lean`); freshness and registry bookkeeping through `HintCollapseProof.lean`'s reused
 helpers (`denseMentions_false_not_mem`, `denseIsFresh_notMem`, `hcMemOcc`, `hcCoveredByOfOcc`,
 `hcRegisterIsInputEq`). -/
@@ -68,10 +66,9 @@ private theorem scDCMEvalCongr (cm : DenseComputationMethod p) (e1 e2 : VarId �
           ihe (fun i hi => h i (by
             simp only [DenseComputationMethod.vars, List.mem_append]; exact Or.inr hi))]
 
-/-! ## Bridging the constraint templates and their value forms (native `clusterEval_iff`) -/
+/-! ## Bridging the constraint templates and their value forms -/
 
-/-- The 14 gadget constraints all hold at `g` iff the 14 value equations do. Native mirror of
-    `clusterEval_iff`, over `DenseExpr` / `VarId → ZMod p`. -/
+/-- The 14 gadget constraints all hold at `g` iff the 14 value equations do. -/
 theorem denseClusterEval_iff (m3 m2 m1 m0 dv R a3 a2 a1 a0 : VarId) (K : ZMod p)
     (g : VarId → ZMod p) :
     (∀ c ∈ denseSeqzClusterConstraints m3 m2 m1 m0 dv R a3 a2 a1 a0 K, c.eval g = 0) ↔
@@ -106,7 +103,7 @@ theorem denseClusterEval_iff (m3 m2 m1 m0 dv R a3 a2 a1 a0 : VarId) (K : ZMod p)
       by linear_combination c10, by linear_combination c11, by linear_combination c12,
       by linear_combination c13, by linear_combination c14, by simp⟩
 
-/-! ## Reassigning the five private witnesses (native `setFive`) -/
+/-! ## Reassigning the five private witnesses -/
 
 /-- Reassign the five private witnesses to given values, leaving everything else at `env`. -/
 def denseSetFive (m3 m2 m1 m0 dv : VarId) (v3 v2 v1 v0 vd : ZMod p) (env : VarId → ZMod p) :
@@ -145,10 +142,10 @@ theorem denseSetFive_atd {m3 m2 m1 m0 dv : VarId} {v3 v2 v1 v0 vd : ZMod p}
     denseSetFive m3 m2 m1 m0 dv v3 v2 v1 v0 vd env dv = vd := by
   simp only [denseSetFive, if_neg h3d, if_neg h2d, if_neg h1d, if_neg h0d, if_true]
 
-/-! ## Filter/drop list helpers (side effects & admissibility, native `hStateEqL`) -/
+/-! ## Filter/drop list helpers (side effects & admissibility) -/
 
 /-- Dropping list elements on which `keep` is false but which are already `sf`-false leaves the
-    `sf`-filtered list unchanged (native mirror of the reference's `hStateEqL`). -/
+    `sf`-filtered list unchanged. -/
 private theorem filter_filter_drop {α : Type} (keep sf : α → Bool) (L : List α)
     (h : ∀ a ∈ L, keep a = false → sf a = false) :
     (L.filter keep).filter sf = L.filter sf := by
@@ -183,14 +180,14 @@ private theorem filter_map_filter_drop {α β : Type} (keep : α → Bool) (g : 
       · have hc : cond (g a) = false := h a (List.mem_cons_self ..) (by simpa using hk)
         rw [List.filter_cons_of_neg hk, List.map_cons, List.filter_cons_of_neg (by simp [hc]), hrest]
 
-/-! ## Native correctness of the collapse (dense mirror of `seqzCollapse_correct`) -/
+/-! ## Correctness of the collapse -/
 
 set_option maxHeartbeats 1600000 in
 /-- **The collapse is `DensePassCorrect`.** Replacing the recognised gadget cluster (14 constraints +
     range-check bus + five private witnesses) by the two-line is-zero gadget (with one fresh derived
     `inv = invId`) is correct: soundness reconstructs the markers via `seqz_reconstruct`;
     completeness derives the is-zero constraints via `seqz_forward` and computes `inv` by
-    `QuotientOrZero`. Native over `VarId → ZMod p`; the value-level engines are reused. -/
+    `QuotientOrZero`. Proved directly over `VarId → ZMod p`; the value-level engines are reused. -/
 theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
     (d : DenseConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (r : DenseSeqzRoles p) (spec : ByteXorSpec p) (invId : VarId)
@@ -633,7 +630,7 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
         have hidocc : i ∈ d.occ := (hout_occ i hiout).resolve_left hveq
         exact ⟨hidocc, hagreeOcc i hidocc⟩
 
-/-! ## The full collapse bundle (extends + coverage + native correctness) at the minted registry -/
+/-! ## The full collapse bundle (extends + coverage + correctness) at the minted registry -/
 
 set_option maxHeartbeats 1600000 in
 /-- The complete `ofExtending` obligation bundle for one accepted collapse: mint the fresh `inv`
@@ -812,7 +809,7 @@ theorem denseSeqzTryList_correct (reg : VarRegistry) (d : DenseConstraintSystem 
           · exact ih res hr
         · exact ih res hr
 
-/-! ## The pass, as a registry-extending native transform -/
+/-! ## The pass, as a registry-extending transform -/
 
 theorem denseSeqzCollapseF_props (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
@@ -832,9 +829,9 @@ theorem denseSeqzCollapseF_props (reg : VarRegistry) (bs : BusSemantics p) (fact
       simp only [Option.getD_some]
       exact denseSeqzTryList_correct reg d bs facts hcov d.busInteractions res hL
 
-/-- **The native dense `seqzCollapse` step.** One scan-and-collapse of the recognised `sltu x, 1`
+/-- **The dense `seqzCollapse` step.** One scan-and-collapse of the recognised `sltu x, 1`
     gadget, minting one `QuotientOrZero` witness, connected to the audited spec via
-    `DensePassCorrect.lift` (through `ofExtending`) — no reference-pass dependency. -/
+    `DensePassCorrect.lift` (through `ofExtending`). -/
 def denseSeqzCollapseStep : DenseVerifiedPassW p :=
   DenseVerifiedPassW.ofExtending (fun reg bs facts d => denseSeqzCollapseF reg bs facts d)
     (fun reg bs facts d hcov => (denseSeqzCollapseF_props reg bs facts d hcov).1)
@@ -842,8 +839,7 @@ def denseSeqzCollapseStep : DenseVerifiedPassW p :=
     (fun reg bs facts d hcov => (denseSeqzCollapseF_props reg bs facts d hcov).2.2.1)
     (fun reg bs facts d hcov => (denseSeqzCollapseF_props reg bs facts d hcov).2.2.2)
 
-/-- Run the dense seqz collapse to a fixpoint, mirroring
-    `SeqzCollapse.seqzCollapsePass := iterateToFixpoint SeqzCollapse.seqzCollapsePass`. -/
+/-- Run the dense seqz collapse to a fixpoint. -/
 def denseSeqzCollapsePass : DenseVerifiedPassW p :=
   denseIterateToFixpoint denseSeqzCollapseStep
 

@@ -3,7 +3,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.FactPass
 
 set_option autoImplicit false
 
-/-! # Dense measures and coverage/stability at the system level (Task 3, WP-C support)
+/-! # Dense measures and coverage/stability at the system level
 
 The dense degree guard and cleanup fixpoint compute their measures over the dense system at
 runtime; here we prove those dense measures equal the spec measures on the *decoded* system, so the

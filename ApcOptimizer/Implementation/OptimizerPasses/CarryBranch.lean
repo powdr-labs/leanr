@@ -3,19 +3,18 @@ import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 
 set_option autoImplicit false
 
-/-! # Dense carry-branch resolution — runtime (Task 3)
+/-! # Dense carry-branch resolution — runtime
 
-Dense, `VarId`-native port of `carryBranchPass`'s runtime. Gated on `p` prime, the pass rewrites
-every algebraic constraint through `denseResolveExpr`, collapsing a product `f·g` to the factor that
-survives whenever the other factor is *certified never-zero* by the fact-derived value bounds
-(`denseBuild`, `DigitFold.lean`).
+Gated on `p` prime, the pass rewrites every algebraic constraint through `denseResolveExpr`,
+collapsing a product `f·g` to the factor that survives whenever the other factor is *certified
+never-zero* by the fact-derived value bounds (`denseBuild`, `DigitFold.lean`).
 
 It is **fact-consuming**: the dense bounds map is the `Std.HashMap VarId Nat` built by `denseBuild`,
-whose native value-level soundness (`denseBuild_sound`, `DigitFoldProof.lean`) is all the correctness
-proof consumes. The interval certificate (`denseSplitSumMax`/`denseIntervalCert`/`denseNeverZeroB`)
-is coefficient-only, and the recursive product collapse (`denseResolveExpr`) is structural. Only the
-algebraic constraints are rewritten (bus interactions untouched). The native `DensePassCorrect`
-proof and the pass itself live in `CarryBranchProof.lean`. -/
+whose value-level soundness (`denseBuild_sound`, `DigitFoldProof.lean`) is all the correctness proof
+consumes. The interval certificate (`denseSplitSumMax`/`denseIntervalCert`/`denseNeverZeroB`) is
+coefficient-only, and the recursive product collapse (`denseResolveExpr`) is structural. Only the
+algebraic constraints are rewritten (bus interactions untouched). The `DensePassCorrect` proof and
+the pass itself live in `CarryBranchProof.lean`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -23,7 +22,9 @@ variable {p : ℕ}
 
 /-! ## Dense two-sided interval certificate (coefficient-only, `VarId`-agnostic) -/
 
-/-- Dense `splitSumMax` (see `splitSumMax`). -/
+/-- The greatest possible magnitude of the negative-coefficient sum and the positive-coefficient
+    sum of `l`'s terms, given a per-variable value bound `B` (each variable ranges over
+    `[0, B[v])`); `none` if any occurring variable is unbounded in `B`. -/
 def denseSplitSumMax (B : Std.HashMap VarId Nat) :
     List (VarId × ZMod p) → Option (Nat × Nat)
   | [] => some (0, 0)
@@ -38,7 +39,8 @@ def denseSplitSumMax (B : Std.HashMap VarId Nat) :
       else none
     | _, _ => none
 
-/-- Dense `intervalCert` (see `intervalCert`). -/
+/-- Whether the linear expression `l`'s value, over the value bounds `B`, is certified to stay
+    strictly within an interval of length `< p` that never wraps around `0`. -/
 def denseIntervalCert (B : Std.HashMap VarId Nat) (l : DenseLinExpr p) : Bool :=
   match denseSplitSumMax B l.terms with
   | none => false
@@ -47,7 +49,9 @@ def denseIntervalCert (B : Std.HashMap VarId Nat) (l : DenseLinExpr p) : Bool :=
 
 /-! ## Dense never-zero certificate -/
 
-/-- Dense `neverZeroB` (see `neverZeroB`). -/
+/-- Whether `e` is certified never-zero under the value bounds `B`: linearize `e`, then check
+    `denseIntervalCert` against every candidate rescaling by an inverse coefficient (the constant
+    term's, or each term's). -/
 def denseNeverZeroB (B : Std.HashMap VarId Nat) (e : DenseExpr p) : Bool :=
   match denseLinearize e with
   | none => false
@@ -58,7 +62,7 @@ def denseNeverZeroB (B : Std.HashMap VarId Nat) (e : DenseExpr p) : Bool :=
 
 /-! ## Dense product-constraint resolution -/
 
-/-- Dense `resolveExpr` (see `resolveExpr`). -/
+/-- Recursively collapse a product to the factor surviving a certified-never-zero other factor. -/
 def denseResolveExpr (B : Std.HashMap VarId Nat) : DenseExpr p → DenseExpr p
   | .mul f g =>
       if denseNeverZeroB B g then denseResolveExpr B f
@@ -66,7 +70,7 @@ def denseResolveExpr (B : Std.HashMap VarId Nat) : DenseExpr p → DenseExpr p
       else .mul f g
   | e => e
 
-/-- `resolveExpr` introduces no new variable (mirrors `resolveExpr_vars`). -/
+/-- `denseResolveExpr` introduces no new variable. -/
 theorem denseResolveExpr_vars (B : Std.HashMap VarId Nat) (e : DenseExpr p) :
     ∀ x ∈ (denseResolveExpr B e).vars, x ∈ e.vars := by
   induction e with

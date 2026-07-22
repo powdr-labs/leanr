@@ -3,15 +3,14 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDropsProof
 
 set_option autoImplicit false
 
-/-! # Native correctness for dense box-certified multilinear rewriting — flagFold's `boxRewritePass`
-    sub-pass (Task 3, busUnify cluster, chunk S4b — prover)
+/-! # Correctness for dense box-certified multilinear rewriting — flagFold's `boxRewrite` sub-pass
 
-Native `DensePassCorrect` for the dense `boxRewrite` transform (`Dense/BoxRewriteNative.lean`),
-lifted to the audited `Variable` spec through `DenseVerifiedPassW.of` (`Dense/Bridge.lean`). NO
-WIRING here — `boxRewrite` is the second sub-pass of the scheduled `flagFold` composite
-(`fxSubstPass → boxRewritePass → boxTautoDropPass → pointwiseDupDropPass`); the chain assembly and
-selector swap happen in chunk S5. This file delivers the native proof plus the `DenseVerifiedPassW`
-value `denseBoxRewritePass`, ready for chain assembly.
+`DensePassCorrect` for the dense `boxRewrite` transform (`Dense/BoxRewriteNative.lean`), lifted to
+the audited `Variable` spec through `DenseVerifiedPassW.of` (`Dense/Bridge.lean`). NO WIRING here —
+`boxRewrite` is the second sub-pass of the scheduled `flagFold` composite
+(`fxSubstPass → boxRewritePass → boxTautoDropPass → pointwiseDupDropPass`); the chain assembly lives
+elsewhere. This file delivers the correctness proof plus the `DenseVerifiedPassW` value
+`denseBoxRewritePass`, ready for chain assembly.
 
 ## Proof shape
 
@@ -19,33 +18,31 @@ value `denseBoxRewritePass`, ready for chain assembly.
 multiplicity, and payload expression is replaced by its certified multilinear reduction. Crucially,
 the reduction itself (`denseReduceExpr`/`densePolyOf`/…) carries **no** correctness proof — the
 runtime certificate `denseBrCert` re-verifies pointwise, so the candidate `e'` is treated
-*opaquely* and NO polynomial-semantics evaluation lemma is required (the spec proves it identically:
-`reduceExpr`/`polyOf`/`exprOfPoly`/`addMono`/`mulMono`/`monoExpr` have no evaluation lemmas). The
-box justification rides on the single-variable constraints (the `denseFindDomainAlg` sources), which
-are never rewritten (they fail the `≥ 2`-distinct-variable certificate guard) and survive verbatim
-into the output. So `out.satisfies ↔ d.satisfies` on the SAME environment, side effects agree
-(rewrites are eval-preserving on any assignment zeroing the singles), and admissibility is
-unchanged — `DensePassCorrect.ofEnvEq`.
+*opaquely* and NO polynomial-semantics evaluation lemma is required. The box justification rides on
+the single-variable constraints (the `denseFindDomainAlg` sources), which are never rewritten (they
+fail the `≥ 2`-distinct-variable certificate guard) and survive verbatim into the output. So
+`out.satisfies ↔ d.satisfies` on the SAME environment, side effects agree (rewrites are
+eval-preserving on any assignment zeroing the singles), and admissibility is unchanged —
+`DensePassCorrect.ofEnvEq`.
 
-Native re-derivation of the spec `ConstraintSystem.boxRewrite_correct` chain over `VarId → ZMod p`
-(`brCert_sound → brRw_sound/brRw_vars/brRw_singleVar → brBi_eval → boxRewrite_correct`), reusing
+The correctness chain over `VarId → ZMod p` (`denseBrCert_sound → denseBrRw_sound/denseBrRw_vars/
+denseBrRw_singleVar → denseBrBi_eval → boxRewrite_denseCorrect`) reuses
 `denseFindDomainAlg_sound`/`mem_denseAssignments`/`denseEnvOfFast_map`/`DenseExpr.eval_congr` (finite
 domain box), `DenseExpr.eval_substF`/`denseEnvF` (partial evaluation), `denseLinearize_eval`/
 `DenseLinExpr.norm_eval` (affine-form semantics), and `List.mergeSort_perm` (the `canonEq`
-permutation, keyed `VarId.index` densely — the representation-forced divergence flagged in the impl
-header; the two sorts only canonicalise a *multiset* comparison, so the exact key is irrelevant to
-soundness, which only needs the two lists sorted by the SAME total order).
+permutation, keyed `VarId.index` densely — the two sorts only canonicalise a *multiset* comparison,
+so the exact key is irrelevant to soundness, which only needs the two lists sorted by the SAME
+total order).
 
 ## Degree
 
 `boxRewrite` intermediates legitimately exceed the degree bound (its whole point is to rewrite
 syntactically over-bound expressions back within bound), and the scheduled composite wraps the ENTIRE
-`flagFold` chain under a single `guardDegree` in S5. Accordingly this pass value carries NO degree
-guard of its own: `DenseVerifiedPassW.of` produces a `DenseVerifiedPassW` with the spec
-`PassCorrect`-on-decode discharged via the lift and NO `DenseRespectsDeg` obligation attached (that
-is the separate `of_respectsDeg` theorem, only invoked when a pass is individually
-`guardDegree`-wrapped — as the S3 drop passes and this one are NOT). The S5 assembly guards the
-composite. -/
+`flagFold` chain under a single `guardDegree`. Accordingly this pass value carries NO degree guard of
+its own: `DenseVerifiedPassW.of` produces a `DenseVerifiedPassW` with the spec `PassCorrect`-on-decode
+discharged via the lift and NO `DenseRespectsDeg` obligation attached (that is the separate
+`of_respectsDeg` theorem, only invoked when a pass is individually `guardDegree`-wrapped — as this
+one is NOT). The composite assembly guards the whole chain. -/
 
 namespace ApcOptimizer.Dense
 
@@ -54,7 +51,7 @@ variable {p : ℕ}
 /-! ## Partial-evaluation point map is the identity on its own restriction -/
 
 /-- `denseEnvF` over a point map is the identity when the point is the environment's own
-    restriction. Native mirror of `envF_ptFun_self`. -/
+    restriction. -/
 theorem denseEnvF_ptFun_self (doms : List (VarId × List (ZMod p))) (denv : VarId → ZMod p) :
     denseEnvF (densePtFun (doms.map (fun vd => (vd.1, denv vd.1)))) denv = denv := by
   funext v
@@ -72,10 +69,9 @@ theorem denseEnvF_ptFun_self (doms : List (VarId × List (ZMod p))) (denv : VarI
 
 /-! ## The certificate is sound -/
 
-/-- **Native certificate soundness** (mirrors `brCert_sound`): on every point of the joint
-    small-domain box both expressions partially evaluate to the same affine form, so they agree on
-    every assignment zeroing the single-variable constraints. The candidate `e'` is opaque; only the
-    certificate is trusted. -/
+/-- **Certificate soundness:** on every point of the joint small-domain box both expressions
+    partially evaluate to the same affine form, so they agree on every assignment zeroing the
+    single-variable constraints. The candidate `e'` is opaque; only the certificate is trusted. -/
 theorem denseBrCert_sound [Fact p.Prime] (singles : List (DenseExpr p)) (e e' : DenseExpr p)
     (h : denseBrCert singles e e' = true) (denv : VarId → ZMod p)
     (hdom : ∀ c ∈ singles, c.eval denv = 0) : e.eval denv = e'.eval denv := by
@@ -137,8 +133,8 @@ theorem denseBrCert_sound [Fact p.Prime] (singles : List (DenseExpr p)) (e e' : 
 
 /-! ## Per-expression rewrite lemmas -/
 
-/-- **Native per-expression rewrite soundness** (mirrors `brRw_sound`): rewriting preserves
-    evaluation on every assignment zeroing the single-variable constraints. -/
+/-- **Per-expression rewrite soundness:** rewriting preserves evaluation on every assignment
+    zeroing the single-variable constraints. -/
 theorem denseBrRw_sound [Fact p.Prime] (singles : List (DenseExpr p)) (bound : Nat)
     (e : DenseExpr p) (denv : VarId → ZMod p)
     (hdom : ∀ c ∈ singles, c.eval denv = 0) :
@@ -154,8 +150,7 @@ theorem denseBrRw_sound [Fact p.Prime] (singles : List (DenseExpr p)) (bound : N
       · rfl
     next _heq => rfl
 
-/-- **Native per-expression rewrite variable subset** (mirrors `brRw_vars`): the rewrite introduces
-    no variable. -/
+/-- **Per-expression rewrite variable subset:** the rewrite introduces no variable. -/
 theorem denseBrRw_vars (singles : List (DenseExpr p)) (bound : Nat) (e : DenseExpr p) :
     ∀ v ∈ (denseBrRw singles bound e).vars, v ∈ e.vars := by
   intro v hv
@@ -171,7 +166,7 @@ theorem denseBrRw_vars (singles : List (DenseExpr p)) (bound : Nat) (e : DenseEx
     next _heq => exact hv
 
 /-- A single-variable expression is never rewritten (the certificate's ≥ 2-variables guard), so the
-    domain sources survive verbatim. Native mirror of `brRw_singleVar`. -/
+    domain sources survive verbatim. -/
 theorem denseBrRw_singleVar (singles : List (DenseExpr p)) (bound : Nat) (c : DenseExpr p)
     (hs : c.vars.eraseDups.length ≤ 1) : denseBrRw singles bound c = c := by
   have hcert : ∀ e' : DenseExpr p, denseBrCert singles c e' = false := by
@@ -191,8 +186,8 @@ theorem denseBrRw_singleVar (singles : List (DenseExpr p)) (bound : Nat) (c : De
 
 /-! ## Per-interaction rewrite lemmas -/
 
-/-- **Native per-interaction rewrite eval** (mirrors `brBi_eval`): the rewritten interaction
-    evaluates to the same message on every assignment zeroing the single-variable constraints. -/
+/-- **Per-interaction rewrite eval:** the rewritten interaction evaluates to the same message on
+    every assignment zeroing the single-variable constraints. -/
 theorem denseBrBi_eval [Fact p.Prime] (singles : List (DenseExpr p)) (db : DegreeBound)
     (bi : BusInteraction (DenseExpr p)) (denv : VarId → ZMod p)
     (hdom : ∀ c ∈ singles, c.eval denv = 0) :
@@ -203,8 +198,8 @@ theorem denseBrBi_eval [Fact p.Prime] (singles : List (DenseExpr p)) (db : Degre
   rw [List.map_map]
   exact List.map_congr_left (fun e _ => denseBrRw_sound singles _ e denv hdom)
 
-/-- The rewritten interaction carries only input variables (mirrors `brRw_vars` lifted through
-    `brBi`). -/
+/-- The rewritten interaction carries only input variables (`denseBrRw_vars` lifted through
+    `denseBrBi`). -/
 theorem denseBrBi_vars (singles : List (DenseExpr p)) (db : DegreeBound)
     (bi : BusInteraction (DenseExpr p)) :
     ∀ i ∈ denseBIVars (denseBrBi singles db bi), i ∈ denseBIVars bi := by
@@ -232,12 +227,11 @@ theorem DenseConstraintSystem.boxRewrite_covered {reg : VarRegistry}
     obtain ⟨e0, he0, rfl⟩ := List.mem_map.1 he
     exact fun i hi => hpc e0 he0 i (denseBrRw_vars _ _ e0 i hi)
 
-/-! ## Native pass correctness -/
+/-! ## Pass correctness -/
 
-/-- **Native box-rewrite correctness.** Every rewritten expression evaluates equally to the original
-    on every assignment zeroing the (never-rewritten) single-variable constraints, so satisfaction is
-    preserved on the SAME environment and side effects / admissibility are unchanged. Native mirror of
-    `ConstraintSystem.boxRewrite_correct`. -/
+/-- **Box-rewrite correctness.** Every rewritten expression evaluates equally to the original on
+    every assignment zeroing the (never-rewritten) single-variable constraints, so satisfaction is
+    preserved on the SAME environment and side effects / admissibility are unchanged. -/
 theorem DenseConstraintSystem.boxRewrite_denseCorrect [Fact p.Prime]
     (d : DenseConstraintSystem p) (bs : BusSemantics p) (isInput : VarId → Bool)
     (b : DegreeBound) :
@@ -338,7 +332,7 @@ theorem DenseConstraintSystem.boxRewrite_denseCorrect [Fact p.Prime]
     rw [hside denv hdom]
     exact BusState.equiv_refl _
 
-/-! ## The native dense box-rewrite pass -/
+/-! ## The dense box-rewrite pass -/
 
 /-- The box-rewrite transform is covered. -/
 theorem denseBoxRewriteF_covered (pw : PrimeWitness p) (b : DegreeBound) (reg : VarRegistry)
@@ -349,7 +343,7 @@ theorem denseBoxRewriteF_covered (pw : PrimeWitness p) (b : DegreeBound) (reg : 
   · exact DenseConstraintSystem.boxRewrite_covered b hcov
   · exact hcov
 
-/-- The box-rewrite transform is `DensePassCorrect` (native). -/
+/-- The box-rewrite transform is `DensePassCorrect`. -/
 theorem denseBoxRewriteF_correct (pw : PrimeWitness p) (b : DegreeBound) (reg : VarRegistry)
     (bs : BusSemantics p) (d : DenseConstraintSystem p) (_hcov : d.CoveredBy reg) :
     DensePassCorrect reg.isInput d (denseBoxRewriteF pw b bs d) [] bs := by
@@ -359,10 +353,10 @@ theorem denseBoxRewriteF_correct (pw : PrimeWitness p) (b : DegreeBound) (reg : 
     exact DenseConstraintSystem.boxRewrite_denseCorrect d bs reg.isInput b
   · exact dpcRefl reg.isInput d bs
 
-/-- **The native dense box-rewrite pass** (second sub-pass of the flagFold composite). Fact-free —
+/-- **The dense box-rewrite pass** (second sub-pass of the flagFold composite). Fact-free —
     the `of` transform ignores `facts`. Carries NO degree guard: the whole `flagFold` chain is
-    wrapped under one `guardDegree` in S5 (box-rewrite intermediates legitimately exceed the bound).
-    Ready for S5 chain assembly. -/
+    wrapped under one `guardDegree` (box-rewrite intermediates legitimately exceed the bound).
+    Ready for chain assembly. -/
 def denseBoxRewritePass (pw : PrimeWitness p) (b : DegreeBound) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (fun bs _ d => denseBoxRewriteF pw b bs d) (fun _ _ _ => [])
     (fun reg bs _ d hcov => denseBoxRewriteF_covered pw b reg bs d hcov)

@@ -2,35 +2,32 @@ import ApcOptimizer.Implementation.OptimizerPasses.Bridge
 
 set_option autoImplicit false
 
-/-! # Certified-step loop combinators and bus-rewrite vocabulary (Task 3)
+/-! # Certified-step loop combinators and bus-rewrite vocabulary
 
-Reusable proof infrastructure that makes future native pass proofs compose *mechanically*, packaging
-two shapes that have already been hand-rolled twice each in the dense port:
+Reusable proof infrastructure that makes pass proofs compose *mechanically*, packaging two shapes
+that have already been hand-rolled more than once:
 
-* **The certified-step induction.** `reencode`'s P3 chunk (`ReencodeProof.lean`,
-  `denseReencodeLoop_correct`) hand-rolled the composition of per-step `DensePassCorrect`
-  certificates along `denseReencodeLoop`, threading `Extends` + coverage + pointwise-`isInput`
-  through an induction and transporting each step's certificate to the final registry via `funext`;
-  `busPairCancel`'s `denseCancelLoop` (`BusPairCancel.lean`) hand-rolled the same shape via a
-  proof-carrying `DenseDropResult`. `bytePack`'s drain loop is about to need it a third time. The
-  `DenseNativeStep` record travels the invariants *with the value* (point-(3) style), and
-  `DenseNativeStep.trans`/`.foldList`/`.drain` package the induction once.
+* **The certified-step induction.** `denseReencodeLoop_correct` (`ReencodeProof.lean`) hand-rolls
+  the composition of per-step `DensePassCorrect` certificates along `denseReencodeLoop`, threading
+  `Extends` + coverage + pointwise-`isInput` through an induction and transporting each step's
+  certificate to the final registry via `funext`; `busPairCancel`'s `denseCancelLoop`
+  (`BusPairCancel.lean`) hand-rolls the same shape via a proof-carrying `DenseDropResult`.
+  `bytePack`'s drain loop is about to need it a third time. The `DenseNativeStep` record travels the
+  invariants *with the value*, and `DenseNativeStep.trans`/`.foldList`/`.drain` package the
+  induction once.
 
-* **The bus-rewrite vocabulary.** The spec's `BusInteraction.mapExpr` is `Expression`-specific
-  (`bi : BusInteraction (Expression p)`, `g : Expression p → Expression p`), so
-  `BusInteraction` being generic over its payload does *not*
-  make it apply to `BusInteraction (DenseExpr p)`. `denseBIMapExpr` is the dense twin (same field
-  order), with the canonical public lemma cluster named 1:1 with the spec's
-  (`mapExpr_eval_of_agree` / `mapExpr_eq_self` / `mapExpr_vars_subset`, `DomainFold.lean`).
+* **The bus-rewrite vocabulary.** `denseBIMapExpr` applies an expression rewrite to every field of a
+  `BusInteraction (DenseExpr p)`, with a canonical public lemma cluster
+  (`denseBIMapExpr_eval_of_agree` / `denseBIMapExpr_eq_self` / `denseBIMapExpr_vars_subset`).
 
 ## Proof-architecture defaults (see also `Bridge.lean`)
 
-New dense ports mirror the spec's proof-carrying structures with **native-`Prop`-carrying dense
-twins** — `Prop` fields about dense data only, which erase — rather than externalising invariants
-into a threaded induction (precedent: `DenseDropResult`, and now `DenseNativeStep`). Data-only dense
-records remain correct only where a *carried* proof would force representation correspondence
-(`DenseTwoRootMap.Sound`-style lookup invariants). Loops compose via the `DenseNativeStep`
-combinators here; passes lift once, at the optimizer boundary, through `DensePassCorrect.lift`.
+Proof-carrying structures use **`Prop`-carrying dense twins** — `Prop` fields about dense data
+only, which erase — rather than externalising invariants into a threaded induction (precedent:
+`DenseDropResult`, and now `DenseNativeStep`). Data-only dense records remain correct only where a
+*carried* proof would force representation correspondence (`DenseTwoRootMap.Sound`-style lookup
+invariants). Loops compose via the `DenseNativeStep` combinators here; passes lift once, at the
+optimizer boundary, through `DensePassCorrect.lift`.
 
 The key `isInput`-composition fact baked in (from `ReencodeProof.register_isInput_eq`): registering
 a `powdrId? = none` `Variable` leaves `VarRegistry.isInput` **pointwise unchanged as a function**
@@ -42,9 +39,9 @@ namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## `DenseNativeStep`: a native certified step, invariants travelling with the value
+/-! ## `DenseNativeStep`: a certified step, invariants travelling with the value
 
-One step of a native dense transform, from registry `reg`/system `d` to `reg'`/`out`, minting the
+One step of a dense transform, from registry `reg`/system `d` to `reg'`/`out`, minting the
 dense derivations `dd`. The data fields (`reg'`/`out`/`dd`) are the runtime output; the five
 `Prop` fields erase. `hii` is the pointwise-`isInput` preservation in `funext` form (the form that
 composes cleanly under `trans`: certificates are transported by a single `rw`). -/
@@ -64,12 +61,11 @@ structure DenseNativeStep (p : ℕ) (bs : BusSemantics p) (reg : VarRegistry)
   cov : out.CoveredBy reg'
   /-- The minted derivations are covered by the output registry. -/
   dcov : dd.CoveredBy reg'
-  /-- Native correctness at the output registry's `isInput`. -/
+  /-- Correctness at the output registry's `isInput`. -/
   correct : DensePassCorrect reg'.isInput d out dd bs
 
 /-- **Reflexivity / identity step.** Same registry and system, no new derivations. The base case of a
-    fold/drain (mirrors `DensePassCorrect.refl` at the step level; needs the input coverage for the
-    `cov` field). -/
+    fold/drain; the input coverage is what fills the `cov` field. -/
 def DenseNativeStep.refl (bs : BusSemantics p) {reg : VarRegistry} {d : DenseConstraintSystem p}
     (hcov : d.CoveredBy reg) : DenseNativeStep p bs reg d where
   reg' := reg
@@ -83,7 +79,7 @@ def DenseNativeStep.refl (bs : BusSemantics p) {reg : VarRegistry} {d : DenseCon
 
 /-- **Non-extending step.** Keep the registry (`reg' = reg`, `hii = rfl`), change the system to `out`
     with no new derivations — the shape of a `busPairCancel`/`bytePack` drop or pack step. The single
-    step's native correctness `hcorrect` and the output coverage `hcov` are supplied by the caller. -/
+    step's correctness `hcorrect` and the output coverage `hcov` are supplied by the caller. -/
 def DenseNativeStep.ofSame (bs : BusSemantics p) {reg : VarRegistry} {d out : DenseConstraintSystem p}
     (hcov : out.CoveredBy reg) (hcorrect : DensePassCorrect reg.isInput d out [] bs) :
     DenseNativeStep p bs reg d where
@@ -188,7 +184,7 @@ def DenseVerifiedPassW.ofDenseStep
   fun reg d hcov bs facts => (build reg bs facts d hcov).toDensePassResult hcov
 
 /-- `ofDenseStep` respects the degree bound whenever the built step's decoded output stays within
-    bound (the per-build degree obligation; mirrors `of_respectsDeg`). -/
+    bound (the per-build degree obligation). -/
 theorem DenseVerifiedPassW.ofDenseStep_respectsDeg {b : DegreeBound}
     {build : (reg : VarRegistry) → (bs : BusSemantics p) → (facts : BusFacts p bs) →
       (d : DenseConstraintSystem p) → d.CoveredBy reg → DenseNativeStep p bs reg d}
@@ -243,8 +239,8 @@ private example {bs : BusSemantics p} {reg : VarRegistry} {d : DenseConstraintSy
 
 One step **extends** the registry (mints a `powdrId? = none` column, keeping the system), the other
 is the identity — composed by `foldList`, closed into a `DenseVerifiedPassW` through `ofDenseStep`.
-The extending step's `hii` uses the baked-in pointwise-stability lemma below (a `private`, canonical
-transliteration of `ReencodeProof.register_isInput_eq`, kept file-local to avoid a duplicate global). -/
+The extending step's `hii` uses the baked-in pointwise-stability lemma below (a `private` restatement
+of `ReencodeProof.register_isInput_eq`, kept file-local to avoid a duplicate global). -/
 
 private theorem register_isInput_stable (reg : VarRegistry) (v : Variable) (hv : v.powdrId? = none)
     (i : VarId) : (reg.register v).1.isInput i = reg.isInput i := by
@@ -291,21 +287,18 @@ private def toyPass : DenseVerifiedPassW p :=
 
 /-! ## Bus-rewrite vocabulary: the dense `BusInteraction.mapExpr`
 
-`denseBIMapExpr` is the dense twin of the `Expression`-specific spec `BusInteraction.mapExpr`
-, same field order. The three canonical public lemmas mirror the
-spec's `mapExpr_eval_of_agree` / `mapExpr_eq_self` / `mapExpr_vars_subset` (`DomainFold.lean`). This
-is additive: existing per-pass inline copies (`denseBIEval_mapExpr_of_agree`, `denseMapExpr_eq_self`,
-`denseMapExpr_vars_subset` in `DomainFoldProof.lean`, stated over the inline `{ bi with … }` form)
-stay untouched. -/
+`denseBIMapExpr` applies an expression-level rewrite to every field of a dense bus interaction, with
+a canonical public lemma cluster (`denseBIMapExpr_eval_of_agree` / `denseBIMapExpr_eq_self` /
+`denseBIMapExpr_vars_subset`). This is additive: existing per-pass inline copies
+(`denseBIEval_mapExpr_of_agree`, `denseMapExpr_eq_self`, `denseMapExpr_vars_subset` in
+`DomainFoldProof.lean`, stated over the inline `{ bi with … }` form) stay untouched. -/
 
-/-- Apply `g` to every expression of a dense bus interaction. Same field order as the spec's
-    `BusInteraction.mapExpr` (dense payload). -/
+/-- Apply `g` to every expression of a dense bus interaction (dense payload). -/
 def denseBIMapExpr (bi : BusInteraction (DenseExpr p)) (g : DenseExpr p → DenseExpr p) :
     BusInteraction (DenseExpr p) :=
   { busId := bi.busId, multiplicity := g bi.multiplicity, payload := bi.payload.map g }
 
-/-- A rewritten interaction evaluates identically given expression-level agreement. Mirrors
-    `mapExpr_eval_of_agree`. -/
+/-- A rewritten interaction evaluates identically given expression-level agreement. -/
 theorem denseBIMapExpr_eval_of_agree (g : DenseExpr p → DenseExpr p) (denv : VarId → ZMod p)
     (hag : ∀ e : DenseExpr p, (g e).eval denv = e.eval denv) (bi : BusInteraction (DenseExpr p)) :
     denseBIEval (denseBIMapExpr bi g) denv = denseBIEval bi denv := by
@@ -314,8 +307,7 @@ theorem denseBIMapExpr_eval_of_agree (g : DenseExpr p → DenseExpr p) (denv : V
   congr 1
   exact List.map_congr_left (fun e _ => by simp only [Function.comp_apply]; exact hag e)
 
-/-- A rewrite fixing each of an interaction's expressions leaves the interaction unchanged. Mirrors
-    `mapExpr_eq_self`. -/
+/-- A rewrite fixing each of an interaction's expressions leaves the interaction unchanged. -/
 theorem denseBIMapExpr_eq_self {bi : BusInteraction (DenseExpr p)} {g : DenseExpr p → DenseExpr p}
     (hm : g bi.multiplicity = bi.multiplicity) (hp : ∀ e ∈ bi.payload, g e = e) :
     denseBIMapExpr bi g = bi := by
@@ -324,8 +316,7 @@ theorem denseBIMapExpr_eq_self {bi : BusInteraction (DenseExpr p)} {g : DenseExp
     (List.map_congr_left (g := id) hp).trans (List.map_id _)
   rw [hm, hpl]
 
-/-- A rewrite introducing no variables per expression keeps an interaction's variables. Mirrors
-    `mapExpr_vars_subset`. -/
+/-- A rewrite introducing no variables per expression keeps an interaction's variables. -/
 theorem denseBIMapExpr_vars_subset (g : DenseExpr p → DenseExpr p)
     (hg : ∀ (e : DenseExpr p) (i : VarId), i ∈ (g e).vars → i ∈ e.vars)
     (bi : BusInteraction (DenseExpr p)) :

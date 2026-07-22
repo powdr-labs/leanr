@@ -2,40 +2,29 @@ import ApcOptimizer.Implementation.OptimizerPasses.Encoding
 
 set_option autoImplicit false
 
-/-! # Native dense stable live projection / tombstone machinery (Task 3, chunk C4)
+/-! # Dense stable live projection / tombstone machinery
 
-The liveness-array (`alive : Array Bool`) tombstone machinery of `busPairCancel`, ported natively to
-the dense `VarId` representation. This mirrors, line for line, the spec's stable-live-projection
-section in `OptimizerPasses/BusPairCancel.lean` (:1491-1730): `liveSeg` (:1504) and its algebra
-(`liveSeg_add/peel/skip/congr/mem/split/drop`, :1512-1640), `liveCount` (:1643) and its decrease,
-the tail-recursive runtime builder `liveArrGo`/`liveArr` (:1656-1670) with `liveArr_eq` (:1694), and
-the projection to a constraint system `mkCs` (:1702) with `mkCs_all` (:1723).
+The liveness-array (`alive : Array Bool`) tombstone machinery of `busPairCancel`, over the dense
+`VarId` representation: `denseLiveSeg` (the live-entries projection) and its algebra
+(`denseLiveSeg_add/peel/skip/congr/mem/split/drop`), `denseLiveCount` (the termination measure) and
+its decrease, the tail-recursive runtime builder `denseLiveArrGo`/`denseLiveArr` (with
+`denseLiveArr_eq`), and the projection to a constraint system `denseMkCs` (with `denseMkCs_all`).
 
-## Generality — mirroring the spec
+These definitions are concrete over `Array (BusInteraction (DenseExpr p))` /
+`DenseConstraintSystem p` rather than polymorphic over an arbitrary element type, even though their
+*proofs* use nothing about `BusInteraction (DenseExpr p)` (they are pure `Array` + `Array Bool`
+liveness algebra) — matching the concrete-`VarId`-implementation style of the surrounding passes.
 
-The spec `liveSeg`/`liveArr`/`liveCount`/`mkCs` are **not** polymorphic over an arbitrary element
-type: they are stated concretely over `Array (BusInteraction (Expression p))` /
-`ConstraintSystem p`, even though their *proofs* use nothing about `BusInteraction (Expression p)`
-(they are pure `Array` + `Array Bool` liveness algebra). Per the Task 3 architecture (mirror the
-spec's generality choices; inner passes are concrete `VarId` implementations, not generic-over-V),
-the dense twins here are likewise concrete over `Array (BusInteraction (DenseExpr p))` /
-`DenseConstraintSystem p`. Nothing from the spec could be reused verbatim: the spec definitions are
-monomorphic to `Expression p`, so a fresh transliteration is required. The transliteration is
-mechanical — every hypothesis, `omega` bound and generic `Array`/`List` lemma is identical to the
-spec; only the element type `Expression p → DenseExpr p` (and `ConstraintSystem → DenseConstraintSystem`
-in `mkCs`) changes.
+## Consumption by `denseCancelLoop` (`BusPairCancel.lean`)
 
-## Consumption by C7 (`cancelLoop`)
-
-`cancelLoop` (spec :2553) maintains a fixed `arr` and a growing tombstone array `alive : Array Bool`,
-uses `denseMkCs cs0 arr alive checks` as the logical intermediate system fed to C2's
-`denseDropPair_correct` (which takes `hsplit : d'.busInteractions = A ++ S :: B ++ R :: C`), derives
-that split from `denseLiveSeg_split` (accept) and rewrites the tombstoned projection with
+`denseCancelLoop` maintains a fixed `arr` and a growing tombstone array `alive : Array Bool`, uses
+`denseMkCs cs0 arr alive checks` as the logical intermediate system fed to `denseDropPair_correct`
+(`BusPairCancelCore.lean`, which takes `hsplit : d'.busInteractions = A ++ S :: B ++ R :: C`),
+derives that split from `denseLiveSeg_split` (accept) and rewrites the tombstoned projection with
 `denseLiveSeg_drop`, tracks termination via the strict `denseLiveCount` decrease each accepted drop
 produces (two live entries removed), and materializes the final compact interaction list exactly
 once with `denseLiveArr` = the ghost `denseLiveSeg` projection via `denseLiveArr_eq`. The initial
-all-live system reduces to the input via `denseMkCs_all`. Every lemma below is stated in exactly the
-shape the spec's `mkDropResult`/`cancelLoop` invoke. -/
+all-live system reduces to the input via `denseMkCs_all`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -110,7 +99,7 @@ theorem denseLiveSeg_mem (arr : Array (BusInteraction (DenseExpr p))) (alive : A
 /-! ### The stable-state split and update
 
 When the search accepts a pair `(iP, jP)` (both live, `iP < jP < size`), the live projection factors
-as `A ++ S :: B ++ R :: C'` (`denseLiveSeg_split`) — feeding C2's `denseDropPair_correct`.
+as `A ++ S :: B ++ R :: C'` (`denseLiveSeg_split`) — feeding `denseDropPair_correct`.
 Tombstoning the two positions changes the projection to `A ++ B ++ C'` (`denseLiveSeg_drop`), so the
 post-drop logical `busInteractions` (`… ++ checks`) matches the `A ++ B ++ C ++ checks` shape
 `denseDropPair_correct` produces. Both are pure `denseLiveSeg` algebra. -/

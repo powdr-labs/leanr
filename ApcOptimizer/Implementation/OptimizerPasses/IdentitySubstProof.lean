@@ -3,19 +3,18 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
 
 set_option autoImplicit false
 
-/-! # Dense late identity-result substitution: native proof and wiring (Task 3)
+/-! # Dense late identity-result substitution: correctness and wiring
 
-Native `DensePassCorrect` proof for the dense `denseIdentitySubstF` transform
-(`IdentitySubst.lean`), lifted to the audited spec via `DenseVerifiedPassW.of` and iterated to
-a fixpoint by `denseIterateToFixpoint` (`Pass.lean`). No dependency on the reference
-`IdentitySubst.identitySubstStep` — the pass is a single batch `DenseConstraintSystem.substF` of the
-`result ↦ operand` map, so its correctness rides on the reusable native substitution core
-`DenseConstraintSystem.substF_denseCorrect` (`DomainBatchProof.lean`) once every mapped pair is shown
-forced by its interaction's acceptance and every resolved operand shown to occur in `d`.
+`DensePassCorrect` proof for the dense `denseIdentitySubstF` transform (`IdentitySubst.lean`),
+lifted to the audited spec via `DenseVerifiedPassW.of` and iterated to a fixpoint by
+`denseIterateToFixpoint` (`Pass.lean`). The pass is a single batch
+`DenseConstraintSystem.substF` of the `result ↦ operand` map, so its correctness rides on the
+reusable substitution core `DenseConstraintSystem.substF_denseCorrect` (`DomainBatchProof.lean`)
+once every mapped pair is shown forced by its interaction's acceptance and every resolved operand
+shown to occur in `d`.
 
-The pair soundness (`denseIdentityPairAt_sound`) is the native mirror of
-`IdentitySubst.identityPairAt_sound`: it applies the representation-independent `orOp` soundness
-(`facts.byteBoolSound`) and `ByteXorSpec.decode_map`/`decode_mem` **value-level** over
+The pair soundness (`denseIdentityPairAt_sound`) applies the representation-independent `orOp`
+soundness (`facts.byteBoolSound`) and `ByteXorSpec.decode_map`/`decode_mem` **value-level** over
 `denseBIEval bi denv` (no decode). -/
 
 namespace ApcOptimizer.Dense
@@ -248,17 +247,16 @@ theorem denseIdentitySubstF_covered (reg : VarRegistry) (bs : BusSemantics p) (f
           (denseIdentityMap_operand_occ facts d i w hw))
     · exact hcov
 
-/-- **The native dense `identitySubst` step.** A single batch substitution of the OR-identity
+/-- **The dense `identitySubst` step.** A single batch substitution of the OR-identity
     `result ↦ operand` map, connected to the audited spec via `DensePassCorrect.lift` (through
-    `of`) — no reference-pass dependency. -/
+    `of`). -/
 def denseIdentitySubstStep : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (fun bs facts d => denseIdentitySubstF bs facts d) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseIdentitySubstF_covered reg bs facts d hcov)
     (fun _ _ _ _ _ => by intro x hx; simp at hx)
     (fun reg bs facts d _ => denseIdentitySubstF_correct reg bs facts d)
 
-/-- Run the dense identity substitution to a fixpoint so operand→operand chains collapse, mirroring
-    `IdentitySubst.identitySubstPass := iterateToFixpoint identitySubstStep`. -/
+/-- Run the dense identity substitution to a fixpoint so operand→operand chains collapse. -/
 def denseIdentitySubstPass : DenseVerifiedPassW p :=
   denseIterateToFixpoint denseIdentitySubstStep
 

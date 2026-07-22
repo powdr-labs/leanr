@@ -6,66 +6,54 @@ import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
-/-! # Dense interval forcing: integer-window analysis of bounded affine slots (Task 3, impl-only)
+/-! # Dense interval forcing: integer-window analysis of bounded affine slots (impl-only)
 
-Dense, `VarId`-native transliteration of the reference `IntervalForce` pass's *runtime* content:
-the signed-representative processed term (`PTerm`/`procTerms`/`maxSum`/`minSum`), the seed walk
-(`pairDiff`/`findPartner`/`walk`), the per-slot seed extraction (`slotSeeds`), the per-invocation
-bounds index (`BoundIdx`), the per-interaction/whole-system seed collection
-(`interactionSeedsGo`/`interactionSeeds`/`allSeeds`), and the pass itself (`intervalForcePass`,
-`:625`) — a **single-shot add-seeds** transform (`ConstraintSystem.addConstraints_correct` at
-`:625`). This is **impl-only**: `srep_cast`, `procTerms_cast`, `procTerms_bounds`, `term_window`,
-`intEval_window`, `int_window`, `intEval_perm`, `walk_sound`, `slotSeeds_sound`,
-`interactionSeeds_sound`, `allSeeds_sound`, `BoundIdx.lookup_sound`, and every other theorem in the
-spec file are proof-side and left for the prover; nothing here is wired into the `denseImpl`
-selector. `intEval` is *not* ported — the runtime (`slotSeeds`/`walk`/`interactionSeeds`/`allSeeds`)
-never calls it; it exists only to state the proof-side window lemmas, which the prover owns.
+Runtime content for `intervalForce`: the signed-representative processed term
+(`DensePTerm`/`denseProcTerms`/`denseMaxSum`/`denseMinSum`), the seed walk
+(`densePairDiff`/`denseFindPartner`/`denseWalk`), the per-slot seed extraction (`denseSlotSeeds`),
+the per-invocation bounds index (`denseBoundIdx*`), the per-interaction/whole-system seed
+collection (`denseInteractionSeedsGo`/`denseInteractionSeeds`/`denseAllSeeds`), and the pass itself
+(`denseIntervalForceF`) — a single-shot add-seeds transform. This file is **impl-only**: it carries
+no soundness lemma, and nothing here is wired into a `DenseVerifiedPassW`/`DensePassCorrect`
+wrapper (the prover's job). Integer-window evaluation is not needed here — the runtime
+(`denseSlotSeeds`/`denseWalk`/`denseInteractionSeeds`/`denseAllSeeds`) never calls it; it would
+exist only to state proof-side window lemmas.
 
-## Representation-independent reuse (per the standing convention)
+## Representation-independent reuse
 
 `IntervalForce.srep : ZMod p → Int` / `srep_cast` / `term_window` / `int_window` and
-`IntervalForce.maxTerms : Nat` touch neither `Variable` nor `Expression`; they are
-**re-homed here** from the reference `IntervalForce` pass
-and reused **unqualified** via `open IntervalForce`, exactly as `open`ed spec constants/helpers are
-reused elsewhere (`IntervalForce.srep.eval`, `denseSlotSeeds` below). `PTerm` itself is *not*
-reusable as-is: its `v` field is typed `Variable`, so a dense `DensePTerm` (`v : VarId`) is a new
-structure, and every function over `List PTerm` (`procTerms`/`maxSum`/`minSum`/`findPartner`/`walk`)
-needs a dense twin purely because the *container* type differs — none of these functions'
-*bodies* are changed beyond that substitution.
+`IntervalForce.maxTerms : Nat` touch neither `VarId` nor `DenseExpr`; they live in the
+representation-independent `IntervalForce` namespace below and are reused **unqualified** via `open
+IntervalForce` (here, and by `BusPairCancelJustify.lean`, which reuses `srep`). `DensePTerm` carries
+a `VarId` in its `v` field, so it (and every function over `List DensePTerm`) is its own structure,
+not reused from anywhere.
 
 ## Reuse of existing dense machinery
 
-* `densePairDiff v w := v − w` is textually identical to `BusUnify.lean`'s `denseEqExpr (.var v)
-  (.var w)` — reused directly, no new expression builder.
-* `denseLinearize`/`DenseLinExpr` (`Affine.lean`) and `DenseLinExpr.norm` (`Normalize.lean`) are the
-  dense `linearize`/`LinExpr`/`LinExpr.norm`.
-* `denseInteractionBound` (`DigitFold.lean:118`) is *exactly* the dense `interactionBound`
-  (`DomainProp.lean`) `BoundIdx.insertVar` consumes — no re-derivation.
+* `densePairDiff v w := v − w` is exactly `BusUnify.lean`'s `denseEqExpr (.var v) (.var w)` — reused
+  directly, no new expression builder.
+* `denseLinearize`/`DenseLinExpr` (`Affine.lean`) and `DenseLinExpr.norm` (`Normalize.lean`).
+* `denseInteractionBound` (`DigitFold.lean`) is what `denseBoundIdxInsertVar` consumes.
 * `DenseExpr.bHash` (`Dedup.lean`) and `HashedDedup.hashedEraseDups` (`HashedDedup.lean`, already
-  generic in the hashed element type) are the dense `Expression.bHash`/`HashedDedup.hashedEraseDups`
-  `allSeeds` consumes.
+  generic in the hashed element type) are what `denseAllSeeds` consumes for its dedup.
 
-## `BoundIdx` → a data-only `Std.HashMap VarId Nat`
+## The bounds index: a data-only `Std.HashMap VarId Nat`
 
-The spec `BoundIdx` is a proof-carrying structure indexed by the interaction list `bis`, whose
-`sound` field only backs `lookup_sound` (proof-side). Following the established `BoundsMap →
-denseBuild` pattern (`DigitFold.lean`), the dense mirror drops the dependent type and the `sound`
-field entirely: `denseBoundIdxInsertVar`/`denseBoundIdxAddBi`/`denseBoundIdxAddAll`/
-`denseBoundIdxBuild` operate directly on a plain `Std.HashMap VarId Nat`, with the identical
-insert-keep-smaller/per-interaction/whole-list recursion structure as `BoundIdx.insertVar`/`.addBi`/
-`.addAll`/`.build`. Named with a `BoundIdx`-specific prefix (`denseBoundIdx*`) to avoid colliding
-with `DigitFold.lean`'s *different* `BoundsMap`-derived `denseInsertEntry`/`denseAddVars`/
-`denseAddAll`/`denseBuild` (a different fact-derived map, same general shape, unrelated pass). -/
+`denseBoundIdxInsertVar`/`denseBoundIdxAddBi`/`denseBoundIdxAddAll`/`denseBoundIdxBuild` operate
+directly on a plain `Std.HashMap VarId Nat` (insert-keep-smaller/per-interaction/whole-list
+recursion), carrying no proof field. Named with a `BoundIdx`-specific prefix (`denseBoundIdx*`) to
+avoid colliding with `DigitFold.lean`'s *different* `denseInsertEntry`/`denseAddVars`/`denseAddAll`/
+`denseBuild` (a different fact-derived map, same general shape, unrelated pass). -/
 
 namespace IntervalForce
 
 variable {p : ℕ}
 
-/-! ## Re-homed representation-independent signed-representative + window arithmetic
+/-! ## Signed-representative and window arithmetic
 
-`srep`/`srep_cast`/`term_window`/`int_window`/`maxTerms` touch only `Nat`/`Int`/`ZMod` — re-homed
-here from the reference `IntervalForce` pass so the dense pass + proof (and
-`BusPairCancelJustify.lean`, which reuses `srep`) consume them from a neutral home. -/
+`srep`/`srep_cast`/`term_window`/`int_window`/`maxTerms` touch only `Nat`/`Int`/`ZMod`; this
+namespace is their shared, representation-independent home, consumed unqualified by the dense
+pass, its proof, and `BusPairCancelJustify.lean` (which reuses `srep`). -/
 
 /-- Signed minimal-magnitude integer representative of a field element: `c.val` when
     `c.val ≤ (p−1)/2`, else `c.val − p`. Scaled differences like `256·a − 256·b` thus get the
@@ -138,15 +126,14 @@ variable {p : ℕ}
 /-! ## Signed representatives and processed terms -/
 
 /-- A dense processed affine term: signed integer coefficient, a proven strict bound for the
-    variable's value, and the `VarId` itself. Mirrors `PTerm`. -/
+    variable's value, and the `VarId` itself. -/
 structure DensePTerm where
   sc : Int
   bnd : Nat
   v : VarId
 
 /-- Pair every term of a dense linear form with its variable's proven bound; `none` if any variable
-    is unbounded. Mirrors `procTerms` (`:69`), reusing `IntervalForce.srep` (representation-
-    independent). -/
+    is unbounded. Reuses `IntervalForce.srep` (representation-independent). -/
 def denseProcTerms (bnd : VarId → Option Nat) :
     List (VarId × ZMod p) → Option (List DensePTerm)
   | [] => some []
@@ -155,22 +142,20 @@ def denseProcTerms (bnd : VarId → Option Nat) :
     | some B, some pts => some (⟨srep c, B, v⟩ :: pts)
     | _, _ => none
 
-/-- Upper window bound: each term contributes `max (sc·(B−1)) 0`. Mirrors `maxSum` (`:81`). -/
+/-- Upper window bound: each term contributes `max (sc·(B−1)) 0`. -/
 def denseMaxSum (pts : List DensePTerm) : Int :=
   (pts.map (fun t => max (t.sc * ((t.bnd : Int) - 1)) 0)).sum
 
-/-- Lower window bound: each term contributes `min (sc·(B−1)) 0`. Mirrors `minSum` (`:85`). -/
+/-- Lower window bound: each term contributes `min (sc·(B−1)) 0`. -/
 def denseMinSum (pts : List DensePTerm) : Int :=
   (pts.map (fun t => min (t.sc * ((t.bnd : Int) - 1)) 0)).sum
 
 /-! ## Seed extraction -/
 
-/-- `v − w` as a dense expression. Mirrors `pairDiff` (`:203`), reusing `denseEqExpr`
-    (`BusUnify.lean`). -/
+/-- `v − w` as a dense expression. Reuses `denseEqExpr` (`BusUnify.lean`). -/
 def densePairDiff (v w : VarId) : DenseExpr p := denseEqExpr (.var v) (.var w)
 
-/-- First term with signed coefficient `g`, and the list without it. Mirrors `findPartner`
-    (`:211`). -/
+/-- First term with signed coefficient `g`, and the list without it. -/
 def denseFindPartner (g : Int) : List DensePTerm → Option (DensePTerm × List DensePTerm)
   | [] => none
   | t :: rest =>
@@ -181,8 +166,7 @@ def denseFindPartner (g : Int) : List DensePTerm → Option (DensePTerm × List 
       | none => none
 
 /-- The walk over the term list: at each term, try the zero arm (against all other terms) and,
-    for a positive coefficient, the pair arm against the first `−g` partner among the other terms.
-    Mirrors `walk` (`:247`). -/
+    for a positive coefficient, the pair arm against the first `−g` partner among the other terms. -/
 def denseWalk (B : Nat) (c0 : Int) : List DensePTerm → List DensePTerm → List (DenseExpr p)
   | _, [] => []
   | seen, t :: rest =>
@@ -204,8 +188,8 @@ def denseWalk (B : Nat) (c0 : Int) : List DensePTerm → List DensePTerm → Lis
 /-! ## Per-slot seeds -/
 
 /-- All seeds forced by one bounded slot: linearize, merge like terms, pair each variable with its
-    proven bound, check the integer window, and extract the pair/zero arms. Mirrors `slotSeeds`
-    (`:385`), reusing `denseLinearize`/`DenseLinExpr.norm` and `IntervalForce.srep`/`.maxTerms`. -/
+    proven bound, check the integer window, and extract the pair/zero arms. Reuses
+    `denseLinearize`/`DenseLinExpr.norm` and `IntervalForce.srep`/`.maxTerms`. -/
 def denseSlotSeeds (bnd : VarId → Option Nat) (B : Nat) (e : DenseExpr p) : List (DenseExpr p) :=
   if p = 0 then []
   else
@@ -225,7 +209,7 @@ def denseSlotSeeds (bnd : VarId → Option Nat) (B : Nat) (e : DenseExpr p) : Li
 /-! ## The per-invocation bounds index (data-only `Std.HashMap VarId Nat`) -/
 
 /-- Record the bound `denseInteractionBound bi x` (if any), keeping the smaller of duplicates.
-    Mirrors `BoundIdx.insertVar` (`:470`), reusing `denseInteractionBound` (`DigitFold.lean:118`). -/
+    Reuses `denseInteractionBound` (`DigitFold.lean`). -/
 def denseBoundIdxInsertVar (bs : BusSemantics p) (facts : BusFacts p bs)
     (I : Std.HashMap VarId Nat) (bi : BusInteraction (DenseExpr p)) (x : VarId) :
     Std.HashMap VarId Nat :=
@@ -238,7 +222,7 @@ def denseBoundIdxInsertVar (bs : BusSemantics p) (facts : BusFacts p bs)
       I.insert x B
     else I
 
-/-- Record every bare-variable slot bound of one interaction. Mirrors `BoundIdx.addBi` (`:493`). -/
+/-- Record every bare-variable slot bound of one interaction. -/
 def denseBoundIdxAddBi (bs : BusSemantics p) (facts : BusFacts p bs)
     (I : Std.HashMap VarId Nat) (bi : BusInteraction (DenseExpr p)) : Std.HashMap VarId Nat :=
   (bi.payload.filterMap (fun e =>
@@ -246,13 +230,13 @@ def denseBoundIdxAddBi (bs : BusSemantics p) (facts : BusFacts p bs)
     | .var x => some x
     | _ => none)).foldl (fun I x => denseBoundIdxInsertVar bs facts I bi x) I
 
-/-- Fold `denseBoundIdxAddBi` over every interaction. Mirrors `BoundIdx.addAll` (`:500`). -/
+/-- Fold `denseBoundIdxAddBi` over every interaction. -/
 def denseBoundIdxAddAll (bs : BusSemantics p) (facts : BusFacts p bs) :
     Std.HashMap VarId Nat → List (BusInteraction (DenseExpr p)) → Std.HashMap VarId Nat
   | I, [] => I
   | I, bi :: rest => denseBoundIdxAddAll bs facts (denseBoundIdxAddBi bs facts I bi) rest
 
-/-- Build the bounds index from scratch. Mirrors `BoundIdx.build` (`:507`). -/
+/-- Build the bounds index from scratch. -/
 def denseBoundIdxBuild (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (DenseExpr p))) : Std.HashMap VarId Nat :=
   denseBoundIdxAddAll bs facts ∅ bis
@@ -260,7 +244,7 @@ def denseBoundIdxBuild (bs : BusSemantics p) (facts : BusFacts p bs)
 /-! ## The pass -/
 
 /-- The per-slot seed walk of `denseInteractionSeeds`, with the constant-payload pattern `pat`
-    computed once by the caller instead of once per slot. Mirrors `interactionSeedsGo` (`:526`). -/
+    computed once by the caller instead of once per slot. -/
 def denseInteractionSeedsGo (bs : BusSemantics p) (facts : BusFacts p bs)
     (bnd : VarId → Option Nat) (bi : BusInteraction (DenseExpr p)) (mval : ZMod p)
     (pat : List (Option (ZMod p))) : List (DenseExpr p) :=
@@ -269,8 +253,7 @@ def denseInteractionSeedsGo (bs : BusSemantics p) (facts : BusFacts p bs)
     | some e, some B => denseSlotSeeds bnd B e
     | _, _ => [])
 
-/-- All seeds of one interaction: every payload slot with a `slotBound`. Mirrors
-    `interactionSeeds` (`:535`). -/
+/-- All seeds of one interaction: every payload slot with a `slotBound`. -/
 def denseInteractionSeeds (bs : BusSemantics p) (facts : BusFacts p bs)
     (bnd : VarId → Option Nat) (bi : BusInteraction (DenseExpr p)) : List (DenseExpr p) :=
   match bi.multiplicity.constValue? with
@@ -280,8 +263,8 @@ def denseInteractionSeeds (bs : BusSemantics p) (facts : BusFacts p bs)
     else denseInteractionSeedsGo bs facts bnd bi mval (bi.payload.map DenseExpr.constValue?)
 
 /-- All seeds over the system: every bounded interaction slot, plus every algebraic constraint
-    consumed as a bound-`1` slot. Mirrors `allSeeds` (`:593`), reusing `DenseExpr.bHash`
-    (`Dedup.lean`) and `HashedDedup.hashedEraseDups` (`HashedDedup.lean`). -/
+    consumed as a bound-`1` slot. Reuses `DenseExpr.bHash` (`Dedup.lean`) and
+    `HashedDedup.hashedEraseDups` (`HashedDedup.lean`). -/
 def denseAllSeeds (bs : BusSemantics p) (facts : BusFacts p bs) (bnd : VarId → Option Nat)
     (d : DenseConstraintSystem p) : List (DenseExpr p) :=
   HashedDedup.hashedEraseDups DenseExpr.bHash
@@ -289,9 +272,8 @@ def denseAllSeeds (bs : BusSemantics p) (facts : BusFacts p bs) (bnd : VarId →
       d.algebraicConstraints.flatMap (fun c => denseSlotSeeds bnd 1 c))
 
 /-- The dense transform: seed every equality/zero forced by the integer-window analysis of the
-    system's bounded affine slots (and its constraints). Mirrors `intervalForcePass` (`:625`), same
-    `Std.HashSet`/hash-bucket dedup shortcut noted in the spec's own comment (`d.occ` in place of
-    `cs.vars`, `DenseExpr.bHash` in place of `Expression.bHash`). -/
+    system's bounded affine slots (and its constraints), using a `Std.HashSet`/hash-bucket dedup
+    shortcut (`d.occ`, `DenseExpr.bHash`) instead of per-seed linear scans. -/
 def denseIntervalForceF (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   let idx := denseBoundIdxBuild bs facts d.busInteractions

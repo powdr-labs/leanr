@@ -4,24 +4,23 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
 
 set_option autoImplicit false
 
-/-! # Dense width-0 range check → equality: native proof and wiring (Task 3)
+/-! # Dense width-0 range check → equality: proof and wiring
 
-Native `DensePassCorrect` proof for the dense `rangeForceZero` transform (`RangeForceZero.lean`),
-lifted to the audited spec via `DenseVerifiedPassW.of`. No dependency on the reference
-`RangeForceZero.rangeForceZeroPass` — the pass is a single-shot **append of entailed constraints**,
-so its correctness rides on the reusable `DensePassCorrect.denseAddConstraints` (`BusUnifyProof.lean`)
-once every appended seed is shown to evaluate to `0` on any satisfying dense assignment.
+`DensePassCorrect` proof for the dense `rangeForceZero` transform (`RangeForceZero.lean`), lifted
+to the audited spec via `DenseVerifiedPassW.of`. The pass is a single-shot **append of entailed
+constraints**, so its correctness rides on the reusable `DensePassCorrect.denseAddConstraints`
+(`BusUnifyProof.lean`) once every appended seed is shown to evaluate to `0` on any satisfying dense
+assignment.
 
-The seed soundness (`denseForceZeroAt_sound`) is the native mirror of
-`RangeForceZero.forceZeroAt_sound`: it applies the representation-independent `facts.rangeCheckAt`
-soundness field **value-level** over `denseBIEval bi denv` (no decode), with
+The seed soundness (`denseForceZeroAt_sound`) applies the representation-independent
+`facts.rangeCheckAt` soundness field **value-level** over `denseBIEval bi denv` (no decode), with
 `denseMatches_evalPattern` (`DomainBatchProof.lean`) supplying the pattern match. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-- Structure of a recognised width-0 check (native mirror of `RangeForceZero.forceZeroAt_spec`). -/
+/-- Structure of a recognised width-0 check. -/
 theorem denseForceZeroAt_spec {bs : BusSemantics p} (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p) (h : denseForceZeroAt facts bi = some e) :
     ∃ valSlot, facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?)
@@ -42,8 +41,7 @@ theorem denseForceZeroAt_spec {bs : BusSemantics p} (facts : BusFacts p bs)
       exact ⟨vs, hrc, hmc, hp⟩
   · exact absurd h (by simp)
 
-/-- Every accepted-and-active width-0 check forces its slot expression to `0` (native mirror of
-    `RangeForceZero.forceZeroAt_sound`). -/
+/-- Every accepted-and-active width-0 check forces its slot expression to `0`. -/
 theorem denseForceZeroAt_sound {bs : BusSemantics p} (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (h1ne : (1 : ZMod p) ≠ 0) (h : denseForceZeroAt facts bi = some e) (denv : VarId → ZMod p)
@@ -106,8 +104,8 @@ theorem denseRangeForceZeroF_correct (reg : VarRegistry) (bs : BusSemantics p) (
       (fun denv _ hsat => denseRangeForceZeroNew_sound facts d h denv hsat)
   · rw [if_neg h]; exact DensePassCorrect.refl reg.isInput d bs
 
-/-- **The native dense `rangeForceZero` pass.** Threads the original `facts` unchanged, connected to
-    the audited spec via `DensePassCorrect.lift` (through `of`) — no reference-pass dependency. -/
+/-- **The dense `rangeForceZero` pass.** Threads the original `facts` unchanged, connected to
+    the audited spec via `DensePassCorrect.lift` (through `of`). -/
 def denseRangeForceZeroPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of denseRangeForceZeroF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseRangeForceZeroF_covered reg bs facts d hcov)

@@ -3,24 +3,22 @@ import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPackProof
 
 set_option autoImplicit false
 
-/-! # Native soundness of the dense `tupleRange` pass (Task 3)
+/-! # Soundness of the dense `tupleRange` pass
 
-Native, `VarId`-native proof for the dense tuple-range packing pass whose runtime lives in
+Proof for the dense tuple-range packing pass whose runtime lives in
 `OptimizerPasses/TupleRange.lean`. A tuple range checker `TupleRangeChecker (256, s2)` accepts
 `[x, y]` iff `x < 256 ∧ y < s2`; that is exactly the conjunction of a single-value byte check on `x`
 and a variable range check `[y, b]` with `2 ^ b.val = s2`, so the two stateless interactions pack
 into one with the identical satisfying set.
 
-Everything here is over dense environments `VarId → ZMod p` — no `decode` transport into
-the reference `Variable` passes. The proof mirrors the spec's `mergeStateless2_correct`/`tupleKey`/
-`packByteFirst_correct`/`packRangeFirst_correct` argument natively, reusing
+Everything here is over dense environments `VarId → ZMod p` — no `decode`. The proof reuses
 `denseMergeStateless2_correct` (`ByteCheckPackProof.lean`) as the two-for-one swap workhorse and the
 `denseMkByteCheck_*` acceptance cluster (`BusPairCancelCheckProof.lean`). The scan's positional
-split is recovered as a loop invariant (`denseFindTuplePack_split`), mirroring `denseFindGo_split`;
-the drain composes single steps through `DensePassCorrect.trans`. The representation-independent
-`BusFacts` fields (`byteXorSpec_sound`, `varRangeBus_sound`, `tupleRangeBus_sound`) and the
-polymorphic `ByteXorSpec` methods apply at the value / `DenseExpr` level exactly as the spec applies
-them. -/
+split is recovered as a loop invariant (`denseFindTuplePack_split`), similar in shape to
+`denseFindGo_split`; the drain composes single steps through `DensePassCorrect.trans`. The
+representation-independent `BusFacts` fields (`byteXorSpec_sound`, `varRangeBus_sound`,
+`tupleRangeBus_sound`) and the polymorphic `ByteXorSpec` methods apply at the value / `DenseExpr`
+level. -/
 
 namespace ApcOptimizer.Dense
 
@@ -39,7 +37,7 @@ theorem denseTupleCheck_eval (busId : Nat) (x y : DenseExpr p) (denv : VarId →
 /-! ## Recognizer soundness: a hit pins the canonical shape by construction -/
 
 /-- A `denseMatchByteSingle` hit *is* the canonical single-value byte check
-    `denseMkByteCheck spec bi.busId x`. Native mirror of `matchByteSingle_eq`. -/
+    `denseMkByteCheck spec bi.busId x`. -/
 theorem denseMatchByteSingle_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     {bi : BusInteraction (DenseExpr p)} {spec : ByteXorSpec p} {x : DenseExpr p}
     (h : denseMatchByteSingle bs facts bi = some (spec, x)) :
@@ -70,7 +68,7 @@ theorem denseMatchByteSingle_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     · exact absurd h (by simp)
 
 /-- A `denseMatchRangeCheck` hit *is* the canonical range check, and carries the width facts the
-    packing key needs. Native mirror of `matchRangeCheck_eq`. -/
+    packing key needs. -/
 theorem denseMatchRangeCheck_eq (bs : BusSemantics p) (facts : BusFacts p bs) {s2 : Nat}
     {bi : BusInteraction (DenseExpr p)} {y : DenseExpr p} {b : ZMod p}
     (h : denseMatchRangeCheck bs facts s2 bi = some (y, b)) :
@@ -93,8 +91,7 @@ theorem denseMatchRangeCheck_eq (bs : BusSemantics p) (facts : BusFacts p bs) {s
     · cases h
   · cases h
 
-/-- The operand of an emitted single-value byte check is a payload entry. Native mirror of
-    `mkByteCheck_operand_mem`. -/
+/-- The operand of an emitted single-value byte check is a payload entry. -/
 theorem denseMkByteCheck_operand_mem (spec : ByteXorSpec p) (busId : Nat) (e : DenseExpr p) :
     e ∈ (denseMkByteCheck spec busId e).payload :=
   (spec.decode_mem (denseMkByteCheck spec busId e).payload
@@ -103,7 +100,7 @@ theorem denseMkByteCheck_operand_mem (spec : ByteXorSpec p) (busId : Nat) (e : D
 /-! ## The tuple-packing key: byte check + exact-width range check = tuple check -/
 
 /-- The tuple check's obligation is exactly the byte check's and the range check's together, given
-    `s1 = 256`, a supported constant width, and `2 ^ b.val = s2`. Native mirror of `tupleKey`. -/
+    `s1 = 256`, a supported constant width, and `2 ^ b.val = s2`. -/
 theorem denseTupleKey (bs : BusSemantics p) (facts : BusFacts p bs)
     (bcBus vrBus trBus : Nat) (s1 s2 : Nat) (spec : ByteXorSpec p)
     (hspec : facts.byteXorSpec bcBus = some spec) (hbound : spec.bound = 256)
@@ -133,8 +130,7 @@ theorem denseTupleKey (bs : BusSemantics p) (facts : BusFacts p bs)
 /-! ## The accept certificates (one per pair orientation) -/
 
 /-- Packing a byte check (first) with a range check (second) into a tuple check is
-    `DensePassCorrect`, given the canonical split equation and the matched facts. Native mirror of
-    `packByteFirst_correct`. -/
+    `DensePassCorrect`, given the canonical split equation and the matched facts. -/
 theorem densePackByteFirst_correct (isInput : VarId → Bool) (d : DenseConstraintSystem p)
     (bs : BusSemantics p) (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0)
     (trBus s1 s2 bcBus vrBus : Nat)
@@ -169,7 +165,7 @@ theorem densePackByteFirst_correct (isInput : VarId → Bool) (d : DenseConstrai
         show e ∈ [e, DenseExpr.const b]; exact List.mem_cons_self ..) hve)
 
 /-- Packing a range check (first) with a byte check (second) into a tuple check is
-    `DensePassCorrect` — the mirrored orientation. Native mirror of `packRangeFirst_correct`. -/
+    `DensePassCorrect` — the swapped orientation. -/
 theorem densePackRangeFirst_correct (isInput : VarId → Bool) (d : DenseConstraintSystem p)
     (bs : BusSemantics p) (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0)
     (trBus s1 s2 bcBus vrBus : Nat)
@@ -208,9 +204,8 @@ theorem densePackRangeFirst_correct (isInput : VarId → Bool) (d : DenseConstra
 
 /-! ## Scan invariants: reconstructing the split equation
 
-The dense `denseFindRangePartner`/`denseFindBytePartner`/`denseFindTuplePack` return plain
-positionally-split data; the split equations are recovered here as loop invariants (mirroring the
-spec `findTuplePackIdx`'s `split_of_extracts`, which never fails at runtime). -/
+`denseFindRangePartner`/`denseFindBytePartner`/`denseFindTuplePack` return plain
+positionally-split data; the split equations are recovered here as loop invariants. -/
 
 /-- The positional split reconstructed from `denseFindRangePartner`. -/
 theorem denseFindRangePartner_split (bs : BusSemantics p) (facts : BusFacts p bs) (s2 : Nat) :
@@ -332,11 +327,12 @@ theorem denseFindTuplePack_split (bs : BusSemantics p) (facts : BusFacts p bs) (
           by simpa only [List.reverse_cons, List.append_assoc, List.singleton_append] using heq,
           hcase⟩
 
-/-! ## Candidate soundness: the dropped re-check is always true by construction
+/-! ## Candidate soundness: the omitted re-check is always true by construction
 
-`denseTryTupleBuses` drops the reference's `if facts.tupleRangeBus trBus = some (s1, s2) ∧ s1 = 256`
-re-check. Every element of `denseTupleBusCandidates`'s output already satisfies it by construction,
-recorded here as the candidate invariant that recovers the fact for the chosen bus. -/
+`denseTryTupleBuses` does not re-check `facts.tupleRangeBus trBus = some (s1, s2) ∧ s1 = 256`
+for each candidate: every element of `denseTupleBusCandidates`'s output already satisfies it by
+construction, recorded here as the candidate invariant that recovers the fact for the chosen
+bus. -/
 
 /-- Every candidate `denseTupleBusCandidates` emits carries its declaring tuple fact with a
     byte-sized first slot. -/
@@ -534,7 +530,7 @@ theorem denseTupleRangeF_covered (reg : VarRegistry) (bs : BusSemantics p) (fact
       d.busInteractions.length d.busInteractions hbi).2
   · exact hcov
 
-/-- Native correctness of the whole dense transform. -/
+/-- Correctness of the whole dense transform. -/
 theorem denseTupleRangeF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
     DensePassCorrect reg.isInput d (denseTupleRangeF bs facts d) [] bs := by

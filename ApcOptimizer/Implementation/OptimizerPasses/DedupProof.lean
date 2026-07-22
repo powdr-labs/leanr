@@ -3,14 +3,12 @@ import ApcOptimizer.Implementation.OptimizerPasses.Bridge
 
 set_option autoImplicit false
 
-/-! # Native correctness for the dense syntactic-duplicate removal pass (Task 3)
+/-! # Correctness for the dense syntactic-duplicate removal pass
 
-This module proves `DensePassCorrect` for the dense dedup transform (`Dense/Dedup.lean`)
-**natively** over dense environments `VarId → ZMod p`, with no commutation to the spec pass and no
-`decode` in the discharged obligations. The spec pass's own `PassCorrect` proof
-(`OptimizerPasses/Dedup.lean`, `ConstraintSystem.dedup_correct`) is only the roadmap: its argument
-structure (`PassCorrect.ofEnvEq` fed by satisfaction-iff, side-effect equality, and
-admissibility-iff) is mirrored here over the native dense semantics of `Dense/Bridge.lean`.
+This module proves `DensePassCorrect` for the dense dedup transform (`Dense/Dedup.lean`) directly
+over dense environments `VarId → ZMod p`, with no `decode` in the discharged obligations. The
+argument structure (`PassCorrect.ofEnvEq` fed by satisfaction-iff, side-effect equality, and
+admissibility-iff) is carried out over the dense semantics of `Dense/Bridge.lean`.
 
 Dedup drops structurally-duplicate algebraic constraints (`List.dedup`) and structurally-duplicate
 *stateless* bus interactions (keep-first). Both operations only shrink the constraint/interaction
@@ -18,19 +16,18 @@ sets while leaving the satisfying set, the (stateful-only) side effects and `adm
 so `env' = env` is the completeness witness and no derivations are produced.
 
 The pass runs the fully hash-bucketed `dedupN` (constraints via `denseDedupConstraintsFast`,
-interactions via `denseDedupStatelessFast`), which equals the reference keep-first `dedup`
-(`dedupN_eq`); correctness therefore transports along `dedupN_eq` to the reference version's native
-proof. The membership-preserving helpers `denseDedupStateless_covers`/`_statefulFilter` live in
+interactions via `denseDedupStatelessFast`), which equals the simpler keep-first `dedup`
+(`dedupN_eq`); correctness is proved for the simpler version and transported along `dedupN_eq`. The
+membership-preserving helpers `denseDedupStateless_covers`/`_statefulFilter` live in
 `Dense/Dedup.lean` (kept `Bridge`-free); the evaluated-message helper `denseDedupStateless_evalFilter`
-is stated over `denseBIEval` and so lives here alongside the native proof. -/
+is stated over `denseBIEval` and so lives here alongside the proof. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-- The active∧stateful *evaluated* message list is untouched (what dense `admissible` consults).
-    Mirrors `dedupStateless_evalFilter`, over `denseBIEval` instead of `BusInteraction.eval`
-    (`(denseBIEval bi denv).busId = bi.busId` is `rfl`). -/
+/-- The active∧stateful *evaluated* message list is untouched (what dense `admissible` consults),
+    stated over `denseBIEval` (`(denseBIEval bi denv).busId = bi.busId` is `rfl`). -/
 theorem denseDedupStateless_evalFilter (bs : BusSemantics p) (denv : VarId → ZMod p) :
     ∀ (seen l : List (BusInteraction (DenseExpr p))),
       ((denseDedupStateless bs seen l).map (fun bi => denseBIEval bi denv)).filter
@@ -59,9 +56,8 @@ theorem denseDedupStateless_evalFilter (bs : BusSemantics p) (denv : VarId → Z
           have hf : bs.isStateful (denseBIEval b denv).busId = false := (by simpa using h1)
           simp [hf]), ih]
 
-/-- **Native dense correctness of dedup.** Mirrors `ConstraintSystem.dedup_correct` over the native
-    dense semantics: satisfaction, side effects and admissibility are all preserved, so `env' = env`
-    witnesses completeness and no derivations arise. -/
+/-- **Correctness of dedup.** Satisfaction, side effects and admissibility are all preserved, so
+    `env' = env` witnesses completeness and no derivations arise. -/
 theorem DenseConstraintSystem.dedup_denseCorrect {isInput : VarId → Bool}
     (d : DenseConstraintSystem p) (bs : BusSemantics p) :
     DensePassCorrect isInput d (d.dedup bs) [] bs := by
@@ -110,10 +106,10 @@ theorem DenseConstraintSystem.dedup_denseCorrect {isInput : VarId → Bool}
     intro denv hadm' hsat
     exact ⟨(hiff denv).2 hsat, (hadm denv).2 hadm', by rw [hside]; exact BusState.equiv_refl _⟩
 
-/-- **The native dense duplicate-removal pass** (runs the fully hash-bucketed `dedupN`). Fact-free:
-    the `of` transform ignores `facts`. Its `PassCorrect`-on-decode is discharged natively via
+/-- **The dense duplicate-removal pass** (runs the fully hash-bucketed `dedupN`). Fact-free:
+    the `of` transform ignores `facts`. Its `PassCorrect`-on-decode is discharged via
     `DensePassCorrect.lift` (through `of`) on `dedup_denseCorrect`, transported along
-    `dedupN_eq` — no commutation with the reference pass. -/
+    `dedupN_eq`. -/
 def denseDedupPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun bs _ d => d.dedupN bs)

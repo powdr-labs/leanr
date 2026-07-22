@@ -4,24 +4,20 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 
 set_option autoImplicit false
 
-/-! # Dense bounded-payload digit fold (Task 3)
+/-! # Dense bounded-payload digit fold
 
-Dense, `VarId`-native port of `DigitFold.digitFoldPass`. The pass detects a witness limb forced to a
-compile-time constant by a byte check over a base-256 ladder, and substitutes it away. This file
-mirrors the spec detection on `DenseExpr`/`VarId` so the dense transform decodes to *exactly* the
-spec pass's output, inheriting the spec `PassCorrect` (no correctness re-proved).
+The pass detects a witness limb forced to a compile-time constant by a byte check over a base-256
+ladder, and substitutes it away.
 
-The one nontrivial ingredient is a dense fact-derived bounds map (`Std.HashMap VarId Nat`) that
-corresponds value-for-value, under `resolve`, to the spec `BoundsMap.build facts`. Because the spec
-never characterizes its build's contents value-wise (passes only use its `sound` field), we mirror
-the build's structure and prove the correspondence by induction. -/
+The one nontrivial ingredient is a dense fact-derived bounds map (`Std.HashMap VarId Nat`) built by
+`denseBuild`; its soundness is proved in `DigitFoldProof.lean`. -/
 
-/-! ## Re-homed representation-independent ℕ-side ladder arithmetic + solution grid
+/-! ## ℕ-side ladder arithmetic and solution grid
 
 The `Nat`/`ZMod`-only ladder layer (`ladderVal` / `unpack?` / `solutions` / their completeness
-theorems / `coeffNat` / `signum` / `tval`) originally lived in the reference `DigitFold` pass and
-is re-homed here so the dense pass + proof (`DigitFold.lean` / `DigitFoldProof.lean`) consume it
-directly. FQN is preserved (`namespace DigitFold`). -/
+theorems / `coeffNat` / `signum` / `tval`) is representation-independent and lives in
+`namespace DigitFold`, consumed directly by the dense pass and its proof
+(`DigitFold.lean` / `DigitFoldProof.lean`). -/
 
 namespace DigitFold
 
@@ -139,7 +135,7 @@ open DigitFold
 
 variable {p : ℕ}
 
-/-! ## Dense mirrors of the per-interaction bound machinery -/
+/-! ## Per-interaction bound machinery -/
 
 /-- Dense `isVarOf`: is this dense expression literally `.var i`? -/
 def denseIsVarOf (i : VarId) : DenseExpr p → Bool
@@ -168,7 +164,7 @@ def denseInteractionBound (bs : BusSemantics p) (facts : BusFacts p bs)
 def denseProbeBase (payload : List (DenseExpr p)) (i : Nat) (v : ZMod p) : List (ZMod p) :=
   (payload.map (fun e => (DenseExpr.constValue? e).getD 0)).set i v
 
-/-- Dense `probedSlotBoundAt`: a probed value bound for `i` (see the spec `probedSlotBoundAt`). -/
+/-- Dense `probedSlotBoundAt`: a probed value bound for `i`. -/
 def denseProbedSlotBoundAt (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (i : VarId) (j : Nat) : Option Nat :=
   if p = 0 then none
@@ -211,9 +207,7 @@ def denseProbedSlotBoundAt (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-! ## Dense bounds map (`Std.HashMap VarId Nat`)
 
-A plain runtime map (no soundness field — correctness flows through the decode-commutation of the
-whole pass). We mirror the spec `BoundsMap.build`'s structure and prove the built map corresponds,
-value-for-value under `resolve`, to `(BoundsMap.build facts).map`. -/
+A plain runtime map (no soundness field); its soundness is proved in `DigitFoldProof.lean`. -/
 
 /-- Dense `insertEntry`: keep the smaller of two bounds for `i`. -/
 def denseInsertEntry (T : Std.HashMap VarId Nat) (i : VarId) (b : Nat) : Std.HashMap VarId Nat :=

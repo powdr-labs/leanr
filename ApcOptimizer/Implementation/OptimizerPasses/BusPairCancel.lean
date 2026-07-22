@@ -5,37 +5,37 @@ import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseqProof
 
 set_option autoImplicit false
 
-/-! # Dense stable-state cancellation loop assembly for `busPairCancel` (Task 3, chunk C7)
+/-! # Dense stable-state cancellation loop assembly for `busPairCancel`
 
-Dense, `VarId`-native transliteration of the final slice of
-`OptimizerPasses/BusPairCancel.lean` (:2311-2624): the `DropResult` record, its builder
-`mkDropResult`, the indexed left-to-right scan `findCancelGoIdx`, the per-bus search `findCancel`,
-the stable-state cancellation loop `cancelLoop`, and the top-level pass `busPairCancelPass` — now the
-native dense pass `denseBusPairCancelPass`. Impl and its (interleaved) proof live together because the
+The final assembly of `busPairCancel`: the `DenseDropResult` record, its builder
+`denseMkDropResult`, the indexed left-to-right scan `denseFindCancelGoIdx`, the per-bus search
+`denseFindCancel`, the stable-state cancellation loop `denseCancelLoop`, and the top-level pass
+`denseBusPairCancelPass`. Definitions and their (interleaved) proofs live together because the
 loop's well-founded recursion rides on the erased proof fields (`decreases`), and the accepted-drop
-builder discharges its single-step correctness inline via C5's `denseCheckCancel_sound`.
+builder discharges its single-step correctness inline via `denseCheckCancel_sound`
+(`BusPairCancelCheckProof.lean`).
 
 ## `DenseDropResult` keeps its proof fields
 
-The spec `DropResult` (:2320) carries data (`aliveNew`/`checksNew`/`emitted`/`dropIdx`/`dropPos`) plus
-*erased* proof fields (`sizeNew`, `step : PassCorrect …`, `decreases`). `DenseDropResult` keeps them
-all — they are erased `Prop`s (zero runtime cost) and `decreases` is load-bearing for the loop's
-termination. `step`/`covNew` are stated *quantified over `isInput`/`reg` with the current logical
-system's coverage as a hypothesis*, so the loop never carries `reg`/`isInput` as runtime data (they
-appear only inside erased proof fields): the loop's data signature mirrors the spec's exactly, and
-one lift to the audited `Variable` spec happens at the pass boundary.
+`DenseDropResult` carries data (`aliveNew`/`checksNew`/`emitted`/`dropIdx`/`dropPos`) plus *erased*
+proof fields (`sizeNew`, `step : DensePassCorrect …`, `decreases`) — zero runtime cost, and
+`decreases` is load-bearing for the loop's termination. `step`/`covNew` are stated *quantified over
+`isInput`/`reg` with the current logical system's coverage as a hypothesis*, so the loop never
+carries `reg`/`isInput` as runtime data (they appear only inside erased proof fields); the lift to
+the audited `Variable` spec happens once, at the pass boundary.
 
-## `mkDropResult` discharge of C5/C4/C6
+## `denseMkDropResult`
 
-`denseMkDropResult` mirrors `mkDropResult` (:2336): the split of the current logical interactions
-around the two live positions (`denseLiveSeg_split`, then appending the checks) feeds C5's
-`denseCheckCancel_sound` (its exact hypothesis list was designed for this: `Sound` facts for `T`/`M`
-supplied as parameters — `DenseTwoRootMap.build_sound` + `rfl` from the `Thunk.mk`-built certs, C4's
-`denseLiveSeg_split` for `hsplit`, the scan's `hmid`/`hshield`, and C6's
-`denseDropWits_mem`/`denseDropFormWits_mem` + `denseLiveSeg_mem` for `hwits`/`hfwits`); tombstoning the
-two positions (`denseLiveSeg_drop`) rewrites its output into the next logical system, and the two C4
-lemmas give the live-count decrease. The coverage-preservation field `covNew` closes over the emitted
-checks' coverage witness (`hcheckcov`, discharged at the call site from `denseMkByteCheck_covered`). -/
+The split of the current logical interactions around the two live positions (`denseLiveSeg_split`,
+then appending the checks) feeds `denseCheckCancel_sound` (`BusPairCancelCheckProof.lean`), whose
+hypothesis list is exactly this: `Sound` facts for `T`/`M` supplied as parameters
+(`DenseTwoRootMap.build_sound` + `rfl` from the `Thunk.mk`-built certs), `denseLiveSeg_split`
+(`BusPairCancelLive.lean`) for `hsplit`, the scan's `hmid`/`hshield`, and
+`denseDropWits_mem`/`denseDropFormWits_mem` (`BusPairCancelWits.lean`) + `denseLiveSeg_mem`
+(`BusPairCancelLive.lean`) for `hwits`/`hfwits`. Tombstoning the two positions (`denseLiveSeg_drop`)
+rewrites its output into the next logical system, and the two `denseLiveSeg` lemmas give the
+live-count decrease. The coverage-preservation field `covNew` closes over the emitted checks'
+coverage witness (`hcheckcov`, discharged at the call site from `denseMkByteCheck_covered`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -79,7 +79,7 @@ theorem denseEmittedChecks_covered (unjust : List Nat) (bcBus? : Option (Nat × 
 
 One accepted drop, as consumed by `denseCancelLoop`. `sizeNew`/`step`/`decreases`/`covNew` are erased
 `Prop`s; `step`/`covNew` are quantified over `isInput`/`reg` with the current system's coverage as a
-hypothesis, so the loop stays `reg`-free at the data level. Native mirror of `DropResult` (:2320). -/
+hypothesis, so the loop stays `reg`-free at the data level. -/
 structure DenseDropResult (cs0 : DenseConstraintSystem p) (bs : BusSemantics p)
     (arr : Array (BusInteraction (DenseExpr p)))
     (alive : Array Bool) (checks : List (BusInteraction (DenseExpr p))) where
@@ -97,10 +97,10 @@ structure DenseDropResult (cs0 : DenseConstraintSystem p) (bs : BusSemantics p)
   covNew : ∀ (reg : VarRegistry), (denseMkCs cs0 arr alive checks).CoveredBy reg →
     (denseMkCs cs0 arr aliveNew checksNew).CoveredBy reg
 
-/-- Assemble the `DenseDropResult` for an accepted candidate. Native mirror of `mkDropResult`
-    (:2336); the `T`/`M`/`candsOf` soundness facts (dropped from the plain dense certs/maps) and the
-    emitted-checks coverage witness `hcheckcov` are supplied as parameters, and the single step is
-    proved by C5's `denseCheckCancel_sound`. All of it is erased. -/
+/-- Assemble the `DenseDropResult` for an accepted candidate: the `T`/`M`/`candsOf` soundness facts
+    (dropped from the plain dense certs/maps) and the emitted-checks coverage witness `hcheckcov`
+    are supplied as parameters, and the single step is proved by `denseCheckCancel_sound`. All of
+    it is erased. -/
 def denseMkDropResult (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (busId : Nat) (shape : MemoryBusShape) (hshape : facts.memShape busId = some shape)
@@ -196,11 +196,11 @@ def denseMkDropResult (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) (fac
   simp only [List.length_append, List.length_cons]
   omega
 
-/-- Indexed left-to-right scan for the first droppable pair on `busId`, from position `i`. Native
-    mirror of `findCancelGoIdx` (:2420): at each live send `S`, find its first matching *live* receive
-    through the hash index and run the region tests over the *live* before/between regions; the byte
-    justification runs only for candidates that already match. The deliberately-thunked continuation
-    `next` (:2438) is preserved exactly — it must not run once a pair is accepted. -/
+/-- Indexed left-to-right scan for the first droppable pair on `busId`, from position `i`: at each
+    live send `S`, find its first matching *live* receive through the hash index and run the region
+    tests over the *live* before/between regions; the byte justification runs only for candidates
+    that already match. The continuation `next` is deliberately thunked — it must not run once a
+    pair is accepted. -/
 def denseFindCancelGoIdx (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (aggressive : Bool)
@@ -293,8 +293,8 @@ def denseFindCancelGoIdx (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) (
   else none
   termination_by arr.size - i
 
-/-- Search declared buses from list index `curIdx` for a droppable pair, honouring the resume hint.
-    Native mirror of `findCancel` (:2514). -/
+/-- Search declared buses from list index `curIdx` for a droppable pair, honouring the resume
+    hint. -/
 def denseFindCancel (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (aggressive : Bool)
@@ -333,20 +333,20 @@ def denseFindCancel (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) (facts
 
 /-! ### The cancellation-loop result bundle
 
-`denseCancelLoop` returns the materialized final system together with (erased) native correctness and
-coverage, each quantified over `isInput`/`reg` with `cs0` coverage as the only hypothesis. -/
+`denseCancelLoop` returns the materialized final system together with (erased) correctness and
+coverage proofs, each quantified over `isInput`/`reg` with `cs0` coverage as the only hypothesis. -/
 structure DenseCancelBundle (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) where
   out : DenseConstraintSystem p
   covered : ∀ (reg : VarRegistry), cs0.CoveredBy reg → out.CoveredBy reg
   correct : ∀ (isInput : VarId → Bool) (reg : VarRegistry), cs0.CoveredBy reg →
     DensePassCorrect isInput cs0 out [] bs
 
-/-- Cancel every droppable pair in one pass invocation, iterating over a *stable* tombstoned array and
-    receive index. Native mirror of `cancelLoop` (:2553): each accepted drop is certified by
-    `denseCheckCancel_sound` (inside its `DenseDropResult.step`) and the composite is
-    `DensePassCorrect.andThen`; the coverage invariant is threaded via `DenseDropResult.covNew`. Total,
-    recursing on the strictly-decreasing live-interaction count; the final compact interaction list is
-    materialized once, here, when the search reports no further pair. -/
+/-- Cancel every droppable pair in one pass invocation, iterating over a *stable* tombstoned array
+    and receive index. Each accepted drop is certified by `denseCheckCancel_sound` (inside its
+    `DenseDropResult.step`) and the composite is `DensePassCorrect.andThen`; the coverage invariant
+    is threaded via `DenseDropResult.covNew`. Total, recursing on the strictly-decreasing
+    live-interaction count; the final compact interaction list is materialized once, here, when the
+    search reports no further pair. -/
 def denseCancelLoop (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (hp1 : (1 : ZMod p) ≠ 0) (deep : Bool) (hdeep : deep = true → p.Prime)
     (aggressive : Bool)
@@ -393,11 +393,10 @@ def denseCancelLoop (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) (facts
   termination_by denseLiveCount arr alive
   decreasing_by exact dr.decreases
 
-/-- The native value-only dense bus-pair-cancellation pass. Native mirror of `busPairCancelPass`
-    (:2590): builds the per-invocation certs/indices once, runs `denseCancelLoop` to its fixpoint, and
-    connects to the audited `Variable` spec via `DensePassCorrect.lift` on the native
-    `DensePassCorrect` proof (no commutation with the reference pass). Registry unchanged (no fresh
-    vars; emitted checks' vars ⊆ `R`'s payload vars ⊆ `cs`'s). -/
+/-- The value-only dense bus-pair-cancellation pass: builds the per-invocation certs/indices once,
+    runs `denseCancelLoop` to its fixpoint, and connects to the audited `Variable` spec via
+    `DensePassCorrect.lift`. Registry unchanged (no fresh vars; emitted checks' vars ⊆ `R`'s payload
+    vars ⊆ `cs`'s). -/
 def denseBusPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : DenseVerifiedPassW p :=
   fun reg d hcov bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then

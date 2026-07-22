@@ -3,12 +3,11 @@ import ApcOptimizer.Implementation.OptimizerPasses.RangeBoolProof
 
 set_option autoImplicit false
 
-/-! # Dense width-0 / width-1 range-check conversion: native proof and wiring (Task 3)
+/-! # Dense width-0 / width-1 range-check conversion: correctness proof and wiring
 
-Native `DensePassCorrect` proof for the dense `zeroWidthRange` transform (`ZeroWidthRange.lean`),
-lifted to the audited spec via `DenseVerifiedPassW.of`. No dependency on the reference
-`ZeroWidthRange.zeroWidthRangePass` — the transform is exactly the two native steps the spec
-composes with `PassCorrect.andThen`, gated on `(1 : ZMod p) ≠ 0`:
+`DensePassCorrect` proof for the dense `zeroWidthRange` transform (`ZeroWidthRange.lean`), lifted
+to the audited spec via `DenseVerifiedPassW.of`. The transform is exactly two steps composed by
+`DensePassCorrect.trans`, gated on `(1 : ZMod p) ≠ 0`:
 
 1. **add** the equivalent algebraic constraint of every recognised degenerate range check
    (the value itself for a width-0 `zeroRangeEq` check; its booleanity `v·(v−1)` for a width-1
@@ -31,8 +30,7 @@ variable {p : ℕ}
 
 /-! ## The recogniser: structure, statelessness, acceptance ⟺ constraint, variables -/
 
-/-- Structure of a recognised degenerate range check (native mirror of
-    `ZeroWidthRange.rangeEq?_spec`). -/
+/-- Structure of a recognised degenerate range check. -/
 theorem denseRangeEq?_spec (one : Bool) (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (h : denseRangeEq? one bs facts bi = some e) :
@@ -52,8 +50,7 @@ theorem denseRangeEq?_spec (one : Bool) (bs : BusSemantics p) (facts : BusFacts 
       exact ⟨hm, v', Or.inr ⟨hone, hv, by rw [hpay, hc], h.symm⟩⟩
   · exact absurd h (by simp)
 
-/-- A recognised degenerate range check lives on a stateless bus (native mirror of
-    `ZeroWidthRange.rangeEq?_stateless`). -/
+/-- A recognised degenerate range check lives on a stateless bus. -/
 theorem denseRangeEq?_stateless (one : Bool) (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (h : denseRangeEq? one bs facts bi = some e) : bs.isStateful bi.busId = false := by
@@ -62,8 +59,7 @@ theorem denseRangeEq?_stateless (one : Bool) (bs : BusSemantics p) (facts : BusF
   · exact (facts.zeroRangeEq_sound bi.busId hz).1
   · exact (facts.varRangeBus_sound bi.busId hv).1
 
-/-- For a recognised check, acceptance is exactly the vanishing of its returned constraint (native
-    mirror of `ZeroWidthRange.rangeEq?_violates_iff`). -/
+/-- For a recognised check, acceptance is exactly the vanishing of its returned constraint. -/
 theorem denseRangeEq?_violates_iff (one : Bool) (hone : one = true → Nat.Prime p)
     (bs : BusSemantics p) (facts : BusFacts p bs) (bi : BusInteraction (DenseExpr p))
     (e : DenseExpr p) (denv : VarId → ZMod p) (h : denseRangeEq? one bs facts bi = some e) :
@@ -87,8 +83,7 @@ theorem denseRangeEq?_violates_iff (one : Bool) (hone : one = true → Nat.Prime
     · exact fun ⟨_, hlt⟩ => by rwa [pow_one] at hlt
     · exact fun hlt => ⟨by omega, by rwa [pow_one]⟩
 
-/-- The variables of a recognised check's constraint occur in `d` (native mirror of the variable
-    clause of the spec's step-1 `ofEnvEq`). -/
+/-- The variables of a recognised check's constraint occur in `d`. -/
 theorem denseRangeEq?_vars (one : Bool) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (h : denseRangeEq? one bs facts bi = some e) (hbi : bi ∈ d.busInteractions) :
@@ -142,9 +137,9 @@ theorem denseZeroWidthRangeF_covered (pw : PrimeWitness p) (reg : VarRegistry) (
         (denseRangeEqNew_vars pw.isPrime bs facts d e h1 i hi)
   · rw [if_neg h]; exact hcov
 
-/-- **The two-step native correctness.** Adding the entailed constraints (`denseAddConstraints`)
-    then dropping the now-entailed checks (`denseFilterBusEntailed`), composed by
-    `DensePassCorrect.trans`, mirroring the spec's `PassCorrect.andThen`. -/
+/-- **The two-step correctness.** Adding the entailed constraints (`denseAddConstraints`) then
+    dropping the now-entailed checks (`denseFilterBusEntailed`), composed by
+    `DensePassCorrect.trans`. -/
 theorem denseZeroWidthRangeF_correct (pw : PrimeWitness p) (reg : VarRegistry) {bs : BusSemantics p}
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     DensePassCorrect reg.isInput d (denseZeroWidthRangeF pw bs facts d) [] bs := by
@@ -186,9 +181,8 @@ theorem denseZeroWidthRangeF_correct (pw : PrimeWitness p) (reg : VarRegistry) {
       exact hsatf.1 e hemem
   · rw [if_neg h1]; exact DensePassCorrect.refl reg.isInput d bs
 
-/-- **The native dense `zeroWidthRange` pass.** Threads the original `facts` unchanged, connected to
-    the audited spec via `DensePassCorrect.lift` (through `of`) — no reference-pass
-    dependency. -/
+/-- **The dense `zeroWidthRange` pass.** Threads the original `facts` unchanged, connected to
+    the audited spec via `DensePassCorrect.lift` (through `of`). -/
 def denseZeroWidthRangePass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (denseZeroWidthRangeF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseZeroWidthRangeF_covered pw reg bs facts d hcov)

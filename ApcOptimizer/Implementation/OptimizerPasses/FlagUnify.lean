@@ -2,64 +2,48 @@ import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
 
 set_option autoImplicit false
 
-/-! # Dense flag unification across duplicate scaled range checks (Task 3, busUnify cluster,
-chunk S2 — impl)
+/-! # Dense flag unification across duplicate scaled range checks
 
-Dense, `VarId`-native transliteration of `OptimizerPasses/FlagUnify.lean`'s **runtime**
-definitions (`FuData`, `fuPairData?`, `fuCheckWith`, `fuCheck`, `FUSeen`, `fuKeyHash`,
-`fuInsertAll`, `fuCandidates`, `fuTargets`, `fuLoop`, `flagUnifyPass`). This file is **impl-only**:
-no theorem/lemma from the spec file is ported, and no `DenseVerifiedPassW`/`DensePassCorrect`
-wrapper is built here — the top-level transform `denseFlagUnifyF` is shaped exactly like
-`denseRootPairUnifyF` (`Dense/RootPairUnifyNative.lean`), so the prover wraps it directly with
-`DenseVerifiedPassW.of`.
+Data and runtime definitions for flag unification: `DenseFuData`, `denseFuPairData?`,
+`denseFuCheckWith`, `denseFuCheck`, `DenseFUSeen`, `denseFuKeyHash`, `denseFuInsertAll`,
+`denseFuCandidates`, `denseFuTargets`, `denseFuLoop`, `denseFlagUnifyF`. No
+`DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the top-level transform
+`denseFlagUnifyF` is shaped exactly like `denseRootPairUnifyF` (`Dense/RootPairUnifyNative.lean`),
+so it is wrapped directly with `DenseVerifiedPassW.of`.
 
-Notes on how spec pieces map here (mirroring the `RootPairUnifyNative` chunk S1 precedent):
+Notes on the runtime shape:
 
-* **`Expression.splitAt` reuse.** Already ported as `DenseExpr.splitAt` in
-  `Dense/RootPairUnifyNative.lean` (chunk S1) — reused unchanged here, not re-derived, per that
-  file's own header instruction.
-* **`findDomainAlg`/`assignments`/`envOf` reuse.** These are owned by `OptimizerPasses/DomainProp.lean`,
-  not `FlagUnify.lean`. Already ported: `denseFindDomainAlg` (`Dense/DomainFold.lean`) and
-  `denseAssignments` (`Dense/DomainFold.lean`) / `denseEnvOfFast` (`Dense/DomainBatch.lean` —
-  structurally identical recursions to `assignments`/`envOf` once there is no name/`powdrId?` split
-  to fast-path around, reused as-is). `facts.slotBound` is read directly at runtime (unchanged
-  `BusFacts`, values-only signature — no `Expression`/`DenseExpr` type parameter to port).
-* **`FuData`'s fields are data-only** (`List Variable`/`List (Variable × ZMod p) × Bool` become
-  `List VarId`/`List (VarId × ZMod p) × Bool`) — a plain 4-field struct, no proof, direct port.
-* **`FUSeen`'s `cs`-scoping is dropped, not just its `mem` proof.** The spec struct is parametrized
-  by `cs : ConstraintSystem p` solely so `mem : bi ∈ cs.busInteractions` typechecks; with `mem`
-  dropped there is nothing left needing `cs` (the `RootPairUnify`/`DenseRPSeen` precedent). `bi`
-  itself is genuinely read (`fuLoop` calls `fuPairData? … ex.1.bi c ex.2` on the matched seen-entry's
-  interaction), so it stays a plain field, unlike `mem`.
-* **`fuLoop`'s `cs`-threading.** The spec `fuLoop` threads `cs`/a membership proof solely so
-  `fuPairData?` can be handed `cs.algebraicConstraints` as `domCs`; with the proof gone, the only
-  genuinely-read piece is `cs.algebraicConstraints` itself, so `denseFuLoop` threads it explicitly as
-  a plain `domCs` parameter (the `denseRpLoop`-threads-`bis`/`domCs` precedent). Unlike
-  `rpCheckPair`/`denseRpCheckPair`, `fuPairData?`/`denseFuPairData?` never consult the interaction
-  list itself (`biX`/`biY` are handed in directly, not looked up), so no `bis` parameter is needed
-  here.
-* **`fuCheck` is proof-side-only in the reference runtime path** (only `fuCheck_vars`/`fuCheck_sound`
-  call it; `fuLoop`/`flagUnifyPass` never do — the loop calls `fuCheckWith` directly on the once-built
-  `FuData`). It is transliterated anyway (`denseFuCheck`) per the assigned scope, purely so the
-  prover has a ready-made dense mirror to restate its own certificate-extraction/soundness lemmas
-  against, mirroring `fuCheck`'s exact shape and check order.
-* **Proof-witness drops.** Every spec `dif`/named `match hdata : …` that exists only to bind a
-  certificate for a later proof term (`fuLoop`'s named `hdata` match, `flagUnifyPass`'s
-  `haveI : Fact p.Prime := ⟨pw.correct hpB⟩`, its `PassCorrect` terms, `fuLoop`'s `hpairs`/`hpairsV`
-  arguments to `Solved.insertAll`) is dropped; every decidable condition that gates *behavior* (the
-  `pw.isPrime = true` primality gate, the `mx = 0`/`my = 0` degenerate-multiplicity checks,
-  `fuPairData?`'s whole certificate, `fuCheckWith`'s per-target checks) is kept as a plain `if`/`Bool`
-  computation with identical control flow — the M1/S1 precedent. Neither `fuPairData?` nor
-  `fuCheckWith`/`fuCheck` needs `[Fact p.Prime]` to *compute* (only the soundness theorem
-  `fuCheck_sound` does — `ZMod p`'s `Inv` is total for every `p`), so the dense mirrors drop the
-  instance argument entirely, not just its construction. `Solved.insertAll` in `denseFuLoop` becomes
-  `DenseSolved.insertAll`, which takes the pair list directly with no soundness/vars proof arguments
-  (`Dense/Gauss.lean`). -/
+* **`Expression.splitAt` reuse.** `DenseExpr.splitAt` (`Dense/RootPairUnifyNative.lean`) is reused
+  unchanged here, not re-derived.
+* **`findDomainAlg`/`assignments`/`envOf` reuse.** `denseFindDomainAlg` (`Dense/DomainFold.lean`),
+  `denseAssignments` (`Dense/DomainFold.lean`), and `denseEnvOfFast` (`Dense/DomainBatch.lean`) are
+  reused as-is. `facts.slotBound` is read directly at runtime (values-only signature — no
+  `DenseExpr` type parameter to thread).
+* **`DenseFuData`'s fields are data-only**: `List VarId`/`List (VarId × ZMod p) × Bool`, a plain
+  4-field struct with no proof content.
+* **`DenseFUSeen` drops the `mem : bi ∈ cs.busInteractions` proof field**, and with it the need to
+  parametrize the struct by `cs`. `bi` itself is genuinely read (`denseFuLoop` calls
+  `denseFuPairData? … ex.1.bi c ex.2` on the matched seen-entry's interaction), so it stays a plain
+  field.
+* **`denseFuLoop`'s `domCs` threading.** `denseFuPairData?` needs the algebraic constraints as
+  `domCs`; `denseFuLoop` threads this explicitly as a plain parameter. `denseFuPairData?` never
+  consults the interaction list itself (`biX`/`biY` are handed in directly, not looked up), so no
+  `bis` parameter is needed.
+* **`denseFuCheck`** is not called by `denseFuLoop` (which calls `denseFuCheckWith` directly on the
+  once-built `FuData`); it exists so the prover has a ready-made certificate to restate
+  extraction/soundness lemmas against, matching `denseFuCheckWith`'s exact check order.
+* **Control flow.** Every decidable condition that gates *behavior* (the `pw.isPrime = true`
+  primality gate, the `mx = 0`/`my = 0` degenerate-multiplicity checks, `denseFuPairData?`'s whole
+  certificate, `denseFuCheckWith`'s per-target checks) is a plain `if`/`Bool` computation. Neither
+  `denseFuPairData?` nor `denseFuCheckWith`/`denseFuCheck` needs `[Fact p.Prime]` to *compute*
+  (`ZMod p`'s `Inv` is total for every `p`), so none of them take that instance argument.
+  `DenseSolved.insertAll` (`Dense/Gauss.lean`) takes the pair list directly with no soundness/vars
+  proof arguments. -/
 
 /-- Two summands below `M` that complete the same integer against multiples of `M` are equal.
 
-    Representation-independent (`Nat`-only) arithmetic lemma, re-homed here from the reference
-    `FlagUnify` pass so the dense proof tree (`FlagUnifyProof.lean`) can consume it. -/
+    Representation-independent (`Nat`-only) arithmetic lemma, kept here so the dense proof tree
+    (`FlagUnifyProof.lean`) can consume it. -/
 theorem residue_uniq (M A B w1 w2 : Nat) (h : M * A + w1 = M * B + w2)
     (h1 : w1 < M) (h2 : w2 < M) : w1 = w2 := by
   have e1 : (M * A + w1) % M = w1 := by rw [Nat.mul_add_mod]; exact Nat.mod_eq_of_lt h1
@@ -73,8 +57,7 @@ variable {p : ℕ}
 /-! ## The pair certificate (dense) -/
 
 /-- Pair-level certificate data: everything independent of the target flag pair. `pts` pairs each
-    enumerated joint flag point with whether the two offset values coincide there. Data-only mirror
-    of `FuData`. -/
+    enumerated joint flag point with whether the two offset values coincide there. -/
 structure DenseFuData (p : ℕ) where
   rxVars : List VarId
   ryVars : List VarId
@@ -82,10 +65,10 @@ structure DenseFuData (p : ℕ) where
   pts : List (List (VarId × ZMod p) × Bool)
 
 /-- The pair-level half of the certificate: slot decompositions, fact bounds, no-wrap checks,
-    domain cover, and the per-point offset bounds — computed **once per matched pair**. Mirrors
-    `fuPairData?`, reusing `DenseExpr.splitAt` (`Dense/RootPairUnifyNative.lean`),
-    `denseFindDomainAlg`/`denseAssignments` (`Dense/DomainFold.lean`) and `denseEnvOfFast`
-    (`Dense/DomainBatch.lean`) unchanged. Consumes `facts.slotBound` at RUNTIME, same as the spec. -/
+    domain cover, and the per-point offset bounds — computed **once per matched pair**, reusing
+    `DenseExpr.splitAt` (`Dense/RootPairUnifyNative.lean`), `denseFindDomainAlg`/`denseAssignments`
+    (`Dense/DomainFold.lean`) and `denseEnvOfFast` (`Dense/DomainBatch.lean`) unchanged. Consumes
+    `facts.slotBound` at runtime. -/
 def denseFuPairData? (bs : BusSemantics p) (facts : BusFacts p bs) (domCs : List (DenseExpr p))
     (biX biY : BusInteraction (DenseExpr p)) (x : VarId) : Option (DenseFuData p) :=
   match biX.multiplicity.constValue?, biY.multiplicity.constValue? with
@@ -125,16 +108,15 @@ def denseFuPairData? (bs : BusSemantics p) (facts : BusFacts p bs) (domCs : List
   | _, _ => none
 
 /-- The per-target half: memberships, disequality, and pointwise flag agreement wherever the
-    offsets coincide. Mirrors `fuCheckWith`. -/
+    offsets coincide. -/
 def denseFuCheckWith (d : DenseFuData p) (vx vy : VarId) : Bool :=
   decide (vx ∈ d.rxVars) && decide (vy ∈ d.ryVars) && !(decide (vy = vx)) &&
   decide (vx ∈ d.payXVars) &&
   d.pts.all (fun ptb => !ptb.2 || decide (denseEnvOfFast ptb.1 vy = denseEnvOfFast ptb.1 vx))
 
 /-- Decidable certificate that interactions `biX`, `biY` are scaled range checks of the same carrier
-    `x` whose offset parts pin `vy` (in `biY`'s flags) to `vx` (in `biX`'s flags). Mirrors `fuCheck`
-    — proof-side-only in the reference runtime path (see the module header), transliterated for the
-    prover's own certificate-extraction/soundness lemmas. -/
+    `x` whose offset parts pin `vy` (in `biY`'s flags) to `vx` (in `biX`'s flags). Not called by
+    `denseFuLoop`; provided for the prover's own certificate-extraction/soundness lemmas. -/
 def denseFuCheck (bs : BusSemantics p) (facts : BusFacts p bs) (domCs : List (DenseExpr p))
     (biX biY : BusInteraction (DenseExpr p)) (x vx vy : VarId) : Bool :=
   match denseFuPairData? bs facts domCs biX biY x with
@@ -144,11 +126,8 @@ def denseFuCheck (bs : BusSemantics p) (facts : BusFacts p bs) (domCs : List (De
 /-! ## The scan loop and the pass (dense) -/
 
 /-- A previously seen scaled-check candidate: the interaction, its carrier variable, and the
-    matching key `(busId, second-slot constant, k, carrier)`. Data-only mirror of `FUSeen`, dropping
-    the `mem : bi ∈ cs.busInteractions` proof field — with it gone there is no remaining reason to
-    parametrize the struct by `cs` either (see the module header). `bi` itself is genuinely read (by
-    `denseFuLoop`'s matched-entry lookup into `denseFuPairData?`), unlike `mem`, so it stays a plain
-    field. -/
+    matching key `(busId, second-slot constant, k, carrier)`. `bi` is genuinely read (by
+    `denseFuLoop`'s matched-entry lookup into `denseFuPairData?`), so it stays a plain field. -/
 structure DenseFUSeen (p : ℕ) where
   bi : BusInteraction (DenseExpr p)
   x : VarId
@@ -157,15 +136,14 @@ structure DenseFUSeen (p : ℕ) where
 /-- Hash of a `DenseFUSeen` match key, used to bucket the `seen` accumulator of `denseFuLoop`. It
     reads only fields the `key == key'` test compares, so equal keys share a bucket (a match is never
     hidden); unequal keys that collide are separated by the retained exact `e.key == xk.2` check
-    inside the scan. Mirrors `fuKeyHash`. -/
+    inside the scan. -/
 def denseFuKeyHash (key : Nat × Option (ZMod p) × ZMod p × VarId) : UInt64 :=
   mixHash (hash key.1) (mixHash (hash (key.2.1.map ZMod.val))
     (mixHash (hash key.2.2.1.val) (hash key.2.2.2)))
 
 /-- Prepend seen-entries into their key-hash buckets. `foldr` keeps each bucket in the same order as
-    the old flat `es ++ seen` list, so the bucketed scan returns the identical earliest twin — output
-    unchanged, per-candidate scan now over one bucket instead of the whole history. Mirrors
-    `fuInsertAll`. -/
+    the flat `es ++ seen` list would, so the bucketed scan returns the identical earliest twin —
+    per-candidate scan is over one bucket instead of the whole history. -/
 def denseFuInsertAll (m : Std.HashMap UInt64 (List (DenseFUSeen p)))
     (es : List (DenseFUSeen p)) : Std.HashMap UInt64 (List (DenseFUSeen p)) :=
   es.foldr (fun e acc => acc.insert (denseFuKeyHash e.key) (e :: acc.getD (denseFuKeyHash e.key) []))
@@ -173,7 +151,7 @@ def denseFuInsertAll (m : Std.HashMap UInt64 (List (DenseFUSeen p)))
 
 /-- Scaled-check candidates of one interaction: carrier variables of the first payload slot with a
     constant-coefficient decomposition and a *nonempty* offset part (raw checks have nothing to
-    unify). Mirrors `fuCandidates`. -/
+    unify). -/
 def denseFuCandidates (bi : BusInteraction (DenseExpr p)) :
     List (VarId × (Nat × Option (ZMod p) × ZMod p × VarId)) :=
   match bi.payload[0]? with
@@ -186,8 +164,7 @@ def denseFuCandidates (bi : BusInteraction (DenseExpr p)) :
         else some (x, (bi.busId, (bi.payload[1]?).bind DenseExpr.constValue?, k, x))
       | none => none)
 
-/-- Flag-target combinations for a matched pair: variables of the two offset parts. Mirrors
-    `fuTargets`. -/
+/-- Flag-target combinations for a matched pair: variables of the two offset parts. -/
 def denseFuTargets (biX biY : BusInteraction (DenseExpr p)) (x : VarId) :
     List (VarId × VarId) :=
   match biX.payload[0]?, biY.payload[0]? with
@@ -199,9 +176,8 @@ def denseFuTargets (biX biY : BusInteraction (DenseExpr p)) (x : VarId) :
   | _, _ => []
 
 /-- Scan the interactions: for each scaled-check candidate, look for an earlier twin with the same
-    key and adopt every flag pair the certificate confirms. Mirrors `fuLoop`, threading `domCs`
-    explicitly in place of the spec's `cs`-scoped field access (see the module header) and
-    `DenseSolved` in place of the proof-carrying `Solved`. -/
+    key and adopt every flag pair the certificate confirms, threading `domCs` explicitly and
+    `DenseSolved` to accumulate the solution. -/
 def denseFuLoop (bs : BusSemantics p) (facts : BusFacts p bs) (domCs : List (DenseExpr p)) :
     List (BusInteraction (DenseExpr p)) → Std.HashMap UInt64 (List (DenseFUSeen p)) →
       DenseSolved p → DenseSolved p
@@ -232,9 +208,9 @@ def denseFuLoop (bs : BusSemantics p) (facts : BusFacts p bs) (domCs : List (Den
 /-- Flag unification across duplicate scaled range checks' runtime transform. Prime `p` only
     (re-checked at runtime); identity otherwise. One sweep; the cleanup fixpoint iterates the pass.
     Runs after `denseRootPairUnifyF` — the carrier limbs must already be shared — and before dedup,
-    which collects the checks this pass makes syntactically identical. Mirrors `flagUnifyPass`'s
-    computed output (dropping its `PassCorrect` term); shaped as `(pw) → (bs) → (facts) → (d) → out`,
-    matching `denseRootPairUnifyF`'s shape exactly for `DenseVerifiedPassW.of`. -/
+    which collects the checks this pass makes syntactically identical. Shaped as
+    `(pw) → (bs) → (facts) → (d) → out`, matching `denseRootPairUnifyF`'s shape exactly for
+    `DenseVerifiedPassW.of`. -/
 def denseFlagUnifyF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then

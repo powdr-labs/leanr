@@ -3,26 +3,25 @@ import ApcOptimizer.Implementation.OptimizerPasses.DigitFoldProof
 
 set_option autoImplicit false
 
-/-! # Native correctness for the dense carry-branch resolution (Task 3)
+/-! # Correctness for the dense carry-branch resolution
 
-Native `VarId`-level correctness for `denseCarryBranchPass` (`CarryBranch.lean`), proved over dense
-environments `VarId → ZMod p` with no decode and no dependency on the reference `Variable` pass. The
-spec pass `CarryBranch` is the roadmap only: its two-sided interval certificate
-(`splitSum_val` / `linNeverZeroSplit` / `intervalCert_sound` / `neverZeroB_sound`) and its resolution
-equivalence (`resolveExpr_eval_iff`) are transliterated here over the dense defs — the `ZMod`
+`VarId`-level correctness for `denseCarryBranchPass` (`CarryBranch.lean`), proved over dense
+environments `VarId → ZMod p`. The two-sided interval certificate (`denseSplitSum_val` /
+`denseLinNeverZeroSplit` / `denseIntervalCert_sound` / `denseNeverZeroB_sound`) and the resolution
+equivalence (`denseResolveExpr_eval_iff`) are proved directly over the dense defs — the `ZMod`
 arithmetic is representation-independent — and the pass correctness is `DensePassCorrect.ofEnvEq`
 (the rewrite preserves the satisfying set exactly; bus interactions, side effects and admissibility
-are untouched). The fact-derived value bounds are consumed through the native `denseBuild_sound`
+are untouched). The fact-derived value bounds are consumed through `denseBuild_sound`
 (`DigitFoldProof.lean`). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Native two-sided interval certificate -/
+/-! ## Two-sided interval certificate -/
 
 /-- The bounded value interval of a term list: `some (maxPos, maxNeg)` with the sum provably
-    `P − N`, `P.val ≤ maxPos`, `N.val ≤ maxNeg`. Dense twin of `splitSum_val`. -/
+    `P − N`, `P.val ≤ maxPos`, `N.val ≤ maxNeg`. -/
 theorem denseSplitSum_val (B : Std.HashMap VarId Nat)
     (terms : List (VarId × ZMod p)) (mp mn : Nat)
     (h : denseSplitSumMax B terms = some (mp, mn)) (hmp : mp < p) (hmn : mn < p)
@@ -66,8 +65,7 @@ theorem denseSplitSum_val (B : Std.HashMap VarId Nat)
           · rw [ZMod.val_add_of_lt haddlt, hheadval]; omega
       case _ => exact absurd h (by simp)
 
-/-- An affine form whose bounded value interval stays strictly inside `(0, p)` never vanishes. Dense
-    twin of `linNeverZeroSplit`. -/
+/-- An affine form whose bounded value interval stays strictly inside `(0, p)` never vanishes. -/
 theorem denseLinNeverZeroSplit (B : Std.HashMap VarId Nat) (l : DenseLinExpr p) (mp mn : Nat)
     (hp : 0 < p) (h : denseSplitSumMax B l.terms = some (mp, mn))
     (hlo : mn < l.const.val) (hhi : l.const.val + mp < p)
@@ -87,8 +85,7 @@ theorem denseLinNeverZeroSplit (B : Std.HashMap VarId Nat) (l : DenseLinExpr p) 
   rw [hPN, hval] at hNle
   omega
 
-/-- The interval condition on one concrete normalized form is a sound never-zero certificate. Dense
-    twin of `intervalCert_sound`. -/
+/-- The interval condition on one concrete normalized form is a sound never-zero certificate. -/
 theorem denseIntervalCert_sound (hp : 0 < p) (B : Std.HashMap VarId Nat) (l : DenseLinExpr p)
     (h : denseIntervalCert B l = true) (denv : VarId → ZMod p)
     (hB : ∀ v bound, B[v]? = some bound → (denv v).val < bound) :
@@ -101,8 +98,7 @@ theorem denseIntervalCert_sound (hp : 0 < p) (B : Std.HashMap VarId Nat) (l : De
     rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at h
     exact denseLinNeverZeroSplit B l mp mn hp hacc h.1 h.2 denv hB
 
-/-- Checked never-zero certificate for an expression (over the candidate rescalings). Dense twin of
-    `neverZeroB_sound`. -/
+/-- Checked never-zero certificate for an expression (over the candidate rescalings). -/
 theorem denseNeverZeroB_sound (hp : 0 < p) (B : Std.HashMap VarId Nat) (e : DenseExpr p)
     (h : denseNeverZeroB B e = true) (denv : VarId → ZMod p)
     (hB : ∀ v bound, B[v]? = some bound → (denv v).val < bound) :
@@ -120,8 +116,7 @@ theorem denseNeverZeroB_sound (hp : 0 < p) (B : Std.HashMap VarId Nat) (e : Dens
     exact denseIntervalCert_sound hp B _ hcert denv hB hs
 
 /-- The resolution is an *equivalence* on satisfying assignments: with the bounds valid and `p`
-    prime, `f·g = 0 ↔ f = 0` whenever `g` is certified never-zero. Dense twin of
-    `resolveExpr_eval_iff`. -/
+    prime, `f·g = 0 ↔ f = 0` whenever `g` is certified never-zero. -/
 theorem denseResolveExpr_eval_iff [Fact p.Prime] (B : Std.HashMap VarId Nat) (e : DenseExpr p)
     (denv : VarId → ZMod p)
     (hB : ∀ v bound, B[v]? = some bound → (denv v).val < bound) :
@@ -144,9 +139,9 @@ theorem denseResolveExpr_eval_iff [Fact p.Prime] (B : Std.HashMap VarId Nat) (e 
   | var x => exact Iff.rfl
   | add a b iha ihb => exact Iff.rfl
 
-/-! ## The native pass correctness -/
+/-! ## The pass correctness -/
 
-/-- **Native carry-branch correctness.** The rewrite through `denseResolveExpr` preserves the
+/-- **Carry-branch correctness.** The rewrite through `denseResolveExpr` preserves the
     satisfying set exactly (both directions use the input assignment); bus interactions, side
     effects and admissibility are untouched, and no variable is introduced. The value bounds needed
     by `denseResolveExpr_eval_iff` hold for every satisfying assignment via `denseBuild_sound`. -/
@@ -215,7 +210,7 @@ theorem denseCarryBranchF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs 
     exact DensePassCorrect.refl reg.isInput d bs
 
 /-- The dense carry-branch-resolution pass: collapse every product constraint with a certified
-    never-vanishing factor to its other factor. Fact-consuming; proved natively over `VarId` via
+    never-vanishing factor to its other factor. Fact-consuming; proved over `VarId` via
     `denseCarryBranchF_correct`. Identity for composite `p`. -/
 def denseCarryBranchPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of

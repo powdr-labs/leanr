@@ -4,39 +4,41 @@ import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnifyProof
 
 set_option autoImplicit false
 
-/-! # Witness re-encoding — dense structure lemmas (Task 3, reencode native port, chunk P1)
+/-! # Witness re-encoding — correctness
 
-Native, `VarId`-side transliterations of the *structure lemmas below the transport core* of
-the reference `Reencode` pass — every proof-side fact the reencode transport core
-(`reencode_correct`/`_D`, chunk P2) and the capstone certificate soundness (`checkReencode_sound_D`,
-chunk P3) consume that is **not** itself the transport core. Each lemma is stated and proved
-**natively** over dense environments `VarId → ZMod p`, decode-free, mirroring the spec proof
-line-by-line over `DenseExpr`/`DenseComputationMethod` and the dense primitives of `Reencode.lean`
-(chunk R1/R2), `DomainBatch.lean`, `DomainFold.lean`, and `Bridge.lean`.
+The full `DensePassCorrect` proof for the `Reencode` pass, over dense environments `VarId → ZMod p`,
+decode-free: the structure lemmas below the transport core, the transport core itself
+(`DenseConstraintSystem.reencode_correct_D`), the capstone certificate soundness
+(`denseCheckReencode_sound`), and the step/loop correctness and pass assembly
+(`denseReencodeStep_correct`/`denseReencodeLoop_correct`/`denseReencodePass`).
 
-Explicitly **out of scope** (P2/P3, not proved here): the transport core `reencCorrect`/
-`reencode_correct`/`reencode_correct_D`, the certificate soundness `checkReencode_sound_D`, and
-anything about `denseReencodeStep`/`denseReencodeLoop`/`denseReencodeF`.
+## Lemma inventory
 
-## Lemma inventory (dense twin ↔ spec original in the reference `Reencode` pass)
-
-* Environment extension (`:40`/`:57`): `denseEnvExt_eq_envOfFast_of_mem`, `denseEnvExt_eq_env_of_notmem`.
-* `mentions`/vars + fast eval (`:69`/`:108`/`:123`): `denseMentions_false_not_mem_vars`,
-  `DenseExpr.evalWith_eq`, `DenseExpr.evalFast_eq`.
-* Booleanity (`:466`/`:471`): `denseBoolConstraint_eval_of_bool`, `dense_bool_of_boolConstraint_eval`.
-* Enumerated assignments (`:387`/`:403`/`:423`): `denseAssignments_keys`,
-  `denseEnvOf_mem_of_assignments`, `denseEnvOf_zipimg`.
-* Substitution-map pointwise facts (`:440`/`:447`): `denseEnvF_eq_varSubst`, `denseSubstF_eval_agree`.
-* Substitution vars + group rewrite (`:1003`/`:629`/`:679`/`:751`/`:1029`/`:1045`):
-  `DenseExpr.substF_varsIn_bits`, `denseGroupRewriteCand_agree`, `denseGroupRewrite_agree`,
-  `denseGroupRewrite_bi_agree`, `denseGroupRewriteCand_vars`, `denseGroupRewrite_vars`.
-* Derived-variable methods (`:891`/`:928`/`:947`/`:971`/`:988`): `DenseComputationMethod.eval_congr`,
-  `denseMatchCM_eval`, `denseMatchCM_vars`, `denseBitCM_eval`, `denseBitCM_vars`.
-* Re-encoded output vars (`:1094`): `denseReencodeOut_vars_subset`.
-* Survivor enumeration (`:550`/`:586`/`:656`/`:794`/`:825`): `denseVarIx_lookup`,
-  `denseCompileE_eval`, `denseCompileEs_all`, `denseGroupSurvivorsE_eq`.
-* Derivation map (`:1137`): `DenseDerivations.methodFor_map` (`methodFor_append` reused from
-  `Bridge.lean`).
+* Environment extension: `denseEnvExt_eq_envOfFast_of_mem`, `denseEnvExt_eq_env_of_notmem`.
+* `mentions`/vars + fast eval: `denseMentions_false_not_mem_vars`, `DenseExpr.evalWith_eq`,
+  `DenseExpr.evalFast_eq`.
+* Booleanity: `denseBoolConstraint_eval_of_bool`, `dense_bool_of_boolConstraint_eval`.
+* Enumerated assignments: `denseAssignments_keys`, `denseEnvOf_mem_of_assignments`,
+  `denseEnvOf_zipimg`.
+* Substitution-map pointwise facts: `denseEnvF_eq_varSubst`, `denseSubstF_eval_agree`.
+* Substitution vars + group rewrite: `DenseExpr.substF_varsIn_bits`, `denseGroupRewriteCand_agree`,
+  `denseGroupRewrite_agree`, `denseGroupRewrite_bi_agree`, `denseGroupRewriteCand_vars`,
+  `denseGroupRewrite_vars`.
+* Derived-variable methods: `DenseComputationMethod.eval_congr`, `denseMatchCM_eval`,
+  `denseMatchCM_vars`, `denseBitCM_eval`, `denseBitCM_vars`.
+* Re-encoded output vars: `denseReencodeOut_vars_subset`.
+* Survivor enumeration: `denseVarIx_lookup`, `denseCompileE_eval`, `denseCompileEs_all`,
+  `denseGroupSurvivorsE_eq`.
+* Derivation map: `DenseDerivations.methodFor_map` (`methodFor_append` reused from `Bridge.lean`).
+* Transport core: `DenseConstraintSystem.reencode_correct_D` — a witness transport principle
+  producing `DensePassCorrect` directly from forward/backward transport hypotheses, decode-free and
+  independent of bits/groups.
+* Capstone: `denseCheckReencode_sound` — supplies the forward transport (with the input-column
+  frame and the `DenseOutReconstructs` obligation for the minted bits) and the backward transport to
+  the transport core, producing `DensePassCorrect` for the re-encoded output and the fresh bits'
+  derivations, over the **extended** registry's `isInput`.
+* Step / loop / pass assembly: `denseReencodeStep_correct`, `denseReencodeLoop_correct`,
+  `denseReencodePass`.
 
 Reused unchanged from existing dense proof modules (not re-proved here): `DenseExpr.eval_congr`,
 `denseVarsInF_sound`, `denseContainsFast_sound` (`DomainFold`/`DomainBatch`), `denseGroupDoms_fst`
@@ -45,18 +47,17 @@ Reused unchanged from existing dense proof modules (not re-proved here): `DenseE
 `ListSplit`).
 
 The interpolation building blocks (`denseIndicatorExpr`/`denseInterpOfV`/`denseCandSelect`/
-`denseInterpPoly`) have **no standalone eval lemma in the spec**: their acceptance/agreement content
-is proved *inside* `groupRewriteCand_agree`/`groupRewriteCand_vars` (the `candSelect` self-check),
-which the dense `denseGroupRewriteCand_agree`/`denseGroupRewriteCand_vars` port directly — so this
-layer is covered without extra top-level lemmas. -/
+`denseInterpPoly`) have no standalone eval lemma of their own: their acceptance/agreement content is
+proved *inside* `denseGroupRewriteCand_agree`/`denseGroupRewriteCand_vars` (the `candSelect`
+self-check), so this layer is covered without extra top-level lemmas. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Environment extension by an association list (↔ `envExt_eq_envOf_of_mem`/`envExt_eq_env_of_notmem`) -/
+/-! ## Environment extension by an association list -/
 
-/-- On the keys, `denseEnvExt` agrees with `denseEnvOfFast`. Mirrors `envExt_eq_envOf_of_mem`. -/
+/-- On the keys, `denseEnvExt` agrees with `denseEnvOfFast`. -/
 theorem denseEnvExt_eq_envOfFast_of_mem (pairs : List (VarId × ZMod p)) (denv : VarId → ZMod p)
     (y : VarId) (h : y ∈ pairs.map Prod.fst) : denseEnvExt pairs denv y = denseEnvOfFast pairs y := by
   induction pairs with
@@ -73,7 +74,7 @@ theorem denseEnvExt_eq_envOfFast_of_mem (pairs : List (VarId × ZMod p)) (denv :
       · exact absurd h hyx
       · exact h
 
-/-- Off the keys, `denseEnvExt` is `denv`. Mirrors `envExt_eq_env_of_notmem`. -/
+/-- Off the keys, `denseEnvExt` is `denv`. -/
 theorem denseEnvExt_eq_env_of_notmem (pairs : List (VarId × ZMod p)) (denv : VarId → ZMod p)
     (y : VarId) (h : y ∉ pairs.map Prod.fst) : denseEnvExt pairs denv y = denv y := by
   induction pairs with
@@ -84,7 +85,7 @@ theorem denseEnvExt_eq_env_of_notmem (pairs : List (VarId × ZMod p)) (denv : Va
     simp only [denseEnvExt, if_neg h.1]
     exact ih h.2
 
-/-! ## `mentions` and variable membership (↔ `mentions_false_not_mem_vars`) -/
+/-! ## `mentions` and variable membership -/
 
 theorem denseMentions_false_not_mem_vars (i : VarId) (e : DenseExpr p)
     (h : e.mentions i = false) : i ∉ e.vars := by
@@ -109,7 +110,7 @@ theorem denseMentions_false_not_mem_vars (i : VarId) (e : DenseExpr p)
       · exact iha h.1 hx
       · exact ihb h.2 hx
 
-/-! ## Fast evaluation (hoisted ring operations) (↔ `Expression.evalWith_eq`/`evalFast_eq`) -/
+/-! ## Fast evaluation (hoisted ring operations) -/
 
 theorem DenseExpr.evalWith_eq (add mul : ZMod p → ZMod p → ZMod p)
     (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
@@ -124,7 +125,7 @@ theorem DenseExpr.evalFast_eq (e : DenseExpr p) (denv : VarId → ZMod p) :
     e.evalFast denv = e.eval denv :=
   DenseExpr.evalWith_eq _ _ (fun _ _ => rfl) (fun _ _ => rfl) denv e
 
-/-! ## Booleanity constraints for the fresh bits (↔ `boolConstraint_eval_of_bool`/`bool_of_boolConstraint_eval`) -/
+/-! ## Booleanity constraints for the fresh bits -/
 
 theorem denseBoolConstraint_eval_of_bool (b : VarId) (denv : VarId → ZMod p)
     (h : denv b = 0 ∨ denv b = 1) : (denseBoolConstraint b).eval denv = 0 := by
@@ -139,9 +140,9 @@ theorem dense_bool_of_boolConstraint_eval [Fact p.Prime] (b : VarId) (denv : Var
   · right
     linear_combination h1
 
-/-! ## Structure of enumerated assignments (↔ `assignments_keys`/`envOf_mem_of_assignments`/`envOf_zipimg`) -/
+/-! ## Structure of enumerated assignments -/
 
-/-- Every enumerated assignment has the domains' keys, in order. Mirrors `assignments_keys`. -/
+/-- Every enumerated assignment has the domains' keys, in order. -/
 theorem denseAssignments_keys (doms : List (VarId × List (ZMod p)))
     (a : List (VarId × ZMod p)) (h : a ∈ denseAssignments doms) :
     a.map Prod.fst = doms.map Prod.fst := by
@@ -156,8 +157,7 @@ theorem denseAssignments_keys (doms : List (VarId × List (ZMod p)))
     obtain ⟨a', ha', v, hv, rfl⟩ := h
     simp [ih a' ha']
 
-/-- Every enumerated assignment's value at a (distinct-keyed) domain entry lies in that domain.
-    Mirrors `envOf_mem_of_assignments`. -/
+/-- Every enumerated assignment's value at a (distinct-keyed) domain entry lies in that domain. -/
 theorem denseEnvOf_mem_of_assignments (doms : List (VarId × List (ZMod p)))
     (hnd : (doms.map Prod.fst).Nodup) (a : List (VarId × ZMod p))
     (h : a ∈ denseAssignments doms) : ∀ xd ∈ doms, denseEnvOfFast a xd.1 ∈ xd.2 := by
@@ -179,7 +179,7 @@ theorem denseEnvOf_mem_of_assignments (doms : List (VarId × List (ZMod p)))
       rw [denseEnvOfFast, if_neg (by simp [hbf])]
       exact ih hnd.2 a' ha' yd hyd
 
-/-- `denseEnvOfFast` of a zipped image list reads off the image function. Mirrors `envOf_zipimg`. -/
+/-- `denseEnvOfFast` of a zipped image list reads off the image function. -/
 theorem denseEnvOf_zipimg (xs : List VarId) (g : VarId → ZMod p) (y : VarId) (hy : y ∈ xs) :
     denseEnvOfFast (xs.map (fun x => (x, g x))) y = g y := by
   induction xs with
@@ -194,17 +194,16 @@ theorem denseEnvOf_zipimg (xs : List VarId) (g : VarId → ZMod p) (y : VarId) (
         · exact absurd h hyx
         · exact h)
 
-/-! ## Pointwise environment facts for the substitution map (↔ `envF_eq_varSubst`/`substF_eval_agree`) -/
+/-! ## Pointwise environment facts for the substitution map -/
 
-/-- `denseEnvF` at any variable is the evaluation of the substituted variable expression. Mirrors
-    `envF_eq_varSubst`. -/
+/-- `denseEnvF` at any variable is the evaluation of the substituted variable expression. -/
 theorem denseEnvF_eq_varSubst (σ : VarId → Option (DenseExpr p)) (denv : VarId → ZMod p)
     (y : VarId) : denseEnvF σ denv y = ((DenseExpr.var y).substF σ).eval denv := by
   show (match σ y with | some t => t.eval denv | none => denv y)
     = ((match σ y with | some t => t | none => .var y) : DenseExpr p).eval denv
   cases σ y <;> rfl
 
-/-- Expression-level agreement from pointwise environment agreement. Mirrors `substF_eval_agree`. -/
+/-- Expression-level agreement from pointwise environment agreement. -/
 theorem denseSubstF_eval_agree (σ : VarId → Option (DenseExpr p)) (denv₀ denv₁ : VarId → ZMod p)
     (e : DenseExpr p) (h : ∀ y ∈ e.vars, denseEnvF σ denv₀ y = denv₁ y) :
     (e.substF σ).eval denv₀ = e.eval denv₁ := by
@@ -223,10 +222,10 @@ theorem denseContainsFast_of_mem (xs : List VarId) (y : VarId) (h : y ∈ xs) :
     · exact Or.inl (by simp)
     · exact Or.inr (ih h)
 
-/-! ## Degree-aware group rewriting (↔ `substF_varsIn_bits`/`groupRewriteCand_agree`/`groupRewrite_agree`/`groupRewrite_bi_agree`) -/
+/-! ## Degree-aware group rewriting -/
 
 /-- Substituting a wholly-in-group expression (whose group variables `σfn` maps into the bits)
-    yields an expression over the bits only. Mirrors `Expression.substF_varsIn_bits`. -/
+    yields an expression over the bits only. -/
 theorem DenseExpr.substF_varsIn_bits (xs bits : List VarId)
     (σfn : VarId → Option (DenseExpr p))
     (hσ : ∀ y ∈ xs, ∀ v ∈ ((DenseExpr.var y).substF σfn).vars, v ∈ bits)
@@ -253,8 +252,8 @@ theorem DenseExpr.substF_varsIn_bits (xs bits : List VarId)
       · exact ihb hin.2 v hv
 
 /-- Interpolation candidate agreement: on a bit pattern that agrees with `denv₀` and off which the
-    substitution map matches `denv₁`, the checked interpolation candidate evaluates as the original.
-    Mirrors `groupRewriteCand_agree` (the `candSelect` self-check content). -/
+    substitution map matches `denv₁`, the checked interpolation candidate evaluates as the
+    original. -/
 theorem denseGroupRewriteCand_agree (xs bits : List VarId)
     (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p)))
     (denv₀ denv₁ : VarId → ZMod p) (aβ : List (VarId × ZMod p)) (haβ : aβ ∈ patts)
@@ -306,7 +305,7 @@ theorem denseGroupRewriteCand_agree (xs bits : List VarId)
   · exact hsubstF
 
 /-- Replace maximal wholly-in-group subexpressions by their interpolations; substitute
-    variable-wise everywhere else, agreeing pointwise with the original. Mirrors `groupRewrite_agree`. -/
+    variable-wise everywhere else, agreeing pointwise with the original. -/
 theorem denseGroupRewrite_agree (xs bits : List VarId)
     (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p)))
     (hσnone : ∀ y, y ∉ xs → σfn y = none)
@@ -378,8 +377,7 @@ theorem denseGroupRewrite_agree (xs bits : List VarId)
         rw [iha hfa, ihb hfb]
 
 /-- Bus-interaction-level agreement for the group rewrite, over the field-by-field inlined rewrite
-    that `denseReencodeOut` produces (there is no dense `BusInteraction.mapExpr`). Mirrors
-    `groupRewrite_bi_agree`. -/
+    that `denseReencodeOut` produces (there is no dense `BusInteraction.mapExpr`). -/
 theorem denseGroupRewrite_bi_agree (xs bits : List VarId)
     (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p)))
     (hσnone : ∀ y, y ∉ xs → σfn y = none)
@@ -404,7 +402,7 @@ theorem denseGroupRewrite_bi_agree (xs bits : List VarId)
     exact denseGroupRewrite_agree xs bits σfn patts hσnone denv₀ denv₁ aβ haβ hbitsagree
       hpolyvars hpoint e (hfreshP e he)
 
-/-- A rewritten wholly-in-group expression is over the bits only. Mirrors `groupRewriteCand_vars`. -/
+/-- A rewritten wholly-in-group expression is over the bits only. -/
 theorem denseGroupRewriteCand_vars (xs bits : List VarId)
     (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p)))
     (hσ : ∀ y ∈ xs, ∀ v ∈ ((DenseExpr.var y).substF σfn).vars, v ∈ bits)
@@ -419,8 +417,8 @@ theorem denseGroupRewriteCand_vars (xs bits : List VarId)
       exact denseVarsInF_sound bits _ hchk.1 v hv
   · exact DenseExpr.substF_varsIn_bits xs bits σfn hσ e hin v hv
 
-/-- Every variable of a group-rewritten expression is either an original variable of `e` or a fresh
-    bit. Mirrors `groupRewrite_vars`. -/
+/-- Every variable of a group-rewritten expression is either an original variable of `e` or a
+    fresh bit. -/
 theorem denseGroupRewrite_vars (xs bits : List VarId)
     (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p)))
     (hσ : ∀ y ∈ xs, ∀ v ∈ ((DenseExpr.var y).substF σfn).vars, v ∈ bits)
@@ -464,11 +462,10 @@ theorem denseGroupRewrite_vars (xs bits : List VarId)
           · exact Or.inl (Or.inr h)
           · exact Or.inr h
 
-/-! ## The re-encoded system's variables (↔ `reencodeOut_vars_subset`) -/
+/-! ## The re-encoded system's variables -/
 
 /-- Every variable of the re-encoded system is either an original variable of `d` or a fresh bit —
-    proven by construction from the certified substitution, so the pass needs no scan. Mirrors
-    `reencodeOut_vars_subset` (stated natively over `occ`). -/
+    proven by construction from the certified substitution, so the pass needs no scan. -/
 theorem denseReencodeOut_vars_subset (d : DenseConstraintSystem p) (xs bits : List VarId)
     (hm : Std.HashMap VarId (DenseExpr p))
     (hσ : ∀ y ∈ xs, ∀ v ∈ ((DenseExpr.var y).substF (denseGroupSubst xs hm)).vars, v ∈ bits) :
@@ -502,9 +499,9 @@ theorem denseReencodeOut_vars_subset (d : DenseConstraintSystem p) (xs bits : Li
         simp only [denseBIVars, List.mem_append, List.mem_flatMap]; exact Or.inr ⟨e0, he0, h⟩
       · exact Or.inr h
 
-/-! ## Derived-variable methods for the fresh bits (↔ `ComputationMethod.eval_congr`/`matchCM`/`bitCM`) -/
+/-! ## Derived-variable methods for the fresh bits -/
 
-/-- A dense computation method reads only its variables. Mirrors `ComputationMethod.eval_congr`. -/
+/-- A dense computation method reads only its variables. -/
 theorem DenseComputationMethod.eval_congr (cm : DenseComputationMethod p) (e1 e2 : VarId → ZMod p) :
     (∀ v ∈ cm.vars, e1 v = e2 v) → cm.eval e1 = cm.eval e2 := by
   induction cm with
@@ -531,7 +528,7 @@ theorem DenseComputationMethod.eval_congr (cm : DenseComputationMethod p) (e1 e2
          = (if cond.eval e2 = 0 then thenM.eval e2 else elseM.eval e2)
       rw [hc, ht, he]
 
-/-- `thenM` if every `x ∈ xs` has `imgFn x = env x`, else `elseM`. Mirrors `matchCM_eval`. -/
+/-- `thenM` if every `x ∈ xs` has `imgFn x = env x`, else `elseM`. -/
 theorem denseMatchCM_eval (xs : List VarId) (imgFn : VarId → ZMod p)
     (thenM elseM : DenseComputationMethod p) (denv : VarId → ZMod p) :
     (denseMatchCM xs imgFn thenM elseM).eval denv
@@ -550,8 +547,7 @@ theorem denseMatchCM_eval (xs : List VarId) (imgFn : VarId → ZMod p)
             List.all_cons]
         simp [hx]
 
-/-- Variables of `denseMatchCM` lie in `xs` together with those of the branches. Mirrors
-    `matchCM_vars`. -/
+/-- Variables of `denseMatchCM` lie in `xs` together with those of the branches. -/
 theorem denseMatchCM_vars (xs : List VarId) (imgFn : VarId → ZMod p)
     (thenM elseM : DenseComputationMethod p) :
     ∀ v ∈ (denseMatchCM xs imgFn thenM elseM).vars, v ∈ xs ∨ v ∈ thenM.vars ∨ v ∈ elseM.vars := by
@@ -569,8 +565,7 @@ theorem denseMatchCM_vars (xs : List VarId) (imgFn : VarId → ZMod p)
         · exact Or.inr (Or.inr h)
       · exact Or.inr (Or.inr hv)
 
-/-- The derivation of bit `b`: scan the patterns, output the first matching pattern's `b`-bit.
-    Mirrors `bitCM_eval`. -/
+/-- The derivation of bit `b`: scan the patterns, output the first matching pattern's `b`-bit. -/
 theorem denseBitCM_eval (patts : List (List (VarId × ZMod p))) (xs : List VarId)
     (hm : Std.HashMap VarId (DenseExpr p)) (b : VarId) (denv : VarId → ZMod p) :
     (denseBitCM patts xs hm b).eval denv
@@ -588,7 +583,7 @@ theorem denseBitCM_eval (patts : List (List (VarId × ZMod p))) (xs : List VarId
       · rw [if_neg hmatch]
         simp only [hmatch, ih]
 
-/-- The derivation of bit `b` reads only group variables. Mirrors `bitCM_vars`. -/
+/-- The derivation of bit `b` reads only group variables. -/
 theorem denseBitCM_vars (patts : List (List (VarId × ZMod p))) (xs : List VarId)
     (hm : Std.HashMap VarId (DenseExpr p)) (b : VarId) :
     ∀ v ∈ (denseBitCM patts xs hm b).vars, v ∈ xs := by
@@ -602,17 +597,16 @@ theorem denseBitCM_vars (patts : List (List (VarId × ZMod p))) (xs : List VarId
       · simp [DenseComputationMethod.vars] at h
       · exact ih v h
 
-/-! ## Survivor enumeration (↔ `varIx_lookup`/`compileE_eval`/`compileEs_all`/`groupSurvivorsE_eq`)
+/-! ## Survivor enumeration
 
-The keyed compiled-evaluation correspondence for the group-survivor enumeration. R1 ports
+The keyed compiled-evaluation correspondence for the group-survivor enumeration:
 `denseGroupSurvivorsE`/`denseSurvZeroCW` against the **keyed** compiled evaluator
-(`denseCompileEs`/`denseIExprEvalWith`, `DomainBatch.lean`); these are the keyed native mirrors of
-the spec's `varIx_lookup`/`compileE_eval`/`compileEs_all` (the value-only siblings
+(`denseCompileEs`/`denseIExprEvalWith`, `DomainBatch.lean`); the value-only siblings
 `denseVarIx_lookupV_env`/`denseCompileE_evalV`/`denseCompileEs_allV` in `DomainBatchProof.lean` serve
-the `domainFold`/`domainBatch` value path). -/
+the `domainFold`/`domainBatch` value path. -/
 
 /-- Positional lookup at `y`'s first key position is exactly the `denseEnvOfFast` scan, on any
-    assignment with the given keys. Mirrors `varIx_lookup`. -/
+    assignment with the given keys. -/
 theorem denseVarIx_lookup (keys : List VarId) (y : VarId) (i : Nat)
     (h : denseVarIx keys y = some i) (pt : List (VarId × ZMod p))
     (hpt : pt.map Prod.fst = keys) : denseLookupIx pt i = denseEnvOfFast pt y := by
@@ -635,8 +629,7 @@ theorem denseVarIx_lookup (keys : List VarId) (y : VarId) (i : Nat)
         rw [denseLookupIx, denseEnvOfFast, if_neg hfast]
         exact ih j hj pt' hpt'
 
-/-- Compiled keyed evaluation agrees with the source's keyed-environment evaluation. Mirrors
-    `compileE_eval`. -/
+/-- Compiled keyed evaluation agrees with the source's keyed-environment evaluation. -/
 theorem denseCompileE_eval (add mul : ZMod p → ZMod p → ZMod p)
     (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
     (keys : List VarId) (e : DenseExpr p) (ie : IExpr p) (h : denseCompileE keys e = some ie)
@@ -679,7 +672,7 @@ theorem denseCompileE_eval (add mul : ZMod p → ZMod p → ZMod p)
             = a.eval (denseEnvOfFast pt) * b.eval (denseEnvOfFast pt)
           rw [hmul, iha ia ha, ihb ib hb]
 
-/-- Compiled-list zero-check agrees with the source list's, keyed. Mirrors `compileEs_all`. -/
+/-- Compiled-list zero-check agrees with the source list's, keyed. -/
 theorem denseCompileEs_all (add mul : ZMod p → ZMod p → ZMod p)
     (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b) (keys : List VarId)
     (es : List (DenseExpr p)) (ces : List (IExpr p)) (h : denseCompileEs keys es = some ces)
@@ -703,7 +696,7 @@ theorem denseCompileEs_all (add mul : ZMod p → ZMod p → ZMod p)
           denseCompileE_eval add mul hadd hmul keys e ie he pt hpt]
 
 /-- `denseGroupSurvivorsE` computes the identical list to the direct `evalFast`/`denseEnvOfFast`
-    filter — the index-compiled path is a pure speedup. Mirrors `groupSurvivorsE_eq`. -/
+    filter — the index-compiled path is a pure speedup. -/
 theorem denseGroupSurvivorsE_eq (es : List (DenseExpr p)) (doms : List (VarId × List (ZMod p))) :
     denseGroupSurvivorsE es doms
       = (denseAssignments doms).filter
@@ -722,21 +715,20 @@ theorem denseGroupSurvivorsE_eq (es : List (DenseExpr p)) (doms : List (VarId ×
       (fun _ _ => rfl) (fun _ _ => rfl) (doms.map Prod.fst) es ces hce a hkeys
   · rfl
 
-/-! ## The generic dense transport core (↔ `reencode_correct`/`reencode_correct_D`)
+/-! ## The generic dense transport core
 
 The keyed assignment membership/readout facts the capstone consumes (`mem_denseAssignments` for the
 keyed `denseAssignments doms`, and `denseEnvOfFast_map`, the keyed sibling of the value-only
 `mem_assignmentsV`) are reused unchanged from `RootPairUnifyProof.lean` — they are generic
 `VarId`-keyed enumeration facts, not reencode-specific, so no local copy is added.
 
-The native `VarId`-side analogue of the spec's `ConstraintSystem.reencode_correct_D`: a witness
-transport principle producing `DensePassCorrect` directly. `out` replaces every expression `e` by
-`grw e` (field-inlined for bus interactions — there is no dense `BusInteraction.mapExpr`), keeps only
-the constraints selected by `keep`, and appends `newCs`; the fresh columns carry the dense
-derivations `dd`. Given forward transport (with the input-column frame and the native
-`DenseOutReconstructs` obligation) and backward transport under which every original expression
-evaluates identically, the step is `DensePassCorrect`. Nothing here mentions bits or groups — a
-generic principle, decode-free. -/
+A witness transport principle producing `DensePassCorrect` directly. `out` replaces every
+expression `e` by `grw e` (field-inlined for bus interactions — there is no dense
+`BusInteraction.mapExpr`), keeps only the constraints selected by `keep`, and appends `newCs`; the
+fresh columns carry the dense derivations `dd`. Given forward transport (with the input-column
+frame and the `DenseOutReconstructs` obligation) and backward transport under which every original
+expression evaluates identically, the step is `DensePassCorrect`. Nothing here mentions bits or
+groups — a generic principle, decode-free. -/
 
 theorem DenseConstraintSystem.reencode_correct_D (d out : DenseConstraintSystem p)
     (bs : BusSemantics p) (isInput : VarId → Bool)
@@ -856,10 +848,10 @@ theorem DenseConstraintSystem.reencode_correct_D (d out : DenseConstraintSystem 
       exact hsat.2 bi0 hbi0
     · rw [hside denv denv' hB]; exact BusState.equiv_refl _
 
-/-! ## Derivation-list map lookup (↔ `Derivations.methodFor_map`) -/
+/-! ## Derivation-list map lookup -/
 
-/-- The method list built for the fresh bits supplies `g w` for a bit `w`, nothing otherwise.
-    Mirrors `Derivations.methodFor_map` (`methodFor_append` reused from `Bridge.lean`). -/
+/-- The method list built for the fresh bits supplies `g w` for a bit `w`, nothing otherwise
+    (`methodFor_append` reused from `Bridge.lean`). -/
 theorem DenseDerivations.methodFor_map (bits : List VarId) (g : VarId → DenseComputationMethod p)
     (w : VarId) :
     DenseDerivations.methodFor (bits.map (fun b => (b, g b))) w
@@ -875,20 +867,21 @@ theorem DenseDerivations.methodFor_map (bits : List VarId) (g : VarId → DenseC
         · have hwb : w ≠ b := fun h => hbw h.symm
           simp [hw, hbw, hwb, Option.orElse]
 
-/-! ## The capstone: certificate soundness (↔ `checkReencode_sound_D`)
+/-! ## The capstone: certificate soundness
 
-The native `VarId`-side analogue of `checkReencode_sound_D`. It supplies the forward transport (with
-the input-column frame and the native `DenseOutReconstructs` obligation for the minted bits) and the
-backward transport to `DenseConstraintSystem.reencode_correct_D`, producing `DensePassCorrect` for
-the re-encoded output and the fresh bits' derivations, over the **extended** registry's `isInput`.
+It supplies the forward transport (with the input-column frame and the `DenseOutReconstructs`
+obligation for the minted bits) and the backward transport to
+`DenseConstraintSystem.reencode_correct_D`, producing `DensePassCorrect` for the re-encoded output
+and the fresh bits' derivations, over the **extended** registry's `isInput`.
 
-Freshness / `isInput` of the minted bits (spec's `hbn : b.powdrId? = none`) enters as the abstract
-hypothesis `hbnInput : ∀ b ∈ bits, isInput b = false` — the extended registry's `reg1.isInput b =
+Freshness / `isInput` of the minted bits enters as the abstract hypothesis
+`hbnInput : ∀ b ∈ bits, isInput b = false` — the extended registry's `reg1.isInput b =
 (reg1.resolve b).powdrId?.isSome`, which is `false` for a bit registered with
-`{ name := freshBase ++ … }` (no `powdrId?`), discharged by the wiring step (P3). The group columns'
-`isInput = true` and their `d.occ` membership (spec's `hxs`/`hxsCs`) likewise enter abstractly
-(`hxsInput`/`hxsOcc`); P3 supplies them from the runtime `xs.all (fun x => reg.isInput x)` gate and
-the registry extension (`reg1.isInput x = reg.isInput x` for a valid `x`). -/
+`{ name := freshBase ++ … }` (no `powdrId?`), discharged by the step/loop/pass-assembly section
+below. The group columns' `isInput = true` and their `d.occ` membership likewise enter abstractly
+(`hxsInput`/`hxsOcc`); that section supplies them from the runtime
+`xs.all (fun x => reg.isInput x)` gate and the registry extension
+(`reg1.isInput x = reg.isInput x` for a valid `x`). -/
 
 theorem denseCheckReencode_sound [Fact p.Prime] (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (isInput : VarId → Bool) (xs bits : List VarId) (hm : Std.HashMap VarId (DenseExpr p))
@@ -936,7 +929,7 @@ theorem denseCheckReencode_sound [Fact p.Prime] (d : DenseConstraintSystem p) (b
     have h2 := List.all_eq_true.mp h1.2 bi hbi
     rw [Bool.and_eq_true] at h2
     simpa using List.all_eq_true.mp h2.2 e he
-  -- FORWARD (with the input frame and the native `DenseOutReconstructs` obligation)
+  -- FORWARD (with the input frame and the `DenseOutReconstructs` obligation)
   have hfwd_D : ∀ denv, d.satisfies bs denv → ∃ denv',
       (∀ c ∈ d.algebraicConstraints,
         ((denseGroupRewrite xs bits (denseGroupSubst xs hm)
@@ -1157,15 +1150,15 @@ theorem denseCheckReencode_sound [Fact p.Prime] (d : DenseConstraintSystem p) (b
     rfl hfwd_D hbwd hVars
 
 
-/-! ## Chunk P3: step / loop correctness, pass assembly (native)
+/-! ## Step / loop correctness, pass assembly
 
-The registry-extending native pass `denseReencodePass`, built from the runtime `denseReencodeF`
-(`Reencode.lean`, chunk R2) via `DenseVerifiedPassW.ofExtending`. The chain: `denseRegisterBits`
+The registry-extending pass `denseReencodePass`, built from the runtime `denseReencodeF`
+(`Reencode.lean`) via `DenseVerifiedPassW.ofExtending`. The chain: `denseRegisterBits`
 mints only bits with `powdrId? = none`, so it preserves `isInput` pointwise and extends the registry
 (`denseRegisterBits_props`); `denseBuildReencode` inherits both plus validity of the bits it returns
 (`denseBuildReencode_props`); one `denseReencodeStep` is `DensePassCorrect` at its own output
 registry's `isInput` — reject branches by `DensePassCorrect.refl` (registry orphan-extended, system
-unchanged), the accept branch by the P2 capstone `denseCheckReencode_sound` with its side
+unchanged), the accept branch by the capstone `denseCheckReencode_sound` with its side
 hypotheses discharged from the runtime gates (`denseReencodeStep_correct`); `denseReencodeLoop`
 composes the per-step certificates via `DensePassCorrect.andThen`, transporting each step's
 certificate forward to the uniform final registry's `isInput` using the pointwise
