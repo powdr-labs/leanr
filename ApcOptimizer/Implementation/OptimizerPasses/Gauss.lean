@@ -19,6 +19,22 @@ def DenseExpr.varCount : DenseExpr p → Nat
   | .add a b => a.varCount + b.varCount
   | .mul a b => a.varCount + b.varCount
 
+/-- Fold variable leaves in left-to-right order without materializing `vars`. -/
+def DenseExpr.foldVars {α : Type} (e : DenseExpr p) (f : α → VarId → α) (init : α) : α :=
+  match e with
+  | .const _ => init
+  | .var x => f init x
+  | .add a b => b.foldVars f (a.foldVars f init)
+  | .mul a b => b.foldVars f (a.foldVars f init)
+
+theorem DenseExpr.foldVars_eq {α : Type} (e : DenseExpr p) (f : α → VarId → α) (init : α) :
+    e.foldVars f init = e.vars.foldl f init := by
+  induction e generalizing init with
+  | const => rfl
+  | var => rfl
+  | add a b iha ihb => simp only [foldVars, DenseExpr.vars, List.foldl_append, iha, ihb]
+  | mul a b iha ihb => simp only [foldVars, DenseExpr.vars, List.foldl_append, iha, ihb]
+
 def DenseExpr.isVar : DenseExpr p → Bool
   | .var _ => true
   | _ => false
@@ -284,18 +300,18 @@ theorem denseCoeffIdxWith_eq (ops : DenseZModOps p) (terms : List (VarId × ZMod
 def densePm1DescWith (ops : DenseZModOps p) (idx : Std.HashMap VarId (ZMod p × Nat))
     (total : Nat) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) (v : VarId) :
     Option (VarId × Nat) :=
-  if ((idx[v]?).getD (ops.zero, 0)).1 = ops.one ∨
-      ((idx[v]?).getD (ops.zero, 0)).1 = ops.negOne then
-    some (v, denseGaussScore occ prot v (total - ((idx[v]?).getD (ops.zero, 0)).2))
+  let cv := (idx[v]?).getD (ops.zero, 0)
+  if cv.1 = ops.one ∨ cv.1 = ops.negOne then
+    some (v, denseGaussScore occ prot v (total - cv.2))
   else none
 
 def denseUnitDescWith (ops : DenseZModOps p) (idx : Std.HashMap VarId (ZMod p × Nat))
     (total : Nat) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) (v : VarId) :
     Option (VarId × Nat) :=
-  if ¬(((idx[v]?).getD (ops.zero, 0)).1 = ops.one ∨
-      ((idx[v]?).getD (ops.zero, 0)).1 = ops.negOne) ∧
-      ops.mul ((idx[v]?).getD (ops.zero, 0)).1 (((idx[v]?).getD (ops.zero, 0)).1)⁻¹ = ops.one then
-    some (v, denseGaussScore occ prot v (total - ((idx[v]?).getD (ops.zero, 0)).2))
+  let cv := (idx[v]?).getD (ops.zero, 0)
+  if ¬(cv.1 = ops.one ∨ cv.1 = ops.negOne) ∧
+      ops.mul cv.1 cv.1⁻¹ = ops.one then
+    some (v, denseGaussScore occ prot v (total - cv.2))
   else none
 
 def densePivotDescsWith (ops : DenseZModOps p) (l : DenseLinExpr p)
@@ -404,7 +420,7 @@ theorem denseFastBest_eq (c : DenseExpr p) (occ : Std.HashMap VarId Nat)
 /-- Occurrence counts of every variable across the dense system (one traversal). -/
 def denseOccurrenceMap (d : DenseConstraintSystem p) : Std.HashMap VarId Nat :=
   let addE := fun (m : Std.HashMap VarId Nat) (e : DenseExpr p) =>
-    e.vars.foldl (fun m x => m.insert x (m.getD x 0 + 1)) m
+    e.foldVars (fun m x => m.insert x (m.getD x 0 + 1)) m
   let m := d.algebraicConstraints.foldl addE ∅
   d.busInteractions.foldl (fun m bi => bi.payload.foldl addE (addE m bi.multiplicity)) m
 
@@ -434,7 +450,7 @@ def insertAll (dσ : DenseSolved p) : List (VarId × DenseExpr p) → DenseSolve
   | (x, t) :: rest =>
       DenseSolved.insertAll
         { map := dσ.map.insert x t,
-          revDeps := t.vars.foldl (fun rd z => rd.insert z (((rd[z]?).getD ∅).insert x)) dσ.revDeps }
+          revDeps := t.foldVars (fun rd z => rd.insert z (((rd[z]?).getD ∅).insert x)) dσ.revDeps }
         rest
 
 theorem insertAll_map :
@@ -504,18 +520,22 @@ theorem denseTrySolveUnit_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarI
     pivot is chosen per constraint over two sweeps, then the whole solution map is substituted
     through the system in one pass. -/
 def denseGaussElim (bs : BusSemantics p) (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
-  let dσ := denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-    (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty
-  if dσ.map.isEmpty then d else d.substF dσ.fn
+  let occ := denseOccurrenceMap d
+  let prot := denseProtectedVars d bs
+  let first := denseGaussLoop occ prot d.algebraicConstraints DenseSolved.empty
+  if first.map.isEmpty then d
+  else d.substF (denseGaussLoop occ prot d.algebraicConstraints first).fn
 
 /-- `denseGaussElim` as an explicit `if` (the `let` zeta-reduces). -/
 theorem denseGaussElim_eq (bs : BusSemantics p) (d : DenseConstraintSystem p) :
     denseGaussElim bs d =
       if (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-          (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty).map.isEmpty
+          d.algebraicConstraints DenseSolved.empty).map.isEmpty
       then d
       else d.substF (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-          (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty).fn := rfl
+          d.algebraicConstraints
+          (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
+            d.algebraicConstraints DenseSolved.empty)).fn := rfl
 
 /-! `denseGaussElimPass` (the wired pass) is built and proved in `Proofs/Gauss.lean`. -/
 
