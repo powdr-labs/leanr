@@ -67,10 +67,6 @@ theorem idOf_resolve {r : VarRegistry} {i : VarId} (h : r.Valid i) :
   rw [resolve_eq h, idOf?]
   simpa using this
 
-theorem idOf_inj {r : VarRegistry} {x y : Variable} {i : VarId}
-    (hx : r.idOf? x = some i) (hy : r.idOf? y = some i) : x = y := by
-  rw [← r.resolve_idOf hx, ← r.resolve_idOf hy]
-
 theorem resolve_inj {r : VarRegistry} {i j : VarId} (hi : r.Valid i) (hj : r.Valid j)
     (h : r.resolve i = r.resolve j) : i = j := by
   have := r.idOf_resolve hi

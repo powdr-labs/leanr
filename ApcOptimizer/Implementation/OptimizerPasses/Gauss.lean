@@ -27,14 +27,6 @@ def DenseExpr.foldVars {α : Type} (e : DenseExpr p) (f : α → VarId → α) (
   | .add a b => b.foldVars f (a.foldVars f init)
   | .mul a b => b.foldVars f (a.foldVars f init)
 
-theorem DenseExpr.foldVars_eq {α : Type} (e : DenseExpr p) (f : α → VarId → α) (init : α) :
-    e.foldVars f init = e.vars.foldl f init := by
-  induction e generalizing init with
-  | const => rfl
-  | var => rfl
-  | add a b iha ihb => simp only [foldVars, DenseExpr.vars, List.foldl_append, iha, ihb]
-  | mul a b iha ihb => simp only [foldVars, DenseExpr.vars, List.foldl_append, iha, ihb]
-
 def DenseExpr.isVar : DenseExpr p → Bool
   | .var _ => true
   | _ => false

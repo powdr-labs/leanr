@@ -355,9 +355,6 @@ def denseBICovered (r : VarRegistry) (bi : BusInteraction (DenseExpr p)) : Prop 
 theorem VarRegistry.encodeBI_fst (r : VarRegistry) (bi : BusInteraction (Expression p)) :
     (r.encodeBI bi).1 = ((r.encodeExpr bi.multiplicity).1.encodeExprs bi.payload).1 := rfl
 
-theorem VarRegistry.encodeBI_busId (r : VarRegistry) (bi : BusInteraction (Expression p)) :
-    (r.encodeBI bi).2.busId = bi.busId := rfl
-
 theorem VarRegistry.encodeBI_mult (r : VarRegistry) (bi : BusInteraction (Expression p)) :
     (r.encodeBI bi).2.multiplicity = (r.encodeExpr bi.multiplicity).2 := rfl
 
@@ -385,7 +382,7 @@ theorem VarRegistry.encodeBI_covered (r : VarRegistry) (bi : BusInteraction (Exp
 
 theorem VarRegistry.decodeBI_encodeBI (r : VarRegistry) (bi : BusInteraction (Expression p)) :
     (r.encodeBI bi).1.decodeBI (r.encodeBI bi).2 = bi := by
-  simp only [VarRegistry.decodeBI, encodeBI_fst, encodeBI_busId, encodeBI_mult, encodeBI_payload]
+  simp only [VarRegistry.decodeBI, encodeBI_fst, encodeBI_mult, encodeBI_payload]
   obtain ⟨busId, mult, payload⟩ := bi
   congr 1
   · rw [((r.encodeExpr mult).1.encodeExprs_extends payload).decodeExpr_eq

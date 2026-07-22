@@ -177,25 +177,10 @@ theorem DenseConstraintSystem.occ_valid {r : VarRegistry} {d : DenseConstraintSy
     · exact hm i him
     · exact hp e hemem i hie
 
-/-- On a covered system, the dense variable count equals the spec variable count of the decode. -/
-theorem VarRegistry.decodeCS_varCount (r : VarRegistry) (d : DenseConstraintSystem p)
-    (hc : d.CoveredBy r) : (r.decodeCS d).varCount = d.varCount := by
-  unfold ConstraintSystem.varCount DenseConstraintSystem.varCount
-  rw [r.decodeCS_occ d]
-  exact size_fold_map_resolve r d.occ ∅ ∅ (by simp) (by simp) (DenseConstraintSystem.occ_valid hc)
-
-/-! ## sizeKey correspondence -/
+/-! ## The dense lexicographic size key -/
 
 /-- The dense lexicographic size key `(distinct vars, bus interactions, constraints)`. -/
 def DenseConstraintSystem.sizeKey (d : DenseConstraintSystem p) : Nat ×ₗ Nat ×ₗ Nat :=
   toLex (d.varCount, toLex (d.busInteractions.length, d.algebraicConstraints.length))
-
-/-- The dense size key equals the spec size key on the decode, so the fixpoint driver makes
-    identical stopping decisions. -/
-theorem VarRegistry.decodeCS_sizeKey (r : VarRegistry) (d : DenseConstraintSystem p)
-    (hc : d.CoveredBy r) : (r.decodeCS d).sizeKey = d.sizeKey := by
-  unfold ConstraintSystem.sizeKey DenseConstraintSystem.sizeKey
-  rw [r.decodeCS_varCount d hc]
-  simp only [VarRegistry.decodeCS, List.length_map]
 
 end ApcOptimizer.Dense
