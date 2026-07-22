@@ -250,75 +250,6 @@ theorem denseFoldRewriteV_covered (reg : VarRegistry) (xs : List VarId)
     (denseFoldRewriteV xs survsV e).CoveredBy reg :=
   fun i hi => hc i (denseFoldRewriteV_vars xs survsV e i hi)
 
-/-! ## `denseFoldOutV` semantic agreement helpers -/
-
-/-- A rewritten interaction evaluates identically, given expression-level agreement. -/
-theorem denseBIEval_foldRewriteV (xs : List VarId) (survsV : List (List (ZMod p)))
-    (denv : VarId → ZMod p)
-    (hag : ∀ e : DenseExpr p, (denseFoldRewriteV xs survsV e).eval denv = e.eval denv)
-    (bi : BusInteraction (DenseExpr p)) :
-    denseBIEval { bi with
-        multiplicity := denseFoldRewriteV xs survsV bi.multiplicity,
-        payload := bi.payload.map (denseFoldRewriteV xs survsV) } denv
-      = denseBIEval bi denv := by
-  unfold denseBIEval
-  simp only [hag bi.multiplicity, List.map_map]
-  congr 1
-  exact List.map_congr_left (fun e _ => by simp only [Function.comp_apply]; exact hag e)
-
-theorem denseFoldOutV_sideEffects_eq (bs : BusSemantics p) (d : DenseConstraintSystem p)
-    (xs : List VarId) (survsV : List (List (ZMod p))) (denv : VarId → ZMod p)
-    (hag : ∀ e : DenseExpr p, (denseFoldRewriteV xs survsV e).eval denv = e.eval denv) :
-    (denseFoldOutV d xs survsV).sideEffects bs denv = d.sideEffects bs denv := by
-  unfold DenseConstraintSystem.sideEffects
-  simp only [denseFoldOutV]
-  rw [filter_map_busId_comm d.busInteractions
-    (fun bi => { bi with
-      multiplicity := denseFoldRewriteV xs survsV bi.multiplicity,
-      payload := bi.payload.map (denseFoldRewriteV xs survsV) }) bs (fun _ => rfl), List.map_map]
-  refine List.map_congr_left (fun bi _ => ?_)
-  simp only [Function.comp_apply]
-  rw [denseBIEval_foldRewriteV xs survsV denv hag bi]
-
-theorem denseFoldOutV_admissible_iff (bs : BusSemantics p) (d : DenseConstraintSystem p)
-    (xs : List VarId) (survsV : List (List (ZMod p))) (denv : VarId → ZMod p)
-    (hag : ∀ e : DenseExpr p, (denseFoldRewriteV xs survsV e).eval denv = e.eval denv) :
-    (denseFoldOutV d xs survsV).admissible bs denv ↔ d.admissible bs denv := by
-  unfold DenseConstraintSystem.admissible
-  have hmap : (denseFoldOutV d xs survsV).busInteractions.map (fun bi => denseBIEval bi denv)
-      = d.busInteractions.map (fun bi => denseBIEval bi denv) := by
-    simp only [denseFoldOutV, List.map_map]
-    exact List.map_congr_left (fun bi _ => by
-      simp only [Function.comp_apply]; exact denseBIEval_foldRewriteV xs survsV denv hag bi)
-  rw [hmap]
-
-theorem denseFoldOutV_occ_subset (d : DenseConstraintSystem p) (xs : List VarId)
-    (survsV : List (List (ZMod p))) : ∀ i ∈ (denseFoldOutV d xs survsV).occ, i ∈ d.occ := by
-  intro i hi
-  simp only [DenseConstraintSystem.occ, List.mem_append, List.mem_flatMap] at hi
-  rcases hi with ⟨c, hc, hic⟩ | ⟨bi, hbi, hib⟩
-  · have hc2 : c ∈ (d.algebraicConstraints.filter (fun c => !denseCoveredBy xs c)).map
-        (denseFoldRewriteV xs survsV) ++ denseCoveredCsOf d xs := hc
-    rcases List.mem_append.1 hc2 with h | h
-    · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 h
-      exact DenseConstraintSystem.mem_occ_of_constraint (List.mem_of_mem_filter hc0)
-        (denseFoldRewriteV_vars xs survsV c0 i hic)
-    · exact DenseConstraintSystem.mem_occ_of_constraint (List.mem_of_mem_filter h) hic
-  · have hbi2 : bi ∈ d.busInteractions.map
-        (fun bi => { bi with
-          multiplicity := denseFoldRewriteV xs survsV bi.multiplicity,
-          payload := bi.payload.map (denseFoldRewriteV xs survsV) }) := hbi
-    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi2
-    simp only [denseBIVars, List.mem_append, List.mem_flatMap] at hib
-    rcases hib with hm | ⟨e, he, hie⟩
-    · exact DenseConstraintSystem.mem_occ_of_bi hbi0 (by
-        rw [denseBIVars, List.mem_append]
-        exact Or.inl (denseFoldRewriteV_vars xs survsV bi0.multiplicity i hm))
-    · obtain ⟨e0, he0, rfl⟩ := List.mem_map.1 he
-      exact DenseConstraintSystem.mem_occ_of_bi hbi0 (by
-        rw [denseBIVars, List.mem_append, List.mem_flatMap]
-        exact Or.inr ⟨e0, he0, denseFoldRewriteV_vars xs survsV e0 i hie⟩)
-
 /-! ## Single-fold correctness -/
 
 theorem denseFoldOutV_correct [Fact p.Prime] (bs : BusSemantics p) (d : DenseConstraintSystem p)
@@ -332,81 +263,42 @@ theorem denseFoldOutV_correct [Fact p.Prime] (bs : BusSemantics p) (d : DenseCon
     intro denv hcov
     rw [hsurv_def]
     exact denseFoldRewriteV_agree_covered d xs doms hdoms denv hcov
-  refine DensePassCorrect.ofEnvEq ?hsound ?hinv ?hsub ?hcomp
-  case hsub => exact denseFoldOutV_occ_subset d xs survsV
-  case hsound =>
-    intro denv hsatout
-    have hcovsat : ∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0 := by
-      intro c hc
-      exact hsatout.1 c (by
-        show c ∈ (denseFoldOutV d xs survsV).algebraicConstraints
-        simp only [denseFoldOutV, List.mem_append]; exact Or.inr hc)
-    have hag := hagCov denv hcovsat
-    refine ⟨denv, ⟨?_, ?_⟩, ?_⟩
-    · intro c hc
-      by_cases hccov : denseCoveredBy xs c = true
-      · exact hcovsat c (List.mem_filter.2 ⟨hc, hccov⟩)
-      · have hmem : denseFoldRewriteV xs survsV c ∈ (denseFoldOutV d xs survsV).algebraicConstraints := by
-          simp only [denseFoldOutV, List.mem_append]
-          exact Or.inl (List.mem_map.2 ⟨c, List.mem_filter.2 ⟨hc, by simpa using hccov⟩, rfl⟩)
-        have hz := hsatout.1 _ hmem
-        rwa [hag c] at hz
-    · intro bi hbi
-      have hmem : { bi with
-          multiplicity := denseFoldRewriteV xs survsV bi.multiplicity,
-          payload := bi.payload.map (denseFoldRewriteV xs survsV) }
-            ∈ (denseFoldOutV d xs survsV).busInteractions := List.mem_map.2 ⟨bi, hbi, rfl⟩
-      have hval := denseBIEval_foldRewriteV xs survsV denv hag bi
-      have hz := hsatout.2 _ hmem
-      rw [hval] at hz; exact hz
-    · rw [denseFoldOutV_sideEffects_eq bs d xs survsV denv hag]; exact BusState.equiv_refl _
-  case hinv =>
-    intro hgi denv hsatout bi' hbi'
-    have hcovsat : ∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0 := by
-      intro c hc
-      exact hsatout.1 c (by
-        show c ∈ (denseFoldOutV d xs survsV).algebraicConstraints
-        simp only [denseFoldOutV, List.mem_append]; exact Or.inr hc)
-    have hag := hagCov denv hcovsat
-    have hsatd : d.satisfies bs denv := by
-      refine ⟨fun c hc => ?_, fun bi hbi => ?_⟩
-      · by_cases hccov : denseCoveredBy xs c = true
-        · exact hcovsat c (List.mem_filter.2 ⟨hc, hccov⟩)
-        · have hmem : denseFoldRewriteV xs survsV c ∈ (denseFoldOutV d xs survsV).algebraicConstraints := by
-            simp only [denseFoldOutV, List.mem_append]
-            exact Or.inl (List.mem_map.2 ⟨c, List.mem_filter.2 ⟨hc, by simpa using hccov⟩, rfl⟩)
-          have hz := hsatout.1 _ hmem
-          rwa [hag c] at hz
-      · have hmem : { bi with
-            multiplicity := denseFoldRewriteV xs survsV bi.multiplicity,
-            payload := bi.payload.map (denseFoldRewriteV xs survsV) }
-              ∈ (denseFoldOutV d xs survsV).busInteractions := List.mem_map.2 ⟨bi, hbi, rfl⟩
-        have hval := denseBIEval_foldRewriteV xs survsV denv hag bi
-        have hz := hsatout.2 _ hmem
-        rw [hval] at hz; exact hz
-    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
-    rw [denseBIEval_foldRewriteV xs survsV denv hag bi0]
-    exact hgi denv hsatd bi0 hbi0
-  case hcomp =>
-    intro denv hadm hsat
-    have hcovsat : ∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0 :=
-      fun c hc => hsat.1 c (List.mem_of_mem_filter hc)
-    have hag := hagCov denv hcovsat
-    refine ⟨⟨?_, ?_⟩, ?_, ?_⟩
-    · intro c hc
-      have hc' : c ∈ (denseFoldOutV d xs survsV).algebraicConstraints := hc
-      simp only [denseFoldOutV, List.mem_append] at hc'
-      rcases hc' with hc' | hc'
-      · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 hc'
-        rw [hag c0]; exact hsat.1 c0 (List.mem_of_mem_filter hc0)
-      · exact hsat.1 c (List.mem_of_mem_filter hc')
-    · intro bi hbi
-      have hbi' : bi ∈ (denseFoldOutV d xs survsV).busInteractions := hbi
-      obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
-      rw [denseBIEval_foldRewriteV xs survsV denv hag bi0]
-      exact hsat.2 bi0 hbi0
-    · exact (denseFoldOutV_admissible_iff bs d xs survsV denv hag).2 hadm
-    · rw [denseFoldOutV_sideEffects_eq bs d xs survsV denv hag]; exact BusState.equiv_refl _
+  refine DensePassCorrect.ofEvalAgree
+    (fun denv => ∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0)
+    (denseFoldRewriteV xs survsV) rfl ?_ ?_ hagCov ?_ ?_ ?_
+    (fun e i hi => denseFoldRewriteV_vars xs survsV e i hi)
+  · -- a covered constraint sits verbatim in the output
+    intro denv hsatout c hc
+    exact hsatout.1 c (show c ∈ (denseFoldOutV d xs survsV).algebraicConstraints from
+      List.mem_append_right _ hc)
+  · exact fun denv hsat c hc => hsat.1 c (List.mem_of_mem_filter hc)
+  · -- input constraints vanish when the output's do
+    intro denv hA hout c hc
+    by_cases hccov : denseCoveredBy xs c = true
+    · exact hA c (List.mem_filter.2 ⟨hc, hccov⟩)
+    · have hz := hout _ (show denseFoldRewriteV xs survsV c
+          ∈ (denseFoldOutV d xs survsV).algebraicConstraints from
+        List.mem_append_left _
+          (List.mem_map.2 ⟨c, List.mem_filter.2 ⟨hc, by simpa using hccov⟩, rfl⟩))
+      rwa [hagCov denv hA c] at hz
+  · -- output constraints vanish when the input's do
+    intro denv hA hd c' hc'
+    have hc'2 : c' ∈ (d.algebraicConstraints.filter (fun c => !denseCoveredBy xs c)).map
+        (denseFoldRewriteV xs survsV) ++ denseCoveredCsOf d xs := hc'
+    rcases List.mem_append.1 hc'2 with h | h
+    · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 h
+      rw [hagCov denv hA c0]
+      exact hd c0 (List.mem_of_mem_filter hc0)
+    · exact hd c' (List.mem_of_mem_filter h)
+  · -- output constraints read only occurring variables
+    intro c' hc' i hi
+    have hc'2 : c' ∈ (d.algebraicConstraints.filter (fun c => !denseCoveredBy xs c)).map
+        (denseFoldRewriteV xs survsV) ++ denseCoveredCsOf d xs := hc'
+    rcases List.mem_append.1 hc'2 with h | h
+    · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 h
+      exact DenseConstraintSystem.mem_occ_of_constraint (List.mem_of_mem_filter hc0)
+        (denseFoldRewriteV_vars xs survsV c0 i hi)
+    · exact DenseConstraintSystem.mem_occ_of_constraint (List.mem_of_mem_filter h) hi
 
 /-! ## Coverage preservation (value-only fold) -/
 
@@ -671,111 +563,6 @@ theorem denseFoldRewriteIdxV_agree_covered [Fact p.Prime] (d : DenseConstraintSy
 
 /-! ### The in-place fold `denseFoldOutInPlaceV` -/
 
-/-- A rewritten interaction evaluates identically, given expression-level agreement — the general
-    form over any rewrite `g`. -/
-theorem denseBIEval_mapExpr_of_agree (g : DenseExpr p → DenseExpr p) (denv : VarId → ZMod p)
-    (hag : ∀ e : DenseExpr p, (g e).eval denv = e.eval denv)
-    (bi : BusInteraction (DenseExpr p)) :
-    denseBIEval { bi with multiplicity := g bi.multiplicity, payload := bi.payload.map g } denv
-      = denseBIEval bi denv := by
-  unfold denseBIEval
-  simp only [hag bi.multiplicity, List.map_map]
-  congr 1
-  exact List.map_congr_left (fun e _ => by simp only [Function.comp_apply]; exact hag e)
-
-theorem denseFoldOutInPlaceV_sideEffects_eq (bs : BusSemantics p) (d : DenseConstraintSystem p)
-    (xs : List VarId) (survsV : List (List (ZMod p))) (denv : VarId → ZMod p)
-    (hag : ∀ e : DenseExpr p, (denseFoldRewriteIdxV xs survsV e).eval denv = e.eval denv) :
-    (denseFoldOutInPlaceV d xs survsV).sideEffects bs denv = d.sideEffects bs denv := by
-  unfold DenseConstraintSystem.sideEffects
-  simp only [denseFoldOutInPlaceV]
-  rw [filter_map_busId_comm d.busInteractions
-    (fun bi => { bi with
-      multiplicity := denseFoldRewriteIdxV xs survsV bi.multiplicity,
-      payload := bi.payload.map (denseFoldRewriteIdxV xs survsV) }) bs (fun _ => rfl), List.map_map]
-  refine List.map_congr_left (fun bi _ => ?_)
-  simp only [Function.comp_apply]
-  rw [denseBIEval_mapExpr_of_agree (denseFoldRewriteIdxV xs survsV) denv hag bi]
-
-theorem denseFoldOutInPlaceV_admissible_iff (bs : BusSemantics p) (d : DenseConstraintSystem p)
-    (xs : List VarId) (survsV : List (List (ZMod p))) (denv : VarId → ZMod p)
-    (hag : ∀ e : DenseExpr p, (denseFoldRewriteIdxV xs survsV e).eval denv = e.eval denv) :
-    (denseFoldOutInPlaceV d xs survsV).admissible bs denv ↔ d.admissible bs denv := by
-  unfold DenseConstraintSystem.admissible
-  have hmap : (denseFoldOutInPlaceV d xs survsV).busInteractions.map (fun bi => denseBIEval bi denv)
-      = d.busInteractions.map (fun bi => denseBIEval bi denv) := by
-    simp only [denseFoldOutInPlaceV, List.map_map]
-    exact List.map_congr_left (fun bi _ => by
-      simp only [Function.comp_apply]
-      exact denseBIEval_mapExpr_of_agree (denseFoldRewriteIdxV xs survsV) denv hag bi)
-  rw [hmap]
-
-/-- Folding introduces no `VarId` (in-place form). -/
-theorem denseFoldOutInPlaceV_occ_subset (d : DenseConstraintSystem p) (xs : List VarId)
-    (survsV : List (List (ZMod p))) : ∀ i ∈ (denseFoldOutInPlaceV d xs survsV).occ, i ∈ d.occ := by
-  intro i hi
-  simp only [DenseConstraintSystem.occ, List.mem_append, List.mem_flatMap] at hi
-  rcases hi with ⟨c, hc, hic⟩ | ⟨bi, hbi, hib⟩
-  · have hc2 : c ∈ d.algebraicConstraints.map
-        (fun c => if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c) := hc
-    obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 hc2
-    by_cases hcc : denseCoveredBy xs c0 = true
-    · rw [if_pos hcc] at hic
-      exact DenseConstraintSystem.mem_occ_of_constraint hc0 hic
-    · rw [if_neg hcc] at hic
-      exact DenseConstraintSystem.mem_occ_of_constraint hc0
-        (denseFoldRewriteIdxV_vars xs survsV c0 i hic)
-  · have hbi2 : bi ∈ d.busInteractions.map
-        (fun bi => { bi with
-          multiplicity := denseFoldRewriteIdxV xs survsV bi.multiplicity,
-          payload := bi.payload.map (denseFoldRewriteIdxV xs survsV) }) := hbi
-    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi2
-    simp only [denseBIVars, List.mem_append, List.mem_flatMap] at hib
-    rcases hib with hm | ⟨e, he, hie⟩
-    · exact DenseConstraintSystem.mem_occ_of_bi hbi0 (by
-        rw [denseBIVars, List.mem_append]
-        exact Or.inl (denseFoldRewriteIdxV_vars xs survsV bi0.multiplicity i hm))
-    · obtain ⟨e0, he0, rfl⟩ := List.mem_map.1 he
-      exact DenseConstraintSystem.mem_occ_of_bi hbi0 (by
-        rw [denseBIVars, List.mem_append, List.mem_flatMap]
-        exact Or.inr ⟨e0, he0, denseFoldRewriteIdxV_vars xs survsV e0 i hie⟩)
-
-/-- Under an agreeing `denv`, the in-place folded system is satisfied iff the input is. -/
-theorem denseFoldOutInPlaceV_satisfies_iff (bs : BusSemantics p) (d : DenseConstraintSystem p)
-    (xs : List VarId) (survsV : List (List (ZMod p))) (denv : VarId → ZMod p)
-    (hag : ∀ e : DenseExpr p, (denseFoldRewriteIdxV xs survsV e).eval denv = e.eval denv) :
-    (denseFoldOutInPlaceV d xs survsV).satisfies bs denv ↔ d.satisfies bs denv := by
-  have hceval : ∀ c : DenseExpr p,
-      (if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c).eval denv = c.eval denv := by
-    intro c
-    by_cases hcov : denseCoveredBy xs c = true
-    · rw [if_pos hcov]
-    · rw [if_neg hcov]; exact hag c
-  constructor
-  · intro hsat
-    refine ⟨fun c hc => ?_, fun bi hbi => ?_⟩
-    · have := hsat.1 _ (List.mem_map.2 ⟨c, hc, rfl⟩ :
-        (if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c)
-          ∈ (denseFoldOutInPlaceV d xs survsV).algebraicConstraints)
-      rwa [hceval c] at this
-    · have := hsat.2 _ (List.mem_map.2 ⟨bi, hbi, rfl⟩ :
-        { bi with
-          multiplicity := denseFoldRewriteIdxV xs survsV bi.multiplicity,
-          payload := bi.payload.map (denseFoldRewriteIdxV xs survsV) }
-          ∈ (denseFoldOutInPlaceV d xs survsV).busInteractions)
-      rwa [denseBIEval_mapExpr_of_agree (denseFoldRewriteIdxV xs survsV) denv hag bi] at this
-  · intro hsat
-    refine ⟨fun c hc => ?_, fun bi hbi => ?_⟩
-    · have hc' : c ∈ (denseFoldOutInPlaceV d xs survsV).algebraicConstraints := hc
-      simp only [denseFoldOutInPlaceV, List.mem_map] at hc'
-      obtain ⟨c0, hc0, rfl⟩ := hc'
-      rw [hceval c0]; exact hsat.1 c0 hc0
-    · have hbi' : bi ∈ (denseFoldOutInPlaceV d xs survsV).busInteractions := hbi
-      simp only [denseFoldOutInPlaceV, List.mem_map] at hbi'
-      obtain ⟨bi0, hbi0, rfl⟩ := hbi'
-      rw [denseBIEval_mapExpr_of_agree (denseFoldRewriteIdxV xs survsV) denv hag bi0]
-      exact hsat.2 bi0 hbi0
-
 /-- Correctness of one in-place fold: the covered constraints pin the group so the rewrite agrees
     with the identity. -/
 theorem denseFoldOutInPlaceV_correct [Fact p.Prime] (bs : BusSemantics p) (d : DenseConstraintSystem p)
@@ -784,45 +571,56 @@ theorem denseFoldOutInPlaceV_correct [Fact p.Prime] (bs : BusSemantics p) (d : D
     DensePassCorrect isInput d
       (denseFoldOutInPlaceV d xs (denseGroupSurvivorsEV (denseCoveredCsOf d xs) xs (doms.map Prod.snd))) [] bs := by
   set survsV := denseGroupSurvivorsEV (denseCoveredCsOf d xs) xs (doms.map Prod.snd) with hsurv_def
-  have hcov_out : ∀ denv : VarId → ZMod p, (denseFoldOutInPlaceV d xs survsV).satisfies bs denv →
-      ∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0 := by
-    intro denv hsat c hc
-    have hcb : denseCoveredBy xs c = true := (List.mem_filter.mp hc).2
-    have hmem : c ∈ (denseFoldOutInPlaceV d xs survsV).algebraicConstraints := by
-      have hm : (if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c)
-          ∈ (denseFoldOutInPlaceV d xs survsV).algebraicConstraints :=
-        List.mem_map.2 ⟨c, List.mem_of_mem_filter hc, rfl⟩
-      rwa [if_pos hcb] at hm
-    exact hsat.1 c hmem
-  have hcov_cs : ∀ denv : VarId → ZMod p, d.satisfies bs denv →
-      ∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0 :=
-    fun denv hsat c hc => hsat.1 c (List.mem_of_mem_filter hc)
   have hagCov : ∀ denv : VarId → ZMod p, (∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0) →
       ∀ e : DenseExpr p, (denseFoldRewriteIdxV xs survsV e).eval denv = e.eval denv := by
     intro denv hcov
     rw [hsurv_def]
     exact denseFoldRewriteIdxV_agree_covered d xs doms hdoms denv hcov
-  refine DensePassCorrect.ofEnvEq ?hsound ?hinv ?hsub ?hcomp
-  case hsub => exact denseFoldOutInPlaceV_occ_subset d xs survsV
-  case hsound =>
-    intro denv hsatout
-    have hag := hagCov denv (hcov_out denv hsatout)
-    exact ⟨denv, (denseFoldOutInPlaceV_satisfies_iff bs d xs survsV denv hag).1 hsatout,
-      by rw [denseFoldOutInPlaceV_sideEffects_eq bs d xs survsV denv hag]; exact BusState.equiv_refl _⟩
-  case hinv =>
-    intro hgi denv hsatout bi' hbi'
-    have hag := hagCov denv (hcov_out denv hsatout)
-    have hsatd : d.satisfies bs denv :=
-      (denseFoldOutInPlaceV_satisfies_iff bs d xs survsV denv hag).1 hsatout
-    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
-    rw [denseBIEval_mapExpr_of_agree (denseFoldRewriteIdxV xs survsV) denv hag bi0]
-    exact hgi denv hsatd bi0 hbi0
-  case hcomp =>
-    intro denv hadm hsat
-    have hag := hagCov denv (hcov_cs denv hsat)
-    exact ⟨(denseFoldOutInPlaceV_satisfies_iff bs d xs survsV denv hag).2 hsat,
-      (denseFoldOutInPlaceV_admissible_iff bs d xs survsV denv hag).2 hadm,
-      by rw [denseFoldOutInPlaceV_sideEffects_eq bs d xs survsV denv hag]; exact BusState.equiv_refl _⟩
+  have hceval : ∀ (denv : VarId → ZMod p), (∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0) →
+      ∀ c : DenseExpr p,
+      (if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c).eval denv
+        = c.eval denv := by
+    intro denv hA c
+    by_cases hcov : denseCoveredBy xs c = true
+    · rw [if_pos hcov]
+    · rw [if_neg hcov]; exact hagCov denv hA c
+  refine DensePassCorrect.ofEvalAgree
+    (fun denv => ∀ c ∈ denseCoveredCsOf d xs, c.eval denv = 0)
+    (denseFoldRewriteIdxV xs survsV) rfl ?_ ?_ hagCov ?_ ?_ ?_
+    (fun e i hi => denseFoldRewriteIdxV_vars xs survsV e i hi)
+  · -- a covered constraint sits verbatim in the output (its `if` keeps it)
+    intro denv hsatout c hc
+    have hcb : denseCoveredBy xs c = true := (List.mem_filter.mp hc).2
+    have hmem : (if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c)
+        ∈ (denseFoldOutInPlaceV d xs survsV).algebraicConstraints :=
+      List.mem_map.2 ⟨c, List.mem_of_mem_filter hc, rfl⟩
+    rw [if_pos hcb] at hmem
+    exact hsatout.1 c hmem
+  · exact fun denv hsat c hc => hsat.1 c (List.mem_of_mem_filter hc)
+  · -- input constraints vanish when the output's do
+    intro denv hA hout c hc
+    have hz := hout _ (show (if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c)
+        ∈ (denseFoldOutInPlaceV d xs survsV).algebraicConstraints from
+      List.mem_map.2 ⟨c, hc, rfl⟩)
+    rwa [hceval denv hA c] at hz
+  · -- output constraints vanish when the input's do
+    intro denv hA hd c' hc'
+    have hc'2 : c' ∈ d.algebraicConstraints.map
+        (fun c => if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c) := hc'
+    obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 hc'2
+    rw [hceval denv hA c0]
+    exact hd c0 hc0
+  · -- output constraints read only occurring variables
+    intro c' hc' i hi
+    have hc'2 : c' ∈ d.algebraicConstraints.map
+        (fun c => if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c) := hc'
+    obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 hc'2
+    by_cases hcc : denseCoveredBy xs c0 = true
+    · rw [if_pos hcc] at hi
+      exact DenseConstraintSystem.mem_occ_of_constraint hc0 hi
+    · rw [if_neg hcc] at hi
+      exact DenseConstraintSystem.mem_occ_of_constraint hc0
+        (denseFoldRewriteIdxV_vars xs survsV c0 i hi)
 
 /-! ### The sparse indexed fold `denseFoldOutIdxV` -/
 

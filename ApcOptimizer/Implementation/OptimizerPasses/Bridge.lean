@@ -578,6 +578,103 @@ theorem DensePassCorrect.ofEnvEq {isInput : VarId → Bool} {d out : DenseConstr
   show i ∈ d.occ ∧ denv i = denv i
   exact ⟨hsub i hi, rfl⟩
 
+/-- A mapped interaction evaluates identically, given expression-level agreement. -/
+theorem denseBIEval_mapExpr_of_agree (g : DenseExpr p → DenseExpr p) (denv : VarId → ZMod p)
+    (hag : ∀ e : DenseExpr p, (g e).eval denv = e.eval denv)
+    (bi : BusInteraction (DenseExpr p)) :
+    denseBIEval { bi with multiplicity := g bi.multiplicity, payload := bi.payload.map g } denv
+      = denseBIEval bi denv := by
+  unfold denseBIEval
+  simp only [hag bi.multiplicity, List.map_map]
+  congr 1
+  exact List.map_congr_left (fun e _ => by simp only [Function.comp_apply]; exact hag e)
+
+/-- Same-environment rewrite transport: `out`'s interactions are `d`'s mapped by a rewrite `gb`
+    that is eval-preserving under an anchor `A` established by either side's satisfaction, and
+    `out`'s constraints vanish exactly when `d`'s do (under `A`). The identity environment then
+    witnesses `DensePassCorrect` (no derivations). Serves in-place expression-rewrite passes
+    (e.g. the two `domainFold` shapes). -/
+theorem DensePassCorrect.ofEvalAgree {isInput : VarId → Bool} {d out : DenseConstraintSystem p}
+    {bs : BusSemantics p} (A : (VarId → ZMod p) → Prop) (gb : DenseExpr p → DenseExpr p)
+    (houtB : out.busInteractions = d.busInteractions.map (fun bi =>
+      { bi with multiplicity := gb bi.multiplicity, payload := bi.payload.map gb }))
+    (hAout : ∀ denv, out.satisfies bs denv → A denv)
+    (hAd : ∀ denv, d.satisfies bs denv → A denv)
+    (hagreeB : ∀ denv, A denv → ∀ e : DenseExpr p, (gb e).eval denv = e.eval denv)
+    (hCfwd : ∀ denv, A denv → (∀ c' ∈ out.algebraicConstraints, c'.eval denv = 0) →
+      ∀ c ∈ d.algebraicConstraints, c.eval denv = 0)
+    (hCbwd : ∀ denv, A denv → (∀ c ∈ d.algebraicConstraints, c.eval denv = 0) →
+      ∀ c' ∈ out.algebraicConstraints, c'.eval denv = 0)
+    (hCvars : ∀ c' ∈ out.algebraicConstraints, ∀ i ∈ c'.vars, i ∈ d.occ)
+    (hBvars : ∀ (e : DenseExpr p) (i : VarId), i ∈ (gb e).vars → i ∈ e.vars) :
+    DensePassCorrect isInput d out [] bs := by
+  have hsatIff : ∀ denv, A denv → (out.satisfies bs denv ↔ d.satisfies bs denv) := by
+    intro denv hA
+    have hag := hagreeB denv hA
+    constructor
+    · rintro ⟨hc, hb⟩
+      refine ⟨hCfwd denv hA hc, fun bi hbi => ?_⟩
+      have hmem : { bi with multiplicity := gb bi.multiplicity, payload := bi.payload.map gb }
+          ∈ out.busInteractions := by rw [houtB]; exact List.mem_map.2 ⟨bi, hbi, rfl⟩
+      have := hb _ hmem
+      rwa [denseBIEval_mapExpr_of_agree gb denv hag bi] at this
+    · rintro ⟨hc, hb⟩
+      refine ⟨hCbwd denv hA hc, fun bi' hbi' => ?_⟩
+      rw [houtB] at hbi'
+      obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
+      have hz := hb bi0 hbi0
+      rwa [← denseBIEval_mapExpr_of_agree gb denv hag bi0] at hz
+  have hside : ∀ denv, A denv → out.sideEffects bs denv = d.sideEffects bs denv := by
+    intro denv hA
+    unfold DenseConstraintSystem.sideEffects
+    rw [houtB, filter_map_busId_comm d.busInteractions
+      (fun bi => { bi with multiplicity := gb bi.multiplicity, payload := bi.payload.map gb })
+      bs (fun _ => rfl), List.map_map]
+    exact List.map_congr_left (fun bi _ => by
+      simp only [Function.comp_apply]
+      rw [denseBIEval_mapExpr_of_agree gb denv (hagreeB denv hA) bi])
+  have hadm : ∀ denv, A denv → (out.admissible bs denv ↔ d.admissible bs denv) := by
+    intro denv hA
+    unfold DenseConstraintSystem.admissible
+    have hmap : out.busInteractions.map (fun bi => denseBIEval bi denv)
+        = d.busInteractions.map (fun bi => denseBIEval bi denv) := by
+      rw [houtB, List.map_map]
+      exact List.map_congr_left (fun bi _ => by
+        simp only [Function.comp_apply]
+        exact denseBIEval_mapExpr_of_agree gb denv (hagreeB denv hA) bi)
+    rw [hmap]
+  have hsub : ∀ i ∈ out.occ, i ∈ d.occ := by
+    intro i hi
+    simp only [DenseConstraintSystem.occ, List.mem_append, List.mem_flatMap] at hi
+    rcases hi with ⟨c, hc, hic⟩ | ⟨bi, hbi, hib⟩
+    · exact hCvars c hc i hic
+    · rw [houtB] at hbi
+      obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi
+      simp only [denseBIVars, List.mem_append, List.mem_flatMap] at hib
+      rcases hib with hm | ⟨e, he, hie⟩
+      · exact DenseConstraintSystem.mem_occ_of_bi hbi0 (by
+          rw [denseBIVars, List.mem_append]; exact Or.inl (hBvars _ i hm))
+      · obtain ⟨e0, he0, rfl⟩ := List.mem_map.1 he
+        exact DenseConstraintSystem.mem_occ_of_bi hbi0 (by
+          rw [denseBIVars, List.mem_append, List.mem_flatMap]
+          exact Or.inr ⟨e0, he0, hBvars e0 i hie⟩)
+  refine DensePassCorrect.ofEnvEq ?_ ?_ hsub ?_
+  · intro denv hsatout
+    have hA := hAout denv hsatout
+    exact ⟨denv, (hsatIff denv hA).1 hsatout,
+      by rw [hside denv hA]; exact BusState.equiv_refl _⟩
+  · intro hgi denv hsatout bi' hbi'
+    have hA := hAout denv hsatout
+    have hsatd := (hsatIff denv hA).1 hsatout
+    rw [houtB] at hbi'
+    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
+    have hz := hgi denv hsatd bi0 hbi0
+    rwa [← denseBIEval_mapExpr_of_agree gb denv (hagreeB denv hA) bi0] at hz
+  · intro denv hadmd hsatd
+    have hA := hAd denv hsatd
+    exact ⟨(hsatIff denv hA).2 hsatd, (hadm denv hA).2 hadmd,
+      by rw [hside denv hA]; exact BusState.equiv_refl _⟩
+
 /-- `DensePassCorrect` composes (derivations empty on both sides); `PassCorrect.andThen`
     specialised to no derivations. -/
 theorem DensePassCorrect.trans {isInput : VarId → Bool} {d1 d2 d3 : DenseConstraintSystem p}
