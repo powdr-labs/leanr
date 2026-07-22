@@ -157,16 +157,7 @@ theorem DenseEqConstraintMap.test_sound {constraints : List (DenseExpr p)}
     (M : DenseEqConstraintMap p) (hM : M.Sound constraints) (d : DenseExpr p)
     (h : M.test d = true) (denv : VarId → ZMod p)
     (hcon : ∀ c ∈ constraints, c.eval denv = 0) : d.eval denv = 0 := by
-  unfold DenseEqConstraintMap.test at h
-  cases hb : M.map[d.bHash]? with
-  | none => rw [hb] at h; exact absurd h (by simp)
-  | some ns =>
-      rw [hb] at h
-      obtain ⟨n, hn, heq⟩ := List.any_eq_true.1 h
-      obtain ⟨c, hc, hcn⟩ := hM d.bHash ns hb n hn
-      have hnd : n = d := of_decide_eq_true heq
-      rw [← hnd, ← hcn, DenseExpr.normalize_eval]
-      exact hcon c hc
+  grind [DenseEqConstraintMap.test, DenseEqConstraintMap.Sound, DenseExpr.normalize_eval]
 
 /-- A passing entailed-payload match makes the *evaluated* payloads equal whenever the constraints
     hold — the `hpayEval` hypothesis `denseDropPair_correct` takes. -/

@@ -322,12 +322,7 @@ theorem denseAddrTwoRootNeq_sound (reg : VarRegistry) (shape : MemoryBusShape)
 /-- A form recognized as identically zero evaluates to `0`. -/
 theorem denseIsZeroLin_sound (l : DenseLinExpr p) (h : denseIsZeroLin l = true)
     (denv : VarId → ZMod p) : l.eval denv = 0 := by
-  unfold denseIsZeroLin at h
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨hterms, hconst⟩ := h
-  have hz : l.norm.eval denv = l.norm.const := by
-    simp only [DenseLinExpr.eval, List.isEmpty_iff.1 hterms, List.map_nil, List.sum_nil, add_zero]
-  rw [← DenseLinExpr.norm_eval, hz, hconst]
+  grind [denseIsZeroLin, DenseLinExpr.eval, DenseLinExpr.norm_eval l denv, List.isEmpty_iff]
 
 /-- Each recognized factor of a reciprocal product `a·b + r` (`r` a nonzero constant) is nonzero. -/
 theorem denseReciprocalWitsProd_sound (a b r : DenseExpr p) (g : DenseLinExpr p)

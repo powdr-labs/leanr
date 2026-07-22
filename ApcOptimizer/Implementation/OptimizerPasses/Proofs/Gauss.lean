@@ -65,29 +65,13 @@ theorem DenseLinExpr.trySolveUnit_sound (l : DenseLinExpr p) (v x : VarId) (t : 
 theorem densePm1PivotsOf_sound (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
     (h : (x, t) ∈ densePm1PivotsOf c) (denv : VarId → ZMod p) (hc : c.eval denv = 0) :
     denv x = t.eval denv := by
-  unfold densePm1PivotsOf at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i l hlin
-    have hl : l.eval denv = 0 := by rw [← denseLinearize_eval c l hlin denv]; exact hc
-    obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
-    exact DenseLinExpr.trySolve_sound l v x t hv denv hl
+  grind [densePm1PivotsOf, denseLinearize_eval, DenseLinExpr.trySolve_sound]
 
 /-- Every unit-pivot of a dense constraint entails its equality. -/
 theorem denseUnitPivotsOf_sound (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
     (h : (x, t) ∈ denseUnitPivotsOf c) (denv : VarId → ZMod p) (hc : c.eval denv = 0) :
     denv x = t.eval denv := by
-  unfold denseUnitPivotsOf at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i l hlin
-    have hl : l.eval denv = 0 := by rw [← denseLinearize_eval c l hlin denv]; exact hc
-    obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
-    cases htr : l.trySolve v with
-    | some r => rw [htr] at hv; exact absurd hv (by simp)
-    | none =>
-        rw [htr] at hv
-        exact DenseLinExpr.trySolveUnit_sound l v x t hv denv hl
+  grind [denseUnitPivotsOf, denseLinearize_eval, DenseLinExpr.trySolveUnit_sound]
 
 /-! ## Pivot-vars bounds -/
 

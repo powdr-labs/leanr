@@ -18,19 +18,7 @@ theorem denseAffineCloser_spec (a : DenseExpr p) (la : DenseLinExpr p)
     (h : denseAffineCloser a = some la) :
     denseLinearize a = some la ∧
       ((la.const = -1 ∧ ∀ t ∈ la.terms, t.2 = 1) ∨ (la.const = 1 ∧ ∀ t ∈ la.terms, t.2 = -1)) := by
-  unfold denseAffineCloser at h
-  split at h
-  · rename_i l hl
-    split at h
-    · rename_i hcond
-      obtain ⟨hc, _⟩ := hcond
-      obtain rfl : l = la := by simpa using h
-      refine ⟨hl, ?_⟩
-      rcases hc with ⟨hc1, hc2⟩ | ⟨hc1, hc2⟩
-      · exact Or.inl ⟨hc1, fun t ht => eq_of_beq (List.all_eq_true.1 hc2 t ht)⟩
-      · exact Or.inr ⟨hc1, fun t ht => eq_of_beq (List.all_eq_true.1 hc2 t ht)⟩
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
+  grind [denseAffineCloser, List.all_eq_true]
 
 /-- `denseReadCloser` succeeds only on `A · x` with `A` linearizing to `la`, `la.const = −1` and
     every coefficient `1` (or the flipped sign). -/

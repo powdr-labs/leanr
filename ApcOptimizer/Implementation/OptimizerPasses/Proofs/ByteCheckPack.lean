@@ -66,12 +66,7 @@ theorem denseMkBytePair_operand_mem (spec : ByteXorSpec p) (busId : Nat) (e₁ e
 theorem denseMkBytePair_payload_vars (spec : ByteXorSpec p) (busId : Nat) (e₁ e₂ : DenseExpr p)
     {x : VarId} (pe : DenseExpr p) (hpe : pe ∈ (denseMkBytePair spec busId e₁ e₂).payload)
     (hx : x ∈ pe.vars) : x ∈ e₁.vars ∨ x ∈ e₂.vars := by
-  simp only [denseMkBytePair] at hpe
-  rcases spec.encode_mem _ _ _ _ pe hpe with h | h | h | h <;> rw [h] at hx
-  · simp only [DenseExpr.vars, List.not_mem_nil] at hx
-  · exact Or.inl hx
-  · exact Or.inr hx
-  · simp only [DenseExpr.vars, List.not_mem_nil] at hx
+  grind [denseMkBytePair, ByteXorSpec.encode_mem, DenseExpr.vars]
 
 /-! ## Decoded-field acceptance characterizations -/
 
@@ -413,12 +408,8 @@ theorem denseMergeStateless2_correct (isInput : VarId → Bool) (d : DenseConstr
 theorem denseMkBytePair_covered (reg : VarRegistry) (spec : ByteXorSpec p) (busId : Nat)
     (e₁ e₂ : DenseExpr p) (he₁ : e₁.CoveredBy reg) (he₂ : e₂.CoveredBy reg) :
     denseBICovered reg (denseMkBytePair spec busId e₁ e₂) := by
-  refine ⟨?_, ?_⟩
-  · intro i hi; simp only [denseMkBytePair, DenseExpr.vars, List.not_mem_nil] at hi
-  · intro pe hpe i hi
-    rcases denseMkBytePair_payload_vars spec busId e₁ e₂ pe hpe hi with h | h
-    · exact he₁ i h
-    · exact he₂ i h
+  grind [denseBICovered, denseMkBytePair, DenseExpr.CoveredBy, DenseExpr.vars,
+    denseMkBytePair_payload_vars]
 
 /-! ## Scan invariants: reconstructing the split equation -/
 

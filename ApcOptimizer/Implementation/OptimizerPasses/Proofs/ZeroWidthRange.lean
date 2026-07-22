@@ -21,17 +21,7 @@ theorem denseRangeEq?_spec (one : Bool) (bs : BusSemantics p) (facts : BusFacts 
       ∃ v, ((facts.zeroRangeEq bi.busId = true ∧ bi.payload = [v, DenseExpr.const 0] ∧ e = v)
         ∨ (one = true ∧ facts.varRangeBus bi.busId = true
             ∧ bi.payload = [v, DenseExpr.const 1] ∧ e = denseBoolC v)) := by
-  unfold denseRangeEq? at h
-  split at h
-  · rename_i v' c hpay
-    split_ifs at h with hm hA hB
-    · obtain ⟨hz, hc⟩ := hA
-      simp only [Option.some.injEq] at h
-      exact ⟨hm, e, Or.inl ⟨hz, by rw [hpay, hc, h], rfl⟩⟩
-    · obtain ⟨hone, hv, hc, _⟩ := hB
-      simp only [Option.some.injEq] at h
-      exact ⟨hm, v', Or.inr ⟨hone, hv, by rw [hpay, hc], h.symm⟩⟩
-  · exact absurd h (by simp)
+  grind [denseRangeEq?]
 
 /-- A recognised degenerate range check lives on a stateless bus. -/
 theorem denseRangeEq?_stateless (one : Bool) (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -71,15 +61,8 @@ theorem denseRangeEq?_vars (one : Bool) (bs : BusSemantics p) (facts : BusFacts 
     (d : DenseConstraintSystem p) (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (h : denseRangeEq? one bs facts bi = some e) (hbi : bi ∈ d.busInteractions) :
     ∀ z ∈ e.vars, z ∈ d.occ := by
-  obtain ⟨hm, v, hcase⟩ := denseRangeEq?_spec one bs facts bi e h
-  intro z hz
-  refine DenseConstraintSystem.mem_occ_of_bi hbi ?_
-  simp only [denseBIVars, List.mem_append, List.mem_flatMap]
-  refine Or.inr ⟨v, ?_, ?_⟩
-  · rcases hcase with ⟨_, hp', _⟩ | ⟨_, _, hp', _⟩ <;> rw [hp'] <;> simp
-  · rcases hcase with ⟨_, _, rfl⟩ | ⟨_, _, _, rfl⟩
-    · exact hz
-    · exact denseBoolC_vars v z hz
+  grind [denseRangeEq?, DenseConstraintSystem.mem_occ_of_bi, denseBIVars, denseBoolC,
+    DenseExpr.vars]
 
 /-- A recognised check's constraint holds on every satisfying dense assignment. -/
 theorem denseRangeEq?_eval (one : Bool) (hone : one = true → Nat.Prime p) (bs : BusSemantics p)

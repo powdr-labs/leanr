@@ -1162,12 +1162,8 @@ theorem denseBuildReencode_props (reg : VarRegistry) (useIdx : Bool) (csIdx : De
 
 theorem coveredBy_of_occ {r : VarRegistry} {d : DenseConstraintSystem p}
     (h : ∀ i ∈ d.occ, r.Valid i) : d.CoveredBy r := by
-  refine ⟨fun e he i hi => h i ?_, fun bi hbi => ⟨fun i hi => h i ?_, fun e he i hi => h i ?_⟩⟩
-  · exact DenseConstraintSystem.mem_occ_of_constraint he hi
-  · refine DenseConstraintSystem.mem_occ_of_bi hbi ?_
-    simp only [denseBIVars, List.mem_append]; exact Or.inl hi
-  · refine DenseConstraintSystem.mem_occ_of_bi hbi ?_
-    simp only [denseBIVars, List.mem_append, List.mem_flatMap]; exact Or.inr ⟨e, he, hi⟩
+  grind [DenseConstraintSystem.CoveredBy, DenseExpr.CoveredBy, denseBICovered, denseBIVars,
+    DenseConstraintSystem.mem_occ_of_constraint, DenseConstraintSystem.mem_occ_of_bi]
 
 theorem csCoveredBy_mono {r r' : VarRegistry} (h : r.Extends r') {d : DenseConstraintSystem p}
     (hc : d.CoveredBy r) : d.CoveredBy r' :=
@@ -1224,13 +1220,7 @@ theorem stepIdentityPost (reg reg' : VarRegistry) (d : DenseConstraintSystem p)
 theorem denseCheckReencode_polyVars (d : DenseConstraintSystem p) (xs bits : List VarId)
     (hm : Std.HashMap VarId (DenseExpr p)) (hchk : denseCheckReencode d xs bits hm = true) :
     ∀ y ∈ xs, ∀ v ∈ ((DenseExpr.var y).substF (denseGroupSubst xs hm)).vars, v ∈ bits := by
-  unfold denseCheckReencode at hchk
-  split at hchk
-  · exact absurd hchk (by simp)
-  · simp only [Bool.and_eq_true] at hchk
-    obtain ⟨⟨⟨⟨⟨⟨⟨_, _⟩, _⟩, _⟩, hvarsB⟩, _⟩, _⟩, _⟩ := hchk
-    intro y hy v hv
-    exact List.contains_iff_mem.mp (List.all_eq_true.mp (List.all_eq_true.mp hvarsB y hy) v hv)
+  grind [denseCheckReencode, List.contains_iff_mem]
 
 theorem denseBuildReencode_ext_of_eq {reg reg1 : VarRegistry} {useIdx : Bool}
     {csIdx : DenseCovIndex} {arrCs : Array (DenseExpr p)} {xs : List VarId} {freshBase : String}

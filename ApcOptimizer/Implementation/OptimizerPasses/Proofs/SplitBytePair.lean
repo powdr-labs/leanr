@@ -22,25 +22,7 @@ theorem denseAsBytePair_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     (h : denseAsBytePair bs facts bi = some (busId, spec, a, b)) :
     bi = denseMkBytePair spec busId a b ∧ facts.byteXorSpec busId = some spec := by
   obtain ⟨biBus, biMul, biPay⟩ := bi
-  unfold denseAsBytePair at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i spec' hspec
-    split at h
-    · rename_i op o1 o2 r hdec
-      split_ifs at h with hc
-      obtain ⟨hm, hop, hr⟩ := hc
-      simp only [Option.some.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl, rfl, rfl⟩ := h
-      have hpay : biPay = spec'.encode (DenseExpr.const spec'.pairOp) o1 o2 (DenseExpr.const 0) := by
-        have he := spec'.decode_eq_encode biPay op o1 o2 r hdec
-        rw [hop, hr] at he; exact he
-      refine ⟨?_, hspec⟩
-      have hm' : biMul = DenseExpr.const 1 := hm
-      show ({ busId := biBus, multiplicity := biMul, payload := biPay } : BusInteraction (DenseExpr p))
-        = denseMkBytePair spec' biBus o1 o2
-      rw [hm', hpay]; rfl
-    · exact absurd h (by simp)
+  grind [denseAsBytePair, denseMkBytePair, ByteXorSpec.decode_eq_encode]
 
 /-- The obligation predicate appearing in dense `satisfies`. -/
 private def denseP (bs : BusSemantics p) (denv : VarId → ZMod p)
