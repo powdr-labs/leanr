@@ -1,6 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
 import ApcOptimizer.Implementation.OptimizerPasses.Rewrite
+import Mathlib.Tactic.LinearCombination
 
 set_option autoImplicit false
 

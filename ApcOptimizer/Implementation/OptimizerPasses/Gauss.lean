@@ -2,7 +2,6 @@ import ApcOptimizer.Implementation.OptimizerPasses.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
-import ApcOptimizer.Implementation.OptimizerPasses.LinExprCore
 
 set_option autoImplicit false
 
@@ -40,11 +39,6 @@ def DenseExpr.varCount : DenseExpr p → Nat
 def DenseExpr.isVar : DenseExpr p → Bool
   | .var _ => true
   | _ => false
-
-/-- Decoding preserves the "is a bare variable" test. -/
-theorem VarRegistry.decodeExpr_isVar (reg : VarRegistry) (e : DenseExpr p) :
-    (reg.decodeExpr e).isVar = e.isVar := by
-  cases e <;> rfl
 
 /-! ## The pivot score (mirrors `pivotScore`) -/
 

@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchRuntime
 import ApcOptimizer.Implementation.OptimizerPasses.Bridge
+import Mathlib.Tactic.LinearCombination
 
 set_option autoImplicit false
 

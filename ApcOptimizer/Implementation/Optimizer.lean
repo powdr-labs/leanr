@@ -3,8 +3,6 @@ import ApcOptimizer.Implementation.OptimizerPasses.FactPass
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 import ApcOptimizer.Implementation.OptimizerPasses.MonicScale
 import ApcOptimizer.Implementation.OptimizerPasses.MonicScaleProof
-import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
-import ApcOptimizer.Implementation.OptimizerPasses.BytePack
 import ApcOptimizer.Implementation.OptimizerPasses.TupleRange
 import ApcOptimizer.Implementation.OptimizerPasses.TupleRangeProof
 import ApcOptimizer.Implementation.OptimizerPasses.DisconnectedComponent

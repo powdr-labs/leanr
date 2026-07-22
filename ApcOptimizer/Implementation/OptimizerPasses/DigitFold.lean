@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.DropPasses
-import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
+import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 
 set_option autoImplicit false
 

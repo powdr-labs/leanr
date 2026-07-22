@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
+import Mathlib.Tactic.LinearCombination
 
 set_option autoImplicit false
 
