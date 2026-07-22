@@ -21,12 +21,7 @@ variable {p : ℕ}
 private theorem denseConstValueEval (e : DenseExpr p) (c : ZMod p) (h : e.constValue? = some c)
     (denv : VarId → ZMod p) : e.eval denv = c := by
   rw [← DenseExpr.fold_eval e denv]
-  unfold DenseExpr.constValue? at h
-  cases hf : e.fold with
-  | const n => rw [hf] at h; simp only [Option.some.injEq] at h; subst h; rfl
-  | var j => rw [hf] at h; simp at h
-  | add a b => rw [hf] at h; simp at h
-  | mul a b => rw [hf] at h; simp at h
+  grind [DenseExpr.constValue?, DenseExpr.eval]
 
 /-- `denseEqExpr e₂ e₁` evaluates to `e₂ − e₁`. -/
 theorem denseEqExpr_eval (e2 e1 : DenseExpr p) (denv : VarId → ZMod p) :
@@ -53,42 +48,12 @@ theorem denseAddrConstsEq_sound (shape : MemoryBusShape) (S S' : BusInteraction 
   have hs := List.all_eq_true.mp h slot hslot
   show (S.payload.map (fun e => e.eval denv))[slot]?
     = (S'.payload.map (fun e => e.eval denv))[slot]?
-  rw [List.getElem?_map, List.getElem?_map]
-  split at hs
-  · rename_i e e' hP hQ
-    rcases (Bool.or_eq_true _ _).mp hs with hsyn | hs
-    · have hee : e = e' := of_decide_eq_true hsyn
-      rw [hP, hQ, hee]
-    · split at hs
-      · rename_i c c' he he'
-        have hcc : c = c' := of_decide_eq_true hs
-        rw [hP, hQ]
-        simp only [Option.map_some]
-        rw [denseConstValueEval e c he denv, denseConstValueEval e' c' he' denv, hcc]
-      all_goals exact absurd hs (by simp)
-  all_goals exact absurd hs (by simp)
+  grind [denseConstValueEval]
 
 theorem denseAddrConstsNeq_sound (shape : MemoryBusShape) (S bi : BusInteraction (DenseExpr p))
     (h : denseAddrConstsNeq shape S bi = true) (denv : VarId → ZMod p) :
     shape.address (denseBIEval S denv) ≠ shape.address (denseBIEval bi denv) := by
-  obtain ⟨slot, hslot, hcond⟩ := List.any_eq_true.1 h
-  cases hSp : S.payload[slot]? with
-  | none => simp [hSp] at hcond
-  | some e =>
-    cases hbp : bi.payload[slot]? with
-    | none => simp [hSp, hbp] at hcond
-    | some e' =>
-      cases hc : e.constValue? with
-      | none => simp [hSp, hbp, hc] at hcond
-      | some c =>
-        cases hc' : e'.constValue? with
-        | none => simp [hSp, hbp, hc, hc'] at hcond
-        | some c' =>
-          simp only [hSp, hbp, hc, hc'] at hcond
-          have hne : e.eval denv ≠ e'.eval denv := by
-            rw [denseConstValueEval e c hc denv, denseConstValueEval e' c' hc' denv]
-            exact of_decide_eq_true hcond
-          exact denseAddr_slot_neq shape S bi denv hslot hSp hbp hne
+  grind [denseAddrConstsNeq, denseConstValueEval, denseAddr_slot_neq]
 
 /-! ## The load-bearing fact application -/
 
@@ -417,16 +382,7 @@ theorem denseCandidateSplitsSweep_split {shape : MemoryBusShape} {T : Thunk (Den
 theorem denseMemEqConstraints_vars (shape : MemoryBusShape) (S Rt : BusInteraction (DenseExpr p))
     {c : DenseExpr p} (hc : c ∈ denseMemEqConstraints shape S Rt) {z : VarId} (hz : z ∈ c.vars) :
     (∃ e ∈ Rt.payload, z ∈ e.vars) ∨ (∃ e ∈ S.payload, z ∈ e.vars) := by
-  unfold denseMemEqConstraints at hc
-  obtain ⟨i, _hi, rfl⟩ := List.mem_map.1 hc
-  simp only [denseEqExpr, DenseExpr.vars, List.mem_append, List.not_mem_nil, false_or] at hz
-  rcases hz with hz | hz
-  · cases hR : Rt.payload[i]? with
-    | none => rw [hR] at hz; simp [DenseExpr.vars] at hz
-    | some e => rw [hR] at hz; exact Or.inl ⟨e, List.mem_of_getElem? hR, hz⟩
-  · cases hS : S.payload[i]? with
-    | none => rw [hS] at hz; simp [DenseExpr.vars] at hz
-    | some e => rw [hS] at hz; exact Or.inr ⟨e, List.mem_of_getElem? hS, hz⟩
+  grind [denseMemEqConstraints, denseEqExpr, DenseExpr.vars, List.mem_of_getElem?]
 
 /-- A var of a bus interaction's payload occurs in `d`. -/
 theorem DenseConstraintSystem.mem_occ_of_payload {d : DenseConstraintSystem p}

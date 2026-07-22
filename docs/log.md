@@ -4292,3 +4292,35 @@ calls are in colder constructors, pass guards, or logical fallbacks. Every runti
 proven equal to the original helper, so variable, bus-interaction, and constraint effectiveness
 are unchanged. Local A/B timing and export comparison are intentionally deferred to the draft
 PR's CI matrix. **Worked: implementation/proofs yes; runtime result pending CI.**
+### 119. Structure: proofs subfolder, guard-once pipeline, dead-code sweep, subsumed-drop consolidation
+
+Maintainability pass; per-case circuit sizes verified identical on the full openvm-eth (100) and
+sp1/rsp (100 ranked) sets plus both keccak stress sets against the pre-refactor binary.
+
+- **Layout**: the 36 `*Proof.lean` files moved to `OptimizerPasses/Proofs/` (suffix dropped);
+  impl files keep runtime definitions, `Proofs/` keeps each pass's correctness proof and wiring.
+- **Guard once**: the three stage lists no longer wrap every entry in `guardDegree` — `guardAll`
+  guards the whole list, and one generic `guardAll_chain_respectsDeg` replaces the three
+  per-list `fin_cases` theorems. Adding a pass is now a bare `(name, pass)` entry.
+- **Dead code**: the sparse `VerifiedPass` combinators (`Basic.lean`) and the dead half of
+  `BridgeSteps.lean` (`foldList`, toy pass, projection glue, `denseBIMapExpr`) removed;
+  `Adapter.lean` folded into `Measure.lean`, dropping a duplicate coverage-monotonicity lemma;
+  `Variable`/`VarId` hash-key lawfulness reduced to a single `LawfulBEq` instance (rest inferred).
+- **Consolidation**: `subsumedRange` + `subsumedCheck` now instantiate one generic
+  `denseSubsumedDropF` skeleton with per-recognizer `SubsumedRecognizerSound` obligations
+  (`SubsumedCheck.lean` + its proof file); `SubsumedRange.lean` deleted. A new subsumption shape
+  is now a recognizer + one soundness lemma.
+- **`grind`**: the recognizer-spec lemma shape (`unfold; split at h; …; Option/Prod injEq`)
+  collapses to `grind [recognizerDef]` one-liners — adopted for 14 lemmas across
+  `Proofs/{SubsumedCheck, DigitFold, XorEqExtract, TupleRange, RedundantByteDrop, BusUnify}`
+  (net −190 lines, build times unchanged). Boolean helpers are best fed as an existing iff lemma
+  (e.g. `denseOpIs_iff`), and a seeding `rw`/`obtain` is sometimes needed; grind does NOT replace
+  the hypothesis-heavy semantic soundness lemmas (BusPairCancelCheck, ZeroRegister) nor
+  induction / `linear_combination` proofs. The same shape recurs ~60× more across `Proofs/`.
+- **Pass removal probe**: `rangeForceZero` removed with its files — per-case output is
+  identical without it on every benchmark set (openvm-eth, sp1/rsp, both keccaks), so its
+  width-0 forced-zero seeding is fully covered by the surrounding passes. Probed and kept:
+  `normalize2`/`constFold2` (removal regresses apc_004/apc_040 by +4 vars each) and the cleanup
+  `dedup` (size-neutral but ~9% slower keccak without it).
+
+**Worked: yes (net −655 lines at unchanged effectiveness; runtime within noise on all sets).**

@@ -34,28 +34,7 @@ theorem denseMatchByteSingle_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     bi = denseMkByteCheck spec bi.busId x ∧ facts.byteXorSpec bi.busId = some spec ∧
       spec.bound = 256 := by
   obtain ⟨busId, mult, payload⟩ := bi
-  unfold denseMatchByteSingle at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i spec' hspec
-    split at h
-    · rename_i hb
-      split at h
-      · rename_i op o1 o2 r hdec
-        split_ifs at h with hc
-        obtain ⟨hm, hop, ho12, hr⟩ := hc
-        simp only [Option.some.injEq, Prod.mk.injEq] at h
-        obtain ⟨rfl, rfl⟩ := h
-        refine ⟨?_, hspec, of_decide_eq_true hb⟩
-        have hpay : payload = spec'.encode (.const spec'.xorOp) o1 o1 (.const 0) := by
-          have he := spec'.decode_eq_encode payload op o1 o2 r hdec
-          rw [hop, ← ho12, hr] at he; exact he
-        have hm' : mult = DenseExpr.const 1 := hm
-        show ({ busId := busId, multiplicity := mult, payload := payload } :
-          BusInteraction (DenseExpr p)) = denseMkByteCheck spec' busId o1
-        rw [hm', hpay]; rfl
-      · exact absurd h (by simp)
-    · exact absurd h (by simp)
+  grind [denseMatchByteSingle, denseMkByteCheck, ByteXorSpec.decode_eq_encode]
 
 /-- A `denseMatchRangeCheck` hit *is* the canonical range check, and carries the width facts the
     packing key needs. -/
@@ -65,21 +44,7 @@ theorem denseMatchRangeCheck_eq (bs : BusSemantics p) (facts : BusFacts p bs) {s
     bi = denseRangeCheck1 bi.busId y (.const b) ∧ facts.varRangeBus bi.busId = true ∧
       b.val ≤ 17 ∧ 2 ^ b.val = s2 := by
   obtain ⟨busId, mult, payload⟩ := bi
-  simp only [denseMatchRangeCheck] at h
-  split at h
-  · rename_i hvr
-    split at h
-    · rename_i c y' b'
-      split at h
-      · rename_i hcond
-        simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
-        obtain ⟨⟨rfl, hble⟩, hs2⟩ := hcond
-        simp only [Option.some.injEq, Prod.mk.injEq] at h
-        obtain ⟨rfl, rfl⟩ := h
-        exact ⟨rfl, hvr, hble, hs2⟩
-      · cases h
-    · cases h
-  · cases h
+  grind [denseMatchRangeCheck, denseRangeCheck1]
 
 /-- The operand of an emitted single-value byte check is a payload entry. -/
 theorem denseMkByteCheck_operand_mem (spec : ByteXorSpec p) (busId : Nat) (e : DenseExpr p) :
@@ -321,19 +286,7 @@ theorem denseFindTuplePack_split (bs : BusSemantics p) (facts : BusFacts p bs) (
 theorem denseTupleBusCandidates_inv (bs : BusSemantics p) (facts : BusFacts p bs) (maxId : Nat) :
     ∀ c ∈ denseTupleBusCandidates bs facts maxId,
       facts.tupleRangeBus c.1 = some (c.2.1, c.2.2) ∧ c.2.1 = 256 := by
-  intro c hc
-  simp only [denseTupleBusCandidates, List.mem_filterMap] at hc
-  obtain ⟨k, _hk, hfm⟩ := hc
-  cases htr : facts.tupleRangeBus k with
-  | none => simp only [htr] at hfm; exact absurd hfm (by simp)
-  | some s12 =>
-    obtain ⟨s1, s2⟩ := s12
-    simp only [htr] at hfm
-    by_cases hs1 : s1 = 256
-    · rw [if_pos hs1, Option.some.injEq] at hfm
-      subst hfm
-      exact ⟨htr, hs1⟩
-    · rw [if_neg hs1] at hfm; exact absurd hfm (by simp)
+  grind [denseTupleBusCandidates]
 
 /-- Soundness of the candidate scan: a hit recovers the chosen bus's tuple fact (byte-sized first
     slot) and the exact-width second slot `s2` the scan matched on, plus the underlying

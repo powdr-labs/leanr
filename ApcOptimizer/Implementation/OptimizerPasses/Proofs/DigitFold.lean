@@ -171,19 +171,7 @@ theorem DenseBMSoundAt.empty (denv : VarId → ZMod p) :
 theorem denseInsertEntry_soundAt {denv : VarId → ZMod p} {T : Std.HashMap VarId Nat}
     {i0 : VarId} {b0 : Nat} (hd : (denv i0).val < b0) (hT : DenseBMSoundAt denv T) :
     DenseBMSoundAt denv (denseInsertEntry T i0 b0) := by
-  intro i b hi
-  rw [show denseInsertEntry T i0 b0
-        = (if (match T[i0]? with | some be => decide (b0 < be) | none => (true : Bool)) = true
-            then T.insert i0 b0 else T) from rfl] at hi
-  split_ifs at hi with hkeep
-  · rw [Std.HashMap.getElem?_insert] at hi
-    by_cases hii : i0 = i
-    · rw [if_pos (by simpa using hii)] at hi
-      simp only [Option.some.injEq] at hi
-      subst hii; subst hi; exact hd
-    · rw [if_neg (by simpa using hii)] at hi
-      exact hT i b hi
-  · exact hT i b hi
+  grind [DenseBMSoundAt, denseInsertEntry]
 
 /-- `goCands` preserves the invariant (probed bounds sound by `denseProbedSlotBoundAt_sound`). -/
 theorem denseGoCands_soundAt (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -387,17 +375,7 @@ theorem denseTryLadder_spec (pos : Bool) (terms : List (VarId × ZMod p))
     (g : ℕ) (sorted : List (VarId × ZMod p))
     (h : denseTryLadder pos terms = some (g, sorted)) :
     terms.Perm sorted ∧ 0 < g ∧ denseIsLadder pos g sorted = true := by
-  unfold denseTryLadder at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i t rest hms
-    split_ifs at h with hcond
-    simp only [Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    have hperm : (terms.mergeSort (fun a b => coeffNat pos a.2 ≤ coeffNat pos b.2)).Perm terms :=
-      List.mergeSort_perm terms _
-    rw [hms] at hperm
-    exact ⟨hperm.symm, hcond.1, hcond.2⟩
+  grind [denseTryLadder, List.mergeSort_perm]
 
 /-- Bound lookup returns byte-sized (`≤ 256`) bounds paired to the terms in order. -/
 theorem denseLookupBounds_spec (bounds : Std.HashMap VarId Nat) :

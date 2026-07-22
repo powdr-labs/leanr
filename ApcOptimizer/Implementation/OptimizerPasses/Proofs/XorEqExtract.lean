@@ -52,25 +52,7 @@ theorem denseXorEq?_spec (bs : BusSemantics p) (facts : BusFacts p bs)
               ∧ c = denseEqExpr r (denseComplExpr o2))
           ∨ (256 ≤ p ∧ spec.bound = 256 ∧ o2 = DenseExpr.const 255
               ∧ c = denseEqExpr r (denseComplExpr o1))) := by
-  unfold denseXorEq? at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i spec hspec
-    split at h
-    · rename_i hmult
-      split at h
-      · rename_i op o1 o2 r hdec
-        split at h
-        · rename_i hop
-          refine ⟨spec, o1, o2, r, hspec, hmult, hop ▸ hdec, ?_⟩
-          split_ifs at h with h1 h2 h3 h4
-          · exact Or.inl ⟨h1, by simpa using h.symm⟩
-          · exact Or.inr (Or.inl ⟨h2, by simpa using h.symm⟩)
-          · exact Or.inr (Or.inr (Or.inl ⟨h3.1, h3.2.1, h3.2.2, by simpa using h.symm⟩))
-          · exact Or.inr (Or.inr (Or.inr ⟨h4.1, h4.2.1, h4.2.2, by simpa using h.symm⟩))
-        · exact absurd h (by simp)
-      · exact absurd h (by simp)
-    · exact absurd h (by simp)
+  grind [denseXorEq?]
 
 theorem denseXorEq?_eval (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p)
     (bi : BusInteraction (DenseExpr p)) (c : DenseExpr p) (denv : VarId → ZMod p)
@@ -153,31 +135,7 @@ theorem denseBoolEq?_spec (bs : BusSemantics p) (facts : BusFacts p bs)
               ∨ (o2 = DenseExpr.const 0 ∧ c = denseEqExpr r o1)))
           ∨ (∃ aop, spec.andOp = some aop ∧ op = DenseExpr.const aop ∧
               ((o1 = DenseExpr.const 0 ∨ o2 = DenseExpr.const 0) ∧ c = r))) := by
-  unfold denseBoolEq? at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i spec hspec
-    split at h
-    · rename_i hmult
-      split at h
-      · rename_i op o1 o2 r hdec
-        refine ⟨spec, op, o1, o2, r, hspec, hmult, hdec, ?_⟩
-        split at h
-        · rename_i hor
-          obtain ⟨oop, hoeq, hopeq⟩ := denseOpIs_iff.1 hor
-          refine Or.inl ⟨oop, hoeq, hopeq, ?_⟩
-          split_ifs at h with h1 h2 h3 h4
-          · exact Or.inl ⟨h1, by simpa using h.symm⟩
-          · exact Or.inr ⟨h3, by simpa using h.symm⟩
-        · split at h
-          · rename_i hand
-            obtain ⟨aop, haeq, hopeq⟩ := denseOpIs_iff.1 hand
-            refine Or.inr ⟨aop, haeq, hopeq, ?_⟩
-            split_ifs at h with h1
-            · exact ⟨h1, by simpa using h.symm⟩
-          · exact absurd h (by simp)
-      · exact absurd h (by simp)
-    · exact absurd h (by simp)
+  grind [denseBoolEq?, denseOpIs_iff]
 
 theorem denseBoolEq?_eval (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p)
     (bi : BusInteraction (DenseExpr p)) (c : DenseExpr p) (denv : VarId → ZMod p)

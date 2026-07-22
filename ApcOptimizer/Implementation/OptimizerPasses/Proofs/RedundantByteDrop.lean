@@ -35,11 +35,7 @@ private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
 theorem denseByteCheckOperands?_stateless (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (ops : List (DenseExpr p))
     (h : denseByteCheckOperands? bs facts bi = some ops) : bs.isStateful bi.busId = false := by
-  unfold denseByteCheckOperands? at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i spec hspec
-    exact (facts.byteXorSpec_sound bi.busId spec hspec).1
+  grind [denseByteCheckOperands?, BusFacts.byteXorSpec_sound]
 
 /-- If every recognized operand evaluates to a byte, the evaluated message is accepted. -/
 theorem denseByteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts p bs)
