@@ -39,15 +39,32 @@ def denseCBiEvalWithV (ops : DenseZModOps p) (cbi : CBi p) (pt : List (ZMod p)) 
     multiplicity := denseIExprEvalWithV ops pt cbi.mult,
     payload := cbi.payload.map (fun ie => denseIExprEvalWithV ops pt ie) }
 
+/-- Check that every compiled constraint vanishes, stopping at the first failure. -/
+def denseAllZeroCWV (ops : DenseZModOps p) (pt : List (ZMod p)) : List (IExpr p) → Bool
+  | [] => true
+  | ie :: rest =>
+    if denseIExprEvalWithV ops pt ie = ops.zero then denseAllZeroCWV ops pt rest else false
+
+/-- Check every compiled bus obligation, skipping payload evaluation when multiplicity is zero. -/
+def denseAllBusCWV (ops : DenseZModOps p) (bs : BusSemantics p)
+    (pt : List (ZMod p)) : List (CBi p) → Bool
+  | [] => true
+  | cbi :: rest =>
+    let mult := denseIExprEvalWithV ops pt cbi.mult
+    if mult = ops.zero then denseAllBusCWV ops bs pt rest
+    else
+      let v : BusInteraction (ZMod p) :=
+        { busId := cbi.busId,
+          multiplicity := mult,
+          payload := cbi.payload.map (fun ie => denseIExprEvalWithV ops pt ie) }
+      if bs.violatesConstraint v then false else denseAllBusCWV ops bs pt rest
+
 /-- `survivesAllCW`, over a value-only point: compiled items' zero test plus interactions'
     obligation check. -/
-def denseSurvivesAllCWV (ops : DenseZModOps p) (isZero : ZMod p → Bool)
-    (bs : BusSemantics p) (ces : List (IExpr p)) (cbis : List (CBi p))
+def denseSurvivesAllCWV (ops : DenseZModOps p) (bs : BusSemantics p)
+    (ces : List (IExpr p)) (cbis : List (CBi p))
     (pt : List (ZMod p)) : Bool :=
-  ces.all (fun ie => isZero (denseIExprEvalWithV ops pt ie)) &&
-    cbis.all (fun cbi =>
-      let v := denseCBiEvalWithV ops cbi pt
-      isZero v.multiplicity || !bs.violatesConstraint v)
+  denseAllZeroCWV ops pt ces && denseAllBusCWV ops bs pt cbis
 
 /-! ### The uncompiled fallback
 
@@ -88,9 +105,7 @@ def denseCompiledSurvV (bs : BusSemantics p) (es : List (DenseExpr p))
   match denseCompileEs keys es, denseCompileBis keys bis with
   | some ces, some cbis =>
     let ops : DenseZModOps p := denseZModOps
-    let dec : DecidableEq (ZMod p) := inferInstance
-    let isZero : ZMod p → Bool := fun v => @decide (v = ops.zero) (dec v ops.zero)
-    ⟨fun pt => denseSurvivesAllCWV ops isZero bs ces cbis pt⟩
+    ⟨fun pt => denseSurvivesAllCWV ops bs ces cbis pt⟩
   | _, _ => ⟨denseSurvivesAllMV bs es bis keys⟩
 
 /-! ## Value-only lazy box enumeration -/
@@ -132,11 +147,41 @@ def denseScanStopV : Option (DenseCandsV p) → Bool
   | none => false
   | some cands => cands.all Option.isNone
 
+mutual
+  /-- Specialized box traversal for the forced-value scan. -/
+  def denseScanBoxLoopV (surv : List (ZMod p) → Bool) :
+      List (FiniteDomain p) → List (ZMod p) → Option (DenseCandsV p) → Option (DenseCandsV p)
+    | [], pt, acc =>
+      if denseScanStopV acc then acc else denseScanStepV surv acc pt
+    | .explicit values :: rest, pt, acc => denseScanExplicitV surv rest pt values acc
+    | .range bound :: rest, pt, acc => denseScanRangeV surv rest pt 0 bound acc
+  termination_by doms _ _ => (doms.length + 1, 0, 0)
+
+  def denseScanExplicitV (surv : List (ZMod p) → Bool) (rest : List (FiniteDomain p))
+      (pt : List (ZMod p)) :
+      List (ZMod p) → Option (DenseCandsV p) → Option (DenseCandsV p)
+    | [], acc => acc
+    | v :: vs, acc =>
+      if denseScanStopV acc then acc
+      else denseScanExplicitV surv rest pt vs (denseScanBoxLoopV surv rest (v :: pt) acc)
+  termination_by values _ => (rest.length + 1, 1, values.length)
+
+  def denseScanRangeV (surv : List (ZMod p) → Bool) (rest : List (FiniteDomain p))
+      (pt : List (ZMod p)) (start : Nat) :
+      Nat → Option (DenseCandsV p) → Option (DenseCandsV p)
+    | 0, acc => acc
+    | n + 1, acc =>
+      if denseScanStopV acc then acc
+      else denseScanRangeV surv rest pt (start + 1) n
+        (denseScanBoxLoopV surv rest (((start : Nat) : ZMod p) :: pt) acc)
+  termination_by count _ => (rest.length + 1, 2, count)
+end
+
 /-- The value-only box scan, streamed lazily over the symbolic domains; the caller
     (`denseForcedOverV`) zips the final mask with `keys` once, after the scan finishes. -/
 def denseScanBoxV (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p)) :
     Option (DenseCandsV p) :=
-  denseBoxFoldV (denseScanStepV surv) denseScanStopV doms none
+  denseScanBoxLoopV surv doms.reverse [] none
 
 /-! ## Redundancy check, value-only -/
 
