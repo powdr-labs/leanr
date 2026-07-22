@@ -4,37 +4,16 @@ set_option autoImplicit false
 
 /-! # Dense stable live projection / tombstone machinery
 
-The liveness-array (`alive : Array Bool`) tombstone machinery of `busPairCancel`, over the dense
-`VarId` representation: `denseLiveSeg` (the live-entries projection) and its algebra
-(`denseLiveSeg_add/peel/skip/congr/mem/split/drop`), `denseLiveCount` (the termination measure) and
-its decrease, the tail-recursive runtime builder `denseLiveArrGo`/`denseLiveArr` (with
-`denseLiveArr_eq`), and the projection to a constraint system `denseMkCs` (with `denseMkCs_all`).
-
-These definitions are concrete over `Array (BusInteraction (DenseExpr p))` /
-`DenseConstraintSystem p` rather than polymorphic over an arbitrary element type, even though their
-*proofs* use nothing about `BusInteraction (DenseExpr p)` (they are pure `Array` + `Array Bool`
-liveness algebra) — matching the concrete-`VarId`-implementation style of the surrounding passes.
-
-## Consumption by `denseCancelLoop` (`BusPairCancel.lean`)
-
-`denseCancelLoop` maintains a fixed `arr` and a growing tombstone array `alive : Array Bool`, uses
-`denseMkCs cs0 arr alive checks` as the logical intermediate system fed to `denseDropPair_correct`
-(`BusPairCancelCore.lean`, which takes `hsplit : d'.busInteractions = A ++ S :: B ++ R :: C`),
-derives that split from `denseLiveSeg_split` (accept) and rewrites the tombstoned projection with
-`denseLiveSeg_drop`, tracks termination via the strict `denseLiveCount` decrease each accepted drop
-produces (two live entries removed), and materializes the final compact interaction list exactly
-once with `denseLiveArr` = the ghost `denseLiveSeg` projection via `denseLiveArr_eq`. The initial
-all-live system reduces to the input via `denseMkCs_all`. -/
+The liveness-array (`alive : Array Bool`) tombstone machinery: `denseLiveSeg` (the live-entries
+projection) and its algebra, `denseLiveCount` (the termination measure), the tail-recursive runtime
+builder `denseLiveArr` (= `denseLiveSeg` via `denseLiveArr_eq`), and the projection `denseMkCs`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ### Stable live projection (tombstoned interaction array)
-
-`denseLiveSeg arr alive lo n` is the live entries of `arr` at the `n` positions `[lo, lo+n)`,
-skipping tombstoned ones (structural recursion on the count `n`, so the equation lemmas unfold
-cleanly). -/
+/-! `denseLiveSeg arr alive lo n` is the live entries of `arr` at positions `[lo, lo+n)`, skipping
+tombstoned ones (structural recursion on the count `n`, so equation lemmas unfold cleanly). -/
 def denseLiveSeg (arr : Array (BusInteraction (DenseExpr p))) (alive : Array Bool) :
     Nat → Nat → List (BusInteraction (DenseExpr p))
   | _, 0 => []
@@ -96,13 +75,9 @@ theorem denseLiveSeg_mem (arr : Array (BusInteraction (DenseExpr p))) (alive : A
   rw [denseLiveSeg_peel arr alive (lo + d) e a halive hget]
   exact List.mem_cons.2 (Or.inl rfl)
 
-/-! ### The stable-state split and update
-
-When the search accepts a pair `(iP, jP)` (both live, `iP < jP < size`), the live projection factors
-as `A ++ S :: B ++ R :: C'` (`denseLiveSeg_split`) — feeding `denseDropPair_correct`.
-Tombstoning the two positions changes the projection to `A ++ B ++ C'` (`denseLiveSeg_drop`), so the
-post-drop logical `busInteractions` (`… ++ checks`) matches the `A ++ B ++ C ++ checks` shape
-`denseDropPair_correct` produces. Both are pure `denseLiveSeg` algebra. -/
+/-! On accepting a pair `(iP, jP)`, the live projection factors as `A ++ S :: B ++ R :: C'`
+(`denseLiveSeg_split`); tombstoning the two positions changes it to `A ++ B ++ C'`
+(`denseLiveSeg_drop`) — the shape `denseDropPair_correct` produces. -/
 
 /-- The live projection factors around two live positions `iP < jP`. -/
 theorem denseLiveSeg_split (arr : Array (BusInteraction (DenseExpr p))) (alive : Array Bool)
@@ -139,7 +114,6 @@ theorem denseLiveSeg_drop (arr : Array (BusInteraction (DenseExpr p))) (alive : 
     denseLiveSeg arr alive' 0 size
       = denseLiveSeg arr alive 0 iP ++ denseLiveSeg arr alive (iP + 1) (jP - iP - 1)
           ++ denseLiveSeg arr alive (jP + 1) (size - jP - 1) := by
-  -- `alive'` is `false` at `iP` and `jP` and agrees with `alive` elsewhere.
   have hgetIP : alive'[iP]?.getD false = false := by
     rw [halive', Array.getElem?_setIfInBounds_ne (show jP ≠ iP from by omega),
       Array.getElem?_setIfInBounds_self_of_lt hisz]; rfl
@@ -177,14 +151,9 @@ theorem denseLiveSeg_drop (arr : Array (BusInteraction (DenseExpr p))) (alive : 
 def denseLiveCount (arr : Array (BusInteraction (DenseExpr p))) (alive : Array Bool) : Nat :=
   (denseLiveSeg arr alive 0 arr.size).length
 
-/-! ### Tail-recursive runtime builder
-
-`denseLiveSeg` is the proof-level *specification*; `denseLiveArr` is the tail-recursive array-builder
-used at every runtime site (the per-candidate `A`/`B` regions and the one final materialization): it
-accumulates in reverse and reverses once, and — given the maintained size invariant
-`alive.size = arr.size` and `lo + n ≤ arr.size` — indexes with `arr[lo]`/`alive[lo]` (no `Option`).
-`denseLiveArr_eq` proves it equal to `denseLiveSeg`, so the correctness proofs continue to reason
-about `denseLiveSeg` exclusively. -/
+/-! `denseLiveArr` is the tail-recursive runtime array-builder (accumulate reversed, reverse once);
+`denseLiveArr_eq` proves it equal to the spec `denseLiveSeg`, so proofs reason about `denseLiveSeg`
+exclusively. -/
 def denseLiveArrGo (arr : Array (BusInteraction (DenseExpr p))) (alive : Array Bool)
     (halive : alive.size = arr.size) :
     (lo n : Nat) → lo + n ≤ arr.size → List (BusInteraction (DenseExpr p)) →
@@ -229,8 +198,7 @@ theorem denseLiveArr_eq (arr : Array (BusInteraction (DenseExpr p))) (alive : Ar
   rw [denseLiveArr, denseLiveArrGo_eq]; simp
 
 /-- The logical constraint system at a point in the loop: the original system with its interactions
-    replaced by the live projection followed by the checks emitted so far. Materialized once, at the
-    end of the loop; intermediate values live only inside the (erased) correctness proof. -/
+    replaced by the live projection followed by the checks emitted so far. -/
 def denseMkCs (cs0 : DenseConstraintSystem p) (arr : Array (BusInteraction (DenseExpr p)))
     (alive : Array Bool) (checks : List (BusInteraction (DenseExpr p))) : DenseConstraintSystem p :=
   { cs0 with busInteractions := denseLiveSeg arr alive 0 arr.size ++ checks }

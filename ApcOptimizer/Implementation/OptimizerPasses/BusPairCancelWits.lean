@@ -6,59 +6,23 @@ set_option autoImplicit false
 
 /-! # Dense witness/form indices for `busPairCancel`
 
-The witness-index machinery `busPairCancel` uses: the per-invocation position indices the
-acceptance test consults for bound-deriving witnesses (`denseBuildBoundIdx`/`denseDropWitsIdxGo`/
-`denseFirstBoundIn`/`denseDropWits`) and range-checked-form witnesses
-(`denseBuildFormIdx`/`denseDropFormWits`), plus the thin `_mem` proof layer that guarantees every
-returned witness is a live interaction other than the dropped pair — the exact shape
-`denseCancelLoop` (`BusPairCancel.lean`) feeds into `denseCheckCancel_sound`'s
-(`BusPairCancelCheckProof.lean`) `hwits`/`hfwits` hypotheses. Definitions and their (small) proof
-layer live together here.
+The per-invocation position indices the acceptance test consults for bound-deriving witnesses
+(`denseBuildBoundIdx`/`denseDropWits`) and range-checked-form witnesses
+(`denseBuildFormIdx`/`denseDropFormWits`), plus the `_mem` layer proving every returned witness is a
+live interaction other than the dropped pair (the `hwits`/`hfwits` shape `denseCheckCancel_sound`
+takes).
 
-## `denseInteractionBoundPat` — the payload-pattern-hoisted variant
-
-`denseInteractionBoundPat` is `denseInteractionBound` with the per-*interaction* multiplicity
-constant and constant-payload pattern hoisted out of the per-payload-*variable* loop of
-`denseBuildBoundIdx` (callers querying every payload variable would otherwise recompute the
-full-payload pattern fold once per variable). It is definitionally the same function as
-`denseInteractionBound` (`DigitFold.lean`) at the canonical arguments
-(`denseInteractionBoundPat_eq`, `rfl`). It is placed in this file (rather than beside
-`denseInteractionBound`) because `denseBuildBoundIdx` is its only current consumer.
-
-## Untrusted indices, re-checked at use
-
-`denseBuildBoundIdx`/`denseBuildFormIdx` build candidate-position lists **once** over the initial
-`arr`. They are *untrusted*: a stale or wrong entry costs time, never soundness, because
-`denseDropWitsIdxGo`/`denseDropFormWits` re-check, at every use, that the position is in range,
-still **live** (`alive[k]?`), distinct from the dropped pair (`≠ S`, `≠ R`), and — for the bound
-witness — that it *still* derives a `denseInteractionBound`. Hence no `_mem`/correctness lemma is
-stated for the two builders: the `_mem` guarantees below rest entirely on the re-checks in the
-lookups.
-
-## The `_mem` layer
-
-`denseDropWitsIdxGo_mem`/`denseDropFormWits_mem` (and the helper `denseFirstBoundIn_mem`) prove
-every returned witness lies in `denseLiveSeg arr alive 0 arr.size` and differs from `S`/`R` — via
-`denseLiveSeg_mem` (`BusPairCancelLive.lean`), the connector between a re-checked live position and
-the ghost live projection. `denseDropWits_mem`/`denseDropFormWits_mem` then lift that to
-`bi ∈ A ++ B ++ C ++ emitted`, given the caller's split of the live entries other than the pair into
-`A ++ B ++ C` (`horig`) and of the previously-emitted checks (`hchecks`). `denseCancelLoop`
-(`BusPairCancel.lean`) supplies `horig`/`hchecks` from `denseLiveSeg_split`, instantiates
-`emitted := checks`, and hands the results straight to `denseCheckCancel_sound` as
-`hwits`/`hfwits` (`∀ v, ∀ bi ∈ wits v, bi ∈ A ++ B ++ C ++ checks`). The lemmas are stated
-generically in `A B C` in exactly that shape. -/
+The builders are **untrusted**: a stale or wrong entry costs time, never soundness, because the
+lookups re-check at every use that the position is in range, still live, distinct from the pair, and
+(for the bound witness) still derives a `denseInteractionBound`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ### `denseInteractionBoundPat` (pattern-hoisted `denseInteractionBound`) -/
-
-/-- `denseInteractionBound` with the multiplicity constant and the constant-payload pattern computed
-    once by the caller — they are per-*interaction* values, and callers that query every payload
-    variable of an interaction would otherwise recompute the pattern (a full payload fold) per
-    variable. Definitionally the same function at the canonical arguments
-    (`denseInteractionBoundPat_eq`). -/
+/-- `denseInteractionBound` with the multiplicity constant and constant-payload pattern hoisted out
+    of the caller's per-payload-variable loop (they are per-interaction values). Definitionally the
+    same function at the canonical arguments (`denseInteractionBoundPat_eq`). -/
 def denseInteractionBoundPat (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (mval? : Option (ZMod p))
     (pat : List (Option (ZMod p))) (i : VarId) : Option Nat :=
@@ -71,14 +35,9 @@ def denseInteractionBoundPat (bs : BusSemantics p) (facts : BusFacts p bs)
       | none => none
       | some slot => facts.slotBound bi.busId mval pat slot
 
-/-! ### The bound-witness position index -/
-
-/-- Candidate positions of bound-deriving interactions, per variable: every array position whose
-    interaction derives a `denseInteractionBound` for the variable, ascending. Built once per
-    invocation (the per-interaction multiplicity constant and constant-payload pattern are hoisted
-    via `denseInteractionBoundPat`); **untrusted** — `denseDropWitsIdxGo` re-checks liveness, the
-    dropped pair, and the bound itself at every use, so a stale or wrong entry costs time, never
-    soundness. -/
+/-- Candidate positions of bound-deriving interactions, per variable (ascending), built once per
+    invocation. Untrusted — `denseDropWitsIdxGo` re-checks liveness, the dropped pair, and the bound
+    at every use. -/
 def denseBuildBoundIdx (bs : BusSemantics p) (facts : BusFacts p bs)
     (arr : Array (BusInteraction (DenseExpr p))) : Std.HashMap VarId (List Nat) :=
   (arr.toList.zipIdx).foldr (fun bik m =>
@@ -97,9 +56,8 @@ def denseBuildBoundIdx (bs : BusSemantics p) (facts : BusFacts p bs)
       | _ => m) m) ∅
 
 /-- The scan behind `denseDropWits`: the first of `v`'s indexed candidate positions (ascending,
-    skipping dead entries and any value equal to the dropped pair) that still derives a
-    `denseInteractionBound` for `v` — exactly the interaction a full array scan would find first, at
-    bucket cost. -/
+    skipping dead entries and the dropped pair) that still derives a `denseInteractionBound` for
+    `v`. -/
 def denseDropWitsIdxGo {bs : BusSemantics p} (facts : BusFacts p bs)
     (arr : Array (BusInteraction (DenseExpr p))) (alive : Array Bool)
     (S R : BusInteraction (DenseExpr p))
@@ -115,9 +73,7 @@ def denseDropWitsIdxGo {bs : BusSemantics p} (facts : BusFacts p bs)
     else denseDropWitsIdxGo facts arr alive S R v ks
 
 /-- First interaction of a plain list deriving a `denseInteractionBound` for `v` — used to consult
-    the emitted byte checks, which live outside the stable array (`checksOld`), preserving the
-    compact-array behaviour where the emitted checks sit in the array's tail and can witness an
-    earlier pair's byte bound. -/
+    the emitted byte checks `checksOld`, which live outside the stable array. -/
 def denseFirstBoundIn {bs : BusSemantics p} (facts : BusFacts p bs) (v : VarId) :
     List (BusInteraction (DenseExpr p)) → Option (BusInteraction (DenseExpr p))
   | [] => none
@@ -127,10 +83,8 @@ def denseFirstBoundIn {bs : BusSemantics p} (facts : BusFacts p bs) (v : VarId) 
     | none => denseFirstBoundIn facts v rest
 
 /-- The witness lookup for a candidate drop: the first bound-deriving interaction other than the
-    dropped pair — first among the live stable-array entries (through the per-variable position
-    index `bidx`, ascending, exactly the order a full-array scan would visit), then among the
-    previously-emitted checks `checksOld` — followed by this drop's emitted checks. Every returned
-    interaction is a member of the remaining region (`denseDropWits_mem`). -/
+    dropped pair — first among the live stable-array entries (via `bidx`), then among the
+    previously-emitted checks `checksOld` — followed by this drop's emitted checks. -/
 def denseDropWits {bs : BusSemantics p} (facts : BusFacts p bs)
     (bidx : Std.HashMap VarId (List Nat))
     (arr : Array (BusInteraction (DenseExpr p))) (alive : Array Bool)
@@ -144,13 +98,9 @@ def denseDropWits {bs : BusSemantics p} (facts : BusFacts p bs)
     | some bi => bi :: emitted
     | none => emitted
 
-/-! ### The range-checked-form witness index -/
-
 /-- Candidate positions for range-checked forms, per variable: interactions on a *stateless* bus
-    (this pass only ever tombstones stateful memory pairs) carrying a compound payload slot that
-    mentions the variable, at most four per variable. Built once per invocation; **untrusted** —
-    `denseDropFormWits` re-checks liveness and the dropped pair at every use, so a stale or wrong
-    entry costs time, never soundness. -/
+    carrying a compound payload slot mentioning the variable, at most four per variable. Untrusted —
+    `denseDropFormWits` re-checks liveness and the dropped pair at every use. -/
 def denseBuildFormIdx (bs : BusSemantics p) (arr : Array (BusInteraction (DenseExpr p))) :
     Std.HashMap VarId (List Nat) :=
   (arr.toList.zipIdx).foldl (fun m bik =>
@@ -179,13 +129,10 @@ def denseDropFormWits (fidx : Std.HashMap VarId (List Nat))
 
 /-! ### The `_mem` proof layer
 
-Every returned witness is a live interaction at a position `≠ S`/`≠ R` — i.e. a member of the
-post-drop `denseLiveSeg` projection, mapped into `A ++ B ++ C ++ emitted`. These are the
-`hwits`/`hfwits` membership hypotheses `denseCheckCancel_sound` consumes; `denseCancelLoop`
-threads `denseLiveSeg`-projected `A`/`B`/`C` and this drop's `checks` as `emitted`. -/
+Every returned witness is a live interaction at a position `≠ S`/`≠ R`, mapped into
+`A ++ B ++ C ++ emitted` — the `hwits`/`hfwits` hypotheses `denseCheckCancel_sound` consumes. -/
 
-/-- Every witness the indexed scan returns is a live entry other than the dropped pair — via
-    `denseLiveSeg_mem`. -/
+/-- Every witness the indexed scan returns is a live entry other than the dropped pair. -/
 theorem denseDropWitsIdxGo_mem {bs : BusSemantics p} (facts : BusFacts p bs)
     (arr : Array (BusInteraction (DenseExpr p))) (alive : Array Bool)
     (S R : BusInteraction (DenseExpr p))
@@ -202,7 +149,7 @@ theorem denseDropWitsIdxGo_mem {bs : BusSemantics p} (facts : BusFacts p bs)
     intro bi h
     rw [denseDropWitsIdxGo] at h
     split_ifs at h with hk hcond
-    · -- in range, live, not the dropped pair
+    ·
       revert h
       cases hb : denseInteractionBound bs facts arr[k] v with
       | some b =>

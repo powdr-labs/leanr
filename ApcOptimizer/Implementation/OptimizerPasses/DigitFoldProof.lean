@@ -3,19 +3,9 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
 
 set_option autoImplicit false
 
-/-! # Soundness of the dense fact-derived bounds map
-
-`VarId`-level soundness for the dense bounds map built by `denseBuild` (`DigitFold.lean`), proved
-over dense environments `VarId → ZMod p`. This is the shared bounds-map fact consumed by both
-`digitFold` and `carryBranch` (and, via the swap below, `hintCollapse`): a value bound `denv i < b`
-holds for every assignment `denv` whose bus interactions are non-violating (the second half of
-dense satisfaction).
-
-The value bounds are threaded through the build recursion as a fixed-`denv` invariant
-`DenseBMSoundAt` — the same pattern as `DomainBatchProof.DenseTableSoundAt`. The per-interaction
-`denseInteractionBound_sound` and the constant/pattern soundness lemmas are reused from
-`DomainBatchProof.lean`; the probed-bound soundness (`denseProbedSlotBoundAt_sound`) is proved
-here. -/
+/-! # Soundness of the dense fact-derived bounds map (`denseBuild`, `DigitFold.lean`): a value
+bound `denv i < b` holds for every assignment whose bus interactions are non-violating. Threaded
+through the build recursion as the fixed-`denv` invariant `DenseBMSoundAt`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -166,8 +156,8 @@ theorem denseProbedSlotBoundAt_sound (bs : BusSemantics p) (facts : BusFacts p b
 
 /-! ## The fixed-`denv` build invariant and its induction -/
 
-/-- Soundness of a dense bounds map at a fixed environment: every stored bound is a strict
-    upper bound on the environment's value for its variable (value-level, no decode). -/
+/-- At a fixed environment, every stored bound is a strict upper bound on the environment's
+    value for its variable. -/
 def DenseBMSoundAt (denv : VarId → ZMod p) (T : Std.HashMap VarId Nat) : Prop :=
   ∀ i b, T[i]? = some b → (denv i).val < b
 
@@ -195,8 +185,7 @@ theorem denseInsertEntry_soundAt {denv : VarId → ZMod p} {T : Std.HashMap VarI
       exact hT i b hi
   · exact hT i b hi
 
-/-- `goCands` preserves the invariant (each candidate for a matching variable inserts a probed
-    bound, sound by `denseProbedSlotBoundAt_sound`). -/
+/-- `goCands` preserves the invariant (probed bounds sound by `denseProbedSlotBoundAt_sound`). -/
 theorem denseGoCands_soundAt (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (i : VarId) (denv : VarId → ZMod p)
     (hob : (denseBIEval bi denv).multiplicity ≠ 0 →
@@ -218,8 +207,8 @@ theorem denseGoCands_soundAt (bs : BusSemantics p) (facts : BusFacts p bs)
         · exact ih _ hT
       · exact ih _ hT
 
-/-- `addVars` preserves the invariant (each raw variable inserts its interaction bound, sound by
-    `denseInteractionBound_sound`, then its probed bounds via `goCands`). -/
+/-- `addVars` preserves the invariant (interaction bounds sound by `denseInteractionBound_sound`,
+    then probed bounds via `goCands`). -/
 theorem denseAddVars_soundAt (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (denv : VarId → ZMod p)
     (hob : (denseBIEval bi denv).multiplicity ≠ 0 →
@@ -273,26 +262,13 @@ theorem denseBuild_sound (bs : BusSemantics p) (facts : BusFacts p bs)
   unfold denseBuild at hlk
   exact denseAddAll_soundAt bs facts denv bis hbus ∅ (DenseBMSoundAt.empty denv) i b hlk
 
-/-! # Correctness of the dense digit-fold pass
-
-`VarId`-level correctness for `denseDigitFoldPass` (`DigitFold.lean`), proved over dense
-environments `VarId → ZMod p`. The recognizer soundness (`densePairByteOps?_bytes`), the ladder
-soundness chain (`denseIsLadder_sum` / `denseEnv_forced` / `denseTryLadder_spec` /
-`denseLookupBounds_spec` / `denseAttemptLadder_sound` / `denseSolveOperand_sound`) and the scan
-(`denseFindFold_sound`) are proved directly over the dense defs. The representation-independent
-ℕ-side layer (`ladderVal` / `unpack?` / `solutions` / `solutions_complete` / `solutions_forced` /
-`coeffNat` / `tval` / `signum` / `ladderVal_le_box`) is reused unqualified via `open DigitFold`. The
-fact-derived value bounds are consumed through `denseBuild_sound` (above); the byte recognizer's
-operand bounds through `BusFacts.byteXorSpec_sound`/`ByteXorSpec.decode_map` applied value-level to
-`denseBIEval` (inlined below, kept off the `ByteCheckPackProof` import path so `HintCollapseProof`,
-which imports this file, is unaffected). The pass correctness reduces the forced substitution to
-`DenseConstraintSystem.substF_denseCorrect` (`DomainBatchProof.lean`). -/
+/-! # Correctness of the dense digit-fold pass (`denseDigitFoldPass`, `DigitFold.lean`), reducing
+the forced substitution to `DenseConstraintSystem.substF_denseCorrect` (`DomainBatchProof.lean`). -/
 
 /-! ## Byte-pair recognizer soundness -/
 
-/-- Acceptance of a recognized pair check bounds both operands below 256: the acceptance
-    characterization is the value-level `BusFacts.byteXorSpec_sound` applied to the decoded
-    payload. -/
+/-- Acceptance of a recognized pair check bounds both operands below 256 (via the value-level
+    `BusFacts.byteXorSpec_sound`). -/
 theorem densePairByteOps?_bytes (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (x y : DenseExpr p)
     (h : densePairByteOps? bs facts bi = some (x, y))
@@ -363,8 +339,8 @@ theorem denseIsLadder_sum [NeZero p] (pos : Bool) :
       push_cast
       ring
 
-/-- The env-side forcing theorem: if the solution grid for a byte-checked dense ladder is the
-    singleton `[ds]`, any satisfying assignment's digit vector is exactly `ds`. -/
+/-- If the solution grid for a byte-checked dense ladder is the singleton `[ds]`, any satisfying
+    assignment's digit vector is exactly `ds`. -/
 theorem denseEnv_forced [NeZero p] (hp : 256 < p) (pos : Bool) (g : ℕ) (hg : 0 < g) (K : ZMod p)
     (l : List (VarId × ZMod p)) (hlad : denseIsLadder pos g l = true)
     (Bs : List ℕ) (hB : ∀ B ∈ Bs, B ≤ 256)
@@ -519,9 +495,8 @@ theorem denseSolveOperand_sound [NeZero p] (hp : 256 < p) (bounds : Std.HashMap 
 
 /-! ## The scan entailment -/
 
-/-- Scanning the dense interactions for a byte-checked ladder operand with a forced digit: on a hit
-    `(i, dd)`, every satisfying assignment forces `denv i = dd`. The value bounds are threaded as a
-    fixed-`denv` hypothesis; the per-interaction obligations come from dense satisfaction. -/
+/-- On a hit `(i, dd)`, every satisfying assignment forces `denv i = dd`; value bounds threaded as
+    a fixed-`denv` hypothesis. -/
 theorem denseFindFold_sound [NeZero p] (hp : 256 < p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (bounds : Std.HashMap VarId Nat) (denv : VarId → ZMod p)
     (hB : ∀ w bnd, bounds[w]? = some bnd → (denv w).val < bnd) :
@@ -562,9 +537,8 @@ theorem denseFindFold_sound [NeZero p] (hp : 256 < p) (bs : BusSemantics p) (fac
                   exact denseSolveOperand_sound hp bounds y i dd hsy denv hB hby
               | none => rw [hsy] at h; dsimp only at h; exact ih hrest i dd h
 
-/-- The forced substitution entailment: if `denseFindFold` over the fact-built bounds map fires
-    `(i, dd)`, every satisfying assignment of `d` has `denv i = dd`. Bounds validity is discharged by
-    `denseBuild_sound` from the bus-obligation half of dense satisfaction. -/
+/-- If `denseFindFold` over the fact-built bounds map fires `(i, dd)`, every satisfying assignment
+    of `d` has `denv i = dd` (bounds validity from `denseBuild_sound`). -/
 theorem denseDigitFoldFindFold_entails [NeZero p] (hp : 256 < p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) (i : VarId) (dd : ℕ)
     (h : denseFindFold bs facts (denseBuild bs facts d.busInteractions) d.busInteractions
@@ -604,8 +578,7 @@ theorem denseSubst_eq_substF (d : DenseConstraintSystem p) (i : VarId) (t : Dens
 
 /-! ## The pass -/
 
-/-- Coverage preservation of the dense digit-fold transform (extracted from the pass's `covered`
-    field): a constant substitution keeps every mentioned variable registered. -/
+/-- Coverage preservation: a constant substitution keeps every mentioned variable registered. -/
 theorem denseDigitFoldF_covered (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
     (denseDigitFoldF bs facts d).CoveredBy reg := by
@@ -619,11 +592,9 @@ theorem denseDigitFoldF_covered (reg : VarRegistry) (bs : BusSemantics p) (facts
         exact DenseConstraintSystem.subst_covered hcov (DenseExpr.coveredBy_const reg _)
   · rw [if_neg hp]; exact hcov
 
-/-- **Digit-fold correctness.** When `256 < p`, the fired constant substitution preserves the
-    satisfying set (the forced digit holds for every satisfying assignment via
-    `denseDigitFoldFindFold_entails`), so it is `DensePassCorrect` through
-    `DenseConstraintSystem.substF_denseCorrect`; the no-fire and small-`p` branches are the identity
-    (`DensePassCorrect.refl`). -/
+/-- Digit-fold correctness: the fired constant substitution preserves the satisfying set (forced
+    digit via `denseDigitFoldFindFold_entails`), through `DenseConstraintSystem.substF_denseCorrect`;
+    the no-fire and small-`p` branches are the identity. -/
 theorem denseDigitFoldF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     DensePassCorrect reg.isInput d (denseDigitFoldF bs facts d) [] bs := by
@@ -658,9 +629,7 @@ theorem denseDigitFoldF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts
           · rw [if_neg hji] at hjt; exact absurd hjt (by simp)
   · rw [if_neg hp]; exact DensePassCorrect.refl reg.isInput d bs
 
-/-- The dense bounded-payload digit fold pass. Substitutes one fact-forced witness limb per
-    invocation (the cleanup fixpoint re-solves the shrunken ladder on the next iteration).
-    Correctness over `VarId` via `denseDigitFoldF_correct`. -/
+/-- The dense bounded-payload digit fold pass; correctness via `denseDigitFoldF_correct`. -/
 def denseDigitFoldPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     denseDigitFoldF

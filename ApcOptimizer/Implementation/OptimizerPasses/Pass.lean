@@ -4,28 +4,15 @@ set_option autoImplicit false
 
 /-! # Dense pass results, composition, degree guard, and fixpoint
 
-An implementation-only dense analogue of the `VerifiedPass`/`PassResult` framework. A dense pass
-maps a registry + covered dense system to an extended registry, a dense output, and dense
-derivations, **bundled with**:
-
-* `ext` — the registry only grows (old IDs stay valid, resolving identically);
-* `covered`/`dcovered` — every ID in the output/derivations is valid in the new registry;
-* `correct` — a `PassCorrect` on the *decoded* systems.
-
-Because `correct` is stated on decodes, a dense pass is discharged by proving `PassCorrect`
-between the decoded input and output systems — in practice via `DensePassCorrect.lift` inside
-the `DenseVerifiedPassW.of`/`ofExtending` builders. Composition here is pure plumbing: it
-threads the registry, concatenates dense derivations, and composes the `PassCorrect` certificates
-using registry-stability to align intermediate decodes — no `decode` runs between passes at runtime
-(the `ext`/`covered`/`correct` fields are `Prop` and erase). The dense degree guard and fixpoint use
-the dense measures (`Measure.lean`), which equal the spec measures on the decoded system, so
-degree and stopping decisions match the spec pipeline. -/
+Implementation-only dense analogue of the `VerifiedPass`/`PassResult` framework: a dense pass maps
+a registry + covered dense system to an extended registry, dense output, and dense derivations,
+bundled with an extension proof, coverage, and a `PassCorrect` on the decoded systems. Composition
+threads the registry and concatenates derivations; the degree guard and fixpoint use the dense
+measures (`Measure.lean`), which equal the spec measures on the decode. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-! ## Coverage monotonicity and append -/
 
 theorem DenseComputationMethod.CoveredBy.mono {r r' : VarRegistry} (h : r.Extends r')
     {cm : DenseComputationMethod p} (hc : cm.CoveredBy r) : cm.CoveredBy r' := by
@@ -47,10 +34,8 @@ theorem DenseDerivations.coveredBy_append {r : VarRegistry} {a b : DenseDerivati
   · exact ha x h
   · exact hb x h
 
-/-! ## Dense pass result and pass -/
-
-/-- The result of a dense pass: extended registry, dense output and derivations, with the extension,
-    coverage, and `PassCorrect`-on-decode evidence (all `Prop`, hence erased at runtime). -/
+/-- The result of a dense pass: extended registry, dense output and derivations, with extension,
+    coverage, and `PassCorrect`-on-decode evidence (all `Prop`, erased at runtime). -/
 structure DensePassResult (reg : VarRegistry) (d : DenseConstraintSystem p) (bs : BusSemantics p) where
   reg' : VarRegistry
   out : DenseConstraintSystem p
@@ -61,21 +46,19 @@ structure DensePassResult (reg : VarRegistry) (d : DenseConstraintSystem p) (bs 
   correct : PassCorrect (reg.decodeCS d) (reg'.decodeCS out) (reg'.decodeDerivs derivs) bs
 
 /-- A proof-carrying dense pass that may consult proven `BusFacts`. Takes the input coverage as an
-    (erased) hypothesis, so the framework can thread it through composition. -/
+    (erased) hypothesis so the framework can thread it through composition. -/
 abbrev DenseVerifiedPassW (p : ℕ) :=
   (reg : VarRegistry) → (d : DenseConstraintSystem p) → d.CoveredBy reg →
     (bs : BusSemantics p) → (facts : BusFacts p bs) → DensePassResult reg d bs
 
-/-- The identity dense pass. -/
 def DenseVerifiedPassW.id : DenseVerifiedPassW p :=
   fun reg d hcov bs _ =>
     { reg' := reg, out := d, derivs := [], ext := VarRegistry.Extends.refl reg, covered := hcov,
       dcovered := by intro x hx; simp at hx,
       correct := PassCorrect.refl (reg.decodeCS d) bs }
 
-/-- Sequential composition: run `f`, then `g` on its output; concatenate dense derivations. The
-    `PassCorrect`s compose via registry-stability (`decodeDerivs` of `f`'s derivations is unchanged
-    under `g`'s registry extension). -/
+/-- Sequential composition: run `f`, then `g` on its output; concatenate dense derivations (the
+    `PassCorrect`s compose via registry-stability). -/
 def DenseVerifiedPassW.andThen (f g : DenseVerifiedPassW p) : DenseVerifiedPassW p :=
   fun reg d hcov bs facts =>
     let r1 := f reg d hcov bs facts
@@ -103,9 +86,8 @@ def DenseRespectsDeg (b : DegreeBound) (f : DenseVerifiedPassW p) : Prop :=
     (reg.decodeCS d).withinDegree b →
     ((f reg d hcov bs facts).reg'.decodeCS (f reg d hcov bs facts).out).withinDegree b
 
-/-- Wrap a dense pass with a degree guard on the *dense* system (no decode): if the output would
-    exceed the bound `b`, keep the input. The dense check equals the spec check on the decoded system
-    (`decodeCS_withinDegreeB`), so this reproduces the spec guard's decision. -/
+/-- Degree guard on the dense system (no decode): if the output would exceed `b`, keep the input.
+    The dense check equals the spec check (`decodeCS_withinDegreeB`). -/
 def DenseVerifiedPassW.guardDegree (b : DegreeBound) (f : DenseVerifiedPassW p) :
     DenseVerifiedPassW p :=
   fun reg d hcov bs facts =>
@@ -151,19 +133,15 @@ theorem denseChain_respectsDeg {b : DegreeBound} {l : List (DenseVerifiedPassW p
 
 /-! ## Dense fixpoint
 
-The dense size key is well-founded (inverse image of `<` on `Nat ×ₗ Nat ×ₗ Nat`), so iterating to a
-fixpoint terminates with no budget, exactly as the spec `iterateToFixpoint`. Because the dense size
-key equals the spec size key on the decoded system, the stopping decision matches the spec loop's. -/
+The dense size key is well-founded, so iterating to a fixpoint terminates with no budget. Because
+it equals the spec size key on the decode, the stopping decision matches the spec loop's. -/
 
 theorem denseSizeKey_wf :
     WellFounded (fun a b : DenseConstraintSystem p => a.sizeKey < b.sizeKey) :=
   InvImage.wf DenseConstraintSystem.sizeKey wellFounded_lt
 
-/-- The dense fixpoint worker, with the input's already-computed size key threaded through (`_hk`):
-    each cycle computes only the *output*'s key (`d.sizeKey`, a fresh occurrence-list walk plus
-    `HashSet` build), never recomputing the input's, which is already available from the previous
-    cycle's output. Correct by construction (each kept step is `PassCorrect`, derivations
-    concatenating; stopping returns the input by reflexivity). -/
+/-- The dense fixpoint worker. `_hk` threads in the input's already-computed size key so each cycle
+    only recomputes the output's. Correct by construction. -/
 def denseIterateToFixpointFrom (f : DenseVerifiedPassW p) (reg : VarRegistry)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (bs : BusSemantics p)
     (facts : BusFacts p bs) (k : Nat ×ₗ Nat ×ₗ Nat) (_hk : d.sizeKey = k) :
@@ -188,16 +166,14 @@ def denseIterateToFixpointFrom (f : DenseVerifiedPassW p) (reg : VarRegistry)
   termination_by d.sizeKey
   decreasing_by rw [_hk]; exact h
 
-/-- Iterate a dense pass to a fixpoint on the dense size key. Computes the initial key once and
-    threads it into `denseIterateToFixpointFrom`. Correct by construction. -/
+/-- Iterate a dense pass to a fixpoint on the dense size key; correct by construction. -/
 def denseIterateToFixpoint (f : DenseVerifiedPassW p) (reg : VarRegistry)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (bs : BusSemantics p)
     (facts : BusFacts p bs) : DensePassResult reg d bs :=
   denseIterateToFixpointFrom f reg d hcov bs facts d.sizeKey rfl
 
-/-- `denseIterateToFixpointFrom` preserves the degree bound: every kept step is `f` (which respects
-    the bound) and the stopping case returns the unchanged input. Proved by strong induction on the
-    dense `sizeKey` measure the loop recurses on, generalizing the registry and the threaded key. -/
+/-- `denseIterateToFixpointFrom` preserves the degree bound (strong induction on the `sizeKey`
+    measure, registry and threaded key generalized). -/
 theorem denseIterateToFixpointFrom_respectsDeg {b : DegreeBound} {f : DenseVerifiedPassW p}
     (hf : DenseRespectsDeg b f) (reg : VarRegistry) (d : DenseConstraintSystem p) :
     ∀ (hcov : d.CoveredBy reg) (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -237,8 +213,8 @@ theorem denseIterateToFixpointFrom_monotone {f : DenseVerifiedPassW p} (reg : Va
         (le_of_lt (by rw [hk]; exact h))
     · exact le_refl _
 
-/-- **The dense cleanup loop can only improve the circuit.** `denseIterateToFixpoint f`'s output
-    never has a larger lexicographic `sizeKey` than its input. -/
+/-- The dense cleanup loop can only improve the circuit: the output's `sizeKey` never exceeds the
+    input's. -/
 theorem denseIterateToFixpoint_monotone {f : DenseVerifiedPassW p} (reg : VarRegistry)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (bs : BusSemantics p)
     (facts : BusFacts p bs) :

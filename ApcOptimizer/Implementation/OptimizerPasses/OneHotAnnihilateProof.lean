@@ -5,24 +5,12 @@ set_option autoImplicit false
 
 /-! # Dense one-hot annihilation: proof and wiring
 
-`DensePassCorrect` proof for the dense `oneHotAnnihilate` transform (`OneHotAnnihilate.lean`),
-lifted to the audited spec via `DenseVerifiedPassW.of`: the transform appends `x = 0` for every
-one-hot-annihilated variable `x` via `DensePassCorrect.denseAddConstraints`, a single-shot
-"add entailed constraints" step.
-
-Every recogniser structure lemma (`denseAffineCloser_spec`/`denseReadCloser_spec`), the annihilation
-algebra (`denseSum_mul_eq_zero`/`denseSum_map_mul_left`/`denseAnnihilate`/`denseCofactor_eval` via
-`denseLinearize_eval`), and the entailment (`denseDeadVars_entailed`, against
-`DenseConstraintSystem.satisfies`) are proved directly over `VarId`/`DenseExpr` — `eq_of_beq` on the
-`==` comparisons goes through the `DecidableEq`-derived lawful `BEq` on `DenseExpr`. The added
-`.var x`'s occurrence is discharged directly from the closer `.mul A (.var x) ∈
-algebraicConstraints` (`mem_occ_of_constraint`), not through `denseLinearize_vars`. -/
+`DensePassCorrect` proof for `OneHotAnnihilate.lean` via `DensePassCorrect.denseAddConstraints`,
+lifted through `DenseVerifiedPassW.of`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-! ## Recogniser structure -/
 
 /-- The affine-closer recogniser's guarantee: the cofactor is `Σ mᵢ − 1` (`k = 1`) or `1 − Σ mᵢ`
     (`k = −1`); in both, `const = −k` and every coefficient is `k`. -/
@@ -67,8 +55,6 @@ theorem denseReadCloser_spec (c : DenseExpr p) (x : VarId) (la : DenseLinExpr p)
     | add e1 e2 => simp [denseReadCloser] at h
     | mul e1 e2 => simp [denseReadCloser] at h
 
-/-! ## The annihilation algebra -/
-
 /-- `Σ (denv mᵢ) · x = 0` from `denv mᵢ · x = 0` for every marker. -/
 theorem denseSum_mul_eq_zero (terms : List (VarId × ZMod p)) (denv : VarId → ZMod p) (xe : ZMod p)
     (hv : ∀ t ∈ terms, denv t.1 * xe = 0) : (terms.map (fun t => denv t.1)).sum * xe = 0 := by
@@ -108,10 +94,7 @@ theorem denseCofactor_eval {A : DenseExpr p} {la : DenseLinExpr p}
     List.map_congr_left (fun t ht => by rw [hcoeff t ht])]
   rw [denseSum_map_mul_left]
 
-/-! ## The entailment: every dead variable is forced to `0` -/
-
-/-- Every `x ∈ denseDeadVars d` is forced to `0` by the system's constraints, against
-    `DenseConstraintSystem.satisfies`. -/
+/-- Every `x ∈ denseDeadVars d` is forced to `0` by the system's constraints. -/
 theorem denseDeadVars_entailed (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (denv : VarId → ZMod p) (hsat : d.satisfies bs denv) (x : VarId)
     (hx : x ∈ denseDeadVars d) : (DenseExpr.var x).eval denv = 0 := by
@@ -153,8 +136,6 @@ theorem denseDeadVars_entailed (d : DenseConstraintSystem p) (bs : BusSemantics 
         rw [mul_comm] at hcv0
         exact hcv0
     exact denseAnnihilate hveval hqeval
-
-/-! ## Coverage and the single-shot correctness -/
 
 /-- Every variable of an added `x = 0` occurs in `d`: the closer `.mul A (.var x)` is a present
     constraint mentioning `x`. -/
@@ -199,8 +180,7 @@ theorem denseOneHotAnnihilateF_correct (reg : VarRegistry) (bs : BusSemantics p)
       obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hc
       exact denseDeadVars_entailed d bs denv hsat x hx)
 
-/-- **The dense one-hot annihilation pass.** Fact-free; connected to the audited spec via
-    `DensePassCorrect.lift` (through `of`). -/
+/-- The dense one-hot annihilation pass. -/
 def denseOneHotAnnihilatePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (fun _ _ d => denseOneHotAnnihilateF d) (fun _ _ _ => [])
     (fun reg _ _ d hcov => denseOneHotAnnihilateF_covered reg d hcov)

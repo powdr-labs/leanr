@@ -5,44 +5,9 @@ set_option autoImplicit false
 
 /-! # Dense flagFold drop sub-passes: box-tautology + pointwise-duplicate removal
 
-This file defines two of the flagFold drop sub-passes: box-tautology replacement and
-pointwise-duplicate stateless check removal. The entailed nonlinear substitution sub-pass
-(`FxSubst.lean`) and the box-rewrite sub-pass of the scheduled composite are defined elsewhere.
-This file is **impl-only**: no correctness theorem is stated here, and no
-`DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here — the two top-level transforms
-`denseBoxTautoDropF`/`densePointwiseDupDropF` are shaped like `denseFlagUnifyF`
-(`Dense/FlagUnifyNative.lean`) minus the `facts` argument (see below), so the prover wraps each
-directly with `DenseVerifiedPassW.of`.
-
-Notes:
-
-* **No `facts` parameter.** Neither transform consults `BusFacts` (their certificates are purely
-  `findDomainAlg`/domain-box-enumeration and syntactic/domain-agreement checks), so both drop
-  `facts` entirely rather than threading an unused parameter; the prover's `of` wrapper (which
-  always takes `(bs) (facts) (d)` at that layer) will simply ignore `facts` at the call site, the
-  same way `denseConstantFoldPass` ignores both `bs` and `facts` (`Dense/ExprOps.lean`).
-* **`bs` is threaded but unused by the box-tautology output.** `denseBoxTautoDropF` keeps a `bs`
-  parameter (unused, named `_bs`) for shape parity with the other `denseXxxF` transforms in this
-  cluster; it costs nothing (erased at the call site once the prover's wrapper ignores it too).
-  Part C's `bs` *is* genuinely read at runtime (`bs.isStateful`), so `densePointwiseDupDropF` uses
-  it directly.
-* `denseFindDomainAlg`/`denseAssignments` (`Dense/DomainFold.lean`) and `denseEnvOfFast`
-  (`Dense/DomainBatch.lean`) are reused unchanged from elsewhere in the codebase.
-* `DenseExpr.splitAt` (`Dense/RootPairUnifyNative.lean`) is reused unchanged for
-  `denseSlotEqCert`.
-* `DenseExpr.mentions` (`Dense/SubstMap.lean`) is reused unchanged for `denseSlotEqCert`'s
-  carrier-membership gate.
-* `DenseExpr.constValue?` (`Dense/DropPasses.lean`) is reused unchanged for `denseMsgEqCert`.
-* `DenseExpr.bHash` (`Dense/Dedup.lean`) is reused wholesale as the structural hash used
-  throughout this file, rather than defining a new one: it mixes the same constants
-  (`11`/`13`/`17`/`19`) over the same recursion, hashing `hash y` directly at variable leaves.
-* `DenseExpr.pdVarBloom` (below) is a Bloom mask of an expression's variables, defined via the
-  same shift/mask recursion as `DenseExpr.bHash`.
-* `densePdDropSet` (below) uses an imperative structure (`Id.run do` with `mut` accumulators):
-  three mutable maps (`buckets`/`firstMemo`/`drops`), a `pos` counter incremented once per outer
-  iteration regardless of the stateful/degenerate-multiplicity early exits, a per-bucket linear
-  scan with a `dropped`-latch inner loop, and a lazily-memoized first-of-class recursion via
-  `firstMemo[e.pos]?`. -/
+Impl-only (no correctness here): the two transforms `denseBoxTautoDropF`/`densePointwiseDupDropF`
+are shaped like `denseFlagUnifyF` minus `facts`, and wrapped with `DenseVerifiedPassW.of` in
+`FlagFoldDropsProof.lean`. Part C's `bs` is read (`bs.isStateful`); part B's is unused. -/
 
 namespace ApcOptimizer.Dense
 
@@ -50,10 +15,7 @@ variable {p : ℕ}
 
 /-! ## Part B: box-tautology replacement (dense) -/
 
-/-- The single-variable constraints of a list (the only `findDomainAlg` sources). The
-    distinct-variable count uses the bucketed dedup (`hashedEraseDups_eq` — the identical list, so
-    the filter and everything downstream is value-unchanged); occurrence-heavy constraints made the
-    plain quadratic `eraseDups` measurable here. -/
+/-- The single-variable constraints of a list (the only `findDomainAlg` sources). -/
 def denseSingleVarCs (all : List (DenseExpr p)) : List (DenseExpr p) :=
   all.filter (fun c => (HashedDedup.hashedEraseDups (hash ·) c.vars).length == 1)
 
@@ -67,10 +29,8 @@ def denseBtCert (singles : List (DenseExpr p)) (c : DenseExpr p) : Bool :=
    decide ((doms.map (fun vd => vd.2.length)).prod ≤ 32) &&
    (denseAssignments doms).all (fun pt => decide (c.eval (denseEnvOfFast pt) = 0)))
 
-/-- A cheap version of `denseBtCert` over a precomputed (pure, memoized) domain lookup — a
-    prefilter only; accepted candidates re-run the real certificate. The distinct-variable list is
-    computed once (bucketed, `hashedEraseDups_eq` keeps it the identical list) instead of three
-    `eraseDups` scans per constraint. -/
+/-- A cheap prefilter over a precomputed domain lookup; accepted candidates re-run the real
+    `denseBtCert`. -/
 def denseBtPre (domOf : VarId → Option (List (ZMod p))) (c : DenseExpr p) : Bool :=
   let vs := HashedDedup.hashedEraseDups (hash ·) c.vars
   2 ≤ vs.length &&
@@ -84,27 +44,23 @@ def denseBtKeep (singles : List (DenseExpr p)) (domOf : VarId → Option (List (
     (c : DenseExpr p) : Bool :=
   denseBtPre domOf c && denseBtCert singles c
 
-/-- Replace certified box tautologies by the trivial constraint (parameterized over the
-    precomputed prefilter inputs). -/
+/-- Replace certified box tautologies by the trivial constraint `0`. -/
 def DenseConstraintSystem.boxTautoReplaceWith (d : DenseConstraintSystem p)
     (singles : List (DenseExpr p)) (domOf : VarId → Option (List (ZMod p))) :
     DenseConstraintSystem p :=
   { d with algebraicConstraints := d.algebraicConstraints.map (fun c =>
       if denseBtKeep singles domOf c then DenseExpr.const 0 else c) }
 
-/-- Part B's runtime transform: prime `p` only (re-checked at runtime, as elsewhere in this
-    cluster); identity otherwise. Builds the per-variable domain cache in one linear pass over all
-    occurrences (the `m.contains v` guard against a quadratic pre-dedup). No `facts` parameter
-    (see the module header) — shaped as `(pw) → (bs) → (d) → out`. -/
+/-- Box-tautology drop (part B): a multi-variable constraint that vanishes at every point of its
+    variables' proven finite-domain box is replaced by the literal `0`. E.g. with `x, y ∈ {0,1}`
+    established by single-variable constraints, a constraint that is `0` on all four `(x,y)` points
+    becomes `0`. Prime `p` only; identity otherwise. -/
 def denseBoxTautoDropF (pw : PrimeWitness p) (_bs : BusSemantics p)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then
     let singles := denseSingleVarCs d.algebraicConstraints
-    -- Bucket the single-variable constraints by their variable once: `denseFindDomainAlg singles v`
-    -- skips every constraint not mentioning `v`, and a single-variable constraint mentions exactly
-    -- its one variable — so scanning `v`'s own bucket (original order preserved) yields the identical
-    -- domain without the O(#singles) `mentions` walk per distinct variable (the pass's dominant cost
-    -- on large circuits).
+    -- Bucket single-variable constraints by their one variable, so `denseFindDomainAlg` scans only
+    -- that variable's bucket (same domain, no O(#singles) walk per variable).
     let singlesBy : Std.HashMap VarId (List (DenseExpr p)) :=
       singles.reverse.foldl (fun m c =>
         match HashedDedup.hashedEraseDups (hash ·) c.vars with
@@ -130,10 +86,8 @@ def denseBoxAgree (singles : List (DenseExpr p)) (R R' : DenseExpr p) : Bool :=
   (denseAssignments doms).all (fun pt =>
     decide (R.eval (denseEnvOfFast pt) = R'.eval (denseEnvOfFast pt)))
 
-/-- Slot-pair certificate: the two expressions are syntactically equal, or they decompose over the
-    same carrier with the same constant coefficient and their offset difference vanishes on the
-    joint (proven, small) domain box of the offset variables. Reuses `DenseExpr.splitAt`
-    (`Dense/RootPairUnifyNative.lean`) and `DenseExpr.mentions` (`Dense/SubstMap.lean`). -/
+/-- Slot-pair certificate: the two expressions are syntactically equal, or decompose over the same
+    carrier with the same constant coefficient and offsets agreeing on the joint domain box. -/
 def denseSlotEqCert (singles : List (DenseExpr p)) (e e' : DenseExpr p) : Bool :=
   e == e' ||
   e.vars.eraseDups.any (fun x =>
@@ -142,8 +96,7 @@ def denseSlotEqCert (singles : List (DenseExpr p)) (e e' : DenseExpr p) : Bool :
     | some (k, R), some (k2, R') => k2 == k && denseBoxAgree singles R R'
     | _, _ => false)
 
-/-- Full-message certificate: same bus, same constant multiplicity, pointwise-equal payloads.
-    Reuses `DenseExpr.constValue?` (`Dense/DropPasses.lean`). -/
+/-- Full-message certificate: same bus, same constant multiplicity, pointwise-equal payloads. -/
 def denseMsgEqCert (singles : List (DenseExpr p)) (bi bi' : BusInteraction (DenseExpr p)) : Bool :=
   bi.busId == bi'.busId &&
   (match bi.multiplicity.constValue?, bi'.multiplicity.constValue? with
@@ -172,14 +125,10 @@ def densePdKeep (bs : BusSemantics p) (singles : List (DenseExpr p))
 
 /-! ### The fast duplicate analysis (dense)
 
-The certified `densePdKeep`/`densePdFirst` above pay an O(#interactions) `findIdx?` (deep
-structural equality) plus a prefix scan of `denseMsgEqCert`s per interaction; `densePdDropSet`
-computes the identical drop set in one left-to-right sweep, bucketed by the certificate's
-necessary invariants and prefiltered by per-slot structural hashes and variable Bloom masks,
-consumed as a *prefilter* only. -/
+`densePdDropSet` computes the identical drop set as `densePdKeep` in one bucketed left-to-right
+sweep, prefiltered by per-slot structural hashes and variable Bloom masks. -/
 
-/-- A 64-bit Bloom mask of the expression's variables (for the shared-variable prefilter), via the
-    same shift/mask recursion `DenseExpr.bHash` uses. -/
+/-- A 64-bit Bloom mask of the expression's variables (for the shared-variable prefilter). -/
 def DenseExpr.pdVarBloom : DenseExpr p → UInt64
   | .const _ => 0
   | .var y => (1 : UInt64) <<< (UInt64.ofNat ((hash y).toNat % 64))
@@ -205,9 +154,7 @@ structure DensePdEntry (p : ℕ) where
   kept : Bool
 
 /-- The value-keyed set of interactions the sweep decides to drop — the same set `densePdKeep`
-    would drop (drops are value-based there too: `findIdx?` evaluates every duplicate at its first
-    occurrence). Uses an imperative structure (three mutable accumulators, the per-bucket scan, the
-    lazily-memoized first-of-class recursion); see the module header. -/
+    would drop (drops are value-based: `findIdx?` evaluates each duplicate at its first occurrence). -/
 def densePdDropSet (bs : BusSemantics p) (singles : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) :
     Std.HashMap UInt64 (List (BusInteraction (DenseExpr p))) := Id.run do
@@ -218,7 +165,7 @@ def densePdDropSet (bs : BusSemantics p) (singles : List (DenseExpr p))
   for bi in bis do
     if !bs.isStateful bi.busId then
       match bi.multiplicity.constValue? with
-      | none => pure ()   -- can neither be dropped nor certify a drop
+      | none => pure ()
       | some m =>
         let key := mixHash (hash bi.busId) (mixHash (hash m.val) (hash bi.payload.length))
         let sigs : Array (UInt64 × UInt64) :=
@@ -236,7 +183,6 @@ def densePdDropSet (bs : BusSemantics p) (singles : List (DenseExpr p))
           for e in entries do
             if !dropped && e.kept && densePdSigsCompatible e.sigs sigs then
               if denseMsgEqCert singles e.bi bi then
-                -- lazily decide whether `e` is first of its class
                 let isFirst ← do
                   match firstMemo[e.pos]? with
                   | some b => pure b
@@ -255,10 +201,8 @@ def densePdDropSet (bs : BusSemantics p) (singles : List (DenseExpr p))
     pos := pos + 1
   return drops
 
-/-- The verdict-map keep test: drop `bi` iff its value bucket holds a *certified* dropped twin
-    (an entry provably `densePdKeep = false`, structurally equal to `bi`). The
-    `{b // densePdKeep … = false}` subtype is load-bearing: each stored entry carries its own
-    `densePdKeep = false` proof. -/
+/-- Drop `bi` iff its value bucket holds a certified dropped twin. The `{b // densePdKeep … = false}`
+    subtype is load-bearing: each stored entry carries its own `densePdKeep = false` proof. -/
 def densePdVerdictKeep {p : ℕ} {P : BusInteraction (DenseExpr p) → Prop}
     (verdicts : Std.HashMap UInt64 (List { b : BusInteraction (DenseExpr p) // P b }))
     (bi : BusInteraction (DenseExpr p)) : Bool :=
@@ -266,8 +210,7 @@ def densePdVerdictKeep {p : ℕ} {P : BusInteraction (DenseExpr p) → Prop}
   | some l => !(l.any (fun b => decide (b.val = bi)))
   | none => true
 
-/-- A `densePdVerdictKeep` drop carries its certificate: the bucket entry is structurally equal to
-    `bi`, so its stored property transports. -/
+/-- A `densePdVerdictKeep` drop carries its certificate (the bucket entry equals `bi`). -/
 theorem densePdVerdictKeep_false {p : ℕ} {P : BusInteraction (DenseExpr p) → Prop}
     (verdicts : Std.HashMap UInt64 (List { b : BusInteraction (DenseExpr p) // P b }))
     (bi : BusInteraction (DenseExpr p)) (h : densePdVerdictKeep verdicts bi = false) : P bi := by
@@ -280,12 +223,10 @@ theorem densePdVerdictKeep_false {p : ℕ} {P : BusInteraction (DenseExpr p) →
     obtain ⟨b, _hb, hbe⟩ := List.any_eq_true.1 h
     exact of_decide_eq_true hbe ▸ b.property
 
-/-- Part C's runtime transform: prime `p` only; identity otherwise. The fast sweep flags exactly
-    `densePdKeep`'s drop set; the certified `densePdKeep` then re-verifies each flagged drop **once
-    per distinct value** — `densePdKeep` is value-determined (its `findIdx?` locates the value's
-    first occurrence), so equal interactions share one run instead of paying the deep-equality scan
-    and prefix certificates per occurrence. No `facts` parameter (see the module header) — shaped
-    as `(pw) → (bs) → (d) → out`. -/
+/-- Pointwise-duplicate drop (part C): a stateless interaction (e.g. a range check) is dropped when
+    an earlier kept interaction sends a message equal to it at every point of the shared finite
+    domain box — the duplicate check is redundant. The fast `densePdDropSet` sweep flags the drops;
+    `densePdKeep` re-verifies each once per distinct value. Prime `p` only; identity otherwise. -/
 def densePointwiseDupDropF (pw : PrimeWitness p) (bs : BusSemantics p)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then

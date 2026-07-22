@@ -4,18 +4,8 @@ import Mathlib.Algebra.Field.ZMod
 
 set_option autoImplicit false
 
-/-! # Shared finite-domain lemmas and bounds
-
-Representation-agnostic building blocks used by the dense finite-domain passes
-(`DomainBatch`, `DomainFold`, `DigitFold`) and the master-theorem completeness proof
-(`Implementation/Optimizer.lean`):
-
-* the `eval_congr` family — evaluation of an expression, bus interaction, or computation method
-  depends only on the values of the variables it reads;
-* the enumeration/probe helpers — the strict-upper-bound probe `probeMax`, its `capBound`
-  cap, the enumeration caps `maxDomainBound`/`maxEnumSize`, and `mem_range_cast` (a value below
-  a bound lies in the cast image of `List.range`).
--/
+/-! # Shared finite-domain lemmas and bounds: the `eval_congr` family (evaluation depends only on
+the variables read) and the enumeration/probe helpers. -/
 
 variable {p : ℕ}
 
@@ -50,10 +40,8 @@ theorem BusInteraction.eval_congr (bi : BusInteraction (Expression p))
         exact Or.inr ⟨e, he, hx⟩))
   simp only [BusInteraction.eval, hmult, hpay]
 
-/-- A computation method reads only its variables (a companion of the `Expression`/
-    `BusInteraction` `eval_congr` lemmas it is built from); the master-theorem completeness
-    proof (`Implementation/Optimizer.lean`) consumes it. `ComputationMethod` is the audited
-    spec type. -/
+/-- A computation method reads only its variables; consumed by the master-theorem completeness
+    proof (`Implementation/Optimizer.lean`). -/
 theorem ComputationMethod.eval_congr (cm : ComputationMethod p) (e1 e2 : Variable → ZMod p) :
     (∀ v ∈ cm.vars, e1 v = e2 v) → cm.eval e1 = cm.eval e2 := by
   induction cm with

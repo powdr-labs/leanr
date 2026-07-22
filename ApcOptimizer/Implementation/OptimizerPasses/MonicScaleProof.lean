@@ -4,26 +4,14 @@ set_option autoImplicit false
 
 /-! # Soundness for the dense monic scaling of constraint factors
 
-`DensePassCorrect` — over `VarId → ZMod p` environments — for the dense monic-scaling
-canonicalizer (`MonicScale.lean`), lifted once to the audited `Variable` spec through
-`DenseVerifiedPassW.of`.
-
-An algebraic constraint matters only through its zero set, so it may be rescaled by any unit without
-changing satisfiability. This pass walks each constraint's product tree and scales each affine factor
-to monic form. Soundness is field-free: each scaling carries a checked unit certificate
-(`u * v = 1`), the rewritten factor evaluates to `u ·` the original, and multiplying an expression by
-a unit preserves its zero set over any commutative ring. The pass mutates only
-`algebraicConstraints`; bus interactions, variables, and derivations are untouched, so side effects
-and admissibility are unchanged and no variable is introduced.
-
-The evaluation / variable-bound lemmas for the affine view (`denseLinearize`, `DenseLinExpr.scale`,
-`.toExpr`, `.norm`) are reused from `Affine.lean` / `Normalize.lean`, not re-derived. -/
+`DensePassCorrect` proof for `MonicScale.lean`, lifted through `DenseVerifiedPassW.of`. Field-free:
+each scaling carries a checked unit certificate (`u * v = 1`), and multiplying a constraint by a
+unit preserves its zero set; only `algebraicConstraints` is touched, so side effects and
+admissibility are unchanged. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-! ## Scaling with a unit certificate: evaluation, unit, variable bounds -/
 
 /-- The monic-scaled affine expression evaluates to its unit multiplier times the original. -/
 theorem denseMonicScaleAffine_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
@@ -131,11 +119,8 @@ theorem denseMonicScale_vars (e : DenseExpr p) : ∀ z ∈ (denseMonicScale e).1
       · simp only [DenseExpr.vars, List.mem_append] at hz ⊢
         exact hz.imp (iha z) (ihb z)
 
-/-! ## The pass correctness -/
-
-/-- **Monic-scaling correctness.** Every constraint is rewritten to a unit multiple of
-    itself, so the zero sets — hence the satisfying assignments — coincide, and the (bus-only) side
-    effects and admissibility are untouched. -/
+/-- Monic-scaling correctness: every constraint becomes a unit multiple of itself, so the
+    satisfying assignments coincide. -/
 theorem denseMonicScaleF_correct (bs : BusSemantics p) (isInput : VarId → Bool)
     (d : DenseConstraintSystem p) :
     DensePassCorrect isInput d (denseMonicScaleF d) [] bs := by
@@ -167,9 +152,7 @@ theorem denseMonicScaleF_correct (bs : BusSemantics p) (isInput : VarId → Bool
   · intro denv hadm hsat
     exact ⟨(hsatiff denv).2 hsat, hadm, BusState.equiv_refl _⟩
 
-/-- **The dense monic-scaling pass.** Rewrites every constraint's affine factors to monic
-    form; unconditional in `p`. Runtime transform lives in `MonicScale.lean`; the pass is
-    fully `facts`/`bs`-free. -/
+/-- The dense monic-scaling pass. -/
 def denseMonicScalePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun _ _ d => denseMonicScaleF d)

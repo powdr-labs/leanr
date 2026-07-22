@@ -2,10 +2,8 @@ set_option autoImplicit false
 
 /-! # Search / enumeration budget constants
 
-Representation-independent (`Nat`) runtime work caps and gates, re-homed here from the reference
-`Variable` passes so the dense passes and their proofs can consume them from a neutral home. Moving a plain `Nat` constant cannot
-change behaviour — the same literal is shared, so every reference-vs-dense decision it gates is
-unchanged. Each constant keeps its original (root-namespace) fully-qualified name. -/
+Representation-independent (`Nat`) runtime work caps and gates consumed by the dense passes and
+their proofs. -/
 
 /-! ## Deep byte-justification budgets -/
 
@@ -31,6 +29,6 @@ def basisFuel : Nat := 3
 def maxEnumWork : Nat := 524288
 
 /-- Systems with at least this many algebraic constraints use the inverted index; smaller ones use
-    the direct per-target `coveredCsOf` scan (see the section comment). Purely a runtime gate —
-    both paths compute the identical fold. -/
+    the direct per-target `coveredCsOf` scan. Purely a runtime gate — both paths compute the
+    identical fold. -/
 def domainFoldIndexThreshold : Nat := 8192

@@ -5,27 +5,12 @@ import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 
 set_option autoImplicit false
 
-/-! # Dense Gauss elimination: scoring, the loop, the transform
-
-The runtime of the batch linear-elimination pass, keyed on `VarId`/`DenseExpr`:
-
-* descriptor-based, `argmin`-free pivot scoring (an occurrence map, a protected-variable set, a
-  pivot score, a coefficient index (`denseCoeffIdx`), `±1`/unit-pivot descriptors
-  (`densePm1Desc`/`denseUnitDesc`), and `denseFastBest`) — `denseFastBest` builds the solution only
-  for the winner, proved equal to the naive `argmin` over `densePm1PivotsOf ++ denseUnitPivotsOf` by
-  `denseFastBest_eq`;
-* the proof-free solution map `DenseSolved` (shared with the domain/flag/rootPair substitution
-  passes) with its reverse-dependency index;
-* the Gauss loop `denseGaussLoop` and the transform `denseGaussElim`.
-
-The pass's `DensePassCorrect` proof lives downstream in `OptimizerPasses/GaussProof.lean` (which
-also builds the wired `denseGaussElimPass` via `DenseVerifiedPassW.of`). -/
+/-! # Dense Gauss elimination: pivot scoring, the loop, the transform.
+Correctness and the wired `denseGaussElimPass` live in `GaussProof.lean`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-! ## Dense expression size -/
 
 /-- Number of variable occurrences (with multiplicity). -/
 def DenseExpr.varCount : DenseExpr p → Nat
@@ -34,12 +19,9 @@ def DenseExpr.varCount : DenseExpr p → Nat
   | .add a b => a.varCount + b.varCount
   | .mul a b => a.varCount + b.varCount
 
-/-- Is the dense expression literally a variable? -/
 def DenseExpr.isVar : DenseExpr p → Bool
   | .var _ => true
   | _ => false
-
-/-! ## The pivot score -/
 
 /-- The duplication cost of a dense pivot `x := t`, with the protection penalty. -/
 def densePivotScore (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
@@ -47,7 +29,7 @@ def densePivotScore (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
   let base := (occ.getD xt.1 1 - 1) * (1 + xt.2.varCount)
   if prot.contains xt.1 && !xt.2.isVar then base + 1000000 else base
 
-/-! ## `toExpr` size facts (score a candidate without building it) -/
+/-! ## `toExpr` size facts -/
 
 theorem denseToExpr_foldl_varCount (terms : List (VarId × ZMod p)) :
     ∀ init : DenseExpr p,
@@ -78,8 +60,6 @@ theorem denseToExpr_foldl_isVar (terms : List (VarId × ZMod p)) :
 
 theorem DenseLinExpr.toExpr_isVar (l : DenseLinExpr p) : l.toExpr.isVar = false :=
   denseToExpr_foldl_isVar l.terms _ rfl
-
-/-! ## Descriptor score -/
 
 /-- Score of a dense pivot on `v` whose solution has `oc` variable occurrences; the
     `densePivotScore` protection penalty reduces to `prot.contains v`, since a `toExpr` solution is
@@ -345,26 +325,20 @@ def denseOccurrenceMap (d : DenseConstraintSystem p) : Std.HashMap VarId Nat :=
   let m := d.algebraicConstraints.foldl addE ∅
   d.busInteractions.foldl (fun m bi => bi.payload.foldl addE (addE m bi.multiplicity)) m
 
-/-! ## Protected variables -/
-
 /-- Variables occurring as a *raw* payload slot of a stateless interaction. -/
 def denseProtectedVars (d : DenseConstraintSystem p) (bs : BusSemantics p) : Std.HashSet VarId :=
   d.busInteractions.foldl (init := ∅) fun s bi =>
     if bs.isStateful bi.busId then s
     else bi.payload.foldl (fun s e => match e with | .var x => s.insert x | _ => s) s
 
-/-! ## The dense (runtime-only) solution map
-
-`DenseSolved` is a solution map keyed by `VarId`: a **plain** structure — no proof fields. Its
-correctness is established separately by the correctness proof, not carried as an invariant. -/
-
+/-- A plain (proof-free) solution map keyed by `VarId`; correctness is established by the
+    correctness proof (`GaussProof.lean`), not carried as a structure invariant. -/
 structure DenseSolved (p : ℕ) where
   map : Std.HashMap VarId (DenseExpr p)
   revDeps : Std.HashMap VarId (Std.HashSet VarId)
 
 namespace DenseSolved
 
-/-- The empty dense solution map. -/
 def empty : DenseSolved p := { map := ∅, revDeps := ∅ }
 
 /-- The map as a lookup function (what `substF` consumes). -/
@@ -380,7 +354,6 @@ def insertAll (dσ : DenseSolved p) : List (VarId × DenseExpr p) → DenseSolve
           revDeps := t.vars.foldl (fun rd z => rd.insert z (((rd[z]?).getD ∅).insert x)) dσ.revDeps }
         rest
 
-/-- `insertAll`'s `map` is a left fold of inserts. -/
 theorem insertAll_map :
     ∀ (pairs : List (VarId × DenseExpr p)) (dσ : DenseSolved p),
       (dσ.insertAll pairs).map = pairs.foldl (fun m p => m.insert p.1 p.2) dσ.map := by
@@ -394,12 +367,8 @@ theorem insertAll_map :
 
 end DenseSolved
 
-/-! ## The dense Gauss loop
-
-Reduce each pending constraint by the current solutions, adopt the cheapest solvable pivot, resolve
-it into the affected stored solutions, continue. No proof arguments — structural recursion on the
-dense pending list. -/
-
+/-- Reduce each pending constraint by the current solutions, adopt the cheapest solvable pivot,
+    and resolve it into the affected stored solutions. -/
 def denseGaussLoop (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
     List (DenseExpr p) → DenseSolved p → DenseSolved p
   | [], dσ => dσ
@@ -413,20 +382,12 @@ def denseGaussLoop (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
           let pairs := touched.map (fun ys => (ys.1, (ys.2.subst x t).normalize)) ++ [(x, t)]
           denseGaussLoop occ prot rest (dσ.insertAll pairs)
 
-/-! ## The adopted pivot is valid and its right-hand side is covered
-
-The pivot `denseFastBest` returns comes from a solvable candidate of a covered constraint, so its key
-is a registered id and its solution mentions only that constraint's (covered) variables. `corr_step`
-needs both facts. -/
-
-/-- A variable of `l.others v` is a variable of `l`. -/
 theorem DenseLinExpr.others_terms_fst_mem (l : DenseLinExpr p) (v : VarId) (x : VarId)
     (h : x ∈ (l.others v).terms.map Prod.fst) : x ∈ l.terms.map Prod.fst := by
   simp only [DenseLinExpr.others, List.mem_map] at h ⊢
   obtain ⟨tt, htt, rfl⟩ := h
   exact ⟨tt, List.mem_of_mem_filter htt, rfl⟩
 
-/-- A `trySolve` solution's variables are variables of the linear form. -/
 theorem denseTrySolve_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarId × DenseExpr p)
     (h : l.trySolve v = some w) : ∀ x ∈ w.2.vars, x ∈ l.terms.map Prod.fst := by
   by_cases h1 : l.coeff v = 1
@@ -443,7 +404,6 @@ theorem denseTrySolve_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarId ×
     · rw [DenseLinExpr.trySolve_eq_none l v (by rintro (h | h); exacts [h1 h, h2 h])] at h
       exact absurd h (by simp)
 
-/-- A `trySolveUnit` solution's variables are variables of the linear form. -/
 theorem denseTrySolveUnit_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarId × DenseExpr p)
     (h : l.trySolveUnit v = some w) : ∀ x ∈ w.2.vars, x ∈ l.terms.map Prod.fst := by
   by_cases h1 : l.coeff v * (l.coeff v)⁻¹ = 1
@@ -456,13 +416,10 @@ theorem denseTrySolveUnit_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarI
   · rw [DenseLinExpr.trySolveUnit_eq_none l v h1] at h
     exact absurd h (by simp)
 
-/-! ## The dense Gauss-elimination pass
-
-Build the occurrence map / protected set, run `denseGaussLoop` over two sweeps of the algebraic
-constraints, and — unless no pivot was adopted — substitute the whole solution map through the
-system. Correctness is proved as a `DensePassCorrect` in `GaussProof.lean`. -/
-
-/-- The dense batch linear-elimination transform. -/
+/-- Batch linear (Gauss) elimination. From a constraint like `x - 2*y - 3 = 0` it derives the
+    assignment `x := 2*y + 3` and substitutes it everywhere, dropping `x`. The cheapest solvable
+    pivot is chosen per constraint over two sweeps, then the whole solution map is substituted
+    through the system in one pass. -/
 def denseGaussElim (bs : BusSemantics p) (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   let dσ := denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
     (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty
@@ -477,7 +434,6 @@ theorem denseGaussElim_eq (bs : BusSemantics p) (d : DenseConstraintSystem p) :
       else d.substF (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
           (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty).fn := rfl
 
-/-! `denseGaussElimPass` (the wired pass) is built and proved in `OptimizerPasses/GaussProof.lean`
-via `DenseVerifiedPassW.of`. -/
+/-! `denseGaussElimPass` (the wired pass) is built and proved in `GaussProof.lean`. -/
 
 end ApcOptimizer.Dense

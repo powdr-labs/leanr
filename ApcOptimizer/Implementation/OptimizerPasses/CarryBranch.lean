@@ -3,18 +3,8 @@ import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 
 set_option autoImplicit false
 
-/-! # Dense carry-branch resolution — runtime
-
-Gated on `p` prime, the pass rewrites every algebraic constraint through `denseResolveExpr`,
-collapsing a product `f·g` to the factor that survives whenever the other factor is *certified
-never-zero* by the fact-derived value bounds (`denseBuild`, `DigitFold.lean`).
-
-It is **fact-consuming**: the dense bounds map is the `Std.HashMap VarId Nat` built by `denseBuild`,
-whose value-level soundness (`denseBuild_sound`, `DigitFoldProof.lean`) is all the correctness proof
-consumes. The interval certificate (`denseSplitSumMax`/`denseIntervalCert`/`denseNeverZeroB`) is
-coefficient-only, and the recursive product collapse (`denseResolveExpr`) is structural. Only the
-algebraic constraints are rewritten (bus interactions untouched). The `DensePassCorrect` proof and
-the pass itself live in `CarryBranchProof.lean`. -/
+/-! # Dense carry-branch resolution (runtime). Pass and `DensePassCorrect` proof in
+`CarryBranchProof.lean`; bounds map via `denseBuild` (`DigitFold.lean`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -22,9 +12,8 @@ variable {p : ℕ}
 
 /-! ## Dense two-sided interval certificate (coefficient-only, `VarId`-agnostic) -/
 
-/-- The greatest possible magnitude of the negative-coefficient sum and the positive-coefficient
-    sum of `l`'s terms, given a per-variable value bound `B` (each variable ranges over
-    `[0, B[v])`); `none` if any occurring variable is unbounded in `B`. -/
+/-- Max magnitudes `(pos, neg)` of the positive- and negative-coefficient term sums of `l`, under
+    per-variable bounds `B` (each variable ranges over `[0, B[v])`); `none` if any is unbounded. -/
 def denseSplitSumMax (B : Std.HashMap VarId Nat) :
     List (VarId × ZMod p) → Option (Nat × Nat)
   | [] => some (0, 0)
@@ -39,8 +28,8 @@ def denseSplitSumMax (B : Std.HashMap VarId Nat) :
       else none
     | _, _ => none
 
-/-- Whether the linear expression `l`'s value, over the value bounds `B`, is certified to stay
-    strictly within an interval of length `< p` that never wraps around `0`. -/
+/-- Certifies `l`'s value stays strictly within an interval of length `< p` that never wraps
+    around `0` (hence nonzero). -/
 def denseIntervalCert (B : Std.HashMap VarId Nat) (l : DenseLinExpr p) : Bool :=
   match denseSplitSumMax B l.terms with
   | none => false
@@ -49,9 +38,8 @@ def denseIntervalCert (B : Std.HashMap VarId Nat) (l : DenseLinExpr p) : Bool :=
 
 /-! ## Dense never-zero certificate -/
 
-/-- Whether `e` is certified never-zero under the value bounds `B`: linearize `e`, then check
-    `denseIntervalCert` against every candidate rescaling by an inverse coefficient (the constant
-    term's, or each term's). -/
+/-- Certifies `e` never-zero under bounds `B`: linearize, then try `denseIntervalCert` on each
+    rescaling by an inverse coefficient (the constant term's, or each term's). -/
 def denseNeverZeroB (B : Std.HashMap VarId Nat) (e : DenseExpr p) : Bool :=
   match denseLinearize e with
   | none => false
@@ -62,7 +50,9 @@ def denseNeverZeroB (B : Std.HashMap VarId Nat) (e : DenseExpr p) : Bool :=
 
 /-! ## Dense product-constraint resolution -/
 
-/-- Recursively collapse a product to the factor surviving a certified-never-zero other factor. -/
+/-- Collapse a product `f·g` in a constraint to the surviving factor when the other factor is
+    certified never-zero by the value bounds `B`: e.g. `(x-5)·g = 0` with `g` provably nonzero
+    becomes `x-5 = 0`. Recurses into the surviving factor. -/
 def denseResolveExpr (B : Std.HashMap VarId Nat) : DenseExpr p → DenseExpr p
   | .mul f g =>
       if denseNeverZeroB B g then denseResolveExpr B f
@@ -70,7 +60,6 @@ def denseResolveExpr (B : Std.HashMap VarId Nat) : DenseExpr p → DenseExpr p
       else .mul f g
   | e => e
 
-/-- `denseResolveExpr` introduces no new variable. -/
 theorem denseResolveExpr_vars (B : Std.HashMap VarId Nat) (e : DenseExpr p) :
     ∀ x ∈ (denseResolveExpr B e).vars, x ∈ e.vars := by
   induction e with

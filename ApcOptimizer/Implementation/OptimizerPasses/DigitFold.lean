@@ -4,20 +4,10 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 
 set_option autoImplicit false
 
-/-! # Dense bounded-payload digit fold
+/-! # Dense bounded-payload digit fold (runtime). Bounds map `denseBuild` proved sound in
+`DigitFoldProof.lean`. -/
 
-The pass detects a witness limb forced to a compile-time constant by a byte check over a base-256
-ladder, and substitutes it away.
-
-The one nontrivial ingredient is a dense fact-derived bounds map (`Std.HashMap VarId Nat`) built by
-`denseBuild`; its soundness is proved in `DigitFoldProof.lean`. -/
-
-/-! ## ℕ-side ladder arithmetic and solution grid
-
-The `Nat`/`ZMod`-only ladder layer (`ladderVal` / `unpack?` / `solutions` / their completeness
-theorems / `coeffNat` / `signum` / `tval`) is representation-independent and lives in
-`namespace DigitFold`, consumed directly by the dense pass and its proof
-(`DigitFold.lean` / `DigitFoldProof.lean`). -/
+/-! ## ℕ-side ladder arithmetic and solution grid (representation-independent) -/
 
 namespace DigitFold
 
@@ -65,10 +55,9 @@ theorem ladderVal_le_box : ∀ (xs Bs : List ℕ), List.Forall₂ (· < ·) xs B
 
 /-! ### The (byte, wrap) solution grid -/
 
-/-- All digit vectors compatible with "the checked value is a byte": for each possible byte `b`
-    and wrap count `m`, decode `tval b + m·p` as a `g`-scaled bounded ladder. `tval b` is the
-    ℕ-residue the ladder sum must have when the byte reads `b` (supplied by the caller from the
-    ZMod arithmetic). -/
+/-- All digit vectors compatible with "the checked value is a byte": for each byte `b` and wrap
+    count `m`, decode `tval b + m·p` as a `g`-scaled bounded ladder (`tval b` = the ℕ-residue the
+    ladder sum must have when the byte reads `b`). -/
 def solutions (p : ℕ) (tval : ℕ → ℕ) (g : ℕ) (Bs : List ℕ) (maxM : ℕ) : List (List ℕ) :=
   (List.range 256).flatMap fun b =>
     (List.range (maxM / p + 1)).filterMap fun m =>
@@ -137,18 +126,17 @@ variable {p : ℕ}
 
 /-! ## Per-interaction bound machinery -/
 
-/-- Dense `isVarOf`: is this dense expression literally `.var i`? -/
 def denseIsVarOf (i : VarId) : DenseExpr p → Bool
   | .var j => j = i
   | _ => false
 
-/-- Dense `varSlot`: the first payload slot literally `.var i`. -/
+/-- The first payload slot index literally `.var i`. -/
 def denseVarSlot (i : VarId) : List (DenseExpr p) → Option Nat
   | [] => none
   | e :: rest => if denseIsVarOf i e then some 0 else (denseVarSlot i rest).map (· + 1)
 
-/-- Dense `interactionBound`: one value bound for `i` from a constant-nonzero-multiplicity
-    interaction carrying `.var i` in a fact-bounded raw payload slot. -/
+/-- One value bound for `i` from a constant-nonzero-multiplicity interaction carrying `.var i`
+    in a fact-bounded raw payload slot. -/
 def denseInteractionBound (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (i : VarId) : Option Nat :=
   match bi.multiplicity.constValue? with
@@ -160,11 +148,11 @@ def denseInteractionBound (bs : BusSemantics p) (facts : BusFacts p bs)
       | none => none
       | some slot => facts.slotBound bi.busId mval (bi.payload.map DenseExpr.constValue?) slot
 
-/-- Dense probe payload: constant slots at their constants, slot `i` at the candidate, others `0`. -/
+/-- Probe payload: constant slots at their constants, slot `i` at the candidate, others `0`. -/
 def denseProbeBase (payload : List (DenseExpr p)) (i : Nat) (v : ZMod p) : List (ZMod p) :=
   (payload.map (fun e => (DenseExpr.constValue? e).getD 0)).set i v
 
-/-- Dense `probedSlotBoundAt`: a probed value bound for `i`. -/
+/-- A probed value bound for `i`. -/
 def denseProbedSlotBoundAt (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (i : VarId) (j : Nat) : Option Nat :=
   if p = 0 then none
@@ -205,22 +193,20 @@ def denseProbedSlotBoundAt (bs : BusSemantics p) (facts : BusFacts p bs)
                       else none
                     | _ => none
 
-/-! ## Dense bounds map (`Std.HashMap VarId Nat`)
+/-! ## Dense bounds map (`Std.HashMap VarId Nat`); soundness in `DigitFoldProof.lean`. -/
 
-A plain runtime map (no soundness field); its soundness is proved in `DigitFoldProof.lean`. -/
-
-/-- Dense `insertEntry`: keep the smaller of two bounds for `i`. -/
+/-- Keep the smaller of two bounds for `i`. -/
 def denseInsertEntry (T : Std.HashMap VarId Nat) (i : VarId) (b : Nat) : Std.HashMap VarId Nat :=
   let keep : Bool := match T[i]? with
     | some b0 => decide (b < b0)
     | none => true
   if keep then T.insert i b else T
 
-/-- Dense raw-variable payload entries. -/
+/-- The raw-variable payload entries. -/
 def denseRawVarsOf (bi : BusInteraction (DenseExpr p)) : List VarId :=
   bi.payload.filterMap (fun e => match e with | .var i => some i | _ => none)
 
-/-- Dense probed-bound candidate `(VarId, slot)` pairs. -/
+/-- The probed-bound candidate `(VarId, slot)` pairs. -/
 def denseProbeCandidatesOf (bi : BusInteraction (DenseExpr p)) : List (VarId × Nat) :=
   if (bi.multiplicity.constValue?).isSome then
     (List.range bi.payload.length).filterMap (fun j =>
@@ -234,7 +220,7 @@ def denseProbeCandidatesOf (bi : BusInteraction (DenseExpr p)) : List (VarId × 
       | none => none)
   else []
 
-/-- Dense `goCands`: for candidate `(y, j)`s matching `i`, insert the probed bound. -/
+/-- For candidate `(y, j)`s matching `i`, insert the probed bound. -/
 def denseGoCands (bs : BusSemantics p) (facts : BusFacts p bs) (bi : BusInteraction (DenseExpr p))
     (i : VarId) : List (VarId × Nat) → Std.HashMap VarId Nat → Std.HashMap VarId Nat
   | [], T => T
@@ -245,7 +231,7 @@ def denseGoCands (bs : BusSemantics p) (facts : BusFacts p bs) (bi : BusInteract
       | none => denseGoCands bs facts bi i cl T
     else denseGoCands bs facts bi i cl T
 
-/-- Dense `addVars`: for each raw variable `i`, insert its interaction bound then its probed bounds. -/
+/-- For each raw variable `i`, insert its interaction bound then its probed bounds. -/
 def denseAddVars (bs : BusSemantics p) (facts : BusFacts p bs) (bi : BusInteraction (DenseExpr p))
     (cands : List (VarId × Nat)) :
     List VarId → Std.HashMap VarId Nat → Std.HashMap VarId Nat
@@ -256,7 +242,7 @@ def denseAddVars (bs : BusSemantics p) (facts : BusFacts p bs) (bi : BusInteract
       | none => T
     denseAddVars bs facts bi cands xs (denseGoCands bs facts bi i cands T1)
 
-/-- Dense `addAll`: collect bounds from every interaction's fact-bounded raw payload slots. -/
+/-- Collect bounds from every interaction's fact-bounded raw payload slots. -/
 def denseAddAll (bs : BusSemantics p) (facts : BusFacts p bs) :
     List (BusInteraction (DenseExpr p)) → Std.HashMap VarId Nat → Std.HashMap VarId Nat
   | [], T => T
@@ -353,7 +339,9 @@ def denseFindFold (bs : BusSemantics p) (facts : BusFacts p bs) (denseBM : Std.H
         | some r => some r
         | none => denseFindFold bs facts denseBM rest
 
-/-- The dense transform: substitute one forced digit per invocation (identity if none found). -/
+/-- Digit-fold transform: when a witness limb is forced to a compile-time constant by a byte check
+    over a base-256 ladder (e.g. a limb pinned to `7`), substitute it away. One forced digit per
+    invocation; identity if none found. -/
 def denseDigitFoldF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     DenseConstraintSystem p :=
   if 256 < p then

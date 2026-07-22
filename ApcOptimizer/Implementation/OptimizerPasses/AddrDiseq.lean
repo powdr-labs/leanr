@@ -3,32 +3,16 @@ import ApcOptimizer.MemoryBus
 
 set_option autoImplicit false
 
-/-! # Dense two-root address disequality
+/-! # Dense address-disequality certificate library
 
-The shared certificate library `busUnifyPass`/`busPairCancelPass` consult to refute a
-memory-address match. This module is a **library**: it exports no pass, only the
-certificate-building and certificate-checking functions the dense `busUnify` (and
-`busPairCancel`) passes consume.
-
-The dense structures (`DenseTwoRootMap`, `DenseNonzeroWits`) keep only their data fields, with no
-`Prop` field: correctness is established downstream, in the proof files. Primality/unit gating
-that is **behaviorally** relevant (the map comes out empty on composite `p`; an entry is only
-inserted when its coefficient is a unit) is preserved exactly, since it changes which candidates
-end up in the map.
-
-`denseTwoRootOf?` (recognizing a two-root decomposition) is placed here rather than in
-`Dense/RootPairUnify.lean`, because `AddrDiseq`'s two-root map is its only consumer here;
-`Dense/RootPairUnify.lean` imports and reuses this definition directly rather than re-deriving
-it. -/
+Certificate-building/checking functions the dense `busUnify` / `busPairCancel` passes consult to
+refute a memory-address match. Exports no pass; correctness lives in `AddrDiseqProof.lean`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Recognizing a two-root constraint (dense)
-
-Placed here rather than in `Dense/RootPairUnify.lean`, since `AddrDiseq`'s two-root map is a
-consumer here; `RootPairUnify.lean` reuses this definition (does not re-derive it). -/
+/-! ## Recognizing a two-root constraint (dense) -/
 
 /-- The two-root decomposition of a dense constraint relative to `x`: `some (k, A, δ)` when the
     constraint is a product of two affine factors, both linear in `x` with the same nonzero
@@ -57,13 +41,9 @@ def densePtrBranchesOf (k : ZMod p) (A : DenseLinExpr p) (δ cx : ZMod p) (rest 
   let r2 := r1.add ⟨-(k⁻¹ * δ), []⟩
   ((rest.add (r1.scale cx)).norm, (rest.add (r2.scale cx)).norm)
 
-/-! ## Reducing a pointer expression through its limb decompositions -/
+/-! ## A dense two-root map (memoized `denseTwoRootOf?`)
 
-/-! ### A dense two-root map (memoized `denseTwoRootOf?`, no proof carried)
-
-Scanning every constraint per variable per candidate pair is quadratic on keccak's interleaved
-window, so the two-root data `(k, A, δ)` for each variable is precomputed once per pass into a
-hash map. -/
+Precomputed once per pass into a hash map (per-pair scanning is quadratic on keccak's window). -/
 
 /-- Per-variable two-root decomposition data (data only). -/
 structure DenseTwoRootMap (p : ℕ) where
@@ -79,9 +59,7 @@ def insertEntry (T : DenseTwoRootMap p) (v : VarId) (k : ZMod p) (A : DenseLinEx
     DenseTwoRootMap p where
   map := T.map.insert v (k, A, δ)
 
-/-- Insert the two-root entry (if any, with a unit coefficient) for each of `c`'s variables. The
-    unit-coefficient condition gates behavior (an entry is only inserted when the coefficient is a
-    unit) and is checked with a plain `if`. -/
+/-- Insert the two-root entry (if any, with a unit coefficient) for each of `c`'s variables. -/
 def addVars (c : DenseExpr p) : DenseTwoRootMap p → List VarId → DenseTwoRootMap p
   | T, [] => T
   | T, v :: vs =>
@@ -96,8 +74,7 @@ def addAll : DenseTwoRootMap p → (pending : List (DenseExpr p)) → DenseTwoRo
   | T, [] => T
   | T, c :: rest => addAll (addVars c T c.vars.eraseDups) rest
 
-/-- Build the map for a constraint list (empty on composite `p`; this primality gate is
-    behaviorally relevant, so it is a plain `if` on the decidable condition). -/
+/-- Build the map for a constraint list (empty on composite `p`). -/
 def build (constraints : List (DenseExpr p)) : DenseTwoRootMap p :=
   if Nat.Prime p then addAll empty constraints else empty
 
@@ -215,9 +192,8 @@ def denseAddrNonzeroNeq (shape : MemoryBusShape) (nw : DenseNonzeroWits p)
     | some D => nw.wits.any (fun g => denseIsZeroLin (D.add (g.scale (-1))) || denseIsZeroLin (D.add g))
     | none => false)
 
-/-- The address-disequality certificates a memory-telescoping pass consults, bundled so both the
-    two-root and the reciprocal-nonzero data thread through the pass as one memoized value
-    (plain 2-field struct). -/
+/-- Both address-disequality certificate tables, bundled so they thread through a pass as one
+    memoized value. -/
 structure DenseAddrCerts (p : ℕ) where
   tworoot : DenseTwoRootMap p
   nonzero : DenseNonzeroWits p

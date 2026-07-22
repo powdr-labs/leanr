@@ -7,15 +7,9 @@ set_option autoImplicit false
 /-!
 # Proven bus facts for the OpenVM semantics
 
-The `BusFacts` instance for `openVmBusSemantics` (see `ApcOptimizer/Implementation/BusFacts.lean` for the design):
-byte bounds for the bitwise-lookup operands, the bits-indexed bound of the variable range
-checker, the tuple-range-checker bounds, the XOR functional dependence, and the table-free
-buses. Every claim is proven here against the concrete `violates`, so none of this needs to be
-audited — a wrong fact simply would not compile.
-
-Like the semantics, the facts are parameterized by the bus map (defaulting to
-`defaultBusMap`): the implementations key on the bus *type* the map assigns, so the proofs are
-uniform in the map.
+The `BusFacts` instance for `openVmBusSemantics` (see `ApcOptimizer/Implementation/BusFacts.lean`
+for the design). Every claim is proven against the concrete `violates`, so none needs auditing.
+Parameterized by the bus map (defaulting to `defaultBusMap`).
 -/
 
 namespace ApcOptimizer.OpenVM
@@ -28,18 +22,15 @@ private def slotBoundImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat) 
   match busMap busId, pattern, slot with
   | some .bitwiseLookup, [_, _, _, some op], 0 => if op.val ≤ 1 then some 256 else none
   | some .bitwiseLookup, [_, _, _, some op], 1 => if op.val ≤ 1 then some 256 else none
-  -- Slot 2 is the bitwise *result* `z`: op 0 forces `z = 0`, op 1 forces `z = x ^ y` with
-  -- byte operands, so `z` is a byte in either case (op ≥ 2 violates). This byte guarantee on
-  -- the XOR/AND result — not just the operands — is what lets a memory pair whose data is an
-  -- XOR output be cancelled (`byteJustified`).
+  -- Slot 2 is the bitwise result `z`: op 0 forces `z = 0`, op 1 forces `z = x ^ y` with byte
+  -- operands, so `z` is a byte either way (op ≥ 2 violates).
   | some .bitwiseLookup, [_, _, _, some op], 2 => if op.val ≤ 1 then some 256 else none
   | some .variableRangeChecker, [_, some bits], 0 =>
       if bits.val ≤ 17 then some (2 ^ bits.val) else none
   | some (.tupleRangeChecker s1 _), [_, _], 0 => some s1
   | some (.tupleRangeChecker _ s2), [_, _], 1 => some s2
-  -- Data limbs of a memory *receive* (multiplicity -1) from a known register / main-memory
-  -- address space: slots 2–5 of the `(addressSpace, pointer, data×4, timestamp)` payload
-  -- are bytes (see `violates`).
+  -- Data limbs (slots 2–5) of a memory receive (multiplicity -1) from address space 1/2 are
+  -- bytes; payload is `(addressSpace, pointer, data×4, timestamp)`.
   | some .memory, [some as, _, _, _, _, _, _], 2 =>
       if mult = -1 ∧ (as.val = 1 ∨ as.val = 2) then some 256 else none
   | some .memory, [some as, _, _, _, _, _, _], 3 =>
@@ -66,19 +57,15 @@ private def slotFunImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat)
 private def neverViolatesImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat) : Bool :=
   match busMap busId with
   | some .executionBridge => true
-  -- Note: the memory bus is *not* listed here. Its `violates` rejects receives of non-byte
-  -- words from address spaces 1/2, so memory messages can violate (see `recvByteSlots`).
-  -- Note: pcLookup is *not* listed here. Its `violates` now rejects payloads whose
-  -- length is not 9, so it can violate and is not unconditionally sound.
+  -- Memory and pcLookup are not listed: memory's `violates` rejects non-byte receives from
+  -- address spaces 1/2 (see `recvByteSlots`), and pcLookup rejects payloads of length ≠ 9.
   | _ => false
 
 /-- Byte-slot obligation for a memory-style pair cancellation, conditioned on the receive's
-    constant pattern. OpenVM's memory limbs are bytes, so the declared bound is `256`. A memory
-    `getPrevious` whose address-space slot (payload slot 0) is a known constant ∉ {1,2} carries
-    **no** byte obligation (`some ([], 256)`) — the VM's `violates` only rejects non-byte data on
-    address spaces 1 and 2 — so it can be cancelled freely (e.g. the wasm frame-pointer cell at
-    AS 5). Otherwise the data limbs (slots 2–5) must be bytes, as before. The execution bridge
-    never violates (`some ([], 256)`); every other bus claims nothing (`none`). -/
+    constant pattern (bound `256`, OpenVM limbs are bytes). A memory `getPrevious` whose
+    address-space slot (slot 0) is a constant ∉ {1,2} carries no obligation (`some ([], 256)`),
+    since `violates` only rejects non-byte data on address spaces 1/2; otherwise slots 2–5 must be
+    bytes. The execution bridge never violates; other buses claim nothing. -/
 private def recvByteSlotsImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat)
     (pattern : List (Option (ZMod p))) : Option (List Nat × Nat) :=
   match busMap busId with
@@ -89,9 +76,7 @@ private def recvByteSlotsImpl (busMap : Nat → Option OpenVmBusType) (busId : N
   | some .executionBridge => some ([], 256)
   | _ => none
 
-/-- OpenVM bitwise payload `[x, y, z, op]` decodes to logical `(op, operand₁, operand₂, result)`
-    `= (op, x, y, z)`. Layout-generic in `α` so the same reordering serves the `ZMod`-level fact
-    soundness and the `Expression`-level pass recognizers. -/
+/-- OpenVM bitwise payload `[x, y, z, op]` decodes to logical `(op, x, y, z)`. -/
 def bitwiseDecode {α : Type} : List α → Option (α × α × α × α)
   | [x, y, z, op] => some (op, x, y, z)
   | _ => none
@@ -112,8 +97,7 @@ theorem bitwiseDecode_mem {α : Type} (pl : List α) (op o1 o2 r : α)
     (h : bitwiseDecode pl = some (op, o1, o2, r)) : o1 ∈ pl ∧ o2 ∈ pl ∧ r ∈ pl := by
   rw [bitwiseDecode_some] at h; subst h; simp
 
-/-- Emit an OpenVM bitwise payload from logical `(op, operand₁, operand₂, result)`: the layout is
-    `[operand₁, operand₂, result, op]`, inverting `bitwiseDecode`. -/
+/-- Emit an OpenVM bitwise payload `[operand₁, operand₂, result, op]`, inverting `bitwiseDecode`. -/
 def bitwiseEncode {α : Type} (op o1 o2 r : α) : List α := [o1, o2, r, op]
 
 theorem bitwiseDecode_encode {α : Type} (op o1 o2 r : α) :
@@ -130,16 +114,14 @@ theorem bitwiseEncode_mem {α : Type} (op o1 o2 r x : α)
     (h : x ∈ bitwiseEncode op o1 o2 r) : x = op ∨ x = o1 ∨ x = o2 ∨ x = r := by
   simp only [bitwiseEncode, List.mem_cons, List.not_mem_nil, or_false] at h; tauto
 
-/-- The fixed-zero cell of the OpenVM memory bus: register `x0` = address `(as, ptr) = (1, 0)`,
-    with the four data limbs at payload slots `2..5`. Backs the `zeroRegisterReads` admissibility
-    clause; `none` for every non-memory bus. -/
+/-- The fixed-zero cell of the OpenVM memory bus: `x0` = address `(as, ptr) = (1, 0)`, data limbs
+    at slots `2..5`; `none` for non-memory buses. -/
 private def zeroCellImpl (busMap : Nat → Option OpenVmBusType) (busId : Nat) :
     Option (List (Nat × ZMod p) × List Nat) :=
   match busMap busId with
   | some .memory => some ([(0, 1), (1, 0)], [2, 3, 4, 5])
   | _ => none
 
-/-- A payload matching a 4-entry pattern is a 4-entry list. -/
 private theorem payload_four {payload : List (ZMod p)} {p0 p1 p2 p3 : Option (ZMod p)}
     (h : Matches payload [p0, p1, p2, p3]) :
     ∃ a b c d, payload = [a, b, c, d] := by
@@ -147,7 +129,6 @@ private theorem payload_four {payload : List (ZMod p)} {p0 p1 p2 p3 : Option (ZM
   match payload, hlen with
   | [a, b, c, d], _ => exact ⟨a, b, c, d, rfl⟩
 
-/-- A payload matching a 2-entry pattern is a 2-entry list. -/
 private theorem payload_two {payload : List (ZMod p)} {p0 p1 : Option (ZMod p)}
     (h : Matches payload [p0, p1]) :
     ∃ a b, payload = [a, b] := by
@@ -155,7 +136,6 @@ private theorem payload_two {payload : List (ZMod p)} {p0 p1 : Option (ZMod p)}
   match payload, hlen with
   | [a, b], _ => exact ⟨a, b, rfl⟩
 
-/-- A payload matching a 7-entry pattern is a 7-entry list. -/
 private theorem payload_seven {payload : List (ZMod p)}
     {p0 p1 p2 p3 p4 p5 p6 : Option (ZMod p)}
     (h : Matches payload [p0, p1, p2, p3, p4, p5, p6]) :
@@ -242,11 +222,8 @@ private theorem memory_recv_ok (busMap : Nat → Option OpenVmBusType)
   have h3 : d3.val < 256 := hslots 5 (by simp) d3 rfl
   simp [isByte, h0, h1, h2, h3]
 
-/-- A memory message whose address-space slot (payload slot 0) is a known constant ∉ {1, 2}
-    never violates, regardless of its multiplicity or data limbs: the VM's `violates` only
-    rejects non-byte data on address spaces 1 and 2. This is what lets a memory receive from a
-    non-register/non-main-memory address space (e.g. the wasm frame-pointer cell at AS 5) be
-    dropped with an empty byte obligation. -/
+/-- A memory message whose address-space slot (slot 0) is a constant ∉ {1, 2} never violates:
+    `violates` only rejects non-byte data on address spaces 1 and 2. -/
 private theorem memory_recv_nonByte_ok (busMap : Nat → Option OpenVmBusType)
     (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .memory)
     (as : ZMod p) (hasval : ¬ (as.val = 1 ∨ as.val = 2)) (has : m.payload[0]? = some as) :
@@ -278,9 +255,7 @@ theorem openVm_isStateful_of_memShape {p : ℕ} (busMap : Nat → Option OpenVmB
   | none => simp at h
   | some t => cases t <;> simp_all [OpenVmBusType.isStateful]
 
-/-- Every shape OpenVM declares uses `direction := .receiveThenSend`, so its `setNewMult` reduces
-    to `1`. Lets the multiplicity-generic memory facts specialize to OpenVM's send `1` / receive
-    `-1` convention. -/
+/-- Every OpenVM shape uses `direction := .receiveThenSend`, so `setNewMult` reduces to `1`. -/
 private theorem memShapeOf_setNewMult_eq_one {p : ℕ} (busMap : Nat → Option OpenVmBusType)
     (busId : Nat) (shape : MemoryBusShape) (h : memShapeOf busMap busId = some shape) :
     (shape.setNewMult : ZMod p) = 1 := by

@@ -9,17 +9,9 @@ set_option autoImplicit false
 
 The `BusFacts` instance for `sp1BusSemantics` (see `ApcOptimizer/Implementation/BusFacts.lean` for
 the design). The memory discipline is direction-parametric (`MemoryBusShape.direction`), so SP1's
-reverse *memory* convention (`setNewMult = -1`) and its execution bridge (`setNewMult = 1`, sending
-the next state like OpenVM) both reuse the same `memShape` / `admissible_sound` / `admissible_dropPair`
-machinery — memory/exec unification transfers directly. This instance
-proves the execution bridge never violating, the x0 zero-cell, the byte-operand slot bounds, the
-byte-XOR functional dependence, and — via the direction-parametric `recvByteSlots` bound — that
-memory `getPrevious` interactions carry a 16-bit (`2^16`) obligation on their four data limbs. The
-byte-check/XOR *packing* facts stay at their `trivial` defaults, as SP1's byte bus is laid out
-`(op, a, b, c)`, not OpenVM's `(x, y, z, op)`. Every claim here is proven against the concrete
-`violates`, so none of this needs to be audited.
-
-Like the semantics, the facts are parameterized by the bus map (defaulting to `defaultBusMap`).
+reverse memory convention (`setNewMult = -1`) and its execution bridge (`setNewMult = 1`) reuse the
+same machinery. Every claim is proven against the concrete `violates`, so none needs auditing.
+Parameterized by the bus map (defaulting to `defaultBusMap`).
 -/
 
 namespace ApcOptimizer.SP1
@@ -52,9 +44,8 @@ private def slotBoundImpl (busMap : Nat → Option Sp1BusType) (busId : Nat) (mu
   | some .byteLookup, 2 => some 256
   | some .byteLookup, 3 => some 256
   -- An op-6 (`Range`) byte-bus message `[6, a, b, 0]` range-checks its result `a` (slot 1) to
-  -- `a < 2^b`. When the op selector (slot 0) and width `b` (slot 2) are constant in the pattern,
-  -- that bounds slot 1 by `2^b` — the fact that lets `busPairCancel` justify SP1's 16-bit memory
-  -- data limbs (each carried by an op-6 width-16 range check) when telescoping.
+  -- `a < 2^b`; with op (slot 0) and width `b` (slot 2) constant in the pattern, that bounds slot 1
+  -- by `2^b`.
   | some .byteLookup, 1 =>
     match pattern[0]? with
     | some (some op) =>
@@ -64,15 +55,14 @@ private def slotBoundImpl (busMap : Nat → Option Sp1BusType) (busId : Nat) (mu
         | some (some w) => if op.val = 6 then some (2 ^ w.val) else none
         | _ => none
     | _ => none
-  -- The four data limbs (slots 5–8) of a memory `getPrevious` (multiplicity `1`, full ≥9-slot
-  -- record) are 16-bit; a surviving read thus justifies the telescoped same-register pairs' data.
+  -- The four data limbs (slots 5–8) of a memory `getPrevious` (multiplicity `1`, ≥9-slot record)
+  -- are 16-bit.
   | some .memory, 5 => if mult = 1 ∧ 9 ≤ pattern.length then some (2 ^ 16) else none
   | some .memory, 6 => if mult = 1 ∧ 9 ≤ pattern.length then some (2 ^ 16) else none
   | some .memory, 7 => if mult = 1 ∧ 9 ≤ pattern.length then some (2 ^ 16) else none
   | some .memory, 8 => if mult = 1 ∧ 9 ≤ pattern.length then some (2 ^ 16) else none
   | _, _ => none
 
-/-- A payload matching a 4-entry pattern is a 4-entry list. -/
 private theorem payload_four {payload : List (ZMod p)} {p0 p1 p2 p3 : Option (ZMod p)}
     (h : Matches payload [p0, p1, p2, p3]) :
     ∃ a b c d, payload = [a, b, c, d] := by
@@ -80,8 +70,7 @@ private theorem payload_four {payload : List (ZMod p)} {p0 p1 p2 p3 : Option (ZM
   match payload, hlen with
   | [a, b, c, d], _ => exact ⟨a, b, c, d, rfl⟩
 
-/-- Every accepted byte-bus message is a 4-tuple `[op, a, b, c]` whose operands `b` and `c` are
-    bytes (each op either byte-checks them or forces them to `0`). -/
+/-- Every accepted byte-bus message is a 4-tuple `[op, a, b, c]` with byte operands `b`, `c`. -/
 private theorem byte_operands (busMap : Nat → Option Sp1BusType)
     (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .byteLookup)
     (hok : violates busMap m = false) :
@@ -121,10 +110,8 @@ private theorem byte_op6_bound (busMap : Nat → Option Sp1BusType)
   rw [Bool.not_eq_false', Bool.and_eq_true] at hok
   exact of_decide_eq_true hok.2
 
-/-- An accepted byte-bus message `[op, a, b, c]` whose op is a non-range operation (`op ≤ 5`) has a
-    **byte result**: AND/OR/XOR of bytes are bytes (`≤ b` / `< 2⁸`), U8Range forces `a = 0`, LTU
-    yields a comparison bit, MSB a single bit — so `a < 256` in every case. This lets a surviving
-    byte-op interaction bound the affine limb recompositions its result feeds (`256·hi + lo`). -/
+/-- An accepted byte-bus message `[op, a, b, c]` with a non-range op (`op ≤ 5`) has a byte result
+    `a < 256` (AND/OR/XOR of bytes, U8Range `a = 0`, LTU/MSB a bit). -/
 private theorem byte_result_lt256 (busMap : Nat → Option Sp1BusType)
     (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .byteLookup)
     (hok : violates busMap m = false)
@@ -165,8 +152,8 @@ private theorem byte_result_lt256 (busMap : Nat → Option Sp1BusType)
     have h128 : (2 : ℕ) ^ 7 = 128 := rfl
     rw [h128]; omega
 
-/-- An op-6 `[6, a, b, c]` message with a supported width (`b ≤ 16`) and `c = 0` is accepted **iff**
-    its result is in range (`a < 2^b`). -/
+/-- An op-6 `[6, a, b, c]` message with supported width (`b ≤ 16`) and `c = 0` is accepted iff
+    `a < 2^b`. -/
 private theorem byte_op6_iff (busMap : Nat → Option Sp1BusType)
     (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .byteLookup)
     (op a b c : ZMod p) (hpay : m.payload = [op, a, b, c]) (hop : op.val = 6)
@@ -183,9 +170,8 @@ private theorem byte_op6_iff (busMap : Nat → Option Sp1BusType)
   · intro h; exact h.2
   · intro h; exact ⟨⟨hw, hc⟩, h⟩
 
-/-- Recognise SP1's op-6 (`Range`) byte-bus check as a pure single-value range check: a message
-    matching `[6, _, w, 0]` with a supported width `w ≤ 16` is accepted iff its result (slot 1) is
-    `< 2^w`. -/
+/-- SP1's op-6 (`Range`) byte-bus check as a single-value range check: `[6, _, w, 0]` with `w ≤ 16`
+    is accepted iff its result (slot 1) is `< 2^w`. -/
 private def rangeCheckAtImpl (busMap : Nat → Option Sp1BusType) (busId : Nat)
     (pattern : List (Option (ZMod p))) : Option (Nat × Nat) :=
   match busMap busId, pattern with
@@ -193,19 +179,16 @@ private def rangeCheckAtImpl (busMap : Nat → Option Sp1BusType) (busId : Nat)
     if op.val = 6 ∧ w.val ≤ 16 ∧ c.val = 0 then some (1, 2 ^ w.val) else none
   | _, _ => none
 
-/-- The fixed-zero cell of the SP1 memory bus: register `x0` = address `(0, 0, 0)` (the three
-    address limbs at payload slots 2, 3 and 4), with the four data limbs at payload slots 5–8.
-    Backs the `zeroRegisterReads` admissibility clause; `none` for every non-memory bus. -/
+/-- The fixed-zero cell of the SP1 memory bus: `x0` = address `(0, 0, 0)` at slots 2–4, data limbs
+    at slots 5–8; `none` for non-memory buses. -/
 private def zeroCellImpl (busMap : Nat → Option Sp1BusType) (busId : Nat) :
     Option (List (Nat × ZMod p) × List Nat) :=
   match busMap busId with
   | some .memory => some ([(2, 0), (3, 0), (4, 0)], [5, 6, 7, 8])
   | _ => none
 
-/-- Byte-slot obligation for an SP1 memory-style pair cancellation. SP1's memory data limbs are
-    16-bit, so the declared bound is `2^16`; the four data limbs sit at payload slots 5–8. The
-    obligation does not depend on the pattern. The execution bridge never violates
-    (`some ([], 256)`); every other bus claims nothing (`none`). -/
+/-- Byte-slot obligation for an SP1 memory-style pair cancellation: 16-bit data limbs (bound
+    `2^16`) at slots 5–8. The execution bridge never violates; other buses claim nothing. -/
 private def recvByteSlotsImpl (busMap : Nat → Option Sp1BusType) (busId : Nat)
     (_pattern : List (Option (ZMod p))) : Option (List Nat × Nat) :=
   match busMap busId with
@@ -213,9 +196,8 @@ private def recvByteSlotsImpl (busMap : Nat → Option Sp1BusType) (busId : Nat)
   | some .executionBridge => some ([], 256)
   | _ => none
 
-/-- SP1 byte-bus payload `[op, a, b, c]` decodes to logical `(op, operand₁, operand₂, result)`
-    `= (op, b, c, a)` — the byte operations put the result in slot 1 (`a`) and the two operands in
-    slots 2, 3 (`b`, `c`). Layout-generic in `α` (see OpenVM's `bitwiseDecode`). -/
+/-- SP1 byte-bus payload `[op, a, b, c]` decodes to logical `(op, b, c, a)` (result `a` in slot 1,
+    operands `b`, `c` in slots 2, 3). -/
 def sp1ByteDecode {α : Type} : List α → Option (α × α × α × α)
   | [op, a, b, c] => some (op, b, c, a)
   | _ => none
@@ -236,8 +218,7 @@ theorem sp1ByteDecode_mem {α : Type} (pl : List α) (op o1 o2 r : α)
     (h : sp1ByteDecode pl = some (op, o1, o2, r)) : o1 ∈ pl ∧ o2 ∈ pl ∧ r ∈ pl := by
   rw [sp1ByteDecode_some] at h; subst h; simp
 
-/-- Emit an SP1 byte payload from logical `(op, operand₁, operand₂, result)`: the layout is
-    `[op, result, operand₁, operand₂]`, inverting `sp1ByteDecode`. -/
+/-- Emit an SP1 byte payload `[op, result, operand₁, operand₂]`, inverting `sp1ByteDecode`. -/
 def sp1ByteEncode {α : Type} (op o1 o2 r : α) : List α := [op, r, o1, o2]
 
 theorem sp1ByteDecode_encode {α : Type} (op o1 o2 r : α) :
@@ -272,9 +253,8 @@ theorem sp1_isStateful_of_memShape {p : ℕ} (busMap : Nat → Option Sp1BusType
   | none => simp at h
   | some t => cases t <;> simp_all [Sp1BusType.isStateful]
 
-/-- The SP1 *memory* bus uses `direction := .sendThenReceive`, so its `setNewMult` reduces to `-1`
-    — SP1 sends the previous record and receives the new one, the reverse of OpenVM. (The execution
-    bridge instead sends the next state, `setNewMult = 1`, so this is memory-specific.) -/
+/-- The SP1 memory bus uses `direction := .sendThenReceive`, so its `setNewMult` reduces to `-1`
+    (the reverse of OpenVM; the execution bridge instead uses `1`). -/
 private theorem memShapeOf_memory_setNewMult {p : ℕ} (busMap : Nat → Option Sp1BusType)
     (busId : Nat) (shape : MemoryBusShape) (hbus : busMap busId = some .memory)
     (h : memShapeOf busMap busId = some shape) :
@@ -283,8 +263,7 @@ private theorem memShapeOf_memory_setNewMult {p : ℕ} (busMap : Nat → Option 
   rw [hbus] at h
   obtain rfl := Option.some.inj h; rfl
 
-/-- A memory message that is not a `getPrevious` (multiplicity ≠ 1) never violates: SP1's
-    memory `violates` only rejects non-16-bit data on a `getPrevious`. -/
+/-- A memory message that is not a `getPrevious` (multiplicity ≠ 1) never violates. -/
 private theorem memory_nonGetPrev_ok (busMap : Nat → Option Sp1BusType)
     (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .memory)
     (hm : m.multiplicity ≠ 1) : violates busMap m = false := by
@@ -295,8 +274,7 @@ private theorem memory_nonGetPrev_ok (busMap : Nat → Option Sp1BusType)
   rcases payload with _ | ⟨c0, _ | ⟨c1, _ | ⟨a0, _ | ⟨a1, _ | ⟨a2, _ | ⟨d0, _ | ⟨d1, _ | ⟨d2,
     _ | ⟨d3, rest⟩⟩⟩⟩⟩⟩⟩⟩⟩ <;> simp [hm]
 
-/-- A memory `getPrevious` (multiplicity 1) with 16-bit data limbs (payload slots 5–8, where
-    present) never violates. -/
+/-- A memory `getPrevious` (multiplicity 1) with 16-bit data limbs (slots 5–8) never violates. -/
 private theorem memory_getPrev_ok (busMap : Nat → Option Sp1BusType)
     (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .memory)
     (hm : m.multiplicity = 1)
@@ -314,9 +292,8 @@ private theorem memory_getPrev_ok (busMap : Nat → Option Sp1BusType)
   have h3 : d3.val < 65536 := hslots 8 (by simp) d3 rfl
   simp [is16Bit, hm, h0, h1, h2, h3]
 
-/-- The four data limbs (payload slots 5–8) of an accepted memory `getPrevious` (multiplicity `1`,
-    full ≥9-slot record) are 16-bit — the converse of `memory_getPrev_ok`, used by `slotBound` so a
-    surviving read bounds the telescoped chain's data. -/
+/-- The four data limbs (slots 5–8) of an accepted memory `getPrevious` (multiplicity `1`, ≥9-slot
+    record) are 16-bit (converse of `memory_getPrev_ok`). -/
 private theorem memory_read_data (busMap : Nat → Option Sp1BusType)
     (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .memory)
     (hm : m.multiplicity = 1) (hok : violates busMap m = false) (hlen : 9 ≤ m.payload.length)
@@ -330,8 +307,7 @@ private theorem memory_read_data (busMap : Nat → Option Sp1BusType)
     (rcases payload with _ | ⟨c0, _ | ⟨c1, _ | ⟨a0, _ | ⟨a1, _ | ⟨a2, _ | ⟨d0, _ | ⟨d1, _ | ⟨d2,
       _ | ⟨d3, rest⟩⟩⟩⟩⟩⟩⟩⟩⟩ <;> simp_all [is16Bit, List.all_cons, List.all_nil])
 
-/-- A memory `setNew` (multiplicity -1) never violates: either the characteristic is > 2 and a
-    `setNew` is not a `getPrevious`, or `p ∣ 2` and every value is trivially 16-bit. -/
+/-- A memory `setNew` (multiplicity -1) never violates. -/
 private theorem memory_setNew_ok [NeZero p] (busMap : Nat → Option Sp1BusType)
     (m : BusInteraction (ZMod p)) (hbus : busMap m.busId = some .memory)
     (hm : m.multiplicity = -1) : violates busMap m = false := by
@@ -562,9 +538,7 @@ def sp1Facts (p : ℕ) [NeZero p]
             · exact List.mem_append_left _ (List.mem_append_right _ (List.mem_cons_of_mem _ hB))
           · exact List.mem_append_right _ (List.mem_cons_of_mem _ hC)
         exact hzero m hmem hbus hp2 hp3 hp4
-    -- SP1's memory data limbs are 16-bit (bound `2^16`) at payload slots 5–8; the execution
-    -- bridge never violates. The `setNew` (multiplicity `-1`) never violates, and a `getPrevious`
-    -- (multiplicity `1`) never violates once its data limbs are `< 2^16`.
+    -- SP1 memory limbs are 16-bit at slots 5–8; the execution bridge never violates.
     recvByteSlots := recvByteSlotsImpl busMap
     recvByteSlots_sound := by
       intro busId shape hmemshape pattern slots bound hfact m hbusId
@@ -575,8 +549,7 @@ def sp1Facts (p : ℕ) [NeZero p]
       | some bt =>
         cases bt with
         | executionBridge =>
-          -- The execution bridge never violates (any multiplicity), so its byte obligation holds
-          -- regardless of `setNewMult` (which is `1` here, unlike memory's `-1`).
+          -- The execution bridge never violates at any multiplicity.
           rw [hbus] at hfact
           simp only [Option.some.injEq, Prod.mk.injEq] at hfact
           obtain ⟨rfl, rfl⟩ := hfact
@@ -594,9 +567,8 @@ def sp1Facts (p : ℕ) [NeZero p]
         | byteLookup => rw [hbus] at hfact; simp at hfact
         | instructionFetch => rw [hbus] at hfact; simp at hfact
         | pageProt => rw [hbus] at hfact; simp at hfact
-    -- SP1's byte bus `[op, a, b, c]`: XOR (op 2) sets `a = b ⊕ c`, U8Range (op 3) forces `a = 0`
-    -- with byte operands. The op selectors `2`/`3` need `256 ≤ p` to be distinct field elements
-    -- (KoalaBear satisfies it); below that the fact claims nothing.
+    -- SP1's byte bus `[op, a, b, c]`: XOR (op 2) sets `a = b ⊕ c`, U8Range (op 3) forces `a = 0`.
+    -- The op selectors need `256 ≤ p` to be distinct field elements; below that the fact is none.
     byteXorSpec := fun busId =>
       match busMap busId with
       | some .byteLookup =>
@@ -646,8 +618,8 @@ def sp1Facts (p : ℕ) [NeZero p]
             unfold violates; rw [hbus]
             simp [hp3, isByte, ZMod.val_eq_zero, and_assoc]
       · rw [if_neg hp] at hspec; exact absurd hspec (by simp)
-    -- SP1's byte bus also carries OR (op 1, `a = b | c`) and AND (op 0, `a = b & c`); both
-    -- range-check `b, c` to bytes, exactly like XOR. Declared in the spec as `orOp`/`andOp`.
+    -- SP1's byte bus also carries OR (op 1, `a = b | c`) and AND (op 0, `a = b & c`), declared as
+    -- `orOp`/`andOp`.
     byteBoolSound := by
       intro busId spec hspec
       have hbus : busMap busId = some .byteLookup := by
@@ -678,8 +650,7 @@ def sp1Facts (p : ℕ) [NeZero p]
           unfold violates; rw [hbus]
           simp [hp0, isByte, and_assoc]
       · rw [if_neg hp] at hspec; exact absurd hspec (by simp)
-    -- SP1's op-6 (`Range`) byte-bus check `[6, a, w, 0]` (w ≤ 16) is a pure range check on `a`
-    -- (`a < 2^w`), so a subsumed-check dropper can remove it when `a` is already bounded.
+    -- SP1's op-6 (`Range`) byte-bus check `[6, a, w, 0]` (w ≤ 16) is a pure range check on `a`.
     rangeCheckAt := fun busId pattern => rangeCheckAtImpl busMap busId pattern
     rangeCheckAt_sound := by
       intro busId pattern valSlot bound hfact

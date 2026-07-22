@@ -9,35 +9,19 @@ set_option autoImplicit false
 
 /-! # Soundness for the dense `rootPairUnify` pass
 
-`DensePassCorrect` for `denseRootPairUnifyF` (`RootPairUnify.lean`), lifted to the audited spec
-through `DenseVerifiedPassW.of` (`Bridge.lean`). This is a **substitution-shaped** pass: rather than
-adding constraints (like `busUnify`), it *eliminates* variables via a solution map (`DenseSolved`)
-and one final `DenseConstraintSystem.substF`.
-
-## The substitution-proof template (shared with `flagUnify` and `flagFold`'s `fxSubst`)
-
-The substitution-correctness core `DenseConstraintSystem.substF_denseCorrect`
-(`DomainBatchProof.lean`) is reused unchanged: substituting an *entailed* (`H`), *occurrence-closed*
-(`hfv`) solution map is `DensePassCorrect`, no derivations. A substitution-shaped pass therefore only
-has to discharge:
-
-1. the **entailment** `H` — every satisfying assignment forces every mapped `x = t`; and
-2. the **occurrence closure** `hfv` — each solution mentions only occurring variables.
-
-Both come out of the scan-loop invariant `denseRpLoop_sound`, established here by a plain structural
-induction over the pending list threading the `DenseSolved` accumulator (a plain struct — no proof
-fields). The per-adoption entailment is the two-root pair certificate `denseRpCheckPair_sound`, which
-combines the value-level two-root soundness `denseTwoRootOf?_sound` (`AddrDiseqProof.lean`) with
-the bounded-integer field core `rootPair_eq` (`RootPairCore.lean`). `flagUnify`/`flagFold` reuse this
-loop-invariant shape (an accumulator invariant + a `seen`-membership invariant recovering the dropped
-`mem` field) and the same certificate-soundness style. -/
+`DensePassCorrect` for `denseRootPairUnifyF` (`RootPairUnify.lean`), lifted through
+`DenseVerifiedPassW.of`. A substitution-shaped pass: it eliminates variables via a `DenseSolved` map
+and one `DenseConstraintSystem.substF`, so (through `substF_denseCorrect`, `DomainBatchProof.lean`)
+it only has to discharge entailment and occurrence-closure of the map — both from the scan-loop
+invariant `denseRpLoop_sound`. The per-adoption entailment is the pair certificate
+`denseRpCheckPair_sound`, combining `denseTwoRootOf?_sound` (`AddrDiseqProof.lean`) with the field
+core `rootPair_eq` (`RootPairCore.lean`). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-- `DensePassCorrect` reflexivity (the identity branches of `denseRootPairUnifyF`). Kept file-local
-    to avoid a heavy cross-pass import. -/
+/-- `DensePassCorrect` reflexivity (the identity branches of `denseRootPairUnifyF`). -/
 theorem dpcRefl (isInput : VarId → Bool) (d : DenseConstraintSystem p) (bs : BusSemantics p) :
     DensePassCorrect isInput d d [] bs := by
   refine ⟨?_, ?_, ?_, ?_⟩
@@ -363,17 +347,14 @@ theorem denseRpCheckPair_vars (bs : BusSemantics p) (facts : BusFacts p bs)
           simp only [Bool.and_eq_true, decide_eq_true_eq] at h
           exact ⟨h.1.1.2, h.1.2⟩
 
-/-! ## The scan-loop invariant (the substitution loop-invariant template)
+/-! ## The scan-loop invariant
 
-The `DenseSolved` accumulator (a plain struct — no proof fields) is proved sound by a plain
-structural induction over the pending constraints. Two invariants are maintained: (a) every stored
-solution is **entailed** by satisfaction, and (b) every stored solution is **occurrence-closed**. The
-`seen` accumulator carries a third invariant — every seen constraint is one of `d`'s constraints —
-recovering the membership the `DenseRPSeen` struct dropped. `flagUnify`/`flagFold` reuse this shape. -/
+Structural induction over the pending constraints threading `DenseSolved`. Maintained: (a) every
+stored solution is entailed by satisfaction, (b) every stored solution is occurrence-closed, and
+every `seen` constraint is one of `d`'s (recovering the membership `DenseRPSeen` omits). -/
 
-/-- The `seen`-bucket invariant is preserved by `denseRpInsertAll`: if every bucketed entry's
-    constraint is in `S`, and every inserted entry's constraint is in `S`, then so is every entry of
-    any bucket afterwards. Recovers the `mem` field the dense `DenseRPSeen` dropped. -/
+/-- The `seen`-bucket invariant is preserved by `denseRpInsertAll`: if every bucketed and every
+    inserted entry's constraint is in `S`, then so is every entry of any bucket afterwards. -/
 theorem denseRpInsertAll_seen {S : List (DenseExpr p)} :
     ∀ (es : List (DenseRPSeen p)) (seen : Std.HashMap UInt64 (List (DenseRPSeen p))),
       (∀ hsh e, e ∈ seen.getD hsh [] → e.c ∈ S) → (∀ e ∈ es, e.c ∈ S) →
@@ -453,7 +434,6 @@ theorem denseRpLoop_sound [Fact p.Prime] (bs : BusSemantics p)
             obtain ⟨hexv, _hxkv⟩ := denseRpCheckPair_vars bs facts d.busInteractions
               d.algebraicConstraints e.c c e.x xk.1 hcert
             have hexocc : e.x ∈ d.occ := DenseConstraintSystem.mem_occ_of_constraint hecmem hexv
-            -- the single-pair solution update `(xk.1 := .var e.x)`
             have hfn : ∀ i, (σ.insertAll [((e, xk.1).2, DenseExpr.var (e, xk.1).1.x)]).fn i
                 = (σ.map.insert xk.1 (DenseExpr.var e.x))[i]? := by
               intro i
@@ -551,10 +531,7 @@ theorem denseRootPairUnifyF_correct (pw : PrimeWitness p) (reg : VarRegistry) (b
       (fun i t hti z hz => hinv.2 i t hti z hz)
   · exact dpcRefl reg.isInput d bs
 
-/-- **The dense `rootPairUnify` pass.** Two-root decomposition unification proved correct
-    over `VarId → ZMod p` (substitution-shaped: the entailed equalities are adopted into a
-    `DenseSolved` map and applied by one `DenseConstraintSystem.substF`), connected to the audited
-    spec via `DensePassCorrect.lift` (through `of`). -/
+/-- The dense `rootPairUnify` pass (see `denseRootPairUnifyF`). -/
 def denseRootPairUnifyPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (denseRootPairUnifyF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseRootPairUnifyF_covered pw reg bs facts d hcov)

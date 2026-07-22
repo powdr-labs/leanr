@@ -4,53 +4,17 @@ set_option autoImplicit false
 
 /-! # Dense region tests + emitted-check acceptance for `busPairCancel`
 
-The region tests and emitted-check acceptance for `busPairCancel`: the receive-candidate scan
-(`denseFirstMatchAt`), the between-region and before-region address-disequality refutation
-(`denseMidRefuted`/`densePreRefuted`/`denseProvRecv`), the before-region shield scan
-(`denseShieldScan`/`denseShieldOk`), the emitted byte checks (`denseMkByteCheck`/`denseMkBytePair`,
-`denseEmitOk`), and the per-candidate acceptance test (`denseUnjustifiedSlots`/`denseCheckCancel`).
-This is **impl-only**: it carries no correctness proof here.
-
-## Notes
-
-* `DenseEqConstraintMap p`/`densePayloadEntailedEq` (`Dense/BusPairCancelIndex.lean`) and
-  `DenseAddrCerts p` (`Dense/AddrDiseq.lean`) are **plain** (non-indexed) structures, so the
-  definitions below carry no index-typed parameter for them — there is nothing dense to index.
-* `denseAddrConstsNeq`/`denseAddrConstsEq`, `denseMultConst` (`Dense/BusUnifyNative.lean`),
-  `denseAddrAffineNeq`/`denseAddrTwoRootNeq`/`denseAddrNonzeroNeq` (`Dense/AddrDiseq.lean`), and
-  `denseByteJustifiedW`/`denseRecvSlotsJustified` (`Dense/BusPairCancelJustify.lean`) are all reused
-  from their defining files.
-* `facts.memShape`/`facts.slotBound`/`facts.recvByteSlots`/`facts.byteXorSpec` and `ByteXorSpec`
-  itself (`Implementation/BusFacts.lean`) are representation-independent (`Nat`/`ZMod p`-valued, or
-  polymorphic `{α : Type}` in the `ByteXorSpec.encode`/`decode` case) and are consulted directly,
-  unqualified — no dense wrapper is introduced or needed.
-* `denseMkByteCheck`/`denseMkBytePair` build the two emitted-check payload shapes (a single-value
-  byte check and a packed pair byte check); `denseMkBytePair` is reused by `ByteCheckPack.lean` to
-  emit its packed pair check rather than re-deriving it there.
-
-## `Thunk` forcing
-
-`denseMidRefuted`'s five `||` disjuncts are, in order: bus mismatch, zero-multiplicity,
-`denseAddrConstsNeq`, `denseAddrAffineNeq`, `denseAddrTwoRootNeq T.get.tworoot`,
-`denseAddrNonzeroNeq T.get.nonzero` — `T.get` (forcing the memoized two-root/nonzero-witness
-tables) is textually the **last two** disjuncts, so `||`'s short-circuit means `T` is never forced
-when any cheaper refutation already succeeds. `densePreRefuted` calls `denseMidRefuted` first (same
-short-circuit inherited) before its own `multConst`-vs-`setNewMult` check. `denseShieldScan`'s
-right-to-left fold calls `densePreRefuted` (and hence, transitively, `denseMidRefuted`) once per
-list element, in the same position within the pair `(hasRecvSoFar, ok)` construction — no
-reordering, no eager forcing introduced. -/
+The receive scan (`denseFirstMatchAt`), address-disequality refutation
+(`denseMidRefuted`/`densePreRefuted`/`denseProvRecv`), the shield scan (`denseShieldOk`), emitted
+byte checks (`denseMkByteCheck`/`denseMkBytePair`), and the per-candidate acceptance test
+(`denseCheckCancel`). Impl-only; soundness in `BusPairCancelCheckProof.lean`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ### The receive-candidate scan -/
-
-/-- The first indexed position strictly after `i` on `busId` whose payload matches `S.payload`,
-    among positions that are still **live** (positions ascending; the hash bucket pre-filters, the
-    liveness bit and the bus-id check and the slot-wise entailed comparison decide). A tombstoned
-    position is skipped exactly as if it were absent, so the receive chosen is the first live
-    match. -/
+/-- The first indexed position after `i` on `busId` whose payload matches `S.payload` among still
+    **live** positions (ascending); tombstoned positions are skipped, so it is the first live match. -/
 def denseFirstMatchAt (M : Thunk (DenseEqConstraintMap p)) (arr : Array (BusInteraction (DenseExpr p)))
     (alive : Array Bool)
     (busId : Nat) (S : BusInteraction (DenseExpr p)) (i : Nat) : List Nat → Option Nat
@@ -64,12 +28,9 @@ def denseFirstMatchAt (M : Thunk (DenseEqConstraintMap p)) (arr : Array (BusInte
       | none => denseFirstMatchAt M arr alive busId S i rest
     else denseFirstMatchAt M arr alive busId S i rest
 
-/-! ### Between-region and before-region address-disequality refutation -/
-
-/-- Refute `m` as an active same-address message on `busId` (the "between" region test). The
-    two-root address-disequality (`denseAddrTwoRootNeq`) lets this step over interleaved
-    other-pointer heap accesses whose addresses are pointer *expressions* rather than constants —
-    the enabler for interior-pair telescoping on the heap. -/
+/-- Refute `m` as an active same-address message on `busId` (the "between" region test). The two-root
+    disequality (`denseAddrTwoRootNeq`) lets it step over interleaved accesses whose addresses are
+    pointer expressions rather than constants. -/
 def denseMidRefuted (shape : MemoryBusShape) (T : Thunk (DenseAddrCerts p)) (busId : Nat)
     (S m : BusInteraction (DenseExpr p)) : Bool :=
   decide (m.busId ≠ busId) || decide (denseMultConst m = some 0) || denseAddrConstsNeq shape S m
@@ -89,8 +50,6 @@ def denseProvRecv (shape : MemoryBusShape) (busId : Nat) (S m : BusInteraction (
   decide (m.busId = busId) && denseAddrConstsEq shape S m &&
     decide (denseMultConst m = some (-shape.setNewMult))
 
-/-! ### The before-region shield scan -/
-
 /-- Single right-to-left pass returning `(hasRecvSoFar, ok)`: `hasRecvSoFar` is whether the tail
     processed so far (everything to the right) contains a provable active same-address receive; `ok`
     is whether every not-`densePreRefuted` message so far is followed by such a receive. O(n). -/
@@ -109,26 +68,21 @@ def denseShieldOk (shape : MemoryBusShape) (T : Thunk (DenseAddrCerts p)) (busId
     (S : BusInteraction (DenseExpr p)) (l : List (BusInteraction (DenseExpr p))) : Bool :=
   (denseShieldScan shape T busId S l).2
 
-/-! ### Emitted byte checks -/
-
 /-- Single-value byte check on `e`, emitted through `spec` (multiplicity `1`). -/
 def denseMkByteCheck (spec : ByteXorSpec p) (busId : Nat) (e : DenseExpr p) :
     BusInteraction (DenseExpr p) :=
   { busId := busId, multiplicity := .const 1,
     payload := spec.encode (.const spec.xorOp) e e (.const 0) }
 
-/-- Packed pair byte check on `(e₁, e₂)`, emitted through `spec` (multiplicity `1`); the builder
-    `ByteCheckPack.lean` reuses to emit its packed pair check, rather than re-deriving it there. -/
+/-- Packed pair byte check on `(e₁, e₂)`, emitted through `spec` (multiplicity `1`). -/
 def denseMkBytePair (spec : ByteXorSpec p) (busId : Nat) (e₁ e₂ : DenseExpr p) :
     BusInteraction (DenseExpr p) :=
   { busId := busId, multiplicity := .const 1,
     payload := spec.encode (.const spec.pairOp) e₁ e₂ (.const 0) }
 
-/-- Certificate that an emitted check is a faithful carrier of `R`'s byte obligation: it sits on
-    a `byteXorSpec` bus (byte bound `256`), has multiplicity 1 and a self-check payload decoding to
-    `(xorOp, e, e, 0)` where `e` is one of `R`'s declared byte-slot entries whose byte-ness `R`'s
-    own accepted receive implies (a `slotBound` of at most 256 at that slot, at multiplicity `-1`,
-    against `R`'s own constant pattern). -/
+/-- Certificate that an emitted check faithfully carries `R`'s byte obligation: on a `byteXorSpec`
+    bus (bound `256`), multiplicity 1, self-check payload `(xorOp, e, e, 0)` for an `e` that is a
+    declared byte slot of `R`. -/
 def denseEmitOk (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) (shape : MemoryBusShape)
     (slots : List Nat) (R ck : BusInteraction (DenseExpr p)) : Bool :=
   match facts.byteXorSpec ck.busId with
@@ -147,8 +101,6 @@ def denseEmitOk (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) (sha
           | none => false))
      | none => false)
 
-/-! ### The per-candidate acceptance test -/
-
 /-- The declared byte slots of `R` whose payload entries the witnesses do not justify. -/
 def denseUnjustifiedSlots (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p))
     (candsOf : VarId → List (DenseExpr p)) (bs : BusSemantics p)
@@ -159,12 +111,10 @@ def denseUnjustifiedSlots (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p
     | some e => !denseByteJustifiedW bound deep domCs candsOf bs facts wits fwits e
     | none => false)
 
-/-- The per-candidate certificate: address/multiplicity/payload of the pair, the emitted
-    checks' certificates, plus the byte justification of the dropped receive's declared byte
-    slots through the witness lookup `wits`. The split equation, the between-region refutation
-    and the before-region shield are *not* re-checked here — the scan established them already
-    and supplies them to the correctness proof as hypotheses. The justification scan is the last
-    conjunct, so it only runs for candidates that already match. -/
+/-- The per-candidate certificate: bus/multiplicity/payload of the pair, the emitted checks'
+    certificates, and byte justification of `R`'s declared slots. The split equation and region
+    tests are not re-checked here (the scan established them); the justification scan is last, so it
+    only runs for already-matching candidates. -/
 def denseCheckCancel (deep : Bool) (bs : BusSemantics p)
     (facts : BusFacts p bs)
     (M : Thunk (DenseEqConstraintMap p))

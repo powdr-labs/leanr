@@ -7,33 +7,15 @@ set_option autoImplicit false
 
 /-! # Soundness for the dense redundant byte-check drop
 
-`DensePassCorrect` — over `VarId → ZMod p` environments — for the dense redundant byte-check
-dropper (`RedundantByteDrop.lean`), lifted once to the audited `Variable` spec through
-`DenseVerifiedPassW.of`.
-
-The pass drops a recognised pure byte-check interaction (`denseByteCheckOperands?`, decoded through
-the VM-neutral `facts.byteXorSpec` at byte bound `256`) whose operands are all already byte-justified
-from the constraints and a non-circular justification base — the interactions this pass can never
-drop (`denseByteDropBase`). Every dropped interaction is then accepted under every assignment
-satisfying the FILTERED system, so it is entailed and its removal is sound and side-effect-neutral.
-
-Three proven ingredients, reused rather than re-derived:
-
-* `DensePassCorrect.denseFilterBusEntailed` (`FlagFoldDropsProof.lean`) — dropping a stateless
-  interaction accepted under every assignment satisfying the filtered system;
-* `denseByteJustified_sound` (`BusPairCancelJustifyProof.lean`) — the operand is a byte under every
-  assignment satisfying the retained (base) interactions' obligations;
-* `denseByteXorSpec_decode_iff`/`denseByteBoolSound_decode_iff`/`denseIsByteCompl_sound`
-  (`ByteCheckPackProof.lean`) — the decoded-field acceptance characterizations.
-
-The recognition-soundness chain `denseByteCheckOperands?_stateless → _accepted` is built directly
-from those value-level `BusFacts` characterizations — no decode. -/
+`DensePassCorrect` — over `VarId → ZMod p` — for the redundant byte-check dropper
+(`RedundantByteDrop.lean`). Every dropped interaction is a recognised byte check whose operands are
+all byte-justified from the non-circular base (`denseByteDropBase`), hence accepted under every
+assignment satisfying the filtered system. Built via `denseFilterBusEntailed`
+(`FlagFoldDropsProof.lean`) and `denseByteJustified_sound` (`BusPairCancelJustifyProof.lean`). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-! ## Local wraparound-free byte facts -/
 
 /-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. -/
 private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
@@ -48,8 +30,6 @@ private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
       _ = (((255 - a.val : ℕ) : ZMod p)).val := by rw [Nat.cast_sub hle, hcast]
       _ = 255 - a.val := ZMod.val_natCast_of_lt (by omega)
   rw [hval]; exact (nat_xor_255 _ ha).symm
-
-/-! ## The recognizer is sound -/
 
 /-- A recognized byte check lives on a stateless bus. -/
 theorem denseByteCheckOperands?_stateless (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -179,11 +159,8 @@ theorem denseByteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts
           exact (key.2 hopEv).mpr ⟨hbound ▸ hops o1 (by simp), hbound ▸ hops o2 (by simp), hr⟩
     · exact absurd h (by simp)
 
-/-! ## The pass -/
-
-/-- **Redundant byte-check removal correctness.** Every dropped interaction is a recognised
-    byte check whose operands are all byte-justified from the retained base, so it is accepted under
-    every assignment satisfying the filtered system — equivalence- and invariant-preserving. -/
+/-- Every dropped interaction is a recognised byte check whose operands are all byte-justified from
+    the retained base, so it is accepted under every assignment satisfying the filtered system. -/
 theorem denseRedundantByteDropF_correct (pw : PrimeWitness p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (isInput : VarId → Bool) (d : DenseConstraintSystem p) :
     DensePassCorrect isInput d (denseRedundantByteDropF pw bs facts d) [] bs := by
@@ -219,9 +196,8 @@ theorem denseRedundantByteDropF_correct (pw : PrimeWitness p) (bs : BusSemantics
         rw [hnone]
       exact hsat.2 bi' (List.mem_filter.2 ⟨(List.mem_filter.1 hbi').1, hkeep⟩) hmult
 
-/-- **The dense redundant byte-check drop pass.** Consumes `facts` directly (through
-    `byteXorSpec`) and the prime witness; unconditional in `p`. Runtime transform lives in
-    `RedundantByteDrop.lean`. -/
+/-- The dense redundant byte-check drop pass; transform `denseRedundantByteDropF`
+    (`RedundantByteDrop.lean`). -/
 def denseRedundantByteDropPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun bs facts d => denseRedundantByteDropF pw bs facts d)

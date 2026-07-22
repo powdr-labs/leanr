@@ -2,14 +2,10 @@ import ApcOptimizer.Implementation.OptimizerPasses.Basic
 
 set_option autoImplicit false
 
-/-! ### Generic `argmin` / `filterMap` list lemmas
+/-! ### Generic `argmin` / `filterMap` list lemmas -/
 
-Representation-independent list machinery, originally in the reference `Gauss` pass, consumed by
-the dense Gauss pass. -/
-
-/-- `argmin` commutes with a key-preserving map: when `g` carries the key (`kγ (g a) = kα a`), the
-    winner of the mapped list is the mapped winner. This lets us score cheap descriptors in place
-    of built candidates. -/
+/-- `argmin` commutes with a key-preserving map (`kγ (g a) = kα a`): the winner of the mapped list
+    is the mapped winner — lets us score cheap descriptors instead of built candidates. -/
 theorem argmin_map_key {α γ : Type*} (g : α → γ) (kα : α → Nat) (kγ : γ → Nat)
     (h : ∀ a, kγ (g a) = kα a) : ∀ l : List α, (l.map g).argmin kγ = (l.argmin kα).map g := by
   intro l
@@ -73,23 +69,16 @@ theorem mem_foldl_insert (l : List Nat) (s : Std.HashSet Nat) (i : Nat) :
       · exact (Or.inl (Or.inl rfl))
       · exact Or.inr h
 
-/-! ### Linear-time dedup
+/-! ### Linear-time dedup -/
 
-Generic list machinery, originally in the reference `Reencode` pass. -/
-
-/-- `List.dedup` computed in linear time via a hash set, with the **identical** result: an element
-    is kept at its last-occurrence position (exactly `List.dedup`'s order), so swapping this in is a
-    pure speedup — `reencodeLoop`'s correctness is independent of the target list, and its
-    (order-sensitive, greedy) behaviour is unchanged because the list itself is unchanged. -/
+/-- `List.dedup` computed in linear time via a hash set, with the identical result: each element is
+    kept at its last-occurrence position, exactly `List.dedup`'s order. -/
 def dedupHash {α : Type} [BEq α] [Hashable α] (l : List α) : List α :=
   (l.reverse.foldl (fun (st : List α × Std.HashSet α) t =>
     if st.2.contains t then st else (t :: st.1, st.2.insert t))
     (([], ∅) : List α × Std.HashSet α)).1
 
-/-! ### `foldl max` bounds
-
-Generic `Nat`/`List` machinery, originally in the reference `RootPairUnify` pass; consumed by the
-dense two-root bounds proof. -/
+/-! ### `foldl max` bounds -/
 
 /-- The seed is at most the `foldl max` accumulation. -/
 theorem init_le_foldl_max (l : List Nat) : ∀ b : Nat, b ≤ l.foldl max b := by
@@ -109,8 +98,7 @@ theorem le_foldl_max (l : List Nat) : ∀ (b : Nat), ∀ a ∈ l, a ≤ l.foldl 
 
 /-! ### Early-exit list fold
 
-Generic list machinery, originally in the reference `DomainBatch` pass; consumed by the
-finite-domain enumeration engine (`EnumEngine.lean`). -/
+Consumed by the finite-domain enumeration engine (`EnumEngine.lean`). -/
 
 /-- Left fold with an early exit: once `stop acc` holds, the remaining elements are skipped. -/
 def foldlStop {α β : Type} (f : β → α → β) (stop : β → Bool) : List α → β → β
@@ -168,11 +156,7 @@ theorem foldlStop_congr {α β : Type} (f g : β → α → β) (stop : β → B
     · rw [if_pos hs, if_pos hs]
     · rw [if_neg hs, if_neg hs, h acc a, ih]
 
-/-! ### Sparse positional map and self-zip membership
-
-Generic list machinery: `zipIdx_map_sparse` (originally in the reference `DomainFold` pass) and
-`zip_map_self_mem` (originally in the reference `Reencode` pass), consumed by the dense
-correspondence proofs. -/
+/-! ### Sparse positional map and self-zip membership -/
 
 /-- The positional pass-through map equals the plain map when the function fixes the item at
     every position outside `mem`. -/

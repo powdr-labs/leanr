@@ -4,34 +4,14 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagUnifyProof
 
 set_option autoImplicit false
 
-/-! # Correctness for the dense Gauss-elimination pass
-
-`DensePassCorrect` for the value-only dense Gauss pass (`denseGaussElim`, `Gauss.lean`) proved
-over dense environments `VarId → ZMod p`, with no `decode` in the discharged obligations.
-
-The pass eliminates variables via a resolved solution map (`DenseSolved`) and one final
-`DenseConstraintSystem.substF`, so it is *substitution-shaped* like `rootPairUnify`/`flagUnify`: its
-whole correctness rides on the substitution core `DenseConstraintSystem.substF_denseCorrect`
-(`DomainBatchProof.lean`), which needs only two facts about the final solution map:
-
-1. **entailment** — every satisfying assignment forces every stored `x = t`;
-2. **occurrence closure** — every stored solution mentions only occurring variables.
-
-Both are established by `denseGaussLoop_sound`, a plain structural induction over the pending
-constraint list threading the `DenseSolved` accumulator (a proof-free struct). Per adopted pivot the
-entailment is the affine soundness (`densePm1PivotsOf_sound`/`denseUnitPivotsOf_sound`) applied
-to the reduced constraint (which evaluates to zero because the current solution map is entailed); the
-touched stored solutions stay entailed because the pivot equality makes the rewriting substitution a
-no-op (`DenseExpr.eval_subst`). The list update is handled by `DenseSolved.insertAll_preserves`.
-
-The affine soundness/vars lemmas here are proved over `DenseLinExpr`/`DenseExpr`/`VarId`, reusing the
-dense eval identities already proved at their definitions' home (`Affine.lean`). -/
+/-! # Correctness for the dense Gauss-elimination pass.
+Substitution-shaped: correctness rides on `DenseConstraintSystem.substF_denseCorrect`
+(`DomainBatchProof.lean`), fed the final solution map's entailment and occurrence closure, both
+established by `denseGaussLoop_sound`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-! ## Substitution semantics -/
 
 /-- Substituting `i := t` and evaluating equals evaluating with `i` rebound to `t.eval denv`. -/
 theorem DenseExpr.eval_subst (e : DenseExpr p) (i : VarId) (t : DenseExpr p)
@@ -139,18 +119,8 @@ theorem denseUnitPivotsOf_vars (c : DenseExpr p) (x : VarId) (t : DenseExpr p)
           rw [htr] at hv
           exact denseLinearize_mem_vars c l hL y (denseTrySolveUnit_vars_subset l v (x, t) hv y hy)
 
-/-! ## The Gauss-loop invariant (substitution loop-invariant template)
-
-The `DenseSolved` accumulator (a proof-free struct) is proved sound by structural induction over the
-pending constraints. Two invariants are threaded: (a) every stored solution is **entailed** by
-satisfaction, and (b) every stored solution is **occurrence-closed**. Per adopted pivot, the
-reduced constraint `c'` evaluates to zero (its solution map is entailed, so
-`DenseExpr.eval_substF ∘ denseEnvF_eq_self` collapses the reduction), so the pivot selected by
-`denseFastBest` (a member of `densePm1PivotsOf c' ++ denseUnitPivotsOf c'`) entails `x = t`; the
-touched stored solutions stay entailed because `denv x = t.eval denv` makes the pivot rewrite a
-no-op, and stay occurrence-closed because substitution introduces no variable outside `c'` and the
-prior solutions. Both invariants are pushed through the list update with
-`DenseSolved.insertAll_preserves`. -/
+/-! ## The Gauss-loop invariant: the `DenseSolved` accumulator stays entailed and
+occurrence-closed, by structural induction over the pending constraints. -/
 
 theorem denseGaussLoop_sound (bs : BusSemantics p) (d : DenseConstraintSystem p)
     (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
@@ -288,11 +258,7 @@ theorem denseGaussElim_correct (reg : VarRegistry) (bs : BusSemantics p)
       (fun denv hsat i t hti => hinv.1 denv hsat i t hti)
       (fun i t hti z hz => hinv.2 i t hti z hz)
 
-/-- **The dense Gauss-elimination pass.** Batch linear elimination over `VarId`,
-    proved `DensePassCorrect` directly over `VarId → ZMod p` (substitution-shaped: the entailed
-    equalities are adopted into a `DenseSolved` map and applied by one
-    `DenseConstraintSystem.substF`), connected to the audited spec once via `DensePassCorrect.lift`
-    (through `of`). -/
+/-- The wired dense Gauss-elimination pass (transform `denseGaussElim`, `Gauss.lean`). -/
 def denseGaussElimPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun bs _ d => denseGaussElim bs d)

@@ -7,27 +7,11 @@ set_option autoImplicit false
 
 /-! # Dense width-1 range check → booleanity: correctness proof and wiring
 
-`DensePassCorrect` proof for the dense `rangeBool` transform (`RangeBool.lean`), lifted to the
-audited spec via `DenseVerifiedPassW.of`. The pass is exactly **two** steps composed by
-`DensePassCorrect.trans`:
-
-1. **add** every recognised booleanity (`x·(x−1)`) as an algebraic constraint — entailed by the
-   width-1 check's acceptance on a prime field — via `DensePassCorrect.denseAddConstraints`
-   (`BusUnifyProof.lean`);
-2. **drop** the now-entailed checks via `DensePassCorrect.denseFilterBusEntailed`
-   (`FlagFoldDropsProof.lean`); the added booleanity survives the bus filter (it touches only
-   interactions), so the dropped check's acceptance is re-derived from the still-present
-   constraint.
-
-The recogniser soundness applies the representation-independent `facts.rangeCheckAt` field
-**value-level** over `denseBIEval bi denv` (no decode), with `denseMatches_evalPattern`
-(`DomainBatchProof.lean`) and the pure-`ZMod` `ZeroWidthRange.val_lt_two_iff`. -/
+`DensePassCorrect` proof for `RangeBool.lean`, lifted via `DenseVerifiedPassW.of`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-! ## Dense booleanity eval / vars -/
 
 theorem denseBoolC_eval (v : DenseExpr p) (denv : VarId → ZMod p) :
     (denseBoolC v).eval denv = v.eval denv * (v.eval denv - 1) := by
@@ -37,8 +21,6 @@ theorem denseBoolC_vars (v : DenseExpr p) : ∀ x ∈ (denseBoolC v).vars, x ∈
   intro x hx
   simp only [denseBoolC, DenseExpr.vars, List.mem_append, List.not_mem_nil, or_false] at hx
   tauto
-
-/-! ## The recogniser: structure, statelessness, acceptance ⟺ booleanity, variables -/
 
 /-- Structure of a recognised width-1 check. -/
 theorem denseBoolCheck?_spec {bs : BusSemantics p} (facts : BusFacts p bs)
@@ -100,8 +82,7 @@ theorem denseBoolCheck?_vars {bs : BusSemantics p} (facts : BusFacts p bs)
   simp only [denseBIVars, List.mem_append, List.mem_flatMap]
   exact Or.inr ⟨DenseExpr.var x, hxpay, hzx⟩
 
-/-- The forward entailment consumed by the add step: a recognised booleanity holds on every
-    satisfying dense assignment (acceptance ⟹ booleanity). -/
+/-- A recognised booleanity holds on every satisfying dense assignment. -/
 theorem denseBoolCheck?_eval {bs : BusSemantics p} (hp : Nat.Prime p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (bi : BusInteraction (DenseExpr p)) (c : DenseExpr p)
     (h1ne : (1 : ZMod p) ≠ 0) (h : denseBoolCheck? facts bi = some c) (denv : VarId → ZMod p)
@@ -112,8 +93,6 @@ theorem denseBoolCheck?_eval {bs : BusSemantics p} (hp : Nat.Prime p) (facts : B
   have hviol : bs.violatesConstraint (denseBIEval bi denv) = false :=
     hsat.2 bi hbi (by rw [hmult]; exact h1ne)
   exact (denseBoolCheck?_violates_iff hp facts bi c h denv).mp hviol
-
-/-! ## Coverage and the two-step correctness -/
 
 /-- Every variable of an added booleanity occurs in `d`. -/
 theorem denseRangeBoolNew_vars {bs : BusSemantics p} (facts : BusFacts p bs)
@@ -200,8 +179,7 @@ theorem denseRangeBoolF_correct (pw : PrimeWitness p) (reg : VarRegistry) {bs : 
     · rw [if_neg hpr]; exact DensePassCorrect.refl reg.isInput d bs
   · rw [if_neg h1]; exact DensePassCorrect.refl reg.isInput d bs
 
-/-- **The dense `rangeBool` pass.** Prime-gated; threads the original `facts` unchanged,
-    connected to the audited spec via `DensePassCorrect.lift` (through `of`). -/
+/-- The dense `rangeBool` pass. -/
 def denseRangeBoolPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (denseRangeBoolF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseRangeBoolF_covered pw reg bs facts d hcov)

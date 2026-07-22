@@ -4,17 +4,12 @@ set_option autoImplicit false
 
 /-! # Dense data model and encode/decode
 
-Implementation-only dense counterparts of the spec's recursive circuit values, with `VarId` leaves.
-`decode` resolves IDs through a registry to recover the spec value; `encode` threads a registry
-left-to-right, registering each variable occurrence and emitting dense leaves in one traversal.
-
-The correspondence results (`decode ∘ encode = id`, extension agreement, degree/eval/vars
-preservation) are what the pipeline's edge encode/decode and the `DensePassCorrect.lift`
-bridge ride on. All evidence is `Prop` (erases); no proof wrapper is stored at
-expression nodes — a single coverage invariant is threaded and local validity derived when needed.
-
-Dense bus interactions reuse the spec's polymorphic `BusInteraction` at `DenseExpr p`, so the
-generic `BusInteraction` machinery composes directly. -/
+Implementation-only dense counterparts of the spec's circuit values, with `VarId` leaves. `decode`
+resolves IDs through a registry; `encode` threads a registry left-to-right, registering each
+variable occurrence in one traversal. The correspondence results (`decode ∘ encode = id`,
+extension agreement, degree/eval/vars preservation) are what the pipeline's edge encode/decode and
+`DensePassCorrect.lift` ride on. A single coverage invariant is threaded rather than a per-node
+proof. -/
 
 namespace ApcOptimizer.Dense
 
@@ -54,7 +49,6 @@ def DenseExpr.degree : DenseExpr p → Nat
   | .add a b => max a.degree b.degree
   | .mul a b => a.degree + b.degree
 
-/-- Evaluation under a dense environment. -/
 def DenseExpr.eval (e : DenseExpr p) (denv : VarId → ZMod p) : ZMod p :=
   match e with
   | .const n => n
@@ -110,25 +104,21 @@ def VarRegistry.decodeExpr (r : VarRegistry) : DenseExpr p → Expression p
   | .add a b => .add (r.decodeExpr a) (r.decodeExpr b)
   | .mul a b => .mul (r.decodeExpr a) (r.decodeExpr b)
 
-/-- Decode a dense computation method. -/
 def VarRegistry.decodeCM (r : VarRegistry) : DenseComputationMethod p → ComputationMethod p
   | .const c => .const c
   | .quotientOrZero num den => .quotientOrZero (r.decodeExpr num) (r.decodeExpr den)
   | .ifEqZero cond thenM elseM => .ifEqZero (r.decodeExpr cond) (r.decodeCM thenM) (r.decodeCM elseM)
 
-/-- Decode a dense bus interaction. -/
 def VarRegistry.decodeBI (r : VarRegistry) (bi : BusInteraction (DenseExpr p)) :
     BusInteraction (Expression p) :=
   { busId := bi.busId,
     multiplicity := r.decodeExpr bi.multiplicity,
     payload := bi.payload.map r.decodeExpr }
 
-/-- Decode a dense constraint system. -/
 def VarRegistry.decodeCS (r : VarRegistry) (d : DenseConstraintSystem p) : ConstraintSystem p :=
   { algebraicConstraints := d.algebraicConstraints.map r.decodeExpr,
     busInteractions := d.busInteractions.map r.decodeBI }
 
-/-- Decode dense derivations. -/
 def VarRegistry.decodeDerivs (r : VarRegistry) (dd : DenseDerivations p) : Derivations p :=
   dd.map (fun d => (r.resolve d.1, r.decodeCM d.2))
 
@@ -179,14 +169,13 @@ theorem VarRegistry.Extends.decodeExpr_eq {r r' : VarRegistry} (h : r.Extends r'
       obtain ⟨ha, hb⟩ := DenseExpr.coveredBy_mul.mp hc
       simp [decodeExpr, iha ha, ihb hb]
 
-/-- Coverage is preserved by extension. -/
 theorem DenseExpr.CoveredBy.mono {r r' : VarRegistry} (h : r.Extends r') {e : DenseExpr p}
     (hc : e.CoveredBy r) : e.CoveredBy r' := fun i hi => h.valid (hc i hi)
 
 /-! ## Encoding (state-threaded registration + dense emission) -/
 
-/-- Encode a spec expression into a dense one, threading the registry (registering each variable
-    occurrence). One `Variable → VarId` lookup per source occurrence — the allowed entry-edge cost. -/
+/-- Encode a spec expression into a dense one, threading the registry and registering each variable
+    occurrence. -/
 def VarRegistry.encodeExpr (r : VarRegistry) : Expression p → VarRegistry × DenseExpr p
   | .const n => (r, .const n)
   | .var x => let (r', i) := r.register x; (r', .var i)
@@ -199,7 +188,6 @@ def VarRegistry.encodeExpr (r : VarRegistry) : Expression p → VarRegistry × D
       let (r2, b') := r1.encodeExpr b
       (r2, .mul a' b')
 
-/-- State-threaded encode of a list of expressions (linear, cons-built — no quadratic append). -/
 def VarRegistry.encodeExprs (r : VarRegistry) :
     List (Expression p) → VarRegistry × List (DenseExpr p)
   | [] => (r, [])
@@ -208,14 +196,12 @@ def VarRegistry.encodeExprs (r : VarRegistry) :
       let (r2, rest') := r1.encodeExprs rest
       (r2, e' :: rest')
 
-/-- Encode a spec bus interaction, threading the registry through multiplicity then payload. -/
 def VarRegistry.encodeBI (r : VarRegistry) (bi : BusInteraction (Expression p)) :
     VarRegistry × BusInteraction (DenseExpr p) :=
   let (r1, m) := r.encodeExpr bi.multiplicity
   let (r2, ps) := r1.encodeExprs bi.payload
   (r2, { busId := bi.busId, multiplicity := m, payload := ps })
 
-/-- State-threaded encode of a list of bus interactions. -/
 def VarRegistry.encodeBIs (r : VarRegistry) :
     List (BusInteraction (Expression p)) → VarRegistry × List (BusInteraction (DenseExpr p))
   | [] => (r, [])
@@ -224,8 +210,7 @@ def VarRegistry.encodeBIs (r : VarRegistry) :
       let (r2, rest') := r1.encodeBIs rest
       (r2, bi' :: rest')
 
-/-- Encode a spec constraint system, threading the registry through constraints then interactions.
-    Left-to-right, single traversal; the registry it returns covers the dense system it returns. -/
+/-- Encode a spec constraint system; the registry it returns covers the dense system it returns. -/
 def VarRegistry.encodeCS (r : VarRegistry) (cs : ConstraintSystem p) :
     VarRegistry × DenseConstraintSystem p :=
   let (r1, acs) := r.encodeExprs cs.algebraicConstraints
@@ -234,7 +219,6 @@ def VarRegistry.encodeCS (r : VarRegistry) (cs : ConstraintSystem p) :
 
 /-! ## Encode: extension, coverage, round trip (expression level) -/
 
-/-- Encoding extends the registry. -/
 theorem VarRegistry.encodeExpr_extends (r : VarRegistry) (e : Expression p) :
     r.Extends (r.encodeExpr e).1 := by
   induction e generalizing r with
@@ -245,7 +229,6 @@ theorem VarRegistry.encodeExpr_extends (r : VarRegistry) (e : Expression p) :
   | mul a b iha ihb =>
       exact (iha r).trans (ihb (r.encodeExpr a).1)
 
-/-- The dense expression `encode` returns is covered by the registry it returns. -/
 theorem VarRegistry.encodeExpr_covered (r : VarRegistry) (e : Expression p) :
     (r.encodeExpr e).2.CoveredBy (r.encodeExpr e).1 := by
   induction e generalizing r with
@@ -262,7 +245,7 @@ theorem VarRegistry.encodeExpr_covered (r : VarRegistry) (e : Expression p) :
       refine ⟨?_, ihb (r.encodeExpr a).1⟩
       exact (iha r).mono ((r.encodeExpr a).1.encodeExpr_extends b)
 
-/-- Round trip: decoding an encoded expression (under the resulting registry) is the identity. -/
+/-- Round trip: decoding an encoded expression is the identity. -/
 theorem VarRegistry.decodeExpr_encodeExpr (r : VarRegistry) (e : Expression p) :
     (r.encodeExpr e).1.decodeExpr (r.encodeExpr e).2 = e := by
   induction e generalizing r with
@@ -302,7 +285,6 @@ theorem VarRegistry.encodeBIs_cons (r : VarRegistry) (bi : BusInteraction (Expre
       (((r.encodeBI bi).1.encodeBIs rest).1,
         (r.encodeBI bi).2 :: ((r.encodeBI bi).1.encodeBIs rest).2) := rfl
 
-/-- List-level decode stability under extension. -/
 theorem VarRegistry.Extends.decodeExprs_eq {r r' : VarRegistry} (h : r.Extends r')
     {es : List (DenseExpr p)} (hc : ∀ e ∈ es, e.CoveredBy r) :
     es.map r'.decodeExpr = es.map r.decodeExpr :=
@@ -357,7 +339,6 @@ theorem VarRegistry.encodeBI_mult (r : VarRegistry) (bi : BusInteraction (Expres
 theorem VarRegistry.encodeBI_payload (r : VarRegistry) (bi : BusInteraction (Expression p)) :
     (r.encodeBI bi).2.payload = ((r.encodeExpr bi.multiplicity).1.encodeExprs bi.payload).2 := rfl
 
-/-- Bus-interaction decode stability under extension. -/
 theorem VarRegistry.Extends.decodeBI_eq {r r' : VarRegistry} (h : r.Extends r')
     {bi : BusInteraction (DenseExpr p)} (hc : denseBICovered r bi) :
     r'.decodeBI bi = r.decodeBI bi := by
@@ -420,8 +401,8 @@ theorem VarRegistry.encodeCS_bis (r : VarRegistry) (cs : ConstraintSystem p) :
     (r.encodeCS cs).2.busInteractions
       = ((r.encodeExprs cs.algebraicConstraints).1.encodeBIs cs.busInteractions).2 := rfl
 
-/-- **Round trip at the system level.** Decoding an encoded constraint system (under the resulting
-    registry) recovers the original — the identity the Checkpoint-1 encode/decode adapter rides on. -/
+/-- Round trip at the system level: decoding an encoded constraint system recovers the original —
+    the identity the pipeline's edge encode/decode rides on. -/
 theorem VarRegistry.decodeCS_encodeCS (r : VarRegistry) (cs : ConstraintSystem p) :
     (r.encodeCS cs).1.decodeCS (r.encodeCS cs).2 = cs := by
   obtain ⟨acs, bis⟩ := cs

@@ -4,48 +4,18 @@ set_option autoImplicit false
 
 /-! # Dense correctness and the central lift bridge
 
-The pipeline is `VarId`-only: passes are proved correct over dense environments `VarId → ZMod p`,
-connected to the audited `Variable`-level spec **once**, at the optimizer boundary. This module
-builds that connection.
-
-It defines the dense semantic notions — dense expression/bus evaluation, satisfaction,
-admissibility, stateful-bus side effects, invariant preservation, refinement (`implies`),
-computation-method evaluation and dense derivations — all over `VarId → ZMod p`, entirely
-`Variable`-free and decode-free. On top of them it defines `DensePassCorrect`, the dense analogue
-of the spec `PassCorrect` (soundness, completeness-with-derivations, stateful-bus effects, and dense
-derivations), parameterised only by an abstract `isInput : VarId → Bool` predicate (which the lift
-instantiates with "resolves to a powdr-ID column").
-
-The **lift theorem** `DensePassCorrect.lift` proves that, under the registry coverage invariants,
-`DensePassCorrect` for a dense transform implies the spec `PassCorrect` for the *decoded*
-input/output/derivations. Environment transfer runs both ways: a spec env `E : Variable → ZMod p`
-restricts to `E ∘ resolve`; a dense env `denv` extends to `extendEnv denv E` (via `idOf` on
-registered variables, falling back to `E` elsewhere), and coverage guarantees decoded expressions
-mention only registered variables so evaluation agrees. Every correspondence lemma here is
-`Prop`-valued and erases; `decode` appears only in these erased bridge statements, never in the
-runtime pipeline.
-
-`DenseVerifiedPassW.of` packages the whole thing: given a dense transform, coverage
-preservation, and a `DensePassCorrect` proof, it yields the existing `DensePassResult` by applying
-the lift — so a dense pass slots into the current `denseChain`/selector with no change to
-composition, the fixpoint, or the other passes.
-
-## Proof-architecture defaults
-
-Dense ports use `Prop`-carrying dense structures — `Prop` fields about dense data only, which erase
-(precedent: `DenseDropResult`, and the `DenseNativeStep` of `BridgeSteps.lean`) — instead of
-externalising invariants into threaded inductions, wherever a carried proof would otherwise force
-representation correspondence. Data-only dense records remain correct without one everywhere else.
-Internal loops compose via the `DenseNativeStep` combinators (`BridgeSteps.lean`); each pass lifts
-once, here, to the audited spec. -/
+Passes are proved correct over dense environments `VarId → ZMod p` and connected to the audited
+`Variable`-level spec once, at the optimizer boundary. This module defines the dense semantics
+(evaluation, satisfaction, admissibility, side effects, refinement), `DensePassCorrect` (the dense
+analogue of `PassCorrect`, parameterised by `isInput : VarId → Bool`), the lift theorem
+`DensePassCorrect.lift`, and the pass builders `DenseVerifiedPassW.of` / `.ofExtending`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Dense computation methods: evaluation, variables, `methodFor` -/
+/-! ## Dense computation methods -/
 
-/-- Evaluate a dense computation method under a dense environment. -/
 def DenseComputationMethod.eval : DenseComputationMethod p → (VarId → ZMod p) → ZMod p
   | .const c, _ => c
   | .quotientOrZero num den, denv =>
@@ -53,7 +23,6 @@ def DenseComputationMethod.eval : DenseComputationMethod p → (VarId → ZMod p
   | .ifEqZero cond thenM elseM, denv =>
       if cond.eval denv = 0 then thenM.eval denv else elseM.eval denv
 
-/-- The `VarId`s a dense computation method may read. -/
 def DenseComputationMethod.vars : DenseComputationMethod p → List VarId
   | .const _ => []
   | .quotientOrZero num den => num.vars ++ den.vars
@@ -67,7 +36,6 @@ def DenseDerivations.methodFor : DenseDerivations p → VarId → Option (DenseC
 
 /-! ## Dense semantics over `VarId → ZMod p` environments -/
 
-/-- Evaluate a dense bus interaction under a dense environment. -/
 def denseBIEval (bi : BusInteraction (DenseExpr p)) (denv : VarId → ZMod p) :
     BusInteraction (ZMod p) :=
   { busId := bi.busId,
@@ -82,7 +50,7 @@ def DenseConstraintSystem.sideEffects (d : DenseConstraintSystem p) (bs : BusSem
       let m := denseBIEval bi denv
       ((m.busId, m.payload), m.multiplicity))
 
-/-- Dense satisfaction: all algebraic constraints vanish and every fired bus message is unconstrained. -/
+/-- Dense satisfaction: all constraints vanish and every fired bus message is unconstrained. -/
 def DenseConstraintSystem.satisfies (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (denv : VarId → ZMod p) : Prop :=
   (∀ c ∈ d.algebraicConstraints, c.eval denv = 0) ∧
@@ -96,14 +64,14 @@ def DenseConstraintSystem.admissible (d : DenseConstraintSystem p) (bs : BusSema
   bs.admissible ((d.busInteractions.map (fun bi => denseBIEval bi denv)).filter
     (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId))
 
-/-- Dense invariant preservation: every fired bus message on a satisfying assignment breaks no invariant. -/
+/-- Every fired bus message on a satisfying assignment breaks no invariant. -/
 def DenseConstraintSystem.guaranteesInvariants (d : DenseConstraintSystem p) (bs : BusSemantics p) :
     Prop :=
   ∀ denv, d.satisfies bs denv → ∀ bi ∈ d.busInteractions,
     let message := denseBIEval bi denv
     message.multiplicity ≠ 0 → bs.breaksInvariant message = false
 
-/-- Dense sound-replacement half: every satisfying assignment has a matching one for `other` with equivalent side effects. -/
+/-- Every satisfying assignment has a matching one for `other` with equivalent side effects. -/
 def DenseConstraintSystem.implies (self other : DenseConstraintSystem p) (bs : BusSemantics p) :
     Prop :=
   ∀ denv, self.satisfies bs denv →
@@ -125,8 +93,7 @@ theorem DenseConstraintSystem.mem_occ_of_bi {d : DenseConstraintSystem p}
 
 /-! ## Dense congruence: a semantics depends only on the variables that occur -/
 
-/-- Dense expression evaluation depends only on the variables that occur. (File-local to avoid
-    clashing with the copy a downstream pass module declares; the bridge is compiled first.) -/
+/-- Dense expression evaluation depends only on the variables that occur. -/
 private theorem denseExprEvalCongr (e : DenseExpr p) (denv1 denv2 : VarId → ZMod p)
     (h : ∀ i ∈ e.vars, denv1 i = denv2 i) : e.eval denv1 = e.eval denv2 := by
   induction e with
@@ -187,7 +154,7 @@ theorem DenseConstraintSystem.sideEffects_congr {d : DenseConstraintSystem p} {b
     (fun i hi => h i (DenseConstraintSystem.mem_occ_of_bi (List.mem_of_mem_filter hbi) hi))]
 
 /-- Filtering the *stateful* interactions commutes with any bus-interaction map that preserves
-    `busId`. Reusable for eval-preserving expression maps (constant folding, normalization). -/
+    `busId`. -/
 theorem filter_map_busId_comm (l : List (BusInteraction (DenseExpr p)))
     (f : BusInteraction (DenseExpr p) → BusInteraction (DenseExpr p)) (bs : BusSemantics p)
     (hf : ∀ bi, (f bi).busId = bi.busId) :
@@ -204,12 +171,11 @@ theorem filter_map_busId_comm (l : List (BusInteraction (DenseExpr p)))
 
 /-! ## Environment transfer: extend a dense env to a spec env -/
 
-/-- Whether a `VarId` resolves to a powdr-ID column (reads the spec's `powdrId?` at the resolved
-    `Variable`). -/
+/-- Whether a `VarId` resolves to a powdr-ID column. -/
 def VarRegistry.isInput (reg : VarRegistry) (i : VarId) : Bool := (reg.resolve i).powdrId?.isSome
 
 /-- Extend a dense environment to a spec environment: registered variables read their dense value,
-    everything else falls back to `E`. The fallback keeps unregistered powdr columns fixed, which the
+    everything else falls back to `E`. The fallback keeps unregistered powdr columns fixed, as the
     spec completeness clause requires. -/
 def VarRegistry.extendEnv (reg : VarRegistry) (denv : VarId → ZMod p) (E : Variable → ZMod p) :
     Variable → ZMod p :=
@@ -392,11 +358,8 @@ theorem VarRegistry.mem_decodeCS_vars (reg : VarRegistry) (d : DenseConstraintSy
 
 /-! ## `DensePassCorrect`: the dense analogue of `PassCorrect`
 
-`isInput : VarId → Bool` abstractly marks the powdr-ID columns; the lift instantiates it with
-`reg.isInput`. `DenseOutReconstructs` is the reconstruction obligation for a pass's output: each
-output derived variable is either derived locally (a method in `dd`, reading only input columns)
-or inherited from the input (present in `d`, value preserved) — deferring the inherited case to the
-spec-side incoming derivations at the lift, avoiding any decode of arbitrary threaded derivations. -/
+`isInput : VarId → Bool` marks the powdr-ID columns (the lift instantiates it with `reg.isInput`).
+`DenseOutReconstructs` states the reconstruction obligation for a pass's output. -/
 
 /-- The reconstruction obligation for a pass's output. -/
 def DenseOutReconstructs (isInput : VarId → Bool) (inputVarIds : List VarId)
@@ -423,7 +386,7 @@ def DensePassCorrect (isInput : VarId → Bool) (d out : DenseConstraintSystem p
       (∀ inputVarIds, (∀ i ∈ d.occ, isInput i = true → i ∈ inputVarIds) →
         DenseOutReconstructs isInput inputVarIds d out dd denv denv'))
 
-/-! ## Spec-level helpers (file-local, avoid re-declaring pass-file lemmas) -/
+/-! ## Spec-level helpers -/
 
 private theorem specExpr_eval_congr (e : Expression p) (e1 e2 : Variable → ZMod p)
     (h : ∀ v ∈ e.vars, e1 v = e2 v) : e.eval e1 = e.eval e2 := by
@@ -497,17 +460,10 @@ private theorem specMethodFor_append (a b : Derivations p) (v : Variable) :
 
 /-! ## Dense composition: `refl` and `andThen`
 
-The dense analogues of `PassCorrect.refl`/`PassCorrect.andThen` (`OptimizerPasses/Basic.lean`),
-proved directly over `VarId → ZMod p` environments — no `decode`. These let a pass with an internal
-fixpoint (e.g. `busPairCancel`'s `denseCancelLoop`, which threads a single-step `DensePassCorrect`
-across intermediate `mkCs` systems via `DensePassCorrect.andThen` with a `DensePassCorrect.refl`
-base) compose entirely in the dense layer, before the one lift to the audited spec. `andThen` is the
-**general** derivation-concatenating form (`dd1 ++ dd2`); specialising both sides to `[]` recovers
-the shape `busPairCancel` needs (`[] ++ [] = []`), and it subsumes the ad-hoc
-`DensePassCorrect_refl`/`DensePassCorrect.trans` shortcuts the domain passes carry. -/
+The dense analogues of `PassCorrect.refl`/`PassCorrect.andThen`, over `VarId → ZMod p`. `andThen`
+concatenates derivations (`dd1 ++ dd2`); with both sides `[]` it composes fixpoint loops. -/
 
-/-- `DenseDerivations.methodFor` over an append: the second list wins, falling back to the first
-    (last-entry-wins, mirroring `specMethodFor_append`). -/
+/-- `methodFor` over an append: the second list wins, falling back to the first. -/
 theorem DenseDerivations.methodFor_append (a b : DenseDerivations p) (v : VarId) :
     DenseDerivations.methodFor (a ++ b) v
       = (DenseDerivations.methodFor b v).orElse (fun _ => DenseDerivations.methodFor a v) := by
@@ -518,8 +474,7 @@ theorem DenseDerivations.methodFor_append (a b : DenseDerivations p) (v : VarId)
       simp only [List.cons_append, DenseDerivations.methodFor, ih]
       cases DenseDerivations.methodFor b v <;> rfl
 
-/-- **Reflexivity.** The identity transform (same system, no new derivations) is correct. The
-    dense analogue of `PassCorrect.refl`; the base case of a drop-loop. -/
+/-- Reflexivity: the identity transform (same system, no new derivations) is correct. -/
 theorem DensePassCorrect.refl (isInput : VarId → Bool) (d : DenseConstraintSystem p)
     (bs : BusSemantics p) : DensePassCorrect isInput d d [] bs := by
   refine ⟨fun denv hsat => ⟨denv, hsat, BusState.equiv_refl _⟩, _root_.id, fun i hi _ => hi, ?_⟩
@@ -528,19 +483,9 @@ theorem DensePassCorrect.refl (isInput : VarId → Bool) (d : DenseConstraintSys
   intro inputVarIds _ i hi _
   exact ⟨hi, rfl⟩
 
-/-- **Sequential composition.** Given correctness `d → mid` (local derivations `dd1`) and
-    `mid → out` (local derivations `dd2`), conclude correctness `d → out` with derivations
-    `dd1 ++ dd2`. The dense analogue of `PassCorrect.andThen` clause by clause: transitive
-    `implies`, invariant preservation, occurrence-shrink chaining, side-effect chaining, and the
-    reconstruction clause across the middle dense system.
-
-    The reconstruction composition (the hard `∃ denv'` direction): `methodFor (dd1 ++ dd2) i` prefers
-    `dd2`, falling back to `dd1` (`methodFor_append`). If `dd2` locally derives `i`, `hrec23` gives
-    the answer directly (evaluated at the final env `e2`). Otherwise `hrec23`'s `none` branch pins
-    `i ∈ mid.occ` with `e2 i = e1 i`, so `hrec12` on the *middle* env decides `i`: if `dd1` derives it,
-    its method reads only input columns, on which `e2` and `e1` agree (`hii23` + `specDCM_eval_congr`),
-    so the value carries from `e1` to `e2`; if neither derives it, both `none` branches chain the
-    value preservation `e2 i = e1 i = denv i`. -/
+/-- Sequential composition: correctness `d → mid` (derivations `dd1`) and `mid → out` (`dd2`) give
+    `d → out` with `dd1 ++ dd2`, composing all four `DensePassCorrect` clauses across the middle
+    system. -/
 theorem DensePassCorrect.andThen {isInput : VarId → Bool} {d mid out : DenseConstraintSystem p}
     {dd1 dd2 : DenseDerivations p} {bs : BusSemantics p}
     (hf : DensePassCorrect isInput d mid dd1 bs) (hg : DensePassCorrect isInput mid out dd2 bs) :
@@ -614,8 +559,8 @@ theorem DensePassCorrect.andThen {isInput : VarId → Bool} {d mid out : DenseCo
 
 /-! ## `DensePassCorrect` shortcuts (env'=env, and composition) -/
 
-/-- The env'=env correctness shape (the dense analogue of `PassCorrect.ofEnvEq`): the fold's
-    completeness witness is the input assignment and it introduces no variable. -/
+/-- The env'=env correctness shape: the completeness witness is the input assignment and it
+    introduces no variable. -/
 theorem DensePassCorrect.ofEnvEq {isInput : VarId → Bool} {d out : DenseConstraintSystem p}
     {bs : BusSemantics p}
     (hsound : out.implies d bs)
@@ -660,11 +605,9 @@ theorem DensePassCorrect.trans {isInput : VarId → Bool} {d1 d2 d3 : DenseConst
       show i ∈ d1.occ ∧ e2 i = denv i
       exact ⟨b12.1, by rw [b23.2, b12.2]⟩
 
-/-! ### Sanity check: the new lemmas compose
+/-! ### Sanity check: the composition lemmas type-check
 
-A drop-shaped step (a trivial bus filter that keeps everything) chained after `refl` through
-`andThen`, plus the fully general `andThen` over hypothetical steps with non-empty derivations. Both
-are erased `example`s — they only witness that the API type-checks and composes. -/
+Erased `example`s: a drop-shaped step chained after `refl`, and the general `andThen`. -/
 
 private def keepAllBus (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   { d with busInteractions := d.busInteractions.filter (fun _ => true) }
@@ -822,11 +765,9 @@ theorem DensePassCorrect.lift {reg : VarRegistry} {d out : DenseConstraintSystem
 
 /-! ## The dense-pass builder -/
 
-/-- Build a `DenseVerifiedPassW` from a dense transform (registry unchanged — no fresh
-    variables), its coverage preservation, and a `DensePassCorrect` proof, discharging the spec
-    `PassCorrect`-on-decode field via `DensePassCorrect.lift`. Fresh-variable passes
-    (`Reencode`/`HintCollapse`/`SeqzCollapse`) need the registry-extending path (`ofExtending`)
-    instead. -/
+/-- Build a `DenseVerifiedPassW` from a registry-preserving dense transform, its coverage
+    preservation, and a `DensePassCorrect` proof (discharged via `DensePassCorrect.lift`).
+    Fresh-variable passes use `ofExtending`. -/
 def DenseVerifiedPassW.of
     (denseF : (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
       DenseConstraintSystem p)
@@ -850,8 +791,7 @@ def DenseVerifiedPassW.of
       correct := DensePassCorrect.lift hcovd (hcov reg bs facts d hcovd)
         (hdcov reg bs facts d hcovd) (hcorrect reg bs facts d hcovd) }
 
-/-- `of`'s decoded output equals the decode of the dense transform's output (registry
-    unchanged), so it respects the degree bound whenever the dense output stays within bound. -/
+/-- `of` respects the degree bound whenever its dense output stays within bound. -/
 theorem DenseVerifiedPassW.of_respectsDeg {b : DegreeBound}
     {denseF : (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
       DenseConstraintSystem p}
@@ -867,16 +807,10 @@ theorem DenseVerifiedPassW.of_respectsDeg {b : DegreeBound}
 
 /-! ## The registry-extending dense-pass builder
 
-`of` hardcodes `reg' := reg` (no fresh variables). Fresh-variable passes
-(`Reencode`/`HintCollapse`/`SeqzCollapse`) mint columns: they extend the registry and emit non-empty
-dense derivations. `ofExtending` is their builder — the sibling of `of`, same obligation
-naming, but with a transform that returns the extended registry alongside the output and
-derivations, and a `DensePassCorrect` obligation stated at the **extended** registry's `isInput`. -/
+`ofExtending` is the sibling of `of` for fresh-variable passes: the transform returns the extended
+registry, and `DensePassCorrect` is stated at the extended registry's `isInput`. -/
 
-/-- Constraint-system coverage is preserved by a registry extension. (`Adapter.lean` carries a
-    public copy as `DenseConstraintSystem.CoveredBy.mono`, but that module is not on this bridge's
-    import path; the extending builder needs the fact to re-cover the input at the extended registry.
-    Public — `BridgeSteps.lean`'s certified-step glue reuses it.) -/
+/-- Constraint-system coverage is preserved by a registry extension. -/
 theorem denseCS_coveredBy_mono {r r' : VarRegistry} (h : r.Extends r')
     {d : DenseConstraintSystem p} (hc : d.CoveredBy r) : d.CoveredBy r' := by
   obtain ⟨hac, hbi⟩ := hc
@@ -884,19 +818,10 @@ theorem denseCS_coveredBy_mono {r r' : VarRegistry} (h : r.Extends r')
   obtain ⟨hm, hp⟩ := hbi bi hbimem
   exact ⟨hm.mono h, fun e he => (hp e he).mono h⟩
 
-/-- Build a `DenseVerifiedPassW` from a registry-**extending** dense transform — the sibling
-    of `of` for passes that mint fresh variables (`Reencode`/`HintCollapse`/`SeqzCollapse`).
-    The `transform` takes the incoming registry and returns the extended registry together with the
-    dense output and dense derivations; the obligations are the registry extension (`hext`), coverage
-    of the output and the derivations at the **extended** registry (`hcov`/`hdcov`), and a
-    `DensePassCorrect` proof stated at the extended registry's `isInput` (`hcorrect`).
-
-    The spec `PassCorrect`-on-decode field is discharged by `DensePassCorrect.lift` instantiated at
-    the extended registry (`lift` fixes no registry): re-cover the input there with `CoveredBy.mono`
-    across the extension, lift to get `PassCorrect` with the input decoded at the extended registry,
-    then `Extends.decodeCS_eq` restates that input decode at the original registry — exactly the field
-    `DensePassResult` demands. The transform is evaluated once per invocation (`let`-bound), so
-    the extended registry, output, and derivations are shared, not recomputed. -/
+/-- Build a `DenseVerifiedPassW` from a registry-extending dense transform (the sibling of `of` for
+    fresh-variable passes). The `transform` returns the extended registry, output, and derivations;
+    the obligations are extension (`hext`), coverage there (`hcov`/`hdcov`), and a
+    `DensePassCorrect` proof at the extended registry's `isInput` (`hcorrect`). -/
 def DenseVerifiedPassW.ofExtending
     (transform : VarRegistry → (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
       VarRegistry × DenseConstraintSystem p × DenseDerivations p)
@@ -930,9 +855,7 @@ def DenseVerifiedPassW.ofExtending
         have hlift := DensePassCorrect.lift hcovd' hcov' hdcov' hcorrect'
         rwa [hext'.decodeCS_eq hcovd] at hlift }
 
-/-- `ofExtending`'s decoded output equals the decode of the transform's output at the extended
-    registry, so it respects the degree bound whenever that dense output stays within bound. Mirrors
-    `of_respectsDeg`. -/
+/-- `ofExtending` respects the degree bound whenever its dense output stays within bound. -/
 theorem DenseVerifiedPassW.ofExtending_respectsDeg {b : DegreeBound}
     {transform : VarRegistry → (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
       VarRegistry × DenseConstraintSystem p × DenseDerivations p}
@@ -947,11 +870,8 @@ theorem DenseVerifiedPassW.ofExtending_respectsDeg {b : DegreeBound}
 
 /-! ### Sanity check: a trivial registry-minting stub composes through the builder -/
 
-/-- A trivial registry-**minting** stub — register one fresh `Variable`, keep the system unchanged,
-    emit no derivations — composes through `ofExtending`. Output coverage rides on
-    `CoveredBy.mono` across the registration extension, and the `DensePassCorrect` obligation is the
-    `refl` template at the extended registry. An erased `example` that only witnesses the extending
-    builder type-checks end-to-end (nothing is wired). -/
+/-- A trivial registry-minting stub (register one fresh `Variable`, keep the system) composing
+    through `ofExtending`; an erased `example` witnessing the extending builder type-checks. -/
 private example (v : Variable) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.ofExtending
     (fun reg _ _ d => ((reg.register v).1, d, []))

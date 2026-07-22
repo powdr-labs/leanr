@@ -6,33 +6,17 @@ set_option autoImplicit false
 
 /-! # Dense fixed-zero-register pinning: correctness proof and wiring
 
-`DensePassCorrect` proof for the dense `zeroRegister` transform, lifted to the audited spec via
-`DenseVerifiedPassW.of`. The transform appends `data_i = 0` for every active fixed-zero memory
-message via `DensePassCorrect.denseAddConstraints`, a single-shot "add entailed constraints" step
-whose entailment needs only admissibility (the value is fixed by the real-trace `zeroCell` fact).
-
-The recogniser entailment `denseCellZeroExprs_eval_zero` is proved over `denseBIEval`, applying
-`facts.zeroCell_sound` value-level — its admissibility premise is exactly dense
-`DenseConstraintSystem.admissible` (`Bridge.lean`), supplied by `denseAddConstraints`' completeness
-hypothesis. The candidate collection `denseCollectZeroCells` is a `Subtype` recursion
-(`denseCellZeroExprs bi ++ acc`) carrying the entailment `Prop` alongside the data, rather than a
-bare `flatMap` plus a separate whole-list soundness lemma.
-
-The occurrence list `d.occ` is hoisted ONCE in `denseZeroRegisterF` and captured by
-`denseZeroPred`, rather than being recomputed per candidate/variable. The filter predicate needs
-zero lemmas about `normalize`/`contains`: filtering only shrinks the collected set, so the
-entailment holds for every survivor; and the added `.var`-free equality's occurrence is discharged
-from the predicate's own third conjunct (`vars ⊆ d.occ`). -/
+`DensePassCorrect` proof for `ZeroRegister.lean` via `DensePassCorrect.denseAddConstraints`
+(appending `data_i = 0` for every active fixed-zero memory message), lifted through
+`DenseVerifiedPassW.of`. The entailment needs only admissibility (`facts.zeroCell_sound`); the
+candidate collection `denseCollectZeroCells` carries its entailment proof alongside the data. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Per-interaction fixed-zero data limbs: the entailment -/
-
-/-- Every expression `denseCellZeroExprs` returns evaluates to `0` on an admissible assignment: the
-    interaction is an active fixed-zero cell, so `zeroCell_sound` forces each of its data limbs to
-    `0`. Needs only admissibility. -/
+/-- Every expression `denseCellZeroExprs` returns evaluates to `0` on an admissible assignment
+    (`zeroCell_sound`). Needs only admissibility. -/
 theorem denseCellZeroExprs_eval_zero (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) (bi : BusInteraction (DenseExpr p)) (hbi : bi ∈ d.busInteractions)
     (denv : VarId → ZMod p) (hadm : d.admissible bs denv) (c : DenseExpr p)
@@ -77,10 +61,8 @@ theorem denseCellZeroExprs_eval_zero (d : DenseConstraintSystem p) (bs : BusSema
             (e.eval denv) hget
       · exact absurd hc (by simp)
 
-/-! ## The proof-carrying candidate collection -/
-
-/-- Collect every interaction's fixed-zero data-limb expressions, with the proof that each evaluates
-    to `0` on an admissible assignment: a `Subtype` recursion (`denseCellZeroExprs bi ++ acc`). -/
+/-- Collect every interaction's fixed-zero data-limb expressions, carrying the proof that each
+    evaluates to `0` on an admissible assignment. -/
 def denseCollectZeroCells (d : DenseConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs) :
     (pending : List (BusInteraction (DenseExpr p))) →
     (∀ bi ∈ pending, bi ∈ d.busInteractions) →
@@ -97,18 +79,15 @@ def denseCollectZeroCells (d : DenseConstraintSystem p) (bs : BusSemantics p) (f
           denv hadm c h
       · exact hacc denv hadm c h⟩
 
-/-! ## The dense transform -/
-
-/-- The filtered fixed-zero data-limb equalities the pass appends. `d.occ` is bound once (`dVars`)
-    — not recomputed per candidate. -/
+/-- The filtered fixed-zero data-limb equalities the pass appends (`d.occ` bound once). -/
 def denseZeroRegisterNew (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     List (DenseExpr p) :=
   let exprs := (denseCollectZeroCells d bs facts d.busInteractions (fun _ h => h)).1
   let dVars := d.occ
   exprs.filter (denseZeroPred d dVars)
 
-/-- The dense fixed-zero pinning transform. Appends the filtered fixed-zero data limbs (identity
-    when there are none); the collected candidates and `d.occ` are each computed once. -/
+/-- The dense fixed-zero pinning transform: append the filtered fixed-zero data limbs (identity
+    when there are none). -/
 def denseZeroRegisterF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     DenseConstraintSystem p :=
   let exprs := (denseCollectZeroCells d bs facts d.busInteractions (fun _ h => h)).1
@@ -124,10 +103,7 @@ theorem denseZeroRegisterF_eq (bs : BusSemantics p) (facts : BusFacts p bs)
       else { d with algebraicConstraints := d.algebraicConstraints ++ denseZeroRegisterNew bs facts d } :=
   rfl
 
-/-! ## Coverage and the single-shot correctness -/
-
-/-- Every variable of a surviving candidate occurs in `d`: the filter's third conjunct
-    (`vars ⊆ d.occ`) is exactly this. -/
+/-- Every variable of a surviving candidate occurs in `d` (the filter's third conjunct). -/
 theorem denseZeroRegisterNew_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     ∀ c ∈ denseZeroRegisterNew bs facts d, ∀ z ∈ c.vars, z ∈ d.occ := by
@@ -137,8 +113,7 @@ theorem denseZeroRegisterNew_vars (bs : BusSemantics p) (facts : BusFacts p bs)
   simp only [Bool.and_eq_true, List.all_eq_true] at hp
   exact of_decide_eq_true (hp.2 z hz)
 
-/-- Every surviving candidate evaluates to `0` on an admissible assignment (drops the collection's
-    entailment through the filter). -/
+/-- Every surviving candidate evaluates to `0` on an admissible assignment. -/
 theorem denseZeroRegisterNew_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (denv : VarId → ZMod p) (hadm : d.admissible bs denv) :
     ∀ c ∈ denseZeroRegisterNew bs facts d, c.eval denv = 0 := by
@@ -168,8 +143,7 @@ theorem denseZeroRegisterF_correct (reg : VarRegistry) (bs : BusSemantics p) (fa
       (denseZeroRegisterNew_vars bs facts d)
       (fun denv hadm _hsat => denseZeroRegisterNew_sound bs facts d denv hadm)
 
-/-- **The dense fixed-zero-register pass.** Fact-consuming; threads the original `facts`
-    unchanged, connected to the audited spec via `DensePassCorrect.lift` (through `of`). -/
+/-- The dense fixed-zero-register pass. -/
 def denseZeroRegisterPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of denseZeroRegisterF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseZeroRegisterF_covered reg bs facts d hcov)

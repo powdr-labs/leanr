@@ -5,55 +5,13 @@ set_option autoImplicit false
 
 /-! # Dense box-certified multilinear rewriting — flagFold's `boxRewritePass` sub-pass
 
-Runtime definitions for `boxRewrite`: `denseAddMono`/`denseMulMono`/`densePolyOf`/`denseMonoExpr`/
-`denseExprOfPoly`/`denseReduceExpr`, `densePtFun`/`denseCanonEq`/`denseBrCert`,
-`denseBrRw`/`denseBrBi`, `DenseConstraintSystem.boxRewrite`, `denseBoxRewriteF`. This file is
-**impl-only**: it carries no soundness lemma, and no `DenseVerifiedPassW`/`DensePassCorrect`
-wrapper is built here — the top-level transform `denseBoxRewriteF` is shaped exactly like
-`denseBoxTautoDropF`/`densePointwiseDupDropF` (`FlagFoldDrops.lean`), so the prover wraps it
-directly with `DenseVerifiedPassW.of`. `denseFlagFoldPass'` itself (the chain assembly,
-`FlagFold.lean`) is not touched here.
+Runtime definitions for `boxRewrite` (proof in `BoxRewriteProof.lean`). `denseBoxRewriteF` takes its
+OWN `DegreeBound` (to decide "over-bound" and rewrite payloads), not the outer `guardDegree`
+wrapper's.
 
-Notes on the definitions below:
-
-* **The pass takes its own `DegreeBound`.** `denseBoxRewriteF` takes `pw` and a `DegreeBound b` —
-  its OWN bound parameter, used to decide "over-bound" and to rewrite bus-interaction payloads,
-  *not* the outer `guardDegree` wrapper's bound — and never reads `bs` except for shape parity with
-  the other `denseXxxF` transforms in this cluster (`_bs`, unused, erased at the call site once the
-  prover's `of` wrapper ignores it too, exactly as `denseBoxTautoDropF`'s `_bs` already does).
-* **`findDomainAlg`/`assignments`/`envOf` reuse.** `denseFindDomainAlg`/`denseAssignments`
-  (`DomainFold.lean`, transitively imported here through `FlagFoldDrops → FlagUnify → RootPairUnify
-  → DomainFold`) and `denseEnvOfFast` (`DomainBatch.lean`, transitively imported through
-  `DomainFold`) are reused unchanged. As in `FlagFoldDrops.lean`, every point lookup in this file
-  (`densePtFun`) goes through `denseEnvOfFast`: for `VarId` equality is already a single `Nat`
-  comparison, so there is only one sensible dense lookup (no separate fast/slow variant is needed).
-* **`Expression.substF`/`linearize`/`LinExpr.norm` reuse.** `DenseExpr.substF` (`SubstMap.lean`,
-  imported explicitly — not on the transitive path from the rest of this cluster),
-  `denseLinearize`/`DenseLinExpr` (`Affine.lean`, transitively imported through `Normalize.lean`),
-  `DenseLinExpr.norm` (`Normalize.lean`, transitively imported).
-* **`denseSingleVarCs` reuse.** Defined in `FlagFoldDrops.lean`; reused unchanged.
-
-## The two `VarId`-keyed sort sites
-
-`denseMulMono` and `denseCanonEq` each canonicalise a list by `List.mergeSort`ing on `VarId.index`
-before comparing/merging:
-
-```
-(a ++ b).mergeSort (fun u v => decide (u.index ≤ v.index))          -- denseMulMono
-l1.terms.mergeSort (fun a b => decide (a.1.index ≤ b.1.index))      -- denseCanonEq (×2)
-```
-
-Neither list is otherwise sorted or exposed — the sort exists purely so that two equal *multisets*
-(of monomial variables in `denseMulMono`; of `(VarId, coeff)` terms up to permutation in
-`denseCanonEq`, after `LinExpr.norm`'s merge-by-first-occurrence already collapsed duplicates but
-did not sort) turn into *syntactically equal lists*, regardless of the multiset's construction
-order. `VarId.index` gives a total, stable order for this purpose — it changes *which* permutation
-of a tied multiset is produced, never *whether* two multisets match. `denseMulMono`'s output is
-itself never read on its own (only equality-compared inside `denseAddMono`, and rebuilt back to an
-expression by `denseMonoExpr`, which folds over it in whatever order it comes in — so a different
-tie order changes the associativity of the rebuilt `mul` chain, not any decision). `denseCanonEq`'s
-two sorted lists come from the SAME two-list comparison, so a consistent order is all correctness
-needs. -/
+`denseMulMono` and `denseCanonEq` each `List.mergeSort` on `VarId.index` only to turn equal
+multisets into syntactically equal lists, regardless of construction order; the exact key is
+irrelevant, the two lists just need the same total order. -/
 
 namespace ApcOptimizer.Dense
 
@@ -68,8 +26,8 @@ def denseAddMono (m : List VarId) (c : ZMod p) :
   | (m', c') :: rest =>
     if m' = m then (m', c' + c) :: rest else (m', c') :: denseAddMono m c rest
 
-/-- Multiply two variable multisets, capping exponents of `boolSet` members at one. Keeps lists
-    sorted by `VarId.index` for canonical merging (see the module header). -/
+/-- Multiply two variable multisets, capping exponents of `boolSet` members at one. Sorts by
+    `VarId.index` for canonical merging. -/
 def denseMulMono (boolSet : List VarId) (a b : List VarId) : List VarId :=
   ((a ++ b).mergeSort (fun u v => decide (u.index ≤ v.index))).foldl
     (fun acc v =>
@@ -112,13 +70,12 @@ def denseReduceExpr (boolSet : List VarId) (e : DenseExpr p) : Option (DenseExpr
 
 /-! ## The certificate -/
 
-/-- Constant-solution map for a box point (used with `substF`). Reuses `denseEnvOfFast` for the
-    lookup (see the module header). -/
+/-- Constant-solution map for a box point (used with `substF`). -/
 def densePtFun (pt : List (VarId × ZMod p)) : VarId → Option (DenseExpr p) :=
   fun v => if pt.any (fun t => t.1 == v) then some (DenseExpr.const (denseEnvOfFast pt v)) else none
 
 /-- Canonical equality of normalized linear forms: equal constants and equal index-sorted term
-    lists (see the module header). -/
+    lists. -/
 def denseCanonEq (l1 l2 : DenseLinExpr p) : Bool :=
   l1.const == l2.const &&
   l1.terms.mergeSort (fun a b => decide (a.1.index ≤ b.1.index))
@@ -166,16 +123,17 @@ def denseBrBi (singles : List (DenseExpr p)) (db : DegreeBound)
     multiplicity := denseBrRw singles db.busInteractions bi.multiplicity,
     payload := bi.payload.map (denseBrRw singles db.busInteractions) }
 
-/-- Rewrite every over-bound expression of the system to its certified reduction. -/
+/-- Rewrites every over-bound expression to a certified lower-degree equivalent by reducing
+    multilinearly over small-domain (boxed) variables — e.g. for a boolean `x`, `x * x` collapses to
+    `x`. The reduction is heuristic; `denseBrCert` re-verifies it pointwise. -/
 def DenseConstraintSystem.boxRewrite (d : DenseConstraintSystem p) (b : DegreeBound) :
     DenseConstraintSystem p :=
   let singles := denseSingleVarCs d.algebraicConstraints
   { algebraicConstraints := d.algebraicConstraints.map (denseBrRw singles b.identities),
     busInteractions := d.busInteractions.map (denseBrBi singles b) }
 
-/-- The rewriter as a standalone (unguarded) pass runtime: prime `p` only (re-checked at runtime,
-    as elsewhere in this cluster); identity otherwise. Shaped as `(pw) (b) (_bs) (d) → out` (see
-    the module header). -/
+/-- The rewriter as a standalone pass runtime: guarded on `p` prime (re-checked at runtime),
+    identity otherwise. -/
 def denseBoxRewriteF (pw : PrimeWitness p) (b : DegreeBound) (_bs : BusSemantics p)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then d.boxRewrite b else d

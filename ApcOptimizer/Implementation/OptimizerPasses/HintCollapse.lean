@@ -6,73 +6,16 @@ set_option autoImplicit false
 
 /-! # Collapsing a multi-limb reciprocal-witness group to one hint
 
-This file defines the single-variable linear peel (`denseExtractLinear`/`densePeel`), the witness
-sum (`denseSumExpr`), the once-in-the-target occurrence test (`denseOccursOnlyInTarget`), the
-byte-bound coefficient recognizers for both collapse shapes (`denseCoeffVar`/`denseCoeffsByteOK`,
-`denseDiffVarsOf`/`denseSqCoeffsOK`), the per-constraint witness-set scan (`denseWitnessesOf`), the
-two collapse attempts (`denseTryOne`/`denseTryOneSq`) and the scanning driver (`denseTryList`), and
-the pass itself (`denseHintCollapseF`). Correctness (`collapse_correct`) is proved in
-`HintCollapseProof.lean`; nothing here states or proves anything beyond the runtime computation.
+Runtime computation only; correctness (`collapse_correct`) lives in `HintCollapseProof.lean`. Shaped
+for `DenseVerifiedPassW.ofExtending`, since it mints a fresh reciprocal-hint witness (like
+`Reencode.lean`). The fresh `VarId` is registered only on the accepting branch. -/
 
-## Shape: a registry-extending transform
-
-Like `Reencode`, this pass mints a fresh derived witness (the reciprocal-hint `inv`), so it is
-shaped for the registry-extending builder — the prover wires it with
-`DenseVerifiedPassW.ofExtending (denseHintCollapseF pw) …`
-(`transform : VarRegistry → (bs) → BusFacts p bs → DenseConstraintSystem p → VarRegistry ×
-DenseConstraintSystem p × DenseDerivations p`, `Reencode.lean`'s own shape). Still out of scope:
-the correctness theorems and the `ofExtending` call itself.
-
-## Where the fresh variable is minted, and the freshness-decision mechanism
-
-`denseTryOne`/`denseTryOneSq` construct the candidate `Variable` (`⟨"hcinv#" ++ …, none⟩` /
-`⟨"hcsq#" ++ …, none⟩`, `powdrId? := none`) **unconditionally**, at the very top, before any of the
-gates — cheaply (a `headD` field read and a string append), so its cost is paid regardless of
-whether the candidate is eventually accepted. It is built from `reg.resolve (D.headD default)`; the
-`D = []` fallback is never observed downstream, since `2 ≤ D.length` fails first (see below), so any
-placeholder there is harmless.
-
-`denseIsFresh` tests whether the candidate collides with the current system without resolving every
-occurrence back to a `Variable`: `reg.idOf?` on the candidate (an `O(1)` hash lookup — if the name
-was never registered, it certainly isn't a system member) composed, on a hit, with a membership test
-against `DenseConstraintSystem.occ` (`Measure.lean`) — a linear scan with `VarId` equality (cheap
-`Nat` compare) in place of `Variable` equality (name-string compare).
-
-The fresh `VarId` is **registered only on the accepting branch** (the innermost `then` of
-`denseTryOne`/`denseTryOneSq`'s gate cascade, right before constructing `out`/`derivs`), not on
-every attempt — the same precedent as `Reencode.lean` (bits are minted only on `buildReencode`'s
-narrow accepting path). Registering-and-discarding a `VarId` on every rejected candidate would cost
-an `Array.push`/`HashMap.insert` per attempt and — more importantly — inflate every subsequent
-`VarId`-indexed structure in this and later passes for the run's remaining lifetime. An unreferenced
-registered `VarId` decodes to nothing and is invisible to every downstream decision, so registering
-lazily changes no observable output.
-
-## Peel is hoisted once
-
-`denseTryOne`/`denseTryOneSq` hoist `densePeel D E` into a single `let (coeffs, rest) := …`,
-computed **only after** confirming `2 ≤ D.length` (so the common `D.length < 2` case short-circuits
-with *zero* `peel` cost) and reused for every later gate and for the output/derivation construction.
-
-## Reuse
-
-`denseBuild` (`DigitFold.lean`) is the dense fact-derived bounds map (`Std.HashMap VarId Nat`).
-`DenseExpr.fold` (`ExprOps.lean`) recognizes a coefficient's normal form, and `DenseExpr.mentions`
-(`SubstMap.lean`) is the allocation-free occurrence test `denseOccursOnlyInTarget` needs. `busVars`/
-`cnt` are built inline, once per pass invocation, as nested `List.foldl`s directly over
-`DenseExpr.vars`/`.dedup`. `busVars`/`cnt` are dropped from `denseTryOne`/`denseTryOneSq`'s parameter
-lists, since the runtime body never reads them; they stay exactly where they're actually used, in
-`denseWitnessesOf`/`denseTryList`. -/
-
-/-! ## Representation-independent field-sum lemmas
-
-`sum_val_eq` / `sum_zero_all_zero` / `sq_diff_val_lt` are `Nat`/`ZMod`-only wrap-free-sum lemmas,
-kept here so the dense proof (`HintCollapseProof.lean`) can consume them. -/
+/-! ## Representation-independent field-sum lemmas (consumed by `HintCollapseProof.lean`) -/
 
 section RehomedHintCollapse
 variable {p : ℕ}
 
-/-- If a list of field elements each has `.val < p` and their `.val`s sum to `< p`, the field sum's
-    `.val` equals the natural-number sum (no wraparound). -/
+/-- Wrap-free: with the value-sum below `p`, the field sum's `.val` is the natural-number sum. -/
 theorem sum_val_eq (hp : 0 < p) :
     ∀ (L : List (ZMod p)), (L.map (fun x => x.val)).sum < p →
       L.sum.val = (L.map (fun x => x.val)).sum
@@ -86,8 +29,7 @@ theorem sum_val_eq (hp : 0 < p) :
         ZMod.val_add_of_lt (by rw [ih]; omega)
       rw [hadd, ih]
 
-/-- Byte-bounded field elements summing (in the field) to `0`, with the value-sum below `p`, are all
-    `0`. Used for the `Σ aᵢ = 0` completeness branch. -/
+/-- Byte-bounded field elements summing to `0` with the value-sum below `p` are all `0`. -/
 theorem sum_zero_all_zero (hp : 0 < p) (L : List (ZMod p))
     (hfit : (L.map (fun x => x.val)).sum < p) (h0 : L.sum = 0) :
     ∀ x ∈ L, x = 0 := by
@@ -106,16 +48,14 @@ theorem sum_zero_all_zero (hp : 0 < p) (L : List (ZMod p))
 theorem sq_diff_val_lt [NeZero p] (hp : 65536 ≤ p) (x y : ZMod p)
     (hx : x.val < 256) (hy : y.val < 256) : ((x - y) * (x - y)).val < 65536 := by
   rcases Nat.lt_or_ge x.val y.val with hlt | hge
-  · -- x < y: x - y = -↑(y.val - x.val), squares to the same value
-    have hd : x - y = -((y.val - x.val : ℕ) : ZMod p) := by
+  · have hd : x - y = -((y.val - x.val : ℕ) : ZMod p) := by
       have hcast : ((y.val - x.val : ℕ) : ZMod p) = y - x := by
         rw [Nat.cast_sub (le_of_lt hlt), ZMod.natCast_zmod_val, ZMod.natCast_zmod_val]
       rw [hcast]; ring
     have hb : y.val - x.val ≤ 255 := by omega
     have hsq : (y.val - x.val) * (y.val - x.val) ≤ 255 * 255 := Nat.mul_le_mul hb hb
     rw [hd, neg_mul_neg, ← Nat.cast_mul, ZMod.val_natCast_of_lt (by omega)]; omega
-  · -- x ≥ y: x - y = ↑(x.val - y.val)
-    have hd : x - y = ((x.val - y.val : ℕ) : ZMod p) := by
+  · have hd : x - y = ((x.val - y.val : ℕ) : ZMod p) := by
       rw [Nat.cast_sub hge, ZMod.natCast_zmod_val, ZMod.natCast_zmod_val]
     have hb : x.val - y.val ≤ 255 := by omega
     have hsq : (x.val - y.val) * (x.val - y.val) ≤ 255 * 255 := Nat.mul_le_mul hb hb
@@ -177,9 +117,7 @@ def denseCoeffVar : DenseExpr p → Option VarId
   | .mul (.const c) (.var a) => if c = 1 then some a else none
   | _ => none
 
-/-- Each coefficient's `fold` reduces to a single `≤ 256`-bounded, `D`-free, input-column variable,
-    using `DenseExpr.fold` (`ExprOps.lean`), `denseBuild` (`DigitFold.lean`) for the bounds, and
-    `reg.isInput` (`Bridge.lean`). -/
+/-- Each coefficient's `fold` reduces to one `≤ 256`-bounded, `D`-free, input-column variable. -/
 def denseCoeffsByteOK (reg : VarRegistry) (B : Std.HashMap VarId Nat) (D : List VarId) :
     List (DenseExpr p) → Bool
   | [] => true
@@ -215,22 +153,18 @@ def denseSqCoeffsOK (reg : VarRegistry) (B : Std.HashMap VarId Nat) (D : List Va
 
 /-! ## The once-in-`E` witness set -/
 
-/-- The witnesses of `E`: variables occurring (in the whole system) only in `E`, prefiltered by a
-    once-per-invocation constraint-occurrence counter (`cnt`) and a bus-occurring-variable set
-    (`busVars`) so the expensive full-system `denseOccursOnlyInTarget` scan runs only for the rare
-    single-occurrence candidates. `E.vars.dedup` is the plain (non-hashed) `.dedup` — this scan does
-    not use the hashed dedup machinery. -/
+/-- The witnesses of `E`: variables occurring (in the whole system) only in `E`. The `cnt` /
+    `busVars` prefilters keep the expensive full-system `denseOccursOnlyInTarget` scan to the rare
+    single-occurrence candidates. -/
 def denseWitnessesOf (d : DenseConstraintSystem p) (busVars : Std.HashSet VarId)
     (cnt : Std.HashMap VarId Nat) (E : DenseExpr p) : List VarId :=
   E.vars.dedup.filter (fun v => !busVars.contains v && cnt.getD v 0 == 1
     && denseOccursOnlyInTarget d E v)
 
-/-! ## Freshness: no collision with the current system (the `Reencode` prefilter mechanism) -/
+/-! ## Freshness: no collision with the current system -/
 
-/-- Is `v` absent from the current system? Uses the `Reencode.lean` freshness-prefilter mechanism: a
-    candidate never registered at all cannot be a system member (`none` case); if it *was*
-    registered, membership in `d.occ` (`Measure.lean`) is checked directly, with `VarId` equality in
-    place of `Variable` equality (see the module header). -/
+/-- Is `v` absent from the current system? An unregistered candidate cannot be a member (`none`);
+    otherwise membership in `d.occ` (`Measure.lean`) is checked by `VarId`. -/
 def denseIsFresh (reg : VarRegistry) (d : DenseConstraintSystem p) (v : Variable) : Bool :=
   match reg.idOf? v with
   | some i => !d.occ.contains i
@@ -238,9 +172,8 @@ def denseIsFresh (reg : VarRegistry) (d : DenseConstraintSystem p) (v : Variable
 
 /-! ## The plain-sum collapse attempt (`is-zero`/`seqz`) -/
 
-/-- Attempt the plain-sum collapse with target constraint `E` and its precomputed witness set `D`.
-    The fresh witness `inv` is minted (registered) only on the accepting branch (see the module
-    header). -/
+/-- Attempt the plain-sum collapse for target `E` with witness set `D`. The fresh witness `inv` is
+    registered only on the accepting branch. -/
 def denseTryOne (reg : VarRegistry) (d : DenseConstraintSystem p) (Bm : Std.HashMap VarId Nat)
     (E : DenseExpr p) (D : List VarId) :
     Option (VarRegistry × DenseConstraintSystem p × DenseDerivations p) :=
@@ -268,8 +201,8 @@ def denseTryOne (reg : VarRegistry) (d : DenseConstraintSystem p) (Bm : Std.Hash
 
 /-! ## The sum-of-squares collapse attempt (`is-equal`) -/
 
-/-- Attempt the sum-of-squares collapse. See the module header for the notes on freshness and the
-    fresh witness's mint point (shared with `denseTryOne`). -/
+/-- Attempt the sum-of-squares collapse (the `is-equal` shape); shares `denseTryOne`'s mint
+    discipline. -/
 def denseTryOneSq (reg : VarRegistry) (d : DenseConstraintSystem p) (Bm : Std.HashMap VarId Nat)
     (E : DenseExpr p) (D : List VarId) :
     Option (VarRegistry × DenseConstraintSystem p × DenseDerivations p) :=
@@ -314,10 +247,10 @@ def denseTryList (reg : VarRegistry) (d : DenseConstraintSystem p) (Bm : Std.Has
 
 /-! ## The pass, as a registry-extending transform -/
 
-/-- The hint-collapse transform, shaped for `DenseVerifiedPassW.ofExtending` (wired with
-    `DenseVerifiedPassW.ofExtending (denseHintCollapseF pw) …`): identity when `p` isn't (witnessed)
-    prime, else builds the bounds map (`denseBuild`, once), the bus-occurring variable set and the
-    constraint-occurrence counter (both inline folds over `DenseExpr.vars`, once), and scans. -/
+/-- Collapses a group of witnesses that each occur in a single constraint into one reciprocal hint:
+    `Σ aᵢ·wᵢ + rest = 0` (byte-bounded `wᵢ`, each occurring only here) becomes `denom·inv + rest`
+    with `denom = Σ aᵢ` and one fresh `inv := QuotientOrZero(−rest, denom)` (the `seqz`/`is-zero`
+    idiom; a sum-of-squares variant handles `is-equal`). Identity unless `p` is witnessed prime. -/
 def denseHintCollapseF (pw : PrimeWitness p) (reg : VarRegistry) (bsem : BusSemantics p)
     (facts : BusFacts p bsem) (d : DenseConstraintSystem p) :
     VarRegistry × DenseConstraintSystem p × DenseDerivations p :=

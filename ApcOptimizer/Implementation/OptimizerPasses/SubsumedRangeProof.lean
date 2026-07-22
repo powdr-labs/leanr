@@ -7,25 +7,11 @@ set_option autoImplicit false
 
 /-! # Soundness for the dense subsumed range-check drop
 
-`DensePassCorrect` — over `VarId → ZMod p` environments — for the dense subsumed
-variable-range-check dropper (`SubsumedRange.lean`), lifted once to the audited `Variable` spec
-through `DenseVerifiedPassW.of`.
-
-The pass drops a recognised single-variable range check `[x, w]` (`facts.varRangeBus` at
-multiplicity `1`, satisfiable width `w.val ≤ 17`) whose variable is already bounded `< 2^w.val` by a
-retained interaction this pass never drops (the non-circular justification base). The dropped
-interaction is then accepted under every assignment satisfying the FILTERED system, so it is
-entailed and its removal is sound and side-effect-neutral.
-
-Two proven ingredients, reused rather than re-derived:
-
-* `DensePassCorrect.denseFilterBusEntailed` (`FlagFoldDropsProof.lean`) — dropping a stateless
-  interaction accepted under every assignment satisfying the filtered system;
-* `denseFindVarBound_sound` (`RootPairUnifyProof.lean`) — the base bound holds under every assignment
-  satisfying the retained (base) interactions' obligations.
-
-The recognition-soundness chain `denseSubsumedRangeCheck?_spec → _stateless → _accepted` is built
-directly from `facts.varRangeBus_sound` and `DenseExpr.constValue?_sound` (`DomainBatchProof.lean`). -/
+`DensePassCorrect` — over `VarId → ZMod p` — for the subsumed variable-range-check dropper
+(`SubsumedRange.lean`). Every dropped range check has its variable bounded `< 2^w.val` by the
+non-circular base, hence accepted under every assignment satisfying the filtered system. Built via
+`denseFilterBusEntailed` (`FlagFoldDropsProof.lean`) and `denseFindVarBound_sound`
+(`RootPairUnifyProof.lean`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -76,10 +62,9 @@ theorem denseSubsumedRangeCheck?_accepted (bs : BusSemantics p) (facts : BusFact
   rw [hev]
   exact ((facts.varRangeBus_sound bi.busId hvr).2 (denv x) cv 1).2 ⟨hle, hlt⟩
 
-/-- **Subsumed variable-range-check removal correctness.** Every dropped interaction is a
-    recognised single-variable range check whose variable is already bounded `< 2^w.val` by the
-    retained base, so it is accepted under every assignment satisfying the filtered system —
-    equivalence- and invariant-preserving. -/
+/-- Every dropped interaction is a recognised range check whose variable is already bounded
+    `< 2^w.val` by the retained base, so it is accepted under every assignment satisfying the
+    filtered system. -/
 theorem denseSubsumedRangeDropF_correct (bs : BusSemantics p) (facts : BusFacts p bs)
     (isInput : VarId → Bool) (d : DenseConstraintSystem p) :
     DensePassCorrect isInput d (denseSubsumedRangeDropF bs facts d) [] bs := by
@@ -118,8 +103,8 @@ theorem denseSubsumedRangeDropF_correct (bs : BusSemantics p) (facts : BusFacts 
         exact denseSubsumedRangeCheck?_accepted bs facts bi x cv hr denv
           (lt_of_lt_of_le hbase hble)
 
-/-- **The dense subsumed variable-range-check drop pass.** Consumes `facts` directly (through
-    `varRangeBus`); unconditional in `p`. -/
+/-- The dense subsumed range-check drop pass; transform `denseSubsumedRangeDropF`
+    (`SubsumedRange.lean`). -/
 def denseSubsumedRangeDropPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun bs facts d => denseSubsumedRangeDropF bs facts d)

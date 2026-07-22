@@ -5,38 +5,10 @@ set_option autoImplicit false
 
 /-! # Soundness for the dense `flagUnify` pass
 
-`DensePassCorrect` for `denseFlagUnifyF` (`FlagUnify.lean`), lifted to the audited
-`Variable` spec through `DenseVerifiedPassW.of` (`Bridge.lean`). This is a
-substitution-shaped pass, directly parallel in structure to `denseRootPairUnifyF`
-(`RootPairUnifyProof.lean`): the entailed flag equalities are adopted into a `DenseSolved`
-map and applied by one `DenseConstraintSystem.substF`, so correctness rides on the reusable
-substitution core `DenseConstraintSystem.substF_denseCorrect` (`DomainBatchProof.lean`).
-
-## What is reused from `RootPairUnifyProof.lean`
-
-* `DenseConstraintSystem.substF_denseCorrect` — the substitution core (entailment `H` + occurrence
-  closure `hfv` ⇒ `DensePassCorrect`, no derivations). Unchanged.
-* `DenseExpr.splitAt_eval`, `mem_denseAssignments`, `denseEnvOfFast_map`, `dpcRefl` — the same dense
-  enumeration/decomposition lemmas, reused verbatim (imported, not re-derived).
-* `denseFindDomainAlg_sound` (`DomainFoldProof.lean`), `denseMatches_evalPattern`,
-  `DenseExpr.constValue?_sound` (`DomainBatchProof.lean`), `DenseExpr.eval_congr`
-  (`DomainBatch.lean`) — the dense finite-domain/eval infrastructure.
-* The scan-loop invariant shape (three interlocking invariants — stored-solution entailment,
-  occurrence closure, and a `seen`-membership invariant recovering the dropped `mem` field), and the
-  `denseRpInsertAll_seen`-style bucket lemma.
-
-## What is new here (the flagUnify certificate)
-
-* `denseFuCheck_sound` — the certificate soundness, proved directly over dense
-  expressions/environments. It uses `facts.slotBound_sound` at the value level, forces the two flag
-  polynomials into the same residue class of `x.val` under `m = k⁻¹.val` (`residue_uniq`, a pure
-  `Nat` lemma), and reads off the flag agreement from the enumerated finite domain box.
-* `denseFuCheck_vars` — the payload-membership extraction.
-* `DenseSolved.insertAll_preserves` — a list-generalisation of the single-pair update
-  (`insertAll_map` + `Std.HashMap.getElem?_insert`), because a matched flag pair adopts a *list* of
-  solutions at once rather than a single one.
-* `denseFuInsertAll_seen`, `denseFuLoop_sound` — the flagUnify scan over the *bus interactions* (with
-  the algebraic constraints threaded as `domCs`), the seen invariant now tracking `e.bi`. -/
+`DensePassCorrect` for `denseFlagUnifyF` (`FlagUnify.lean`): a substitution-shaped pass parallel to
+`denseRootPairUnifyF`, riding on `DenseConstraintSystem.substF_denseCorrect`. The new content is the
+certificate soundness `denseFuCheck_sound` (via `facts.slotBound_sound` + `residue_uniq`) and the
+scan-loop invariant. -/
 
 namespace ApcOptimizer.Dense
 
@@ -44,8 +16,7 @@ variable {p : ℕ}
 
 /-! ## The certificate is sound -/
 
-/-- **`denseFuCheck` exposes the payload membership.** A passed
-    certificate forces `vx` into `biX`'s payload variables (needed for occurrence closure). -/
+/-- A passed `denseFuCheck` forces `vx` into `biX`'s payload variables (for occurrence closure). -/
 theorem denseFuCheck_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (domCs : List (DenseExpr p)) (biX biY : BusInteraction (DenseExpr p))
     (x vx vy : VarId) (h : denseFuCheck bs facts domCs biX biY x vx vy = true) :
@@ -97,11 +68,8 @@ theorem denseFuCheck_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     simp only [Bool.and_eq_true, decide_eq_true_eq] at h
     exact hpay ▸ h.1.2
 
-/-- **`denseFuCheck` entails flag-variable equality.** Two scaled
-    range checks of the same carrier `x` whose offset parts agree pointwise on their finite flag box
-    force `vy = vx` on satisfying assignments. Proved directly over `VarId → ZMod p` — reuses only
-    value-level pieces (`facts.slotBound_sound`, the pure `Nat` `residue_uniq`) and the dense
-    finite-domain/decomposition lemmas. -/
+/-- `denseFuCheck` entails `vy = vx` on satisfying assignments: two scaled range checks of the same
+    carrier `x` whose offsets agree pointwise on their finite flag box pin the flags equal. -/
 theorem denseFuCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFacts p bs)
     (domCs : List (DenseExpr p)) (biX biY : BusInteraction (DenseExpr p))
     (x vx vy : VarId) (h : denseFuCheck bs facts domCs biX biY x vx vy = true)
@@ -160,7 +128,6 @@ theorem denseFuCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFact
                     simp only [Option.some.injEq] at hd
                     subst hd
                     simp only at hvxR' hvyR' hcw
-                    -- acceptance and slot-value bounds
                     have hmXe : (denseBIEval biX denv).multiplicity = mx :=
                       biX.multiplicity.constValue?_sound mx hmx denv
                     have hmYe : (denseBIEval biY denv).multiplicity = my :=
@@ -185,7 +152,6 @@ theorem denseFuCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFact
                         (biY.payload.map DenseExpr.constValue?) 0 bY (OY.eval denv)
                         (by rw [(rfl : (denseBIEval biY denv).busId = biY.busId), hmYe]; exact hbY)
                         (denseMatches_evalPattern biY.payload denv) hviolY hgetY
-                    -- field decomposition `x = m·u + W`, both sides
                     set m := k⁻¹ with hm
                     have hOXe : OX.eval denv = k * denv x + RX.eval denv :=
                       DenseExpr.splitAt_eval x OX k RX hsX denv
@@ -202,7 +168,6 @@ theorem denseFuCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFact
                         rw [hOYe]; ring
                       rw [mul_comm m k, hunit, one_mul] at h1
                       linear_combination -h1
-                    -- the environment restricted to the joint flag box is an enumerated point
                     have hmemdoms : ∀ vd ∈ (RX.vars ++ RY.vars).eraseDups.filterMap (fun v =>
                         (denseFindDomainAlg domCs v).map (fun d => (v, d))), denv vd.1 ∈ vd.2 := by
                       intro vd hvd
@@ -236,14 +201,12 @@ theorem denseFuCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFact
                           (fun vd => (vd.1, denv vd.1)))) = RY.eval denv :=
                       DenseExpr.eval_congr RY _ denv (fun v hv =>
                         hagree v (List.mem_eraseDups.2 (List.mem_append_right _ hv)))
-                    -- pair-level point bounds, at the environment's own point
                     have hpair := List.all_eq_true.mp hall _ hpt
                     rw [Bool.and_eq_true] at hpair
                     have hWXlt : ((-m) * RX.eval denv).val < m.val := by
                       rw [← hRXagree]; exact of_decide_eq_true hpair.1
                     have hWYlt : ((-m) * RY.eval denv).val < m.val := by
                       rw [← hRYagree]; exact of_decide_eq_true hpair.2
-                    -- integer decomposition of `x.val` through both checks
                     have hbX1 : (OX.eval denv).val ≤ bX - 1 := by omega
                     have hbY1 : (OY.eval denv).val ≤ bY - 1 := by omega
                     have hle1 : m.val * (OX.eval denv).val ≤ m.val * (bX - 1) :=
@@ -267,7 +230,6 @@ theorem denseFuCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFact
                     have hres : ((-m) * RX.eval denv).val = ((-m) * RY.eval denv).val :=
                       residue_uniq m.val (OX.eval denv).val (OY.eval denv).val _ _
                         (hvalX.symm.trans hvalY) hWXlt hWYlt
-                    -- the combo condition at the environment's point
                     have hmempts : (((RX.vars ++ RY.vars).eraseDups.filterMap (fun v =>
                           (denseFindDomainAlg domCs v).map (fun d => (v, d)))).map
                             (fun vd => (vd.1, denv vd.1)),
@@ -299,10 +261,10 @@ theorem denseFuCheck_sound [Fact p.Prime] (bs : BusSemantics p) (facts : BusFact
                         ← hagree vx (List.mem_eraseDups.2 (List.mem_append_left _ hvxR'))]
                     exact horb
 
-/-! ## Solution-map list update (generalising the single-pair `insertAll`) -/
+/-! ## Solution-map list update -/
 
-/-- A left fold of `HashMap` inserts preserves any per-entry property `Q` that holds of the base map
-    and of every inserted pair. The `List`-of-pairs analogue of a single-pair update. -/
+/-- A left fold of `HashMap` inserts preserves any per-entry property `Q` holding of the base map
+    and every inserted pair. -/
 theorem foldl_insert_getElem {Q : VarId → DenseExpr p → Prop} :
     ∀ (pairs : List (VarId × DenseExpr p)) (m : Std.HashMap VarId (DenseExpr p)),
       (∀ i t, m[i]? = some t → Q i t) → (∀ pr ∈ pairs, Q pr.1 pr.2) →
@@ -324,8 +286,7 @@ theorem foldl_insert_getElem {Q : VarId → DenseExpr p → Prop} :
         exact hpairs (x, t0) (List.mem_cons_self ..)
       · exact hm j s hjs
 
-/-- Insertions preserve any per-entry property of the `DenseSolved` solution map. Generalises the
-    single-pair `DenseSolved.insertAll_map`/`getElem?_insert` step to a whole adopted pair list. -/
+/-- Insertions preserve any per-entry property of the `DenseSolved` solution map. -/
 theorem DenseSolved.insertAll_preserves {Q : VarId → DenseExpr p → Prop}
     (pairs : List (VarId × DenseExpr p)) (σ : DenseSolved p)
     (hσ : ∀ i t, σ.fn i = some t → Q i t) (hpairs : ∀ pr ∈ pairs, Q pr.1 pr.2) :
@@ -334,11 +295,9 @@ theorem DenseSolved.insertAll_preserves {Q : VarId → DenseExpr p → Prop}
   simp only [DenseSolved.fn, DenseSolved.insertAll_map] at ht
   exact foldl_insert_getElem pairs σ.map (fun i t h => hσ i t h) hpairs i t ht
 
-/-! ## The scan-loop invariant (same shape as `denseRpInsertAll_seen`/`denseRpLoop_sound` in
-    `RootPairUnifyProof.lean`) -/
+/-! ## The scan-loop invariant (parallels `RootPairUnifyProof.lean`) -/
 
-/-- The `seen`-bucket invariant is preserved by `denseFuInsertAll`. Recovers the `bi`-membership the
-    dense `DenseFUSeen` dropped (same argument as `denseRpInsertAll_seen`, now on `e.bi`). -/
+/-- `denseFuInsertAll` preserves the `seen`-bucket invariant (every entry's `bi` is in `S`). -/
 theorem denseFuInsertAll_seen {S : List (BusInteraction (DenseExpr p))} :
     ∀ (es : List (DenseFUSeen p)) (seen : Std.HashMap UInt64 (List (DenseFUSeen p))),
       (∀ hsh e, e ∈ seen.getD hsh [] → e.bi ∈ S) → (∀ e ∈ es, e.bi ∈ S) →
@@ -361,12 +320,8 @@ theorem denseFuInsertAll_seen {S : List (BusInteraction (DenseExpr p))} :
         · exact hacc (denseFuKeyHash e0.key) e hmem'
       · exact hacc hsh e hmem
 
-/-- **The flagUnify scan loop is sound**, same argument shape as `denseRpLoop_sound`: the final
-    solution map is entailed (a) and occurrence-closed (b). The certificate `denseFuCheck_sound`
-    forces each adopted `vy = vx` on satisfying assignments (using the *current* and the *seen*
-    interaction's bus obligation); the bucketed `seen` scan's membership is recovered by
-    `denseFuInsertAll_seen`. The pass loops over the *bus interactions*, threading the algebraic
-    constraints as `domCs`. -/
+/-- The flagUnify scan loop is sound: the final solution map is entailed (a) and occurrence-closed
+    (b), each adopted `vy = vx` justified by `denseFuCheck_sound`. -/
 theorem denseFuLoop_sound [Fact p.Prime] (bs : BusSemantics p)
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     ∀ (pending : List (BusInteraction (DenseExpr p)))
@@ -412,7 +367,6 @@ theorem denseFuLoop_sound [Fact p.Prime] (bs : BusSemantics p)
               exact ih _ σ hrest hseen' hσs hσv
           | some d0 =>
               simp only []
-              -- the matched seen-entry's interaction is one of `d`'s interactions
               obtain ⟨xk, _hxkmem, hinner⟩ := List.exists_of_findSome?_eq_some hf
               obtain ⟨e, hemem, hif⟩ := List.exists_of_findSome?_eq_some hinner
               by_cases hk : (e.key == xk.2) = true
@@ -421,7 +375,7 @@ theorem denseFuLoop_sound [Fact p.Prime] (bs : BusSemantics p)
                 have hexbi : ex.1.bi ∈ d.busInteractions := by
                   rw [← hif]; exact hseen (denseFuKeyHash xk.2) e hemem
                 refine ih _ (σ.insertAll _) hrest hseen' ?_ ?_
-                · -- (a) entailment of the updated map
+                ·
                   intro denv hsat i t hti
                   refine DenseSolved.insertAll_preserves _ σ
                     (fun i' t' h' => hσs denv hsat i' t' h') ?_ i t hti
@@ -439,7 +393,7 @@ theorem denseFuLoop_sound [Fact p.Prime] (bs : BusSemantics p)
                       tt.2 tt.1 hfc denv hsat.1 (hsat.2 ex.1.bi hexbi) (hsat.2 c hcmem)
                   · rw [if_neg hck] at hpif
                     exact absurd hpif (by simp)
-                · -- (b) occurrence closure of the updated map
+                ·
                   intro i t hti
                   refine DenseSolved.insertAll_preserves
                     (Q := fun i t => ∀ z ∈ t.vars, z ∈ d.occ) _ σ hσv ?_ i t hti
@@ -466,8 +420,7 @@ theorem denseFuLoop_sound [Fact p.Prime] (bs : BusSemantics p)
 
 /-! ## The dense `flagUnify` pass -/
 
-/-- The dense `flagUnify` transform re-expressed with the loop's solution map named, for the
-    correctness/coverage proofs. -/
+/-- `denseFlagUnifyF` re-expressed with the loop's solution map named, for the proofs below. -/
 theorem denseFlagUnifyF_eq (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     denseFlagUnifyF pw bs facts d
@@ -478,8 +431,7 @@ theorem denseFlagUnifyF_eq (pw : PrimeWitness p) (bs : BusSemantics p) (facts : 
                 DenseSolved.empty).fn)
          else d) := rfl
 
-/-- The final loop solution map is entailed and occurrence-closed (specialising `denseFuLoop_sound`
-    to the pass's initial `∅`/`empty` accumulators). -/
+/-- The final loop solution map is entailed and occurrence-closed (`denseFuLoop_sound` at `∅`). -/
 theorem denseFlagUnify_loop_invariant [Fact p.Prime] (bs : BusSemantics p)
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     (∀ denv, d.satisfies bs denv → ∀ i t,
@@ -523,11 +475,7 @@ theorem denseFlagUnifyF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : 
       (fun i t hti z hz => hinv.2 i t hti z hz)
   · exact dpcRefl reg.isInput d bs
 
-/-- **The dense `flagUnify` pass.** Flag unification across duplicate scaled range checks
-    proved correct directly over `VarId → ZMod p` (substitution-shaped: the entailed flag equalities
-    are adopted into a `DenseSolved` map and applied by one `DenseConstraintSystem.substF`), connected
-    to the audited spec via `DensePassCorrect.lift` (through `of`). Directly parallels
-    `denseRootPairUnifyPass`. -/
+/-- The dense `flagUnify` pass (transform `denseFlagUnifyF`). -/
 def denseFlagUnifyPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (denseFlagUnifyF pw) (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseFlagUnifyF_covered pw reg bs facts d hcov)

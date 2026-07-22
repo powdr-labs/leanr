@@ -6,26 +6,11 @@ set_option autoImplicit false
 
 /-! # Soundness for the dense address-disequality certificate library
 
-The proof layer for `Dense/AddrDiseq.lean`. This module is a **library**: it exposes no pass, only the
-value-level soundness lemmas the dense `busUnify` / `busPairCancel` proofs consume to discharge
-their `DensePassCorrect` without re-proving representation correspondence per certificate.
-
-## Proof strategy
-
-Each dense certificate is proved sound directly at the value level, over dense
-environments `VarId → ZMod p` (`DenseExpr.eval`/`DenseLinExpr.eval`/`denseBIEval`), via the
-`norm`/`add`/`scale`/`eval_split`/`linearize` algebra,
-carried out over the dense forms with the dense eval lemmas (`DenseLinExpr.norm_eval`, `add_eval`,
-`scale_eval`, `eval_split`, `denseLinearize_eval`). No `VarRegistry` and no `decode` is involved; the
-field-membership core (`twoRoot_mem`, `RootPairCore.lean`) is representation-independent.
-
-The soundness invariants are stated directly over the dense data: `DenseTwoRootMap.Sound` (proved
-along `build`/`addAll`/`addVars`/`insertEntry`) records that every map lookup is prime-gated,
-unit-coefficient, and witnessed by an actual constraint's `denseTwoRootOf?` decomposition; the
-reciprocal-nonzero certificate reads its witnesses straight off `DenseNonzeroWits.build`.
-
-The value-level two-root soundness `denseTwoRootOf?_sound` (proved directly over dense evaluation via
-`twoRoot_mem`) also lives here; the dense `rootPairUnify` proof consumes it directly. -/
+The proof layer for `AddrDiseq.lean`. Exposes no pass, only value-level soundness lemmas the dense
+`busUnify` / `busPairCancel` proofs consume. Each certificate is proved sound directly over dense
+environments `VarId → ZMod p` via the `norm`/`add`/`scale`/`linearize` eval algebra — no `decode`.
+`DenseTwoRootMap.Sound` records that every lookup is prime-gated, unit-coefficient, and witnessed by
+a constraint's `denseTwoRootOf?` decomposition. -/
 
 namespace ApcOptimizer.Dense
 
@@ -33,8 +18,7 @@ variable {p : ℕ}
 
 /-! ## Nonzero-constant differences -/
 
-/-- **`denseConstDiffNZ` is sound.** Two dense linear forms whose normalized difference is a nonzero
-    constant evaluate differently. -/
+/-- Two dense linear forms whose difference is a nonzero constant evaluate differently. -/
 theorem denseConstDiffNZ_sound (a b : DenseLinExpr p) (h : denseConstDiffNZ a b = true)
     (denv : VarId → ZMod p) : a.eval denv ≠ b.eval denv := by
   unfold denseConstDiffNZ at h
@@ -91,8 +75,8 @@ theorem denseAddr_eq_slot (shape : MemoryBusShape) (S m : BusInteraction (DenseE
 
 /-! ## The affine (same-base) certificate -/
 
-/-- **`denseAddrAffineNeq` is sound.** Some address slot linearizes to two affine forms differing by a
-    nonzero constant, so the addresses differ. -/
+/-- Some address slot linearizes to two affine forms a nonzero constant apart, so the addresses
+    differ. -/
 theorem denseAddrAffineNeq_sound (reg : VarRegistry) (shape : MemoryBusShape)
     (S bi : BusInteraction (DenseExpr p)) (_hS : denseBICovered reg S) (_hbi : denseBICovered reg bi)
     (h : denseAddrAffineNeq shape S bi = true) (denv : VarId → ZMod p) :
@@ -120,8 +104,7 @@ theorem denseAddrAffineNeq_sound (reg : VarRegistry) (shape : MemoryBusShape)
 /-! ## The two-root map: the lookup-wise soundness invariant -/
 
 /-- The dense soundness invariant: every successful lookup is prime-gated, unit-coefficient, and
-    witnessed by an actual constraint's `denseTwoRootOf?` decomposition. Purely dense (mentions no
-    registry / decode). -/
+    witnessed by an actual constraint's `denseTwoRootOf?` decomposition. -/
 def DenseTwoRootMap.Sound (dcs : List (DenseExpr p)) (T : DenseTwoRootMap p) : Prop :=
   ∀ v k A δ, T.map[v]? = some (k, A, δ) →
     Nat.Prime p ∧ k * k⁻¹ = 1 ∧ ∃ c ∈ dcs, denseTwoRootOf? c v = some (k, A, δ)
@@ -179,7 +162,6 @@ theorem DenseTwoRootMap.Sound.addAll {dcs : List (DenseExpr p)} (hp : Nat.Prime 
       exact ih _ (fun c' h => hmem c' (List.mem_cons_of_mem _ h))
         (DenseTwoRootMap.Sound.addVars hp (hmem c (List.mem_cons_self ..)) T _ hT)
 
-/-- **The built two-root map is sound.** -/
 theorem DenseTwoRootMap.build_sound (dcs : List (DenseExpr p)) :
     (DenseTwoRootMap.build dcs).Sound dcs := by
   rw [DenseTwoRootMap.build]
@@ -191,20 +173,16 @@ theorem DenseTwoRootMap.build_sound (dcs : List (DenseExpr p)) :
 
 /-! ## Two-root decomposition soundness (value-level)
 
-The keystone the dense `rootPairUnify` (and `busPairCancel`) proofs consume: a recognized
-`denseTwoRootOf?` puts `x` at one of the two roots on every satisfying dense assignment, proved
-directly over `DenseExpr`/`DenseLinExpr` evaluation via the field core `twoRoot_mem`. No registry
-or decode is involved. -/
+A recognized `denseTwoRootOf?` puts `x` at one of the two roots on every satisfying assignment
+(via the field core `twoRoot_mem`). -/
 
 /-- Two dense linear forms with equal term lists evaluate a constant apart. -/
 theorem DenseLinExpr.eval_of_terms_eq (a b : DenseLinExpr p) (h : b.terms = a.terms)
     (denv : VarId → ZMod p) : b.eval denv = a.eval denv + (b.const - a.const) := by
   simp only [DenseLinExpr.eval, h]; ring
 
-/-- **`denseTwoRootOf?` is sound.** A recognized two-root decomposition `(k, A, δ)` of a constraint
-    `c` (a product of two affine factors, both linear in `x` with the same unit coefficient `k`,
-    `x`-free parts a constant `δ` apart) places `x` at one of the two roots `-(k⁻¹·A)` and
-    `-(k⁻¹·A) - k⁻¹·δ` on every satisfying assignment. Proved directly over dense evaluation. -/
+/-- A recognized two-root decomposition `(k, A, δ)` of a satisfied constraint `c` places `x` at one
+    of the two roots `-(k⁻¹·A)` and `-(k⁻¹·A) - k⁻¹·δ`. -/
 theorem denseTwoRootOf?_sound [Fact p.Prime] (c : DenseExpr p) (x : VarId)
     (k : ZMod p) (A : DenseLinExpr p) (δ : ZMod p)
     (h : denseTwoRootOf? c x = some (k, A, δ)) (hk : k * k⁻¹ = 1)
@@ -247,7 +225,7 @@ theorem denseTwoRootOf?_sound [Fact p.Prime] (c : DenseExpr p) (x : VarId)
 
 /-! ## Substituting a two-root branch into a linear form -/
 
-/-- The two branch forms of `densePtrBranchesOf` evaluate to `rest` plus the substituted root value. -/
+/-- The two branch forms of `densePtrBranchesOf` evaluate to `rest` plus the substituted root. -/
 theorem densePtrBranchesOf_eval (k : ZMod p) (A : DenseLinExpr p) (δ cx : ZMod p)
     (rest : DenseLinExpr p) (denv : VarId → ZMod p) :
     ((densePtrBranchesOf k A δ cx rest).1).eval denv
@@ -264,9 +242,8 @@ theorem densePtrBranchesOf_eval (k : ZMod p) (A : DenseLinExpr p) (δ cx : ZMod 
 
 /-! ## `densePtrReductions` soundness (via the two-root soundness) -/
 
-/-- **`densePtrReductions` is sound.** Every reduction pair of an expression brackets its
-    value under any dense environment satisfying the constraints the map was built from, using
-    `denseTwoRootOf?_sound` and `densePtrBranchesOf_eval`. -/
+/-- Every reduction pair of an expression brackets its value under any satisfying dense
+    environment. -/
 theorem densePtrReductions_sound {dcs : List (DenseExpr p)}
     (T : DenseTwoRootMap p) (hT : T.Sound dcs)
     (E : DenseExpr p) (b1 b2 : DenseLinExpr p)
@@ -301,7 +278,6 @@ theorem densePtrReductions_sound {dcs : List (DenseExpr p)}
       · left; rw [hEL, hsplit, hr, hb1, he1]; ring
       · right; rw [hEL, hsplit, hr, hb2, he2]; ring
 
-/-- **`denseExprTwoRootNeq` is sound.** -/
 theorem denseExprTwoRootNeq_sound {dcs : List (DenseExpr p)}
     (T : DenseTwoRootMap p) (hT : T.Sound dcs) (e e' : DenseExpr p)
     (h : denseExprTwoRootNeq T e e' = true) (denv : VarId → ZMod p)
@@ -321,8 +297,7 @@ theorem denseExprTwoRootNeq_sound {dcs : List (DenseExpr p)}
   · exact denseConstDiffNZ_sound a2 b1 h21 denv
   · exact denseConstDiffNZ_sound a2 b2 h22 denv
 
-/-- **`denseAddrTwoRootNeq` is sound.** Some address slot's two interactions provably differ,
-    so the addresses differ. Consumes the lookup-wise `DenseTwoRootMap.Sound` invariant. -/
+/-- Some address slot's two interactions provably differ, so the addresses differ. -/
 theorem denseAddrTwoRootNeq_sound (reg : VarRegistry) (shape : MemoryBusShape)
     {dcs : List (DenseExpr p)} (T : DenseTwoRootMap p) (hT : T.Sound dcs)
     (_hdcov : ∀ c ∈ dcs, c.CoveredBy reg) (S bi : BusInteraction (DenseExpr p))
@@ -344,7 +319,7 @@ theorem denseAddrTwoRootNeq_sound (reg : VarRegistry) (shape : MemoryBusShape)
 
 /-! ## The nonzero-witness (register-vs-RAM) certificate -/
 
-/-- **`denseIsZeroLin` is sound.** A form recognized as identically zero evaluates to `0`. -/
+/-- A form recognized as identically zero evaluates to `0`. -/
 theorem denseIsZeroLin_sound (l : DenseLinExpr p) (h : denseIsZeroLin l = true)
     (denv : VarId → ZMod p) : l.eval denv = 0 := by
   unfold denseIsZeroLin at h
@@ -354,8 +329,7 @@ theorem denseIsZeroLin_sound (l : DenseLinExpr p) (h : denseIsZeroLin l = true)
     simp only [DenseLinExpr.eval, List.isEmpty_iff.1 hterms, List.map_nil, List.sum_nil, add_zero]
   rw [← DenseLinExpr.norm_eval, hz, hconst]
 
-/-- **`denseReciprocalWitsProd` is sound.** Each recognized factor of a reciprocal product `a·b + r`
-    (with `r` a nonzero constant) is nonzero. -/
+/-- Each recognized factor of a reciprocal product `a·b + r` (`r` a nonzero constant) is nonzero. -/
 theorem denseReciprocalWitsProd_sound (a b r : DenseExpr p) (g : DenseLinExpr p)
     (h : g ∈ denseReciprocalWitsProd a b r) (denv : VarId → ZMod p)
     (hc : a.eval denv * b.eval denv + r.eval denv = 0) : g.eval denv ≠ 0 := by
@@ -389,7 +363,6 @@ theorem denseReciprocalWitsProd_sound (a b r : DenseExpr p) (g : DenseLinExpr p)
           rw [hlb, ← denseLinearize_eval b lb hb denv]; exact hbne
     · simp at h
 
-/-- **`denseReciprocalWits?` is sound.** -/
 theorem denseReciprocalWits?_sound (c : DenseExpr p) (g : DenseLinExpr p)
     (h : g ∈ denseReciprocalWits? c) (denv : VarId → ZMod p) (hc : c.eval denv = 0) :
     g.eval denv ≠ 0 := by
@@ -452,9 +425,8 @@ theorem denseDiffSumOver_eval_zero (S m : BusInteraction (DenseExpr p)) (fields 
               rw [DenseLinExpr.add_eval, DenseLinExpr.add_eval, DenseLinExpr.scale_eval]
               linear_combination -hlMe + hlSe - hval + haccz
 
-/-- **`denseAddrNonzeroNeq` is sound.** Some subset `T` of the address fields has
-    limb-difference sum equal (up to sign) to a nonzero witness `g`; were the addresses equal that
-    sum would vanish, contradicting `g ≠ 0`. -/
+/-- Some address-field subset has limb-difference sum equal (up to sign) to a nonzero witness `g`;
+    equal addresses would make that sum vanish, contradicting `g ≠ 0`. -/
 theorem denseAddrNonzeroNeq_sound (reg : VarRegistry) (shape : MemoryBusShape)
     (dcs : List (DenseExpr p)) (_hdcov : ∀ c ∈ dcs, c.CoveredBy reg)
     (S m : BusInteraction (DenseExpr p)) (_hS : denseBICovered reg S) (_hm : denseBICovered reg m)

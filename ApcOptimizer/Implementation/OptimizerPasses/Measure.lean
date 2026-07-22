@@ -5,14 +5,11 @@ set_option autoImplicit false
 
 /-! # Dense measures and coverage/stability at the system level
 
-The dense degree guard and cleanup fixpoint compute their measures over the dense system at
-runtime; here we prove those dense measures equal the spec measures on the *decoded* system, so the
-dense driver makes exactly the same degree and stopping decisions (an output-identical refactor).
-
-The degree correspondence needs no coverage (degree ignores `resolve`). The distinct-variable count
-does: it is invariant under `resolve` only because `resolve` is injective on the valid IDs the
-system contains, so this file also carries the system-level coverage predicates and the
-`Extends`-stability lemmas that composition relies on. -/
+The dense degree guard and cleanup fixpoint compute measures over the dense system; here we prove
+they equal the spec measures on the decoded system, so the dense driver makes the same degree and
+stopping decisions. The distinct-variable count matches only because `resolve` is injective on
+valid IDs, so this file also carries the system-level coverage predicates and `Extends`-stability
+lemmas. -/
 
 namespace ApcOptimizer.Dense
 
@@ -96,9 +93,8 @@ def DenseConstraintSystem.occ (d : DenseConstraintSystem p) : List VarId :=
 def DenseConstraintSystem.varCount (d : DenseConstraintSystem p) : Nat :=
   (d.occ.foldl (·.insert ·) (∅ : Std.HashSet VarId)).size
 
-/-- **HashSet distinct-count is invariant under the injective `resolve` relabeling.** Folding a
-    list of valid IDs (and the list of their resolutions) into hash sets yields equal sizes, because
-    `resolve` is injective on valid IDs so it neither merges nor splits distinct elements. -/
+/-- HashSet distinct-count is invariant under the injective `resolve` relabeling: folding valid IDs
+    and their resolutions into hash sets yields equal sizes. -/
 private theorem size_fold_map_resolve (r : VarRegistry) :
     ∀ (l : List VarId) (sI : Std.HashSet VarId) (sV : Std.HashSet Variable),
       (∀ j, r.Valid j → (j ∈ sI ↔ r.resolve j ∈ sV)) → sI.size = sV.size →
@@ -153,8 +149,7 @@ theorem DenseConstraintSystem.occ_valid {r : VarRegistry} {d : DenseConstraintSy
     · exact hm i him
     · exact hp e hemem i hie
 
-/-- **Distinct-variable count correspondence.** On a covered system, the dense variable count equals
-    the spec variable count of the decoded system. -/
+/-- On a covered system, the dense variable count equals the spec variable count of the decode. -/
 theorem VarRegistry.decodeCS_varCount (r : VarRegistry) (d : DenseConstraintSystem p)
     (hc : d.CoveredBy r) : (r.decodeCS d).varCount = d.varCount := by
   unfold ConstraintSystem.varCount DenseConstraintSystem.varCount
@@ -167,7 +162,7 @@ theorem VarRegistry.decodeCS_varCount (r : VarRegistry) (d : DenseConstraintSyst
 def DenseConstraintSystem.sizeKey (d : DenseConstraintSystem p) : Nat ×ₗ Nat ×ₗ Nat :=
   toLex (d.varCount, toLex (d.busInteractions.length, d.algebraicConstraints.length))
 
-/-- The dense size key equals the spec size key on the decoded system — so the fixpoint driver makes
+/-- The dense size key equals the spec size key on the decode, so the fixpoint driver makes
     identical stopping decisions. -/
 theorem VarRegistry.decodeCS_sizeKey (r : VarRegistry) (d : DenseConstraintSystem p)
     (hc : d.CoveredBy r) : (r.decodeCS d).sizeKey = d.sizeKey := by

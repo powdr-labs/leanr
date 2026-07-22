@@ -5,25 +5,16 @@ import Mathlib.Tactic.LinearCombination
 
 set_option autoImplicit false
 
-/-! # Dense width-0 / width-1 range-check conversion (impl-only)
+/-! # Dense width-0 / width-1 range-check conversion
 
-Dense `VarId` definitions for width-0/width-1 range-check conversion: the booleanity builder
-`boolC`, the recognizer `rangeEq?`, and the transform inside `zeroWidthRangePass`. **Impl-only**:
-the `DensePassCorrect` proof and the pass wiring live in `ZeroWidthRangeProof.lean`.
-
-Gated on `(1 : ZMod p) ≠ 0`, the transform appends the equivalent algebraic constraint for every
-degenerate range check (`value = 0` for width-0, its booleanity `value·(value−1) = 0` for width-1
-when `p` is prime — decided per-arm through the recognizer's `one` parameter) and then drops the
-now-entailed interactions. It is **fact-consuming** (`zeroRangeEq`/`varRangeBus`). -/
+Impl-only: booleanity builder `denseBoolC`, recognizer `denseRangeEq?`, transform
+`denseZeroWidthRangeF`; correctness and wiring in `ZeroWidthRangeProof.lean`. -/
 
 namespace ZeroWidthRange
 
 variable {p : ℕ}
 
-/-- On a prime field, `x < 2` (as a value) is exactly booleanity.
-
-    Representation-independent (`Nat`/`ZMod`) lemma, kept here at its value-level home so the dense
-    proof tree (`ZeroWidthRangeProof.lean` / `RangeBoolProof.lean`) can consume it. -/
+/-- On a prime field, `x < 2` (value-level) is exactly booleanity `x·(x−1) = 0`. -/
 theorem val_lt_two_iff (hp : Nat.Prime p) (x : ZMod p) :
     x.val < 2 ↔ x * (x - 1) = 0 := by
   haveI : Fact p.Prime := ⟨hp⟩
@@ -48,15 +39,11 @@ namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Dense booleanity constraint -/
-
 /-- `v·(v − 1)` as a dense expression. -/
 def denseBoolC (v : DenseExpr p) : DenseExpr p := .mul v (.add v (.const (-1)))
 
-/-! ## Dense recognizer -/
-
-/-- Recognize a degenerate-width range check, returning its value slot (width-0, `c = 0`) or its
-    booleanity constraint (width-1, `c = 1`, on a prime field). -/
+/-- Recognizes a degenerate-width range check: width-0 (`c = 0`) forces its value slot to `0`;
+    width-1 (`c = 1`, on a prime field) makes its value boolean, returning `v·(v−1) = 0`. -/
 def denseRangeEq? (one : Bool) (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (DenseExpr p) :=
   match bi.payload with
@@ -69,10 +56,8 @@ def denseRangeEq? (one : Bool) (bs : BusSemantics p) (facts : BusFacts p bs)
     else none
   | _ => none
 
-/-! ## The dense transform -/
-
-/-- The dense width-0/width-1 conversion transform: append the entailed constraints, then drop the
-    now-entailed interactions (identity off a prime field). -/
+/-- Append the entailed constraints, then drop the now-entailed interactions (identity off a
+    prime field). Gated on `(1 : ZMod p) ≠ 0`. -/
 def denseZeroWidthRangeF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if (1 : ZMod p) ≠ 0 then

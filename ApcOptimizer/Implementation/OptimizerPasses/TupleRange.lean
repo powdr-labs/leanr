@@ -4,49 +4,9 @@ set_option autoImplicit false
 
 /-! # Dense tuple-range packing
 
-Recognizes byte checks (`denseMatchByteSingle`) and range checks (`denseMatchRangeCheck`) on the
-relevant buses, scans for a packable pair of them (`denseFindRangePartner`/`denseFindBytePartner`/
-`denseFindTuplePack`), tries every candidate tuple bus in turn (`denseTryTupleBuses`), and drains
-every packable pair (`denseDrainTuplePacks`) into the pass transform `denseTupleRangeF`. This file
-is **impl-only**: it carries no `DensePassCorrect`/`DenseVerifiedPassW` proof obligation here. The
-runtime transform `denseTupleRangeF` is unconditional in `p`, gated only by a `(1 : ZMod p) ≠ 0`
-self-check, and consumes `facts` directly with no fresh variables, so it can be wrapped with
-`DenseVerifiedPassW.of`.
-
-## Notes
-
-* `denseMkByteCheck` (`BusPairCancelCheck.lean`) is **not used here**: `denseMatchByteSingle`/
-  `denseMatchRangeCheck` only *recognize* an already-built check syntactically (they never emit
-  one), and the packed output is a *different* bus message (`[x, y]` on the tuple-range bus, built
-  fresh below as `denseTupleCheck`), not a rebuilt byte check.
-* `ByteXorSpec`/`BusFacts.byteXorSpec`/`BusFacts.varRangeBus`/`BusFacts.tupleRangeBus` are
-  representation-independent (`Nat`/`ZMod p`-valued, or `{α : Type} → …` for `decode`), so they are
-  consulted directly, unqualified.
-* `DecidableEq (DenseExpr p)` (derived on the inductive, `Encoding.lean:33`) is what
-  `denseMatchByteSingle`/`denseMatchRangeCheck` use everywhere they decide payload-slot equalities.
-
-## Partner scans: plain `List` splits
-
-`denseFindRangePartner`/`denseFindBytePartner` and `denseFindTuplePack` scan plain `List`s and
-return the split directly as `pre`/`mid`/`post` sublists — the split equation is then true by
-construction of the traversal, available for the prover to state as a loop invariant. At each
-position, left to right, a byte check is tried first (looking strictly rightward for the first
-exact-width range check partner via `denseFindRangePartner`); failing that, a range check is tried
-(looking strictly rightward for the first byte check partner via `denseFindBytePartner`); failing
-both, the scan moves to the next position.
-
-Two further points on how the packed output is built:
-
-* `denseTryTupleBuses` calls straight into the scan for every candidate bus with no re-check of the
-  bus's shape: every element of `denseTupleBusCandidates`'s output already satisfies the tuple-bus
-  shape by construction (`denseTupleBusCandidates` only ever emits `(k, s1, s2)` after checking
-  exactly this).
-* The packed output `denseTupleCheck trBus x y` needs **no** `ByteXorSpec` to build — it is the
-  plain 2-ary message `[x, y]`. So `denseFindTuplePack` only needs `x`/`y` at its own return
-  boundary and discards the byte bus's `spec`/the range check's width witness `b : ZMod p` with an
-  underscore once matched — the `spec`/`b` data itself is still threaded one level deeper, in
-  `denseFindRangePartner`/`denseFindBytePartner`'s own return tuples, for the prover's convenience
-  (a bound name rather than a re-derived existential). -/
+Runtime recognizers, partner scans, and drain for `tupleRange`; the pass is wrapped in
+`TupleRangeProof.lean`. The partner scans return the `pre`/`mid`/`post` split directly, so the
+split equation holds by construction, available to the prover as a loop invariant. -/
 
 namespace ApcOptimizer.Dense
 
@@ -128,12 +88,9 @@ def denseFindBytePartner (bs : BusSemantics p) (facts : BusFacts p bs) :
     | some (spec, x) => some (revMid.reverse, spec, x, rest)
     | none => denseFindBytePartner bs facts (b :: revMid) rest
 
-/-- Fused scan for the first packable pair for a tuple bus with second-slot size `s2`: at each
-    position, left to right, a byte check first looks rightward for the first exact-width range
-    check (`denseFindRangePartner`); failing that, a range check looks rightward for the first byte
-    check (`denseFindBytePartner`); failing both, move on. Returns the packed values `x` (byte) and
-    `y` (range) with the surrounding `pre`/`mid`/`post` split — `x`/`y` are all `denseTupleCheck`
-    needs to build the replacement, in either orientation. -/
+/-- Fused scan for the first packable pair for a tuple bus with second-slot size `s2`: a byte check
+    with an exact-width range check partner, in either order, returned as the packed values `x`
+    (byte) and `y` (range) with the surrounding `pre`/`mid`/`post` split. -/
 def denseFindTuplePack (bs : BusSemantics p) (facts : BusFacts p bs) (s2 : Nat)
     (revPre : List (BusInteraction (DenseExpr p))) :
     List (BusInteraction (DenseExpr p)) →
@@ -170,10 +127,8 @@ def denseTryTupleBuses (bs : BusSemantics p) (facts : BusFacts p bs)
     | none => denseTryTupleBuses bs facts bis rest
 
 /-- Drain every packable pair: pack the first (bus-major, then position-major) pair, recompute the
-    candidate buses on the shrunken list, repeat. One invocation replaces the enclosing per-pair
-    fixpoint. Fuel-bounded structural recursion, fuel initialized to the interaction-list length at
-    the call site (`denseTupleRangeF`): each successful pack strictly drops that list's length by
-    one, so the fuel is never actually exhausted before `denseTryTupleBuses` reports `none`. -/
+    candidate buses on the shrunken list, repeat. Fuel-bounded; each pack drops the list length by
+    one, so fuel = interaction-list length suffices. -/
 def denseDrainTuplePacks (bs : BusSemantics p) (facts : BusFacts p bs) :
     Nat → List (BusInteraction (DenseExpr p)) → List (BusInteraction (DenseExpr p))
   | 0, bis => bis
@@ -184,11 +139,9 @@ def denseDrainTuplePacks (bs : BusSemantics p) (facts : BusFacts p bs) :
       denseDrainTuplePacks bs facts fuel (pre ++ denseTupleCheck trBus x y :: mid ++ post)
     | none => bis
 
-/-- The dense pack-until-drained transform (`of` shape: registry unchanged, no fresh
-    variables). VM-neutral: with a trivial `BusFacts`, `tupleRangeBus` is `none` everywhere, so
-    `denseTupleBusCandidates` is always `[]` and the drain is the identity in its first step. This
-    pass needs no outer `iterateToFixpoint` wrapper; the single internal drain call already
-    exhausts every packable pair. -/
+/-- Packs a single-value byte check on `x` and an exact-width range check `[y, b]` into one tuple
+    check `[x, y]` on a tuple-range bus (`x < 256 ∧ y < 2^b`), draining every packable pair in one
+    invocation (`denseTupleRangePass`). -/
 def denseTupleRangeF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     DenseConstraintSystem p :=
   if (1 : ZMod p) ≠ 0 then

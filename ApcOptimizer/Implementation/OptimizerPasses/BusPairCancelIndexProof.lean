@@ -6,53 +6,18 @@ set_option autoImplicit false
 
 /-! # Soundness of the dense hash index + entailed-equality maps
 
-Soundness layer, over `VarId → ZMod p` environments, for the per-invocation hash-indexing and
-entailed-equality machinery defined (impl-only) in `Dense/BusPairCancelIndex.lean`. Those impl
-structures carry no `sound` proof field (and no `constraints`-list index parameter); this file
-establishes their soundness invariants as **separate lookup-wise `Sound` predicates**, in the shape
-of `DenseTwoRootMap.Sound` (`Dense/AddrDiseqProof.lean`) — invariants proved by induction along the
-build ops, *not* whole-map decode equality.
-
-## What `denseCheckCancel`/`denseCancelLoop` consume
-
-* `DenseVarCsIdx.Sound` + `build_sound` + `lookup_mem` — `denseCheckCancel` feeds
-  `candsT.get.lookup` as the per-variable candidate list and `fun x => (build_sound …).lookup_mem x`
-  as the membership witness.
-* `DenseEqConstraintMap.Sound` + `build_sound` + `test_sound`. The non-aggressive cycle uses
-  `DenseEqConstraintMap.empty` (`empty_sound`); the aggressive coda uses
-  `DenseEqConstraintMap.build d.algebraicConstraints` (`build_sound`).
-* `densePayloadEntailedEq_sound` — shaped so that `denseCheckCancel` supplies `S.payload`/
-  `R.payload` and obtains the *evaluated* payload equality
-  `S.payload.map (·.eval denv) = R.payload.map (·.eval denv)`, which is definitionally
-  `(denseBIEval S denv).payload = (denseBIEval R denv).payload` — **exactly** the `hpayEval`
-  hypothesis `Dense/BusPairCancelCore.lean`'s `denseDropPair_correct` takes.
-
-## Affine-normalization evaluation
-
-`test_sound`/`densePayloadEntailedEq_sound` need `(DenseExpr.normalize e).eval denv = e.eval denv`.
-It is assembled here from the existing `denseLinearize_eval` / `DenseLinExpr.norm_eval`
-(`Dense/DomainBatchNativeProof.lean`) and a new `DenseLinExpr.toExpr_eval`. No prime hypothesis is
-required — these are pure algebraic identities.
-
-## Bucket lemmas left for the consumer
-
-`denseRecvIndexAll` builds an ascending-bucket receive index (module header of
-`BusPairCancelIndex.lean`); its bucket-membership / ascending-order properties feed
-`denseFirstMatchAt` (`BusPairCancelCheck.lean`), which reasons about the index inline at its own use
-site — no standalone `denseRecvIndexAll` bucket lemma is proved here. -/
+Over `VarId → ZMod p`, for the machinery in `BusPairCancelIndex.lean`. Those impl structures carry
+no `sound` field; this file establishes their invariants as separate lookup-wise `Sound` predicates,
+proved by induction along the build ops. No standalone `denseRecvIndexAll` bucket lemma is proved
+here (`denseFirstMatchAt` reasons about the index inline at its own use site). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## The per-variable candidate-constraint index: `DenseVarCsIdx.Sound`
+/-! ## `DenseVarCsIdx.Sound` -/
 
-The affine-normalization eval lemmas this file consumes (`DenseLinExpr.toExpr_eval`,
-`DenseExpr.normalize_eval`) live at their definitions' home in `Dense/Affine.lean` and
-`Dense/Normalize.lean` (shared, proved once). -/
-
-/-- Every entry of every successfully-looked-up bucket is one of the indexed `constraints`. Proved
-    lookup-wise by induction along the build ops, in the shape of `DenseTwoRootMap.Sound`. -/
+/-- Every entry of every looked-up bucket is one of the indexed `constraints`. -/
 def DenseVarCsIdx.Sound (constraints : List (DenseExpr p)) (I : DenseVarCsIdx p) : Prop :=
   ∀ (x : VarId) (l : List (DenseExpr p)), I.map[x]? = some l → ∀ c ∈ l, c ∈ constraints
 
@@ -126,8 +91,7 @@ theorem DenseVarCsIdx.build_sound (constraints : List (DenseExpr p)) :
   exact DenseVarCsIdx.addAll_sound DenseVarCsIdx.empty constraints (fun _ h => h)
     (DenseVarCsIdx.empty_sound constraints)
 
-/-- Every looked-up candidate constraint is one of the indexed constraints; the `Sound` invariant
-    is an explicit argument (the impl structure carries no `sound` field). -/
+/-- Every looked-up candidate constraint is one of the indexed constraints. -/
 theorem DenseVarCsIdx.lookup_mem {constraints : List (DenseExpr p)} {I : DenseVarCsIdx p}
     (hI : I.Sound constraints) (x : VarId) : ∀ c ∈ I.lookup x, c ∈ constraints := by
   intro c hc
@@ -136,10 +100,9 @@ theorem DenseVarCsIdx.lookup_mem {constraints : List (DenseExpr p)} {I : DenseVa
   | none => rw [hb] at hc; simp at hc
   | some l => rw [hb] at hc; exact hI x l hb c hc
 
-/-! ## The normalized-constraint hash index: `DenseEqConstraintMap.Sound` -/
+/-! ## `DenseEqConstraintMap.Sound` -/
 
-/-- Every entry of every bucket is witnessed as the normalization of an actual indexed constraint.
-    Proved lookup-wise. -/
+/-- Every entry of every bucket is witnessed as the normalization of an actual indexed constraint. -/
 def DenseEqConstraintMap.Sound (constraints : List (DenseExpr p))
     (M : DenseEqConstraintMap p) : Prop :=
   ∀ (h : UInt64) (ns : List (DenseExpr p)), M.map[h]? = some ns →
@@ -189,8 +152,7 @@ theorem DenseEqConstraintMap.build_sound (constraints : List (DenseExpr p)) :
   exact DenseEqConstraintMap.addAll_sound DenseEqConstraintMap.empty constraints (fun _ h => h)
     (DenseEqConstraintMap.empty_sound constraints)
 
-/-- A passing `test d` means `d` evaluates to zero whenever the indexed constraints hold; the
-    `Sound` invariant is an explicit argument. -/
+/-- A passing `test d` means `d` evaluates to zero whenever the indexed constraints hold. -/
 theorem DenseEqConstraintMap.test_sound {constraints : List (DenseExpr p)}
     (M : DenseEqConstraintMap p) (hM : M.Sound constraints) (d : DenseExpr p)
     (h : M.test d = true) (denv : VarId → ZMod p)
@@ -206,14 +168,8 @@ theorem DenseEqConstraintMap.test_sound {constraints : List (DenseExpr p)}
       rw [← hnd, ← hcn, DenseExpr.normalize_eval]
       exact hcon c hc
 
-/-! ## Constraint-entailed payload matching: `densePayloadEntailedEq_sound` -/
-
-/-- **A passing entailed-payload match makes the *evaluated* payloads equal whenever the constraints
-    hold.** The `Sound` invariant on the (forced) map is an explicit hypothesis. `denseCheckCancel`
-    supplies `S.payload` and `R.payload`; the resulting
-    `S.payload.map (·.eval denv) = R.payload.map (·.eval denv)` is definitionally
-    `(denseBIEval S denv).payload = (denseBIEval R denv).payload`, i.e. the `hpayEval` hypothesis
-    for `denseDropPair_correct`. -/
+/-- A passing entailed-payload match makes the *evaluated* payloads equal whenever the constraints
+    hold — the `hpayEval` hypothesis `denseDropPair_correct` takes. -/
 theorem densePayloadEntailedEq_sound {constraints : List (DenseExpr p)}
     (M : Thunk (DenseEqConstraintMap p)) (hM : M.get.Sound constraints) :
     ∀ (pl pl' : List (DenseExpr p)), densePayloadEntailedEq M pl pl' = true →

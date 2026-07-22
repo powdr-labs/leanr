@@ -4,16 +4,12 @@ set_option autoImplicit false
 
 /-! # Constraint-system coverage monotonicity
 
-Coverage-side lemmas for the dense representation: a covered constraint system stays covered under
-registry extension (`DenseConstraintSystem.CoveredBy.mono`), and the encode of a spec constraint
-system is covered by the registry it produces (`VarRegistry.encodeCS_covered`, consumed at the
-pipeline entry in `Implementation/Optimizer.lean`). -/
+A covered dense constraint system stays covered under registry extension, and the encode of a spec
+system is covered by the registry it produces (`encodeCS_covered`, used at the pipeline entry). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-! ## Constraint-system coverage monotonicity and list-of-bus coverage -/
 
 theorem DenseConstraintSystem.CoveredBy.mono {r r' : VarRegistry} (h : r.Extends r')
     {d : DenseConstraintSystem p} (hc : d.CoveredBy r) : d.CoveredBy r' := by

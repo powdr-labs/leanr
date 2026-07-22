@@ -4,24 +4,14 @@ set_option autoImplicit false
 
 /-! # Dense width-0 range check → equality
 
-`denseForceZeroAt` recognizes a width-0 (`bound = 1`) range check and yields its forced-zero slot
-expression; `denseForceZeroSeeds` collects these across all bus interactions; the pass
-`denseRangeForceZeroF` is a single `if`-gated append of these seeds as new algebraic constraints —
-the shape `DenseVerifiedPassW.of`/the DigitFold-style direct construction expects
-(`bs → facts → d → d'`). The `DensePassCorrect` proof and the pass wiring (`denseRangeForceZeroPass`,
-scheduled as `"rangeForceZero"`) live in `RangeForceZeroProof.lean`.
-
-`facts.rangeCheckAt` is representation-independent (`(busId : Nat) → (pattern : List (Option (ZMod
-p))) → …`) and is consulted unqualified — no dense twin needed. The membership filter
-`e.vars.all (fun z => cs.vars.contains z)` mirrors onto `d.occ` (`Measure.lean`), the dense analogue
-of `ConstraintSystem.vars` (established in `HintCollapse.lean`'s `denseIsFresh`). -/
+Impl-only: recognizer `denseForceZeroAt`, seed collection `denseForceZeroSeeds`, transform
+`denseRangeForceZeroF`; correctness and wiring in `RangeForceZeroProof.lean`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-- The forced-zero expression of `bi`: its value-slot expression, when `bi` is a mult-1 range
-    check whose `rangeCheckAt` bound is `1` (`= 2⁰`, so the slot is `< 1`, i.e. `0`). -/
+/-- The value-slot expression of a mult-1 width-0 (`bound = 1`) range check, forced to `0`. -/
 def denseForceZeroAt {bs : BusSemantics p} (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (DenseExpr p) :=
   match facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?) with
@@ -40,8 +30,8 @@ def denseForceZeroSeeds {bs : BusSemantics p} (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : List (DenseExpr p) :=
   d.busInteractions.filterMap (denseForceZeroAt facts)
 
-/-- The dense transform: seed `expr = 0` for every width-0 (`bound = 1`) range check. Gated on
-    `(1 : ZMod p) ≠ 0`. -/
+/-- For a width-0 range check (`bound = 1`, so its value slot must satisfy `x < 1`, i.e. `x = 0`),
+    seeds the constraint `slotExpr = 0`. Gated on `(1 : ZMod p) ≠ 0`. -/
 def denseRangeForceZeroF (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if (1 : ZMod p) ≠ 0 then
