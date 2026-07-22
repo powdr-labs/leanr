@@ -34,7 +34,8 @@ theorem denseMatchByteSingle_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     bi = denseMkByteCheck spec bi.busId x ∧ facts.byteXorSpec bi.busId = some spec ∧
       spec.bound = 256 := by
   obtain ⟨busId, mult, payload⟩ := bi
-  grind [denseMatchByteSingle, denseMkByteCheck, ByteXorSpec.decode_eq_encode]
+  grind [denseMatchByteSingle, denseByteShape?, denseCmpStructural, denseMkByteCheck,
+    ByteXorSpec.decode_eq_encode]
 
 /-- A `denseMatchRangeCheck` hit *is* the canonical range check, and carries the width facts the
     packing key needs. -/
