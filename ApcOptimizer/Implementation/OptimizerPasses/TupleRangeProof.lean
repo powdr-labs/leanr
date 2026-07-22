@@ -5,20 +5,10 @@ set_option autoImplicit false
 
 /-! # Soundness of the dense `tupleRange` pass
 
-Proof for the dense tuple-range packing pass whose runtime lives in
-`OptimizerPasses/TupleRange.lean`. A tuple range checker `TupleRangeChecker (256, s2)` accepts
-`[x, y]` iff `x < 256 ∧ y < s2`; that is exactly the conjunction of a single-value byte check on `x`
-and a variable range check `[y, b]` with `2 ^ b.val = s2`, so the two stateless interactions pack
-into one with the identical satisfying set.
-
-Everything here is over dense environments `VarId → ZMod p` — no `decode`. The proof reuses
-`denseMergeStateless2_correct` (`ByteCheckPackProof.lean`) as the two-for-one swap workhorse and the
-`denseMkByteCheck_*` acceptance cluster (`BusPairCancelCheckProof.lean`). The scan's positional
-split is recovered as a loop invariant (`denseFindTuplePack_split`), similar in shape to
-`denseFindGo_split`; the drain composes single steps through `DensePassCorrect.trans`. The
-representation-independent `BusFacts` fields (`byteXorSpec_sound`, `varRangeBus_sound`,
-`tupleRangeBus_sound`) and the polymorphic `ByteXorSpec` methods apply at the value / `DenseExpr`
-level. -/
+`DensePassCorrect` for the tuple-range packing pass (`TupleRange.lean`), over `VarId → ZMod p`. A
+tuple range checker `(256, s2)` accepts `[x, y]` iff `x < 256 ∧ y < s2` — exactly a byte check on
+`x` and a range check `[y, b]` with `2 ^ b.val = s2` — so the two stateless interactions pack into
+one via `denseMergeStateless2_correct` (`ByteCheckPackProof.lean`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -202,10 +192,7 @@ theorem densePackRangeFirst_correct (isInput : VarId → Bool) (d : DenseConstra
     · exact Or.inl (denseMem_biVars_of_payload _ e (by
         show e ∈ [e, DenseExpr.const b]; exact List.mem_cons_self ..) hve)
 
-/-! ## Scan invariants: reconstructing the split equation
-
-`denseFindRangePartner`/`denseFindBytePartner`/`denseFindTuplePack` return plain
-positionally-split data; the split equations are recovered here as loop invariants. -/
+/-! ## Scan invariants: reconstructing the split equation -/
 
 /-- The positional split reconstructed from `denseFindRangePartner`. -/
 theorem denseFindRangePartner_split (bs : BusSemantics p) (facts : BusFacts p bs) (s2 : Nat) :
@@ -327,12 +314,7 @@ theorem denseFindTuplePack_split (bs : BusSemantics p) (facts : BusFacts p bs) (
           by simpa only [List.reverse_cons, List.append_assoc, List.singleton_append] using heq,
           hcase⟩
 
-/-! ## Candidate soundness: the omitted re-check is always true by construction
-
-`denseTryTupleBuses` does not re-check `facts.tupleRangeBus trBus = some (s1, s2) ∧ s1 = 256`
-for each candidate: every element of `denseTupleBusCandidates`'s output already satisfies it by
-construction, recorded here as the candidate invariant that recovers the fact for the chosen
-bus. -/
+/-! ## Candidate soundness: the omitted re-check is always true by construction -/
 
 /-- Every candidate `denseTupleBusCandidates` emits carries its declaring tuple fact with a
     byte-sized first slot. -/
@@ -443,7 +425,6 @@ theorem denseTupleStep_covered (reg : VarRegistry) (bs : BusSemantics p) (facts 
   obtain ⟨D₁, D₂, spec, bw, heq, hcase⟩ :=
     denseFindTuplePack_split bs facts s2 [] bis pre x mid y post hfp
   rw [List.reverse_nil, List.nil_append] at heq
-  -- membership helper: everything in pre/mid/post, D₁, D₂ is a member of `bis`
   have hmemD1 : D₁ ∈ bis := by rw [heq]; simp only [List.mem_append, List.mem_cons]; tauto
   have hmemD2 : D₂ ∈ bis := by rw [heq]; simp only [List.mem_append, List.mem_cons]; tauto
   have hmemPMP : ∀ bi, bi ∈ pre ∨ bi ∈ mid ∨ bi ∈ post → bi ∈ bis := by
@@ -546,9 +527,7 @@ theorem denseTupleRangeF_correct (reg : VarRegistry) (bs : BusSemantics p) (fact
     exact h
   · exact DensePassCorrect.refl reg.isInput d bs
 
-/-- The dense tuple-range packing pass: pack every byte-check + exact-width range-check pair into a
-    single tuple check, draining every packable pair in one invocation. Registry-preserving (no
-    fresh variables), so built through `DenseVerifiedPassW.of`. -/
+/-- The dense tuple-range packing pass (see `denseTupleRangeF`, `TupleRange.lean`). -/
 def denseTupleRangePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun bs facts d => denseTupleRangeF bs facts d)

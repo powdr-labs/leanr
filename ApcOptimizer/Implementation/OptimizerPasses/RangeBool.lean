@@ -2,32 +2,18 @@ import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
 
 set_option autoImplicit false
 
-/-! # Dense width-1 range check → booleanity (impl-only)
+/-! # Dense width-1 range check → booleanity
 
-Dense `VarId` definitions for the recognizer `boolCheck?` and the pass `rangeBoolPass`.
-**Impl-only**: no correctness theorem is stated here.
-
-## Two fixed steps, kept as two dense sub-transforms
-
-The pass is exactly **two** steps: step 1 adds every recognised booleanity as an algebraic
-constraint (interactions untouched); step 2 drops the now-entailed interactions via `filterBus`.
-Kept here as two separate dense transforms — `denseRangeBoolAddF` (the add) and
-`denseRangeBoolDropF` (the drop) — so the prover can certify each half separately (their own
-`DensePassCorrect`) and compose with `.andThen`; `denseRangeBoolF` is their sequential application
-under the same two gates (`(1 : ZMod p) ≠ 0`, `pw.isPrime = true`).
-
-## Reuse
-
-`denseBoolC` (`ZeroWidthRange.lean`) is the dense `v·(v−1)` booleanity builder, so no new
-booleanity builder is introduced here. `facts.rangeCheckAt`/`DenseExpr.constValue?` are as in
-`RangeForceZero.lean`. -/
+Impl-only: recognizer `denseBoolCheck?` and transform `denseRangeBoolF`; correctness in
+`RangeBoolProof.lean`. Split into add/drop sub-transforms so each half carries its own
+`DensePassCorrect`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-- The booleanity constraint of a width-1 (`bound = 2`) op-6 check whose value slot is a bare
-    variable. Reuses `denseBoolC` (`ZeroWidthRange.lean`). -/
+/-- The booleanity `x·(x−1)` of a width-1 (`bound = 2`) check whose value slot is a bare variable
+    `x`. -/
 def denseBoolCheck? {bs : BusSemantics p} (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (DenseExpr p) :=
   match facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?) with
@@ -50,9 +36,8 @@ def denseRangeBoolDropF {bs : BusSemantics p} (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   d.filterBus (fun bi => (denseBoolCheck? facts bi).isNone)
 
-/-- The dense transform: replace every width-1 op-6 range check on a bare variable by its
-    booleanity, then drop the check, gated by `(1 : ZMod p) ≠ 0` then `pw.isPrime = true` in that
-    order. -/
+/-- For a width-1 range check `x < 2` on a bare variable `x`, adds its booleanity `x·(x−1) = 0`
+    as a constraint then drops the now-redundant check. Gated on a prime field. -/
 def denseRangeBoolF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if (1 : ZMod p) ≠ 0 then

@@ -3,22 +3,18 @@ import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 
 set_option autoImplicit false
 
-/-! # Dense one-hot annihilation (impl-only)
+/-! # Dense one-hot annihilation
 
-Dense `VarId` definitions for the one-hot-annihilation pass: the recogniser chain
-(`affineCloser`/`readCloser`/`hasProd`/`deadFromCloser`/`deadVars`) and the append transform. The
-pass appends `x = 0` for every one-hot-annihilated variable `x`, read off the closer constraints.
-It is **fact-free**. The `DensePassCorrect` proof and the pass wiring live in
+Impl-only: the recogniser chain (`denseAffineCloser`/`denseReadCloser`/`denseHasProd`/
+`denseDeadFromCloser`/`denseDeadVars`) and the append transform. Correctness in
 `OneHotAnnihilateProof.lean`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Dense recognizers -/
-
-/-- Recognize an affine "closer" factor: `−1 + Σxᵢ` or `1 − Σxᵢ` with all unit coefficients (a
-    one-hot indicator's complement). -/
+/-- An affine "closer" factor: `−1 + Σxᵢ` or `1 − Σxᵢ` with all unit coefficients (a one-hot
+    indicator's complement). -/
 def denseAffineCloser (a : DenseExpr p) : Option (DenseLinExpr p) :=
   match denseLinearize a with
   | some la =>
@@ -48,9 +44,8 @@ def denseDeadFromCloser (d : DenseConstraintSystem p) (c : DenseExpr p) : Option
 def denseDeadVars (d : DenseConstraintSystem p) : List VarId :=
   d.algebraicConstraints.filterMap (denseDeadFromCloser d)
 
-/-! ## The dense transform -/
-
-/-- The dense transform: append `x = 0` for every one-hot-annihilated dense variable. -/
+/-- When a one-hot closer `(x₁ + … + xₙ − 1)·x = 0` is present together with every product
+    `xᵢ·x = 0`, the variable `x` is forced to `0`; appends `x = 0` for each such annihilated `x`. -/
 def denseOneHotAnnihilateF (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   { d with algebraicConstraints :=
       d.algebraicConstraints ++ (denseDeadVars d).map (fun i => DenseExpr.var i) }

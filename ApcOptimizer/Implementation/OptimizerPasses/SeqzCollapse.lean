@@ -4,96 +4,19 @@ set_option autoImplicit false
 
 /-! # Collapsing the `sltu x, 1` (seqz) gadget — dense `VarId` port (impl-only)
 
-Dense `VarId` definitions for the seqz-collapse pass: the expression templates
-(`eM1`/`e0`/`e1`/`e2`/`sExpr`/`markerSum`/`krExpr`/`twoRExpr`/
-`diffInner`/`diffInner0`/`clusterConstraints`/`clusterBus`/`boolConstraint`/`sumExpr4`/
-`newConstraints`/`invMethod`), the recognizer (`matchMarkerSum`/`matchNegVar`/`matchE11`/
-`matchPrefixVar`/`Roles`/`Roles.witnesses`/`Roles.inv`/`pureInCluster`/`extractRoles`/
-`collapsedSystem`/`rolesValid`), and the scanning driver (`tryList`, `seqzCollapsePass`'s computed
-output). This file is **impl-only**: no correctness theorem is stated here, and no
-`DenseVerifiedPassW`/`DensePassCorrect` wrapper is built here.
-
-## Shape: a registry-extending transform
-
-Like `Reencode`/`HintCollapse`, this pass mints a fresh derived witness (the reciprocal hint `inv`
-of the is-zero gadget), so it is shaped for the registry-extending builder — the prover wires it with
-`DenseVerifiedPassW.ofExtending (denseSeqzCollapseF) …`
-(`transform : VarRegistry → (bs) → BusFacts p bs → DenseConstraintSystem p → VarRegistry ×
-DenseConstraintSystem p × DenseDerivations p`, `Reencode.lean`/`HintCollapse.lean`'s own shape).
-Still out of scope: the correctness theorems and the `ofExtending` call itself.
-
-## Where the fresh variable is minted, and the freshness-decision mechanism
-
-`denseSeqzInvVar reg r` computes the *candidate* name for the fresh `inv` witness —
-`⟨"seqzinv#" ++ (reg.resolve r.dv).name, none⟩` — by resolving `r.dv`'s `VarId` back to the display
-name it was registered under. `denseIsFresh` (`HintCollapse.lean`, reused unchanged — see its header
-for the mechanism: an `reg.idOf?` prefilter composed with a linear scan of `d.occ`) tests whether that
-candidate name is already in use, and `denseSeqzRolesValid` requires it to be fresh. The candidate is
-registered (`reg.register`) only on `denseSeqzTryList`'s accepting branch: registering-and-discarding a
-`VarId` for every rejected candidate would needlessly inflate the registry for the run's remaining
-lifetime, while an unregistered candidate is invisible to every downstream decision.
-
-## `denseBuild` is recomputed per accepted candidate, not hoisted
-
-`denseSeqzTryList` calls `denseBuild bs facts (…)` *inside* the `some r` branch, once per
-`extractRoles`-recognised candidate that also has a `byteXorSpec` — potentially more than once
-per pass invocation, since the scan keeps trying further bus interactions until `denseSeqzRolesValid`
-succeeds. It is **not** hoisted above the scan: the filtered bus-interaction list it folds over does
-not depend on the (not-yet-registered) `inv` variable, but the recomputation on every accepted
-candidate is deliberate and preserved rather than memoised across candidates. This lets
-freshness-checking and the byte-bound map both be computed *before* any registration, so `inv` is
-still minted only on the final accepting branch (see above).
-
-## No `PrimeWitness` — primality is re-decided per candidate
-
-Unlike `HintCollapse`/`MonicScale`/`SplitBytePair`/`IdentitySubst`, `denseSeqzRolesValid` inlines
-`decide (Nat.Prime p) && decide (1024 ≤ p)` directly in its `Bool` chain, rather than being gated by
-an outer `[Fact p.Prime]`/`PrimeWitness` on its caller; there is no such gate on
-`denseSeqzTryList`/`denseSeqzCollapseF`. Primality is therefore re-decided once per
-`extractRoles`-recognised candidate, at the same frequency as every other check in
-`denseSeqzRolesValid`; introducing a `PrimeWitness` here would change this cost profile and is out of
-scope.
-
-## Reuse map
-
-* `denseBuild` (`DigitFold.lean`) is the fact-derived byte-bounds map used by
-  `denseSeqzRolesValid`/`denseSeqzTryList` (see above for why it is recomputed per candidate rather
-  than memoised).
-* `reg.isInput` (`Bridge.lean`) tests `x.powdrId?.isSome` through the registry.
-* `DenseExpr.mentions` (`SubstMap.lean`) is reused unchanged by `denseSeqzPureInCluster`.
-* `denseIsFresh` (`HintCollapse.lean`) is the freshness-prefilter mechanism, reused unchanged rather
-  than re-derived here.
-* `DecidableEq (DenseExpr p)`/`DecidableEq (BusInteraction (DenseExpr p))` (`Encoding.lean`'s
-  `deriving`, `FactPass.lean`'s `deriving instance … for BusInteraction`) back every structural
-  equality test below (`matchE11`/`matchPrefixVar`'s `lhs = …`, `pureInCluster`'s `bi = bus`,
-  `rolesValid`'s `.contains`/`.Nodup`).
-
-## Ordering note
-
-Nothing here ever sorts or iterates by variable *name*: `denseSeqzExtractRoles` matches syntactic
-shapes in the constraint list's given order (`List.findSome?`, first match wins), and
-`denseSeqzTryList` scans `busInteractions` in original list order, first accepted candidate wins.
-`VarId`'s `BEq`/`Hashable`/`DecidableEq` instances make every `.contains`/`.Nodup`/`decide (· = ·)`
-test below a straightforward equality check with no reordering. -/
+Dense `VarId` definitions for the seqz-collapse pass: expression templates, the recognizer, and
+the scanning driver. This file states no correctness theorem; see `SeqzCollapseProof.lean`. The
+pass mints a fresh `inv` witness, so it is wired with `DenseVerifiedPassW.ofExtending`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Expression templates for the recognised gadget
+/-! ## Expression templates for the recognised gadget -/
 
-Names are prefixed `denseSeqz` (rather than just `dense`) since short names like `e0`, `markerSum`,
-`boolConstraint`, `sumExpr4` would plausibly collide with other dense pass files sharing this flat
-namespace — indeed `denseBoolConstraint`/`denseTryList` are already taken by
-`Reencode.lean`/`HintCollapse.lean`. -/
-
-/-- `-1` as a dense constant. -/
 def denseSeqzEM1 : DenseExpr p := .const (-1)
-/-- `0` as a dense constant. -/
 def denseSeqzE0 : DenseExpr p := .const 0
-/-- `1` as a dense constant. -/
 def denseSeqzE1 : DenseExpr p := .const 1
-/-- `2` as a dense constant. -/
 def denseSeqzE2 : DenseExpr p := .const 2
 
 /-- The partial marker sums `sₖ = -1 + mₖ + … + m₃` (`s3` is `-1 + m3`), nested left. -/
@@ -170,10 +93,7 @@ def denseSeqzNewConstraints (R a0 a1 a2 a3 inv : VarId) : List (DenseExpr p) :=
 def denseSeqzInvMethod (R a0 a1 a2 a3 : VarId) : DenseComputationMethod p :=
   .quotientOrZero (.add denseSeqzE1 (.mul denseSeqzEM1 (.var R))) (denseSeqzSumExpr4 a0 a1 a2 a3)
 
-/-! ## Role extraction (recogniser)
-
-Pattern-matches the constraint list and a candidate bus interaction against the gadget's expected
-shapes to recover its role variables. -/
+/-! ## Role extraction (recogniser) -/
 
 /-- Match the bus multiplicity `((m3 + m2) + m1) + m0`. -/
 def denseSeqzMatchMarkerSum : DenseExpr p → Option (VarId × VarId × VarId × VarId)
@@ -214,14 +134,11 @@ structure DenseSeqzRoles (p : ℕ) where
 /-- The private witnesses of a gadget instance (dropped by the collapse). -/
 def DenseSeqzRoles.witnesses (r : DenseSeqzRoles p) : List VarId := [r.m3, r.m2, r.m1, r.m0, r.dv]
 
-/-- The fresh `inv` variable *candidate* for a gadget instance: `reg.resolve r.dv` recovers the
-    display name that `dv`'s `VarId` was registered under, and `"seqzinv#"` is prepended to form the
-    candidate name. `reg` is threaded through since a `VarId` alone carries no display name. -/
+/-- The fresh `inv` variable candidate: `"seqzinv#"` prepended to `dv`'s registered display name. -/
 def denseSeqzInvVar (reg : VarRegistry) (r : DenseSeqzRoles p) : Variable :=
   ⟨"seqzinv#" ++ (reg.resolve r.dv).name, none⟩
 
-/-- Does variable `w` occur only inside the recognised cluster (the 14 constraints + the bus)?
-    Decided with `DenseExpr.mentions`. -/
+/-- Does `w` occur only inside the recognised cluster (the 14 constraints + the bus)? -/
 def denseSeqzPureInCluster (d : DenseConstraintSystem p) (cluster : List (DenseExpr p))
     (bus : BusInteraction (DenseExpr p)) (w : VarId) : Bool :=
   (d.algebraicConstraints.all (fun c => cluster.contains c || !(c.mentions w))) &&
@@ -250,9 +167,7 @@ def denseSeqzExtractRoles (d : DenseConstraintSystem p) (bi : BusInteraction (De
   pure { m3, m2, m1, m0, dv, R, a3, a2, a1, a0, K, busId := bi.busId }
 
 /-- The collapsed output system: drop the cluster constraints and range bus, add the is-zero
-    constraints with the (already-registered) fresh witness `invId`, passed in explicitly since
-    minting it is the caller's job (`denseSeqzTryList`, only on the accepting branch — see the
-    module header). -/
+    constraints with the fresh witness `invId`. -/
 def denseSeqzCollapsedSystem (d : DenseConstraintSystem p) (r : DenseSeqzRoles p) (invId : VarId)
     (spec : ByteXorSpec p) : DenseConstraintSystem p :=
   let cluster := denseSeqzClusterConstraints r.m3 r.m2 r.m1 r.m0 r.dv r.R r.a3 r.a2 r.a1 r.a0 r.K
@@ -262,11 +177,9 @@ def denseSeqzCollapsedSystem (d : DenseConstraintSystem p) (r : DenseSeqzRoles p
         ++ denseSeqzNewConstraints r.R r.a0 r.a1 r.a2 r.a3 invId,
     busInteractions := d.busInteractions.filter (fun bi => decide (bi ≠ bus)) }
 
-/-- All checks that must pass for the collapse to be sound: field size and primality (re-decided
-    here, per candidate — see the module header), constants, template presence, result booleanity
-    (kept), purity/distinctness of the witnesses, byte bounds on the limbs (via the fact-derived
-    bounds map `Bm`, built over the *output* bus interactions — see the module header), and `inv`
-    freshness. `reg` resolves `r.dv`'s name for `denseSeqzInvVar` and tests `isInput`/freshness. -/
+/-- All checks that must pass for the collapse to be sound: field size/primality, constants,
+    template presence, kept result booleanity, witness purity/distinctness, limb byte bounds (via
+    the fact-derived bounds map `Bm`), and `inv` freshness. -/
 def denseSeqzRolesValid (reg : VarRegistry) (d : DenseConstraintSystem p) (r : DenseSeqzRoles p)
     (spec : ByteXorSpec p) (Bm : Std.HashMap VarId Nat) : Bool :=
   let cluster := denseSeqzClusterConstraints r.m3 r.m2 r.m1 r.m0 r.dv r.R r.a3 r.a2 r.a1 r.a0 r.K
@@ -287,9 +200,7 @@ def denseSeqzRolesValid (reg : VarRegistry) (d : DenseConstraintSystem p) (r : D
 /-! ## The scanning driver -/
 
 /-- Scan the bus interactions for the first collapsible gadget, registering the fresh `inv` witness
-    only on the accepting branch. The fact-derived bounds map `Bm` is (re)built inside the `some r`
-    branch on every accepted-extraction candidate rather than hoisted above the scan (see the module
-    header). -/
+    only on the accepting branch. -/
 def denseSeqzTryList (reg : VarRegistry) (d : DenseConstraintSystem p) (bs : BusSemantics p)
     (facts : BusFacts p bs) :
     List (BusInteraction (DenseExpr p)) →
@@ -313,10 +224,10 @@ def denseSeqzTryList (reg : VarRegistry) (d : DenseConstraintSystem p) (bs : Bus
 
 /-! ## The pass, as a registry-extending transform -/
 
-/-- The seqz-collapse transform, shaped for `DenseVerifiedPassW.ofExtending` (the prover wires
-    it with `DenseVerifiedPassW.ofExtending denseSeqzCollapseF …`): scan for the first recognised
-    gadget, replacing it by the is-zero gadget (dropping the four `diff_marker`s and `diff_val`,
-    minting one `QuotientOrZero` witness); identity when none is found. -/
+/-- The seqz-collapse transform (pass entry point): finds the recognised `sltu x, 1` gadget — a
+    14-constraint cluster plus a range-check bus computing `cmp = [x == 0]` — and replaces it with
+    a compact is-zero gadget (`R·S = 0` and `inv·S + (R − 1) = 0`, `S = a0+a1+a2+a3`), dropping the
+    four marker witnesses and `diff_val` and minting one fresh `QuotientOrZero` witness `inv`. -/
 def denseSeqzCollapseF (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : VarRegistry × DenseConstraintSystem p × DenseDerivations p :=
   (denseSeqzTryList reg d bs facts d.busInteractions).getD (reg, d, [])

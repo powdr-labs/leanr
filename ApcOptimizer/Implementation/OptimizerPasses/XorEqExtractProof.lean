@@ -5,22 +5,12 @@ set_option autoImplicit false
 
 /-! # Dense XOR/OR/AND constant-operand equality extraction: correctness and wiring
 
-`DensePassCorrect` proof for the dense `xorEqExtract` transform (`XorEqExtract.lean`), lifted to the
-audited spec via `DenseVerifiedPassW.of`. The pass is a single-shot **append of entailed
-constraints**, so its correctness rides on the reusable `DensePassCorrect.denseAddConstraints`
-(`BusUnifyProof.lean`) once every appended equality is shown to evaluate to `0` on any satisfying
-dense assignment.
-
-The seed soundness (`denseXorEq?_eval`/`denseBoolEq?_eval`) applies the representation-independent
-`byteXorSpec` soundness (`facts.byteXorSpec_sound`/`facts.byteBoolSound`) and
-`ByteXorSpec.decode_map`/`decode_mem` **value-level** over `denseBIEval bi denv` (no decode).
-`subE`/`complE` are `denseEqExpr` (`BusUnify.lean`) / `denseComplExpr` (`ByteCheckPack.lean`). -/
+`DensePassCorrect` proof for `XorEqExtract.lean` via `DensePassCorrect.denseAddConstraints`,
+lifted through `DenseVerifiedPassW.of`. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-! ## Small reused arithmetic facts -/
 
 /-- `ZMod.val` is injective (nonzero characteristic). -/
 private theorem val_inj [NeZero p] (a b : ZMod p) (h : a.val = b.val) : a = b :=
@@ -303,8 +293,7 @@ theorem denseXorEqExtractF_correct (reg : VarRegistry) (bs : BusSemantics p) (fa
       (fun denv _ hsat => denseXorEqExtractNew_sound bs facts d h denv hsat)
   · rw [if_neg h]; exact DensePassCorrect.refl reg.isInput d bs
 
-/-- **The dense `xorEqExtract` pass.** Threads the original `facts` unchanged, connected to the
-    audited spec via `DensePassCorrect.lift` (through `of`). -/
+/-- The dense `xorEqExtract` pass. -/
 def denseXorEqExtractPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of denseXorEqExtractF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseXorEqExtractF_covered reg bs facts d hcov)

@@ -6,22 +6,10 @@ set_option autoImplicit false
 
 /-! # Collapsing the `sltu x, 1` (seqz) gadget — correctness proof
 
-Correctness for the dense `seqzCollapse` port (`SeqzCollapse.lean`), proved over dense environments
-`VarId → ZMod p` (satisfaction / admissibility / stateful-bus side effects / `DensePassCorrect`, all
-over `Bridge.lean`'s dense semantics).
-
-The **value-level engines** are representation-independent (they quantify over `ZMod p` values only,
-with no `VarId`/decode) and are reused verbatim from `SeqzCollapseCore.lean`: the
-range-check byte facts `bus_accepts_byte_zero` / `bus_byte_of_accepts`, the booleanity split `zbool`,
-and the completeness / soundness cores `seqz_forward` / `seqz_reconstruct` (which internally use
-`oneHot`, `neg_byte_val_big`, `byte_sub_one_val`, `byte_sub_two_val`, `val_add_one`, `val_one_eq`,
-`small_natCast_ne_zero`, `sum_zero_all_zero`). Everything else — the template↔value
-bridge `denseClusterEval_iff`, the witness reassignment `denseSetFive`, the bus evaluation, purity /
-framing / side-effect reasoning, freshness and coverage of the minted `inv` — is proved directly
-over `DenseExpr` / `VarId`. The fact-derived byte bounds come through `denseBuild_sound`
-(`DigitFoldProof.lean`); freshness and registry bookkeeping through `HintCollapseProof.lean`'s reused
-helpers (`denseMentions_false_not_mem`, `denseIsFresh_notMem`, `hcMemOcc`, `hcCoveredByOfOcc`,
-`hcRegisterIsInputEq`). -/
+`DensePassCorrect` for the dense `seqzCollapse` port (`SeqzCollapse.lean`), over `Bridge.lean`'s
+dense semantics. The representation-independent value-level engines (`seqz_forward`,
+`seqz_reconstruct`, and the byte/bus facts) come from `SeqzCollapseCore.lean`; freshness and
+registry helpers from `HintCollapseProof.lean`; byte bounds from `denseBuild_sound`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -183,11 +171,9 @@ private theorem filter_map_filter_drop {α β : Type} (keep : α → Bool) (g : 
 /-! ## Correctness of the collapse -/
 
 set_option maxHeartbeats 1600000 in
-/-- **The collapse is `DensePassCorrect`.** Replacing the recognised gadget cluster (14 constraints +
-    range-check bus + five private witnesses) by the two-line is-zero gadget (with one fresh derived
-    `inv = invId`) is correct: soundness reconstructs the markers via `seqz_reconstruct`;
-    completeness derives the is-zero constraints via `seqz_forward` and computes `inv` by
-    `QuotientOrZero`. Proved directly over `VarId → ZMod p`; the value-level engines are reused. -/
+/-- The collapse is `DensePassCorrect`: soundness reconstructs the marker witnesses via
+    `seqz_reconstruct`; completeness derives the is-zero constraints via `seqz_forward`, computing
+    `inv` by `QuotientOrZero`. Proved directly over `VarId → ZMod p`. -/
 theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
     (d : DenseConstraintSystem p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (r : DenseSeqzRoles p) (spec : ByteXorSpec p) (invId : VarId)
@@ -220,9 +206,7 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
   set busE := denseSeqzClusterBus r.busId r.m3 r.m2 r.m1 r.m0 r.dv spec with hbusEdef
   set out := denseSeqzCollapsedSystem d r invId spec with houtdef
   set method : DenseComputationMethod p := denseSeqzInvMethod r.R r.a0 r.a1 r.a2 r.a3 with hmethoddef
-  -- `busE` is stateless (byte-check bus).
   have hbusStateless : bs.isStateful r.busId = false := (facts.byteXorSpec_sound r.busId spec hspec).1
-  -- Distinctness: `R, a0..a3` are disjoint from the five witnesses.
   have hdisj : ∀ x ∈ ([r.R, r.a0, r.a1, r.a2, r.a3] : List VarId), x ∉ r.witnesses := by
     have hnd : (([r.R, r.a0, r.a1, r.a2, r.a3] : List VarId) ++ r.witnesses).Nodup := hnodup
     have hpw := (List.nodup_append.mp hnd).2.2
@@ -234,16 +218,13 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
   have ha3w : ∀ w ∈ r.witnesses, r.a3 ≠ w := fun w hw h => hdisj r.a3 (by simp) (h ▸ hw)
   have hwmem : ∀ w ∈ ([r.m3, r.m2, r.m1, r.m0, r.dv] : List VarId), w ∈ r.witnesses := by
     intro w hw; simpa [DenseSeqzRoles.witnesses] using hw
-  -- `boolConstraint R` is a kept constraint of `out`.
   have hboolOut : denseSeqzBoolConstraint r.R ∈ out.algebraicConstraints := by
     rw [houtdef, denseSeqzCollapsedSystem]
     refine List.mem_append_left _ (List.mem_filter.2 ⟨hboolMem, ?_⟩)
     simpa using hboolNC
-  -- `nc` are kept constraints of `out`.
   have hncOut : ∀ c ∈ denseSeqzNewConstraints r.R r.a0 r.a1 r.a2 r.a3 invId,
       c ∈ out.algebraicConstraints := by
     intro c hc; rw [houtdef, denseSeqzCollapsedSystem]; exact List.mem_append_right _ hc
-  -- Purity: witnesses do not occur outside the cluster / range bus.
   have hpureC : ∀ w ∈ r.witnesses, ∀ c ∈ d.algebraicConstraints, c ∉ cl → w ∉ c.vars := by
     intro w hw c hc hccl
     have hp := hpure w hw
@@ -265,7 +246,6 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
     · exact absurd h hbne
     · exact ⟨denseMentions_false_not_mem w bi.multiplicity hm,
         fun e he => denseMentions_false_not_mem w e (hpay e he)⟩
-  -- Witness membership and internal distinctness (for `denseSetFive` lookups).
   have wm3 : r.m3 ∈ r.witnesses := hwmem r.m3 (by simp)
   have wm2 : r.m2 ∈ r.witnesses := hwmem r.m2 (by simp)
   have wm1 : r.m1 ∈ r.witnesses := hwmem r.m1 (by simp)
@@ -310,20 +290,17 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
     · exact ha1occ
     · exact ha2occ
     · exact ha3occ
-  -- A stateful bus of `d` is never the (stateless) range bus `busE`.
   have hstatefulNe : ∀ (bi : BusInteraction (DenseExpr p)),
       bs.isStateful bi.busId = true → bi ≠ busE := by
     intro bi hst h
     rw [h, show busE.busId = r.busId from rfl, hbusStateless] at hst
     exact absurd hst (by decide)
-  -- Evaluating the range bus at any assignment.
   have hbusEvalAt : ∀ (denv : VarId → ZMod p), denseBIEval busE denv =
       { busId := r.busId, multiplicity := denv r.m3 + denv r.m2 + denv r.m1 + denv r.m0,
         payload := spec.encode spec.pairOp (-1 + denv r.dv) 0 0 } := by
     intro denv
     simp only [hbusEdef, denseSeqzClusterBus, denseBIEval, spec.encode_map, denseSeqzMarkerSum,
       denseSeqzEM1, denseSeqzE0, DenseExpr.eval]
-  -- `out` and `d` have the same side effects at every assignment.
   have hside : ∀ (denv : VarId → ZMod p), out.sideEffects bs denv = d.sideEffects bs denv := by
     intro denv
     simp only [houtdef, denseSeqzCollapsedSystem, DenseConstraintSystem.sideEffects, ← hbusEdef]
@@ -332,7 +309,7 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
         have hbe : bi = busE := by simpa using hkf
         simp only [hbe, hbusEdef, denseSeqzClusterBus]
         exact hbusStateless)]
-  -- **Soundness reconstruction.** Any `out`-satisfying assignment lifts to a `d`-satisfying one.
+  -- Soundness reconstruction: any `out`-satisfying assignment lifts to a `d`-satisfying one.
   have hReconstruct : ∀ env, out.satisfies bs env → ∃ g,
       d.satisfies bs g ∧
       (∀ bi ∈ d.busInteractions, bi ≠ busE → denseBIEval bi g = denseBIEval bi env) ∧
@@ -392,12 +369,10 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
       have hpay : bi.payload.map (fun e => e.eval g) = bi.payload.map (fun e => e.eval env) :=
         List.map_congr_left (fun e he => hgframeE e (fun w hw => (hpureB w hw bi hbi hne).2 e he))
       simp only [denseBIEval, hmul, hpay]
-    -- the range bus, evaluated at `g`, is a byte-pair message accepted by the fact
     have hbusEval : denseBIEval busE g =
         { busId := r.busId, multiplicity := v3 + v2 + v1 + v0,
           payload := spec.encode spec.pairOp (-1 + vd) 0 0 } := by
       rw [hbusEvalAt g, gm3, gm2, gm1, gm0, gdv]
-    -- all 14 cluster constraints hold at `g`
     have hclG : ∀ c ∈ cl, c.eval g = 0 := by
       rw [hcldef]
       refine (denseClusterEval_iff r.m3 r.m2 r.m1 r.m0 r.dv r.R r.a3 r.a2 r.a1 r.a0 r.K g).mpr ?_
@@ -436,7 +411,6 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
       have hst : bs.isStateful bi.busId = true := by simpa using List.of_mem_filter hbi
       rw [hgframeBus bi hbimem (hstatefulNe bi hst)]
     exact ⟨g, hgcs, hgframeBus, hseSound⟩
-  -- Every output occurrence is either the fresh `invId` or an occurrence of `d`.
   have hout_occ : ∀ i ∈ out.occ, i = invId ∨ i ∈ d.occ := by
     intro i hi
     rw [hcMemOcc] at hi
@@ -634,9 +608,8 @@ theorem dense_seqzCollapse_correct [Fact p.Prime] (isInput : VarId → Bool)
 
 set_option maxHeartbeats 1600000 in
 /-- The complete `ofExtending` obligation bundle for one accepted collapse: mint the fresh `inv`
-    witness (`powdrId? = none`, so `isInput` is preserved pointwise), extend the registry, and combine
-    coverage of the output/derivations with `dense_seqzCollapse_correct`. Primality is recovered from
-    the accepting `denseSeqzRolesValid` flag (no outer `[Fact p.Prime]`). -/
+    witness, extend the registry, and combine output/derivation coverage with
+    `dense_seqzCollapse_correct`. Primality comes from the `denseSeqzRolesValid` flag. -/
 theorem dense_seqzCollapse_bundle (reg : VarRegistry) (d : DenseConstraintSystem p)
     (bs : BusSemantics p) (facts : BusFacts p bs) (r : DenseSeqzRoles p) (spec : ByteXorSpec p)
     (hcov : d.CoveredBy reg) (hspec : facts.byteXorSpec r.busId = some spec)
@@ -678,7 +651,6 @@ theorem dense_seqzCollapse_bundle (reg : VarRegistry) (d : DenseConstraintSystem
     show ((reg.register (denseSeqzInvVar reg r)).1.resolve
       (reg.register (denseSeqzInvVar reg r)).2).powdrId?.isSome = false
     rw [VarRegistry.register_resolve reg (denseSeqzInvVar reg r), hpv]; rfl
-  -- occurrences of `R, a0..a3` in `d` (for coverage of the output's new constraints)
   have hRocc : r.R ∈ d.occ :=
     DenseConstraintSystem.mem_occ_of_constraint hboolMem
       (by simp [denseSeqzBoolConstraint, DenseExpr.vars, denseSeqzEM1])
@@ -703,7 +675,7 @@ theorem dense_seqzCollapse_bundle (reg : VarRegistry) (d : DenseConstraintSystem
         (hclMem (.mul (denseSeqzSExpr r.m3 r.m2 r.m1 r.m0 3) (.mul (.var r.a3) (denseSeqzKrExpr r.K r.R)))
           (by simp [denseSeqzClusterConstraints]))
         (by simp [DenseExpr.vars, denseSeqzSExpr, denseSeqzKrExpr, denseSeqzEM1])
-  -- byte bounds on the limbs, `Bm`-free (any output-satisfying assignment), via `denseBuild_sound`
+  -- byte bounds on the limbs for any output-satisfying assignment, via `denseBuild_sound`
   have habyteAll : ∀ (denv : VarId → ZMod p),
       (∀ bi ∈ (denseSeqzCollapsedSystem d r (reg.register (denseSeqzInvVar reg r)).2 spec).busInteractions,
         (denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false) →
@@ -725,7 +697,6 @@ theorem dense_seqzCollapse_bundle (reg : VarRegistry) (d : DenseConstraintSystem
   have hcorrect := dense_seqzCollapse_correct (reg.register (denseSeqzInvVar reg r)).1.isInput d bs
     facts r spec (reg.register (denseSeqzInvVar reg r)).2 hspec h1024 hK hbound hbusMem hclMem
     hboolMem hboolNC hpure habyteAll hnodup hinv_fresh hinv_id hpow5
-  -- coverage of the output occurrences
   have hout_occ : ∀ i ∈ (denseSeqzCollapsedSystem d r (reg.register (denseSeqzInvVar reg r)).2 spec).occ,
       i = (reg.register (denseSeqzInvVar reg r)).2 ∨ i ∈ d.occ := by
     intro i hi
@@ -829,9 +800,8 @@ theorem denseSeqzCollapseF_props (reg : VarRegistry) (bs : BusSemantics p) (fact
       simp only [Option.getD_some]
       exact denseSeqzTryList_correct reg d bs facts hcov d.busInteractions res hL
 
-/-- **The dense `seqzCollapse` step.** One scan-and-collapse of the recognised `sltu x, 1`
-    gadget, minting one `QuotientOrZero` witness, connected to the audited spec via
-    `DensePassCorrect.lift` (through `ofExtending`). -/
+/-- One scan-and-collapse step (see `denseSeqzCollapseF`), lifted to the audited spec via
+    `ofExtending`. -/
 def denseSeqzCollapseStep : DenseVerifiedPassW p :=
   DenseVerifiedPassW.ofExtending (fun reg bs facts d => denseSeqzCollapseF reg bs facts d)
     (fun reg bs facts d hcov => (denseSeqzCollapseF_props reg bs facts d hcov).1)

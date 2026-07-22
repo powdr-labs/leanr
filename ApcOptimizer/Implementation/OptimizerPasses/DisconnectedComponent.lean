@@ -5,31 +5,12 @@ set_option autoImplicit false
 /-! # Disconnected-component removal
 
 A *disconnected component* is a set of algebraic constraints and stateless bus interactions whose
-variables never touch any **stateful** bus interaction. The pass finds such a component by
-connectivity from the stateful buses, tries the all-zero witness, and drops the component only if
-the witness provably certifies it (the same run-time re-check `guardDegree` uses).
-
-The correctness argument (`dropComponent_correct`) and the run-time re-check that discharges it are
-proved in `DisconnectedComponentProof.lean`. Nothing here states or proves anything beyond the
-runtime computation.
-
-## A terminating closure
-
-New `partial def`s are forbidden on this branch (correctness never depends on the closure's
-result — the pass re-checks the partition it induces), so `denseBfsClosure` runs its worklist
-algorithm — one visited `HashSet`, one worklist stack, one group-processed `HashSet`, and per-step
-work of one `v2g` lookup, one `filter`, and two `foldl`s — as a **well-founded** recursion on a
-genuine decreasing measure, with no step counter.
-
-**The measure.** Each step pops one stack element, so the recursion decreases the lexicographic pair
-`(unprocessed-groups-in-range, stack.length)`, where the first component is the number of group
-indices `g < groups.size` not yet in `procGroups`. On a *productive* step (`x` unvisited) the
-frontier either marks a fresh in-range group processed — strictly shrinking the first component,
-however many variables that group pushes — or it triggers only out-of-range group indices, whose
-`groups.getD g []` are all empty, so nothing is pushed and `stack.length` strictly shrinks with the
-first component fixed. A step that skips an already-visited `x`, and the terminal empty stack, also
-shrink `stack.length`. Every recursive call therefore decreases the pair: the search terminates with
-no fuel argument. Correctness never depends on the result. -/
+variables never touch a stateful bus interaction. The pass finds one by connectivity from the
+stateful buses, tries the all-zero witness, and drops the component only if the witness certifies
+it at run time (the same re-check `guardDegree` uses). Correctness is in
+`DisconnectedComponentProof.lean`; the connectivity closure is a well-founded recursion (no fuel)
+whose decreasing lexicographic measure `(unprocessed-groups-in-range, stack.length)` is proved by
+`denseBfsMeasureDecreasing`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -37,9 +18,8 @@ variable {p : ℕ}
 
 /-! ## The co-occurrence graph -/
 
-/-- The co-occurrence graph of the dense system: for each item (constraint, then interaction) its
-    list of `VarId`s (`groups`), and a map from each `VarId` to the indices of the items it occurs in
-    (`v2g`). -/
+/-- The co-occurrence graph: `groups` gives each item (constraint, then interaction) its list of
+    `VarId`s; `v2g` maps each `VarId` to the indices of the items it occurs in. -/
 def denseBuildGraph (d : DenseConstraintSystem p) :
     Array (List VarId) × Std.HashMap VarId (List Nat) :=
   let groups : Array (List VarId) :=
@@ -53,7 +33,7 @@ def denseBuildGraph (d : DenseConstraintSystem p) :
 /-! ## The terminating closure -/
 
 /-- Membership in a left-fold of `insert`s over a `Std.HashSet Nat`: an index is present iff it was
-    already present or it is one of the folded elements. Supports the closure's termination measure. -/
+    already present or it is one of the folded elements. -/
 private theorem denseProcMem (l : List Nat) (s : Std.HashSet Nat) (i : Nat) :
     i ∈ l.foldl (fun s g => s.insert g) s ↔ i ∈ s ∨ i ∈ l := by
   induction l generalizing s with
@@ -71,8 +51,8 @@ private theorem denseProcMem (l : List Nat) (s : Std.HashSet Nat) (i : Nat) :
       · exact Or.inl (Or.inl rfl)
       · exact Or.inr h
 
-/-- Folding a list of *out-of-range* group indices leaves the stack unchanged: each `groups.getD g []`
-    is the default empty list. The push-nothing case of the closure's measure. -/
+/-- Folding a list of out-of-range group indices leaves the stack unchanged: each `groups.getD g []`
+    is the default empty list. -/
 private theorem denseFoldOutOfRange (groups : Array (List VarId)) :
     ∀ (l : List Nat), (∀ g ∈ l, groups.size ≤ g) → ∀ (acc : List VarId),
       l.foldl (fun acc g => groups.getD g [] ++ acc) acc = acc := by
@@ -89,9 +69,8 @@ private theorem denseFoldOutOfRange (groups : Array (List VarId)) :
     exact ih (fun g hg => hl g (List.mem_cons_of_mem _ hg)) acc
 
 /-- The lexicographic measure `(unprocessed-groups-in-range, stack.length)` strictly decreases on a
-    productive closure step. If some triggered group index is in range it is newly processed, so the
-    first component drops; otherwise every push is empty and the stack shrinks with the first
-    component fixed (see the module header). -/
+    productive closure step: a triggered in-range group index is newly processed (first component
+    drops), else every push is empty and the stack shrinks. -/
 private theorem denseBfsMeasureDecreasing (groups : Array (List VarId))
     (procGroups : Std.HashSet Nat) (gids : List Nat) (rest : List VarId)
     (hg : ∀ g ∈ gids, procGroups.contains g = false) :
@@ -137,9 +116,8 @@ private theorem denseBfsMeasureDecreasing (groups : Array (List VarId))
     · show (gids.foldl (fun acc g => groups.getD g [] ++ acc) rest).length < rest.length + 1
       rw [denseFoldOutOfRange groups gids hcase' rest]; omega
 
-/-- Variables reachable from a seed via co-occurrence in a constraint or interaction, computed by a
-    well-founded recursion (see the module header for the termination measure). Correctness never
-    depends on this result — the pass re-checks the partition it induces. -/
+/-- Variables reachable from a seed via co-occurrence in a constraint or interaction. Correctness
+    never depends on this result — the pass re-checks the partition it induces. -/
 def denseBfsClosure (groups : Array (List VarId)) (v2g : Std.HashMap VarId (List Nat))
     (visited : Std.HashSet VarId) (procGroups : Std.HashSet Nat) (stack : List VarId) :
     Std.HashSet VarId :=
@@ -174,16 +152,14 @@ def denseKeepBiWith (bs : BusSemantics p) (remV : VarId → Bool)
 
 /-! ## Computing the removable set
 
-`denseConnBad` returns the two reachable sets as **data** (a pair), not a `VarId → Bool` predicate:
-a def whose result type is a function is eta-expanded to maximal arity, which would re-run the
-graph build and both closures on *every* `remV x` application (the `lean-arity-expansion-trap`). The
-`remV` predicate is instead built once, at the single use site in `denseDisconnectedF`, capturing
-the already-computed sets. -/
+`denseConnBad` returns the two reachable sets as data (a pair), not a `VarId → Bool` predicate: a
+function-valued def is eta-expanded to maximal arity, which would rebuild the graph and rerun both
+closures on every `remV x` application (arity-expansion trap). The `remV` predicate is built once at
+the use site in `denseDisconnectedF`. -/
 
-/-- The two reachable sets the pass computes: `conn` (variables connected to a stateful bus
-    interaction) and `bad` (the co-occurrence closure of any disconnected item the all-zero witness
-    fails on). Returns data — the `remV` predicate is derived at the use site. Treated **opaquely**
-    by the correctness proof (which re-checks the partition the derived `remV` induces). -/
+/-- The two reachable sets: `conn` (variables connected to a stateful bus interaction) and `bad`
+    (the co-occurrence closure of any disconnected item the all-zero witness fails on). Treated
+    opaquely by the correctness proof. -/
 def denseConnBad (bs : BusSemantics p) (d : DenseConstraintSystem p) :
     Std.HashSet VarId × Std.HashSet VarId :=
   let (groups, v2g) := denseBuildGraph d
@@ -230,10 +206,9 @@ def denseDropGuarded (bs : BusSemantics p) (d : DenseConstraintSystem p) (remV :
       busInteractions := d.busInteractions.filter (denseKeepBiWith bs remV) }
   else d
 
-/-- The dense disconnected-component transform: compute the reachable sets once, derive the
-    removable predicate as a closure over them, then run the guarded drop. Returns data (a
-    `DenseConstraintSystem`), so the `let cb` runs once per invocation — the `remV` closure captures
-    it, never recomputes it. -/
+/-- Finds a set of constraints and stateless interactions whose variables never reach a stateful
+    bus, and — if the all-zero witness satisfies them (re-checked at run time by `denseDropCheck`) —
+    drops the whole component. -/
 def denseDisconnectedF (bs : BusSemantics p) (d : DenseConstraintSystem p) :
     DenseConstraintSystem p :=
   let cb := denseConnBad bs d

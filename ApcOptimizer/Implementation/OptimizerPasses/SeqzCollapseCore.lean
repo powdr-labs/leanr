@@ -5,23 +5,15 @@ set_option autoImplicit false
 
 /-! # Value-level semantic core of the seqz-collapse gadget
 
-The `ZMod p`-value-level lemmas and range-check bus facts underlying the `seqzCollapse` pass,
-re-homed here from the reference `SeqzCollapse` pass so the dense proof
-(`SeqzCollapseProof.lean`) consumes them from a neutral home. They quantify over `ZMod p` values and bus specs only, so they
-are wholly representation-independent; kept under the original `SeqzCollapse` namespace so every
-consumer's fully-qualified name is unchanged. `sum_zero_all_zero` is reused unqualified from
-`HintCollapse.lean` (itself re-homed there). -/
+Representation-independent `ZMod p`-value lemmas and range-check bus facts underlying the
+`seqzCollapse` pass, consumed by `SeqzCollapseProof.lean`. `sum_zero_all_zero` comes from
+`HintCollapse.lean`. -/
 
 namespace SeqzCollapse
 
 variable {p : ℕ}
 
-/-! ## Value-level semantic core
-
-Two facts about the gadget's constraint *values* (`ZMod p` equalities), stated with the constraints
-already simplified from their serialised trees. `seqz_forward` is used for completeness (derive the
-is-zero constraints); `seqz_reconstruct` is used for soundness (rebuild the marker witnesses). Both
-need the byte bounds on the four limbs and the monic constant `2K = -1`. -/
+/-! ## Value-level semantic core -/
 
 /-- For a byte-valued `y` with `1 ≤ y.val`, the negation `-y` has value `≥ 256` in a field with
     `512 ≤ p` — so `-y` cannot be a byte. The engine of every range-check contradiction below. -/

@@ -5,17 +5,9 @@ set_option autoImplicit false
 
 /-! # Dense late identity-result substitution: correctness and wiring
 
-`DensePassCorrect` proof for the dense `denseIdentitySubstF` transform (`IdentitySubst.lean`),
-lifted to the audited spec via `DenseVerifiedPassW.of` and iterated to a fixpoint by
-`denseIterateToFixpoint` (`Pass.lean`). The pass is a single batch
-`DenseConstraintSystem.substF` of the `result ↦ operand` map, so its correctness rides on the
-reusable substitution core `DenseConstraintSystem.substF_denseCorrect` (`DomainBatchProof.lean`)
-once every mapped pair is shown forced by its interaction's acceptance and every resolved operand
-shown to occur in `d`.
-
-The pair soundness (`denseIdentityPairAt_sound`) applies the representation-independent `orOp`
-soundness (`facts.byteBoolSound`) and `ByteXorSpec.decode_map`/`decode_mem` **value-level** over
-`denseBIEval bi denv` (no decode). -/
+`DensePassCorrect` for `denseIdentitySubstF` (`IdentitySubst.lean`), a single batch
+`DenseConstraintSystem.substF` riding on `substF_denseCorrect` (`DomainBatchProof.lean`): every
+mapped pair is forced by its interaction's acceptance and every resolved operand occurs in `d`. -/
 
 namespace ApcOptimizer.Dense
 

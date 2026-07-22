@@ -4,23 +4,7 @@ set_option autoImplicit false
 
 /-! # Dense subsumed pure-range-check removal
 
-Recognizes a pure single-value range check whose bound is already entailed by a stronger-or-equal
-retained check on the same variable, and drops it. No `DenseVerifiedPassW`/`DensePassCorrect`
-wrapper is built here — the runtime transform `denseSubsumedCheckDropF` is shaped like
-`denseBoxTautoDropF` (`Dense/FlagFoldDrops.lean`) MINUS a `PrimeWitness`/`facts`-selection gate
-(this pass is unconditional in `p` and consumes `facts` directly), so it is wrapped directly with
-`DenseVerifiedPassW.of`.
-
-## Reuse map (not re-derived)
-
-* `denseFindVarBound` (`Dense/RootPairUnify.lean`, itself built from `denseInteractionBound` /
-  `Dense/DigitFold.lean`) is reused unchanged as the non-circular justification base for
-  `dropKeep`, not re-derived.
-* `DenseExpr.constValue?` (`Dense/DropPasses.lean`) is consumed through `facts.rangeCheckAt`.
-* `DenseConstraintSystem.filterBus` (`Dense/Rewrite.lean`) is what the pass's `.out` is built from.
-* `BusFacts`/`BusSemantics` are representation-independent (their signatures only mention `Nat`/
-  `ZMod p`/patterns, never `Variable`/`Expression`), so `facts.rangeCheckAt` is consumed directly,
-  unchanged. -/
+Runtime definitions for `subsumedCheckDrop`; the pass is wrapped in `SubsumedCheckProof.lean`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -55,8 +39,8 @@ def denseSubsumedCheckDropKeep (bs : BusSemantics p) (facts : BusFacts p bs)
     | none => true
   | none => true
 
-/-- The runtime transform: drop every pure single-value range check whose bound is already
-    entailed by a stronger-or-equal retained stateless check on the same variable. -/
+/-- Drops a pure single-value range check on `x` when `x` is already bounded `< bound` by a
+    stronger-or-equal retained check on the same variable (`denseSubsumedCheckDropPass`). -/
 def denseSubsumedCheckDropF (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   d.filterBus (denseSubsumedCheckDropKeep bs facts (denseSubsumedCheckDropBase bs facts d))

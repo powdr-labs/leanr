@@ -6,22 +6,8 @@ set_option autoImplicit false
 
 /-! # Soundness of the dense `bytePack` recognizer and builders
 
-Proofs for the recognizer and pair builder of the dense generalized single-value byte-check
-packing pass (`ByteCheckPack.lean`), re-derived over dense environments `VarId → ZMod p` with no
-decode dependency (`denseBIEval`, `DenseExpr.eval`, and value-level `BusFacts` application).
-
-## Reuse
-
-* `denseMkByteCheck` and its soundness (`denseMkByteCheck_eval`/`_accepted`/`_breaks`/
-  `_payload_vars`, `BusPairCancelCheckProof.lean`) are reused verbatim: `denseMkBytePair`'s
-  acceptance is routed through `denseMkBytePair_iff_singles` so the merge key reuses
-  `denseMkByteCheck_accepted` rather than re-deriving pair acceptance inline.
-* `DenseExpr.normalize`/`DenseExpr.normalize_eval` (`Normalize.lean`) and
-  `DenseExpr.constValue?`/`DenseExpr.constValue?_sound` (`DomainBatchProof.lean`) discharge
-  `denseIsByteCompl_sound` exactly as `Expression`'s do for `isByteCompl_sound`.
-* `ByteXorSpec.decode`/`encode` are payload-polymorphic (`{α : Type} → …`), so `spec.decode_map`
-  applies to a dense payload mapped through `.eval` identically to the `Expression` case — this
-  is the whole content of `denseByteXorSpec_decode_iff`/`denseByteBoolSound_decode_iff`. -/
+`DensePassCorrect` proofs for the recognizer and pair builder of the byte-check packing pass
+(`ByteCheckPack.lean`), over dense environments `VarId → ZMod p`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -315,14 +301,11 @@ theorem denseFindSecond_sound (bs : BusSemantics p) (facts : BusFacts p bs) (bus
         rw [← hcb, ← hceb]; exact hc
       · exact ih (c :: revMid) mid b eB post h
 
-/-! ## Correctness of one stateless two-for-one pack
+/-! ## Correctness of one stateless two-for-one pack -/
 
-`denseMergeStateless2_correct`: replacing two stateless multiplicity-1 interactions `D₁`,
-`D₂` by one stateless multiplicity-1 interaction `C` whose obligation is exactly their conjunction is
-`DensePassCorrect`. Since every interaction involved is stateless, both the stateful-bus side effects
-and the active∧stateful admissibility argument collapse (the filtered lists coincide), so the
-assembly is `DensePassCorrect.ofEnvEq` (env' = env). -/
-
+/-- Replacing two stateless multiplicity-1 interactions `D₁`, `D₂` by one stateless multiplicity-1
+    interaction `C` whose obligation is exactly their conjunction is `DensePassCorrect`; all three
+    stateless, so the filtered side-effect/admissibility lists coincide (`ofEnvEq`). -/
 theorem denseMergeStateless2_correct (isInput : VarId → Bool) (d : DenseConstraintSystem p)
     (bs : BusSemantics p) (hp1 : (1 : ZMod p) ≠ 0)
     (D₁ D₂ C : BusInteraction (DenseExpr p))
@@ -341,7 +324,6 @@ theorem denseMergeStateless2_correct (isInput : VarId → Bool) (d : DenseConstr
   set out : DenseConstraintSystem p := { d with busInteractions := pre ++ C :: mid ++ post }
     with hout
   have houtb : out.busInteractions = pre ++ C :: mid ++ post := rfl
-  -- the obligation predicate that appears in `satisfies`
   set P : (VarId → ZMod p) → BusInteraction (DenseExpr p) → Prop :=
     fun denv bi => (denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false
     with hP
@@ -357,7 +339,6 @@ theorem denseMergeStateless2_correct (isInput : VarId → Bool) (d : DenseConstr
     ⟨fun h => h (by rw [hme2 denv]; exact hp1), fun h _ => h⟩
   have hPC : ∀ denv, (P denv C ↔ bs.violatesConstraint (denseBIEval C denv) = false) := fun denv =>
     ⟨fun h => h (by rw [hmeC denv]; exact hp1), fun h _ => h⟩
-  -- satisfaction equivalence
   have hsatiff : ∀ denv, d.satisfies bs denv ↔ out.satisfies bs denv := by
     intro denv
     have hbus : (∀ bi ∈ d.busInteractions, P denv bi) ↔ (∀ bi ∈ out.busInteractions, P denv bi) := by
@@ -389,7 +370,6 @@ theorem denseMergeStateless2_correct (isInput : VarId → Bool) (d : DenseConstr
   have hadm : ∀ denv, d.admissible bs denv ↔ out.admissible bs denv := by
     intro denv
     simp only [DenseConstraintSystem.admissible, hadmarg]
-  -- membership: `out`'s variables come from `d`'s
   have hmemD1 : D₁ ∈ d.busInteractions := by
     rw [hsplit]; simp only [List.mem_append, List.mem_cons]; tauto
   have hmemD2 : D₂ ∈ d.busInteractions := by
@@ -440,13 +420,7 @@ theorem denseMkBytePair_covered (reg : VarRegistry) (spec : ByteXorSpec p) (busI
     · exact he₁ i h
     · exact he₂ i h
 
-/-! ## Scan invariants: reconstructing the split equation
-
-`denseFindSecond`/`denseFindGo` return plain positionally-split data; the split equations
-`revMid.reverse ++ rest = mid ++ b :: post` and `revPre.reverse ++ bis = pre ++ a :: mid ++ b :: post`
-are recovered here as loop invariants of the scan. Together with the selection facts
-(`denseSvCheck?` on the two chosen interactions, `a`'s `byteXorSpec` and its `bound = 256` gate)
-this is exactly the input to `denseMergeStateless2_correct`. -/
+/-! ## Scan invariants: reconstructing the split equation -/
 
 /-- The positional split reconstructed from `denseFindSecond`. -/
 theorem denseFindSecond_split (bs : BusSemantics p) (facts : BusFacts p bs) (busId : Nat) :
@@ -527,11 +501,7 @@ theorem denseFindGo_split (bs : BusSemantics p) (facts : BusFacts p bs) :
             exact ⟨a', b',
               by simpa only [List.reverse_cons, List.append_assoc, List.singleton_append] using heq, rest'⟩
 
-/-! ## One pack step, as a certified step
-
-`denseBytePackStep_correct` packages one accepted `denseFindGo` pack into a `DensePassCorrect` via
-`denseMergeStateless2_correct`; `denseBytePackStep_covered` gives the output coverage. The merge key
-is routed through `denseMkBytePair_iff_singles`, reusing `denseMkByteCheck_accepted`. -/
+/-! ## One pack step, as a certified step -/
 
 theorem denseBytePackStep_correct (isInput : VarId → Bool) (bs : BusSemantics p)
     (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) (d : DenseConstraintSystem p)
@@ -552,14 +522,14 @@ theorem denseBytePackStep_correct (isInput : VarId → Bool) (bs : BusSemantics 
   refine denseMergeStateless2_correct isInput d bs hp1 a b (denseMkBytePair spec busId eA eB)
     hsa.1 hsbd.1 hstC hsa.2.1 hsbd.2.1 rfl (fun denv => ?_) (fun denv => ?_) (fun v hv => ?_)
     pre mid post hsplit
-  · -- obligation equivalence, via the pack/split law reusing `denseMkByteCheck_accepted`
+  ·
     rw [denseMkBytePair_iff_singles bs facts spec busId hspec eA eB denv,
         denseMkByteCheck_accepted bs facts spec busId hspec eA denv,
         denseMkByteCheck_accepted bs facts spec busId hspec eB denv, hbound]
     exact and_congr (hsa.2.2.2 denv).symm (hsbd.2.2.2 denv).symm
-  · -- the pair check breaks no invariant
+  ·
     exact denseMkBytePair_breaks bs facts spec busId hspec eA eB denv
-  · -- the pair check's variables come from `a` and `b`
+  ·
     have hvab : v ∈ eA.vars ∨ v ∈ eB.vars := by
       rw [denseBIVars, List.mem_append] at hv
       rcases hv with hm | hpp
@@ -604,19 +574,10 @@ theorem denseBytePackStep_covered (reg : VarRegistry) (bs : BusSemantics p) (fac
   · exact hcbi bi (hmem bi (Or.inr (Or.inl h)))
   · exact hcbi bi (hmem bi (Or.inr (Or.inr h)))
 
-/-! ## The dense `bytePack` pass: drain packs through `DenseNativeStep.drain`
+/-! ## The dense `bytePack` pass: drain packs through `DenseNativeStep.drain` -/
 
-Each drain step scans for the next packable pair (`denseFindGo`) and, on a hit, produces a
-non-extending certified step (`DenseNativeStep.ofSame`) whose correctness is `denseBytePackStep_correct`
-and whose coverage is `denseBytePackStep_covered`; the loop composes them via `DenseNativeStep.drain`
-(fuel = interaction-list length, a safe bound: each pack strictly drops that count by one). The loop
-carrier is the erasing combinator, so the runtime work per step is just the `denseFindGo` scan and
-the `pre ++ denseMkBytePair … :: mid ++ post` rebuild. The whole thing is closed into a
-`DenseVerifiedPassW` by `ofDenseStep`, folding the label's outer `iterateToFixpoint` into this
-single dense call, gated by the same `(1 : ZMod p) ≠ 0` self-check used by sibling passes in this
-cluster. -/
-
-/-- One drain step: on a `denseFindGo` hit, a non-extending certified pack step; otherwise `none`. -/
+/-- One drain step: on a `denseFindGo` hit, a non-extending certified pack step; otherwise `none`.
+    Fuel = interaction-list length, a safe bound since each pack drops that count by one. -/
 def denseBytePackStep (bs : BusSemantics p) (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0) :
     Unit → (reg : VarRegistry) → (d : DenseConstraintSystem p) → d.CoveredBy reg →
       Option (Unit × DenseNativeStep p bs reg d) :=
@@ -628,8 +589,7 @@ def denseBytePackStep (bs : BusSemantics p) (facts : BusFacts p bs) (hp1 : (1 : 
         (denseBytePackStep_covered reg bs facts d hcov busId spec pre eA mid eB post hfg)
         (denseBytePackStep_correct reg.isInput bs facts hp1 d busId spec pre eA mid eB post hfg))
 
-/-- The dense generalized single-value byte-check packing pass. Registry-preserving (no fresh
-    variables): `ofDenseStep` over the `DenseNativeStep.drain` of `denseBytePackStep`. -/
+/-- The dense single-value byte-check packing pass (see `denseFindGo`, `ByteCheckPack.lean`). -/
 def denseByteCheckPackPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.ofDenseStep (fun reg bs facts d hcov =>
     if hp1 : (1 : ZMod p) ≠ 0 then

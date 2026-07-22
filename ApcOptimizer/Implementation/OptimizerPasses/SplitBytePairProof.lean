@@ -6,30 +6,10 @@ set_option autoImplicit false
 
 /-! # Correctness of the dense byte-check pair splitting pass
 
-`DensePassCorrect` proof for `denseSplitBytePairF` (`SplitBytePair.lean`): every obligation is
-discharged over dense environments `VarId → ZMod p`.
-
-## Why it is correct
-
-Splitting a recognized packed pair check `denseMkBytePair spec busId a b` (multiplicity `1`, on a
-`byteXorSpec` bus, decoding to `(pairOp, a, b, 0)`) into the two single-value checks
-`[denseMkByteCheck spec busId a, denseMkByteCheck spec busId b]` carries the *identical* obligation
-("both operands are bytes"): the proven pack/split law `denseMkBytePair_iff_singles`
-(`ByteCheckPackProof.lean`, the inverse pack pass's precedent) ties acceptance of the pair form to
-bytehood of both operands. Because these lookups are stateless, the stateful side effects and the
-active∧stateful admissibility argument are untouched, so completeness rides on `env' = env`
-(`DensePassCorrect.ofEnvEq`). The transform is variable- and constraint-neutral (`a`/`b` are already
-payload entries of the replaced interaction).
-
-## Reuse
-
-* `denseMkBytePair_iff_singles`/`denseMkBytePair_eval`/`denseMkBytePair_operand_mem`/
-  `denseMkBytePair_payload_vars`/`denseMem_biVars_of_payload` (`ByteCheckPackProof.lean`) and
-  `denseMkByteCheck_eval`/`_breaks`/`_payload_vars` (`BusPairCancelCheckProof.lean`),
-  `denseMkByteCheck_covered` (`BusPairCancel.lean`) — the same bus-fact lemma cluster the pack pass
-  reasons about, mined rather than re-derived.
-* `DensePassCorrect.ofEnvEq`/`.refl` and `DenseVerifiedPassW.of` (`Dense/Bridge.lean`) close
-  the pass and lift it to the audited `Variable` spec once, at the optimizer boundary. -/
+`DensePassCorrect` for `denseSplitBytePairF` (`SplitBytePair.lean`), over `VarId → ZMod p`. The
+split carries the identical obligation ("both operands are bytes") via the pack/split law
+`denseMkBytePair_iff_singles` (`ByteCheckPackProof.lean`); all stateless, so completeness rides on
+`env' = env`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -67,7 +47,6 @@ private def denseP (bs : BusSemantics p) (denv : VarId → ZMod p)
     (bi : BusInteraction (DenseExpr p)) : Prop :=
   (denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false
 
-/-- `[x].filter q ++ ys.filter q = (x :: ys).filter q`. -/
 private theorem filter_cons_append {α : Type} (q : α → Bool) (x : α) (ys : List α) :
     ([x].filter q) ++ ys.filter q = (x :: ys).filter q := by
   cases h : q x <;> simp [h]
@@ -314,9 +293,7 @@ theorem denseSplitBytePairF_correct (reg : VarRegistry) (bs : BusSemantics p) (f
   next hp1 => exact denseSplitBytePair_correct_aux reg.isInput bs facts hp1 d _ rfl rfl
   next => exact DensePassCorrect.refl reg.isInput d bs
 
-/-- The dense byte-check pair splitting pass. Registry-preserving (`a`/`b` are existing operands, no
-    fresh variables): `of` over `denseSplitBytePairF`, lifted to the audited spec once by
-    `DensePassCorrect.lift`. -/
+/-- The dense byte-check pair splitting pass (see `denseSplitBytePairF`, `SplitBytePair.lean`). -/
 def denseSplitBytePairPass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun bs facts d => denseSplitBytePairF bs facts d)

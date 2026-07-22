@@ -3,28 +3,19 @@ import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
-/-! # Dense syntactic-duplicate removal
+/-! # Dense syntactic-duplicate removal (runtime defs; proof in `DedupProof.lean`)
 
-Drops structurally-duplicate algebraic constraints and stateless bus interactions (keep-first),
-keeping the first occurrence. Because dedup compares whole values structurally (equality of
-`DenseExpr`/`BusInteraction (DenseExpr p)`), it only shrinks the constraint/interaction sets — the
-satisfying set, the stateful-only side effects and `admissible` are all unchanged.
-
-Correctness rests on the exact structural comparison (`denseDedupStateless`, `List.dedup`); the
-hash-bucketed twins — `denseDedupStatelessFast` (interactions) and `denseDedupConstraintsFast`
-(constraints, via `HashedDedup.hashedDedup`) — are proven to return the *identical* lists
-(`denseDedupStatelessFast_eq`, `denseDedupConstraintsFast_eq`, both hash-agnostic), so the pass runs
-the fast versions (`DenseConstraintSystem.dedupN`) while its correctness is stated over the exact
-version. The `DensePassCorrect` proof and the pass itself live in `DedupProof.lean` (which imports
-`Bridge`); this module stays `Bridge`-free so its runtime defs and structural helpers can be reused
-by other dense modules (`DenseExpr.bHash`, `denseDedupStateless`). -/
+The exact structural version (`denseDedupStateless`, `List.dedup`) carries correctness; the pass
+runs the hash-bucketed twins (`DenseConstraintSystem.dedupN`), proven to return the identical lists
+(`denseDedupStatelessFast_eq`, `denseDedupConstraintsFast_eq`). Kept `Bridge`-free so its defs are
+reusable elsewhere. -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
--- `DenseExpr` has decidable equality (needed for `List.dedup` and the `∈ seen` membership test);
--- it also induces `DecidableEq (BusInteraction (DenseExpr p))` via the generic instance.
+-- `DecidableEq DenseExpr` (needed by `List.dedup` and the `∈ seen` test); induces it for
+-- `BusInteraction (DenseExpr p)` too.
 deriving instance DecidableEq for DenseExpr
 
 /-! ## Dense keep-first stateless dedup (reference version) -/
@@ -165,11 +156,7 @@ theorem denseDedupStatelessFast_eq_nil (bs : BusSemantics p)
     denseDedupStatelessFast bs ∅ bis = denseDedupStateless bs [] bis :=
   denseDedupStatelessFast_eq bs bis [] ∅ (by intro bi; simp [Std.HashMap.getD_empty])
 
-/-! ## Hash-bucketed constraint dedup
-
-`List.dedup` on the constraint list is O(C²·E) structural comparisons; `HashedDedup.hashedDedup`
-is its proven-identical bucketed twin (the identity `hashedDedup_eq` is hash-agnostic, so the
-output is byte-identical to `List.dedup`). -/
+/-! ## Hash-bucketed constraint dedup -/
 
 /-- The bucketed constraint dedup: identical output to `List.dedup`, one-bucket membership tests
     instead of whole-tail scans. -/
@@ -182,7 +169,8 @@ theorem denseDedupConstraintsFast_eq (l : List (DenseExpr p)) :
 
 /-! ## The deduplicated dense system -/
 
-/-- The deduplicated dense system (reference: keep-first stateless dedup). -/
+/-- Drops structurally-duplicate algebraic constraints and stateless bus interactions — e.g. two
+    identical range-check lookups collapse to one. (Reference version; the pass runs `dedupN`.) -/
 def DenseConstraintSystem.dedup (d : DenseConstraintSystem p) (bs : BusSemantics p) :
     DenseConstraintSystem p :=
   { algebraicConstraints := d.algebraicConstraints.dedup,
@@ -202,9 +190,8 @@ theorem DenseConstraintSystem.dedup_covered {reg : VarRegistry} {d : DenseConstr
 
 /-! ## The fully hash-bucketed dense system -/
 
-/-- The deduplicated dense system, computed with the hash-bucketed constraint dedup and the
-    hash-bucketed keep-first stateless dedup. Equal to `DenseConstraintSystem.dedup`
-    (`dedupN_eq`), so it inherits its correctness and coverage. -/
+/-- The deduplicated dense system via the hash-bucketed dedups. Equal to
+    `DenseConstraintSystem.dedup` (`dedupN_eq`). -/
 def DenseConstraintSystem.dedupN (d : DenseConstraintSystem p) (bs : BusSemantics p) :
     DenseConstraintSystem p :=
   { algebraicConstraints := denseDedupConstraintsFast d.algebraicConstraints,

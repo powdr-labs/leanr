@@ -2,14 +2,11 @@ import ApcOptimizer.Implementation.OptimizerPasses.FactPass
 
 set_option autoImplicit false
 
-/-! # Hash-bucketed `eraseDups`
+/-! # Hash-bucketed `eraseDups` and `dedup`
 
-`List.eraseDups` keeps the first occurrence of each element, testing each new element against the
-whole kept-so-far list — O(n²) structural comparisons. `hashedEraseDups` carries the kept set
-bucketed by a caller-supplied structural hash, so each test scans one bucket;
-`hashedEraseDups_eq` proves the output is the **identical list**, so callers keep their proofs
-(and their byte-identical behavior) by rewriting along it. Generic in the element type; with
-`LawfulBEq` the hash needs no congruence side condition. -/
+`List.eraseDups`/`List.dedup` twins that bucket the kept set by a caller-supplied structural hash,
+so each membership test scans one bucket. `hashedEraseDups_eq`/`hashedDedup_eq` prove the output is
+the identical list, so callers keep their proofs by rewriting along them. -/
 
 namespace HashedDedup
 
@@ -68,11 +65,9 @@ theorem hashedEraseDups_eq (hf : α → UInt64) (l : List α) :
 
 /-! ## Hash-bucketed `List.dedup`
 
-`List.dedup` keeps the **last** occurrence of each duplicate (`dedup (a :: l)` drops `a` when
-`a ∈ l`), testing each head against its tail — O(n²). The bucketed twin walks the list carrying
-the *remaining-tail multiset* as hash buckets: the head is kept exactly when it no longer occurs
-in its bucket, which is `a ∈ l` by the count invariant — so `hashedDedup_eq` proves the output is
-the identical list. Requires `DecidableEq` (like `List.dedup`). -/
+`List.dedup` keeps the last occurrence of each duplicate. The bucketed twin carries the
+remaining-tail multiset as hash buckets: the head is kept exactly when it no longer occurs in its
+bucket, which is `a ∈ l` by the count invariant. -/
 
 section Dedup
 

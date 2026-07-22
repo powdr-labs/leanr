@@ -3,11 +3,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Adapter
 
 set_option autoImplicit false
 
-/-! # Dense drop-pass runtime transforms: trivial-constraint, zero-multiplicity-bus, and
-    tautology-lookup removal
-
-The three drop passes' *runtime* recognizers and predicates. The passes themselves (with their
-`DensePassCorrect` proofs) live in `DropPassesProof.lean`. -/
+/-! # Dense drop-pass runtime recognizers (passes and proofs in `DropPassesProof.lean`) -/
 
 namespace ApcOptimizer.Dense
 
@@ -35,7 +31,8 @@ def denseConstMessage? (bi : BusInteraction (DenseExpr p)) : Option (BusInteract
   | some m, some vs => some { busId := bi.busId, multiplicity := m, payload := vs }
   | _, _ => none
 
-/-- Is this dense interaction a tautology: stateless, with a constant message the bus accepts? -/
+/-- Recognizes a tautological lookup: a stateless interaction whose message is fully constant and
+    already accepted by the bus — e.g. a range check `[5]` against `[0..255]` — hence droppable. -/
 def denseIsTautoLookup (bs : BusSemantics p) (bi : BusInteraction (DenseExpr p)) : Bool :=
   !bs.isStateful bi.busId &&
     (match denseConstMessage? bi with

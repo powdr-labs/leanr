@@ -7,13 +7,10 @@ import ApcOptimizer.Sp1Semantics
 /-!
 # JSON parser for powdr `SymbolicMachine` exports
 
-Parses the `ApcWithBusMap` JSON that powdr's APC export writes (see
-`autoprecompiles/src/export.rs` in powdr): the `machine` key holds constraints (expression
-trees, asserted zero) and bus interactions (`{id, mult, args}`), the `bus_map.bus_ids` key
-maps bus ids to bus types. Adapted from the `main`-branch parser to target the `Spec.lean`
-types (`ConstraintSystem`, `Nat` bus ids) and the structured `OpenVmBusType`.
-
-Parsing needs no primality: everything lands in `ZMod p` verbatim.
+Parses the `ApcWithBusMap` JSON that powdr's APC export writes (see `autoprecompiles/src/export.rs`
+in powdr): the `machine` key holds constraints (assert-zero expression trees) and bus interactions
+(`{id, mult, args}`), and `bus_map.bus_ids` maps bus ids to bus types. Parsing needs no primality:
+everything lands in `ZMod p` verbatim.
 -/
 
 set_option autoImplicit false
@@ -91,7 +88,6 @@ private def parseBusMapSp1 (j : Lean.Json) :
     let ty ← parseBusTypeSp1 v
     pure (id, ty)
 
-/-- Parse a JSON expression tree into an `Expression p`. -/
 partial def parseJsonExpr (j : Lean.Json) : Except String (Expression p) :=
   match j with
   | Lean.Json.num n =>
@@ -153,13 +149,10 @@ private def parseBusInteraction (j : Lean.Json) :
 
 /-! ### Variable interning
 
-The JSON parser mints a fresh `String` (and `Variable`) per *occurrence* — ~10⁵ heap-distinct
-copies of a few thousand names on a large export. Interning rebuilds the parsed system with one
-shared `Variable` object per distinct value: the runtime's `String` equality has a pointer
-fast-path (`lean_string_eq`: `s1 == s2 || …`), so every later equality test on equal names — the
-bulk of `Variable` comparisons in hash maps, dedups and substitution lookups across the whole
-optimizer — short-circuits without touching the bytes. The interned system is **the same value**
-(`Variable`s compare equal), so nothing downstream can observe the difference except time. -/
+The parser mints a fresh `String`/`Variable` per occurrence; interning rebuilds the system with one
+shared `Variable` per distinct value, so the runtime's pointer fast-path in `String` equality
+short-circuits the many later equality tests. The interned system is the same value (`Variable`s
+compare equal), so nothing downstream observes the difference except time. -/
 
 /-- Collect one canonical `Variable` object per distinct value. -/
 private def collectVars (m : Std.HashMap Variable Variable) : Expression p →
@@ -186,16 +179,14 @@ private def internSystem (cs : ConstraintSystem p) : ConstraintSystem p :=
       { bi with multiplicity := internExpr m bi.multiplicity,
                 payload := bi.payload.map (internExpr m) }) }
 
-/-- Parse the field-generic, bus-map-agnostic part of a powdr export: the top-level JSON (so callers
-    can pull the `bus_map` out with the right per-VM parser), the constraint system under the
-    `machine` key, and the `next_free_id` cursor if present (`none` for a raw CLI export; the FFI
-    requires it, `parseFile` does not). Constraints are assert-zero expressions. -/
+/-- Parse the bus-map-agnostic part of a powdr export: the top-level JSON (so callers pull
+    `bus_map` with the right per-VM parser), the constraint system under `machine`, and the
+    `next_free_id` cursor if present. -/
 private def parseMachinePart (jsonStr : String) :
     Except String (Lean.Json × ConstraintSystem p × Option Nat) := do
   let json ← Lean.Json.parse jsonStr
   let machine ← json.getObjVal? "machine"
 
-  -- Parse constraints
   let constraintsJson ← machine.getObjVal? "constraints"
   let constraintArr ← match constraintsJson with
     | Lean.Json.arr a => pure a
@@ -203,7 +194,6 @@ private def parseMachinePart (jsonStr : String) :
   let constraints : List (Expression p) ←
     constraintArr.toList.mapM fun c => parseConstraint (p := p) c
 
-  -- Parse bus interactions
   let busJson ← machine.getObjVal? "bus_interactions"
   let busArr ← match busJson with
     | Lean.Json.arr a => pure a
@@ -236,9 +226,8 @@ def parseJsonSystemSp1 (jsonStr : String) :
   let busMap ← parseBusMapSp1 (← json.getObjVal? "bus_map")
   pure (system, busMap, nextFreeId?)
 
-/- A real powdr export from the `openvm-eth` benchmark set, exercising every parser path
-   (constraints, bus interactions, all six bus types). The fixture is gzipped like the CLI
-   inputs, so decompress it with `gunzip -c` exactly as `Main.readInput` does. -/
+/- A real powdr export exercising every parser path; gzipped like the CLI inputs, so
+   decompress with `gunzip -c`. -/
 /-- info: Parsed 117 constraints, 71 bus interactions, 6 bus types -/
 #guard_msgs in
 #eval! do

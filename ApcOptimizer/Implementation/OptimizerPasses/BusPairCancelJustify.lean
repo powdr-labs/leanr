@@ -8,43 +8,15 @@ set_option autoImplicit false
 /-! # Dense byte-justification certificates for `busPairCancel`
 
 Runtime-only certificates for deciding whether an expression is provably a byte (`< 256`) or
-otherwise bounded, used by the byte-justified drops inside `busPairCancel`. This is a pure **leaf**
-file: no bus-pair scan, no loop, no pass — just the per-slot byte-justification certificates later
-files build on. It is **impl-only**: it carries no soundness lemma and states no theorem
-(definitions only).
-
-## Constants
-
-`maxDeepPoints`/`maxDeepDomain`/`maxDeepConstraints`/`maxDeepVars` come from the shared budget home
-`SearchBudgets.lean`, reused unqualified: they are plain `Nat` literals that only cap
-enumeration/candidate counts.
-
-## Reuse map
-
-`denseLinearize`/`DenseLinExpr.norm` (`Affine.lean`/`Normalize.lean`), `denseFindVarBound`
-(`RootPairUnify.lean`), `denseFindDomainAlg`/`denseAssignments` (`DomainFold.lean`),
-`denseEnvOfFast` (`DomainBatch.lean`), `DenseExpr.constValue?` (`DropPasses.lean`),
-`DenseExpr.fold` (`ExprOps.lean`), `DenseExpr.substF` (`SubstMap.lean`), `DenseExpr.vars`
-(`Encoding.lean`) are all pulled in transitively through the `RootPairUnify` import.
-`denseInteractionBound`/`denseVarSlot` (`DigitFold.lean`) are not used here (nothing here reads a
-bus interaction's payload slots directly — that is `denseFindVarBound`'s job) but are transitively
-imported.
-
-`DenseExpr.mentions` (`SubstMap.lean`) is the occurrence check used below; there is no separate
-`containsVar`-named definition. `DenseExpr.singleVarAux`/`DenseExpr.isSingleVar` (defined below)
-recognise a single-variable expression: `denseSingleVarCs` (`FlagFoldDrops.lean`) is a different,
-unrelated concept — the *list* of constraints with exactly one distinct variable via
-`c.vars.eraseDups.length == 1`, not this expression-level walk. -/
+otherwise bounded, used by the byte-justified drops. A leaf file — definitions only, no soundness
+lemma (that lives in `BusPairCancelJustifyProof.lean`). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## `DenseExpr.singleVarAux`/`isSingleVar` -/
-
 /-- The expression's single distinct variable: `some (some v)` when exactly `v` occurs, `some none`
-    when no variable occurs, `none` when several distinct variables occur. Cheap pre-filter for the
-    constraints `denseFindDomainAlg` can actually derive a domain from. -/
+    when no variable occurs, `none` when several distinct variables occur. -/
 def DenseExpr.singleVarAux : DenseExpr p → Option (Option VarId)
   | .const _ => some none
   | .var y => some (some y)
@@ -61,13 +33,9 @@ def DenseExpr.isSingleVar (e : DenseExpr p) : Bool :=
   | some (some _) => true
   | _ => false
 
-/-! ## The deep enumeration certificate chain -/
-
-/-- Per-point core of the deep justification. The point `pt` fixes the enumerable variables `keys`
-    of the constraint `c`; after substituting and folding, the constraint must be linear and — once
-    normalized — either pin `x` to a re-checked byte constant, or equate `x` (coefficient-for-
-    coefficient, no constant) to a single variable in `byteVars` (the precomputed byte-bounded
-    variables — so the per-point work is allocation-light and scans nothing). -/
+/-- Per-point core of the deep justification: with the `keys` of `c` pinned by `pt`, the substituted
+    and folded constraint must be linear and, once normalized, either pin `x` to a re-checked byte
+    constant or equate it to a variable in the precomputed `byteVars`. -/
 def densePointByteOk (x : VarId) (c : DenseExpr p) (byteVars : List VarId)
     (keys : List VarId) (pt : List (VarId × ZMod p)) : Bool :=
   match denseLinearize ((c.substF (fun v =>
@@ -77,12 +45,10 @@ def densePointByteOk (x : VarId) (c : DenseExpr p) (byteVars : List VarId)
     let ln := DenseLinExpr.norm l
     match ln.terms with
     | [(v, a)] =>
-      -- `x` is pinned to the (re-checked) root; it must be a byte
       decide (v = x) && decide (a ≠ 0) &&
         decide (a * (-(a⁻¹ * ln.const)) + ln.const = 0) &&
         decide ((-(a⁻¹ * ln.const) : ZMod p).val < 256)
     | [(v1, a1), (v2, a2)] =>
-      -- `x = other` (opposite coefficients, no constant); the other side is byte-bounded
       decide (ln.const = 0) &&
       (if v1 = x then
         decide (a2 = -a1) && decide (a1 ≠ 0) && byteVars.contains v2
@@ -130,8 +96,6 @@ def denseDeepByteJustified (domCs cands : List (DenseExpr p)) (bs : BusSemantics
     (wits : VarId → List (BusInteraction (DenseExpr p))) (x : VarId) : Bool :=
   (cands.take maxDeepConstraints).any (fun c => denseDeepBoundOk domCs bs facts wits x c)
 
-/-! ## Affine bound propagation for byte-domain expressions -/
-
 /-- Evaluate the single-variable expression `e` with its variable fixed to `d` and check the result
     is a byte constant. -/
 def denseExprPointByte (e : DenseExpr p) (x : VarId) (d : ZMod p) : Bool :=
@@ -148,11 +112,6 @@ def denseDomainByteJustified (domCs : List (DenseExpr p)) (e : DenseExpr p) : Bo
     | some d => decide (d.length ≤ maxDeepDomain) && d.all (denseExprPointByte e x)
     | none => false
   | _ => false
-
-/-! ## Affine bound propagation through a linearized form
-
-The affine justification tier: reuses `denseLinearize`/`DenseLinExpr.norm` (imported transitively,
-see the reuse map above). -/
 
 /-- Natural upper bound of a term list `Σ cᵥ·v` under per-variable value bounds `bnd` (`bnd v`
     bounds `(denv v).val` strictly): `Σ cᵥ.val·(bnd v − 1)`; `none` if any variable is unbounded. -/
@@ -177,17 +136,7 @@ def denseAffineJustified (bound : Nat) (bnd : VarId → Option Nat) (e : DenseEx
     | none => false
   | none => false
 
-/-! ## Basis justification
-
-The basis justification tier. `basisFuel` (`SearchBudgets.lean`) is a plain `Nat` literal, reused
-unqualified below.
-
-### `IntervalForce.srep`
-
-`IntervalForce.srep` (`IntervalForce.lean`, imported above) is
-`fun c : ZMod p => if c.val ≤ (p - 1) / 2 then (c.val : Int) else (c.val : Int) - p` — a plain
-`ZMod p → Int` function with no `VarId`/`DenseExpr` anywhere in its signature or body, called
-unqualified below by `denseBasisReduceGo`, exactly as it calls `p` itself. -/
+/-! ## Basis justification -/
 
 /-- The linearized (merged) form and bound of payload slot `i` of `bi`, when the multiplicity is
     a nonzero constant and the slot carries a `slotBound`. -/
@@ -206,10 +155,8 @@ def denseFormBoundAt {bs : BusSemantics p} (facts : BusFacts p bs)
         | none => none
       | _, _ => none
 
-/-- Fuel-bounded basis reduction: is `L`'s value provably `< bound − used` using per-variable
-    bounds (`bnd`, the finish arm) after subtracting positive integer multiples of range-checked
-    slot forms from `fwits` (each step accounts its form's worst case against `used`)? The
-    recursion is structural on `fuel`. -/
+/-- Fuel-bounded basis reduction: is `L`'s value provably `< bound − used` via per-variable bounds
+    (finish arm) after subtracting integer multiples of range-checked slot forms from `fwits`? -/
 def denseBasisReduceGo (bound : Nat) (bnd : VarId → Option Nat) {bs : BusSemantics p}
     (facts : BusFacts p bs) (fwits : VarId → List (BusInteraction (DenseExpr p))) :
     Nat → Nat → DenseLinExpr p → Bool
@@ -239,26 +186,12 @@ def denseBasisJustified (bound : Nat) (bnd : VarId → Option Nat) {bs : BusSema
   | some L => denseBasisReduceGo bound bnd facts fwits basisFuel 0 L.norm
   | none => false
 
-/-! ## The byte-justification dispatcher
-
-The top of the byte-justification tower: `denseByteJustifiedW`/`denseByteJustified`/
-`denseRecvSlotsJustified`. These tie together the leaf certificates above
-(`denseDeepByteJustified`/`denseDomainByteJustified`) and the affine/basis tier
-(`denseAffineJustified`/`denseBasisJustified`) via a fixed-order, short-circuiting disjunction. No
-soundness lemma is stated here (impl-only). -/
-
-/-- Is `e` provably a byte under every assignment satisfying the remaining system? Either a
-    constant `< bound`, a variable with a proven bus-fact bound `≤ bound` derived from the
-    remaining interactions, or — when `deep` is set — a variable a constraint pins to a byte on
-    every point of its selector flags' finite domains (`denseDeepByteJustified`), or a
-    single-variable expression whose variable's finite domain makes `e` a byte at every point
-    (`denseDomainByteJustified`), or an affine recomposition of bounded limbs
-    (`denseAffineJustified`), or a basis reduction against range-checked slot forms from the
-    second witness lookup `fwits` (`denseBasisJustified`).
-
-    Parameterized form: the remaining interactions are consulted through the witness lookup
-    `wits` (see `denseDeepByteVars`), the single-variable constraints `domCs` and the
-    per-variable candidate constraints `candsOf` are precomputed by the caller. -/
+/-- Is `e` provably a byte under every assignment satisfying the remaining system? Tries, in order:
+    a constant `< bound`; a variable with a bus-fact bound `≤ bound`; (when `deep`) a
+    selector-flag-domain deep justification or a single-variable finite-domain justification; an
+    affine recomposition of bounded limbs; or a basis reduction against range-checked slot forms
+    (`fwits`). Remaining interactions are consulted through `wits`; `domCs`/`candsOf` are precomputed
+    by the caller. -/
 def denseByteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p))
     (candsOf : VarId → List (DenseExpr p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (wits fwits : VarId → List (BusInteraction (DenseExpr p)))
@@ -278,10 +211,8 @@ def denseByteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p))
     denseAffineJustified bound (fun x => denseFindVarBound bs facts (wits x) x) e ||
     denseBasisJustified bound (fun x => denseFindVarBound bs facts (wits x) x) facts fwits e
 
-/-- The plain full-scan form (used by the coda's `RedundantByteDrop`): witness lookup and
-    precomputed constraint lists instantiated with the naive per-query filters. The basis arm is
-    disabled (`fwits = []`): feeding the whole region would rescan it per queried variable, and
-    the byte-level drops it serves don't need range-checked forms. -/
+/-- The plain full-scan form (used by the coda's `RedundantByteDrop`): naive per-query filters, with
+    the basis arm disabled (`fwits = []`). -/
 def denseByteJustified (bound : Nat) (deep : Bool) (all : List (DenseExpr p))
     (bs : BusSemantics p) (facts : BusFacts p bs)
     (rest : List (BusInteraction (DenseExpr p))) (e : DenseExpr p) : Bool :=

@@ -4,20 +4,12 @@ set_option autoImplicit false
 
 /-! # Dropping matched send/receive pairs preserves `admissibleMemoryBus`
 
-The `MemoryBus`-level machinery behind the pair-cancellation pass (`OptimizerPasses/BusPairCancel`).
-When a memory access chain leaves a *send* `S` (multiplicity `1`) and a later *receive* `R`
-(multiplicity `-1`) carrying the same payload — the write of one access and the read of the next —
-the two contribute `0` to every message's net multiplicity, so both can be dropped. The completeness
-half needs the VM's `admissible` predicate to survive that drop; these lemmas discharge that at the
-concrete-discipline level (`admissibleMemoryBus`).
-
-Kept out of the audit surface (`MemoryBus.lean`): these are consequences of the discipline, not part
-of it. The reverse bridge that lets a *generic* pass rebuild the abstract `bs.admissible` from these
-is the `admissible_dropPair` field of `BusFacts`. -/
+The `MemoryBus`-level machinery behind the pair-cancellation pass (`OptimizerPasses/BusPairCancel`):
+a matched send/receive pair contributes `0` to every net multiplicity, so both can be dropped, and
+these lemmas show the concrete discipline survives that drop. The generic reverse bridge is the
+`admissible_dropPair` field of `BusFacts`. -/
 
 variable {p : ℕ}
-
-/-! ## Discipline lemmas kept out of the audit surface (`MemoryBus.lean`) -/
 
 /-- The `setNew` multiplicity is nonzero whenever `1 ≠ 0` (it is `±1`). -/
 theorem MemoryBusShape.setNewMult_ne_zero (shape : MemoryBusShape) (hp1 : (1 : ZMod p) ≠ 0) :
@@ -27,12 +19,9 @@ theorem MemoryBusShape.setNewMult_ne_zero (shape : MemoryBusShape) (hp1 : (1 : Z
   · exact hp1
   · exact neg_ne_zero.mpr hp1
 
-/-- The consumption form the passes use. Given `admissibleMemoryBus` over the **active** sublist of a
-    raw (all-multiplicity) message list `Lraw`, a `setNew` `S` followed by a `getPrevious` `R` to the
-    same address in `Lraw`, with no active same-address message between them, have equal payloads.
-    The passes exhibit the split of `Lraw` (the raw per-bus interaction list) directly; this lemma
-    filters it to the active sublist that `admissibleMemoryBus` ranges over (`S`, `R` survive as they
-    are active, given `1 ≠ 0`). -/
+/-- The consumption form the passes use: given `admissibleMemoryBus` over the active sublist of a
+    raw message list `Lraw`, a `setNew` `S` followed by a same-address `getPrevious` `R` with no
+    active same-address message between them have equal payloads. -/
 theorem admissibleMemoryBus.consecutive (shape : MemoryBusShape)
     (Lraw : List (BusInteraction (ZMod p))) (hp1 : (1 : ZMod p) ≠ 0)
     (h : admissibleMemoryBus shape (Lraw.filter (fun m => decide (m.multiplicity ≠ 0))))
@@ -98,13 +87,9 @@ theorem map_split {α β : Type*} (f : α → β) (x : β) :
       exact ⟨a :: pre, a', suf, by rw [hl]; rfl, by rw [List.map_cons, hpre], hfa, hsuf⟩
 
 /-- Removing a single interaction `e` from an `admissibleMemoryBus` list preserves the discipline,
-    provided `e` is inactive or **every active same-address send in `P` is followed by an active
-    same-address receive in `P`** (the *shield* condition; strictly weaker than "no active
-    same-address send precedes `e`"). The only new consecutive pair a removal can expose sits
-    across `e`'s position; a fresh *send→receive* pair there would need an active same-address send
-    in `P` with no active same-address receive between it and the exposed receive — but the shield
-    receive sits in that gap and violates the pair's "no active same-address message between"
-    obligation, so no such pair survives. -/
+    provided `e` is inactive or the *shield* condition holds on `P` (every active same-address send
+    in `P` is followed by an active same-address receive in `P`). Any pair a removal exposes across
+    `e`'s position would need an unshielded same-address send, which the shield rules out. -/
 theorem admissibleMemoryBus_dropOne (shape : MemoryBusShape) (hp1 : (1 : ZMod p) ≠ 0)
     (P Q : List (BusInteraction (ZMod p))) (e : BusInteraction (ZMod p))
     (hadm : admissibleMemoryBus shape (P ++ e :: Q))
@@ -133,9 +118,8 @@ theorem admissibleMemoryBus_dropOne (shape : MemoryBusShape) (hp1 : (1 : ZMod p)
     · -- `c' = c0 :: c''`, so `c0 = S` and `mid ++ R :: post = c'' ++ Q`.
       rw [List.cons_append, List.cons.injEq] at hT
       obtain ⟨rfl, hT2⟩ := hT
-      -- When `e` is active and same-address as `S`, the shield gives an active same-address
-      -- receive `Rp` in `c''` (= `P` after `S`, via `hP : P = pre ++ S :: c''`). `Rp` will sit in
-      -- the exposed pair's middle, contradicting its clean-middle obligation `hmid`.
+      -- When `e` is active and same-address as `S`, the shield gives an active same-address receive
+      -- `Rp` in `c''`, which will sit in the exposed pair's middle and contradict `hmid`.
       have hEshield : e.multiplicity ≠ 0 → shape.address e = shape.address S →
           ∃ Rp, Rp ∈ c'' ∧ Rp.multiplicity ≠ 0 ∧ shape.address Rp = shape.address S := by
         intro hene haddreS
@@ -177,13 +161,9 @@ theorem admissibleMemoryBus_dropOne (shape : MemoryBusShape) (hp1 : (1 : ZMod p)
               exact hmid Rp (by rw [hmidw]; exact List.mem_append_left w hRpc) hRpne hRpaddr
             · exact hmid m (by rw [hmidw]; exact List.mem_append_right c'' hmw) hmne hmaddr
 
-/-- Dropping a matched consecutive send→receive pair (`S₀` a send, `R₀` a later receive, no active
-    same-address message between them) preserves `admissibleMemoryBus`, provided every active
-    same-address send in the before-region `A` is followed by an active same-address receive in
-    `A` (the *shield* condition `hshield` — strictly weaker than "`S₀` is the earliest active
-    same-address send"). Proved by removing `S₀` then `R₀`, each a `dropOne` whose shield side
-    condition is met: `hshield` for `S₀`'s `A`, and for `R₀`'s `A ++ B` a same-address send lands
-    in `A` (shielded by `hshield`) or in `B` (excluded by `hcons`). -/
+/-- Dropping a matched consecutive send→receive pair (`S₀`, later `R₀`, no active same-address
+    message between them) preserves `admissibleMemoryBus`, given the *shield* condition `hshield` on
+    the before-region `A`. Proved by removing `S₀` then `R₀`, each a `dropOne`. -/
 theorem admissibleMemoryBus_dropPair (shape : MemoryBusShape) (hp1 : (1 : ZMod p) ≠ 0)
     (A B C : List (BusInteraction (ZMod p))) (S₀ R₀ : BusInteraction (ZMod p))
     (hadm : admissibleMemoryBus shape (A ++ S₀ :: B ++ R₀ :: C))
