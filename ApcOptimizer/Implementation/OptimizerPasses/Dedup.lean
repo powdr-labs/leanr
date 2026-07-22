@@ -1,9 +1,9 @@
-import ApcOptimizer.Implementation.OptimizerPasses.Adapter
+import ApcOptimizer.Implementation.OptimizerPasses.Pass
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
 
-/-! # Dense syntactic-duplicate removal (runtime defs; proof in `DedupProof.lean`)
+/-! # Dense syntactic-duplicate removal (runtime defs; proof in `Proofs/Dedup.lean`)
 
 The exact structural version (`denseDedupStateless`, `List.dedup`) carries correctness; the pass
 runs the hash-bucketed twins (`DenseConstraintSystem.dedupN`), proven to return the identical lists

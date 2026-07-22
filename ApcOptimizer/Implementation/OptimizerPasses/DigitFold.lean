@@ -5,7 +5,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
 set_option autoImplicit false
 
 /-! # Dense bounded-payload digit fold (runtime). Bounds map `denseBuild` proved sound in
-`DigitFoldProof.lean`. -/
+`Proofs/DigitFold.lean`. -/
 
 /-! ## ℕ-side ladder arithmetic and solution grid (representation-independent) -/
 
@@ -193,7 +193,7 @@ def denseProbedSlotBoundAt (bs : BusSemantics p) (facts : BusFacts p bs)
                       else none
                     | _ => none
 
-/-! ## Dense bounds map (`Std.HashMap VarId Nat`); soundness in `DigitFoldProof.lean`. -/
+/-! ## Dense bounds map (`Std.HashMap VarId Nat`); soundness in `Proofs/DigitFold.lean`. -/
 
 /-- Keep the smaller of two bounds for `i`. -/
 def denseInsertEntry (T : Std.HashMap VarId Nat) (i : VarId) (b : Nat) : Std.HashMap VarId Nat :=

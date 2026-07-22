@@ -50,8 +50,8 @@ in the log.
 
 ## How to add a pass
 
-Write a `VerifiedPass` in a new `ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
-`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass.….guardDegree)` entry to the
+Write a dense `DenseVerifiedPassW` (impl in a new file, proof + wiring under `Proofs/`) in `ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
+`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass)` entry to the
 `cleanupPasses` list (the single pass-list both the optimizer and the profiler consume). See
 `AGENTS.md` and `docs/design/architecture.md` for the architecture; correctness follows from the
 pass's own `PassCorrect`.

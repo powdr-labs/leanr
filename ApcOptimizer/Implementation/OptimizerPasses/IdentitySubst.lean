@@ -2,7 +2,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
 
 set_option autoImplicit false
 
-/-! # Dense late identity-result substitution (runtime defs; proof in `IdentitySubstProof.lean`)
+/-! # Dense late identity-result substitution (runtime defs; proof in `Proofs/IdentitySubst.lean`)
 
 The map is keyed by first occurrence in `d.busInteractions` list order — no sort or key
 enumeration, plain hash-map point lookups. -/

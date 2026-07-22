@@ -6,7 +6,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 set_option autoImplicit false
 
 /-! # Dense Gauss elimination: pivot scoring, the loop, the transform.
-Correctness and the wired `denseGaussElimPass` live in `GaussProof.lean`. -/
+Correctness and the wired `denseGaussElimPass` live in `Proofs/Gauss.lean`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -415,7 +415,7 @@ def denseProtectedVars (d : DenseConstraintSystem p) (bs : BusSemantics p) : Std
     else bi.payload.foldl (fun s e => match e with | .var x => s.insert x | _ => s) s
 
 /-- A plain (proof-free) solution map keyed by `VarId`; correctness is established by the
-    correctness proof (`GaussProof.lean`), not carried as a structure invariant. -/
+    correctness proof (`Proofs/Gauss.lean`), not carried as a structure invariant. -/
 structure DenseSolved (p : ℕ) where
   map : Std.HashMap VarId (DenseExpr p)
   revDeps : Std.HashMap VarId (Std.HashSet VarId)
@@ -517,6 +517,6 @@ theorem denseGaussElim_eq (bs : BusSemantics p) (d : DenseConstraintSystem p) :
       else d.substF (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
           (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty).fn := rfl
 
-/-! `denseGaussElimPass` (the wired pass) is built and proved in `GaussProof.lean`. -/
+/-! `denseGaussElimPass` (the wired pass) is built and proved in `Proofs/Gauss.lean`. -/
 
 end ApcOptimizer.Dense

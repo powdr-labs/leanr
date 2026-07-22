@@ -5,7 +5,7 @@ set_option autoImplicit false
 /-! # Dense width-1 range check → booleanity
 
 Impl-only: recognizer `denseBoolCheck?` and transform `denseRangeBoolF`; correctness in
-`RangeBoolProof.lean`. Split into add/drop sub-transforms so each half carries its own
+`Proofs/RangeBool.lean`. Split into add/drop sub-transforms so each half carries its own
 `DensePassCorrect`. -/
 
 namespace ApcOptimizer.Dense

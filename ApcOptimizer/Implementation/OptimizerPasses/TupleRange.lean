@@ -5,7 +5,7 @@ set_option autoImplicit false
 /-! # Dense tuple-range packing
 
 Runtime recognizers, partner scans, and drain for `tupleRange`; the pass is wrapped in
-`TupleRangeProof.lean`. The partner scans return the `pre`/`mid`/`post` split directly, so the
+`Proofs/TupleRange.lean`. The partner scans return the `pre`/`mid`/`post` split directly, so the
 split equation holds by construction, available to the prover as a loop invariant. -/
 
 namespace ApcOptimizer.Dense

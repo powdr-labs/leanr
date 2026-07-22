@@ -5,7 +5,7 @@ set_option autoImplicit false
 
 /-! # Dense box-certified multilinear rewriting — flagFold's `boxRewritePass` sub-pass
 
-Runtime definitions for `boxRewrite` (proof in `BoxRewriteProof.lean`). `denseBoxRewriteF` takes its
+Runtime definitions for `boxRewrite` (proof in `Proofs/BoxRewrite.lean`). `denseBoxRewriteF` takes its
 OWN `DegreeBound` (to decide "over-bound" and rewrite payloads), not the outer `guardDegree`
 wrapper's.
 

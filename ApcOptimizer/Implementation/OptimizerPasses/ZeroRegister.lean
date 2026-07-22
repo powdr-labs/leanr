@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Dense fixed-zero-register pinning
 
 Impl-only recognisers: fixed-zero data-limb recogniser `denseCellZeroExprs` and filter predicate
-`denseZeroPred`. Candidate collection, transform, proof, and wiring in `ZeroRegisterProof.lean`. -/
+`denseZeroPred`. Candidate collection, transform, proof, and wiring in `Proofs/ZeroRegister.lean`. -/
 
 namespace ApcOptimizer.Dense
 

@@ -5,7 +5,7 @@ set_option autoImplicit false
 /-! # Dense monic scaling of constraint factors
 
 Impl-only: canonicalizes every constraint's affine factors to monic form (`denseMonicScaleAffine`,
-`denseMonicScale`, transform `denseMonicScaleF`); correctness in `MonicScaleProof.lean`. Soundness
+`denseMonicScale`, transform `denseMonicScaleF`); correctness in `Proofs/MonicScale.lean`. Soundness
 is field-free — each scaling carries a checked unit certificate (`k * k⁻¹ = 1`, `ZMod p`'s junk
 `Inv` verified before use), so no `PrimeWitness` is needed. -/
 

@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Dense address-disequality certificate library
 
 Certificate-building/checking functions the dense `busUnify` / `busPairCancel` passes consult to
-refute a memory-address match. Exports no pass; correctness lives in `AddrDiseqProof.lean`. -/
+refute a memory-address match. Exports no pass; correctness lives in `Proofs/AddrDiseq.lean`. -/
 
 namespace ApcOptimizer.Dense
 

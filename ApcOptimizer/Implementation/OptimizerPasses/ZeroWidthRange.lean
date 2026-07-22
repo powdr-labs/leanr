@@ -8,7 +8,7 @@ set_option autoImplicit false
 /-! # Dense width-0 / width-1 range-check conversion
 
 Impl-only: booleanity builder `denseBoolC`, recognizer `denseRangeEq?`, transform
-`denseZeroWidthRangeF`; correctness and wiring in `ZeroWidthRangeProof.lean`. -/
+`denseZeroWidthRangeF`; correctness and wiring in `Proofs/ZeroWidthRange.lean`. -/
 
 namespace ZeroWidthRange
 

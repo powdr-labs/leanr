@@ -7,7 +7,7 @@ set_option autoImplicit false
 
 Per-invocation hash-indexing and entailed-equality machinery: `densePayloadHash`/`denseAddrHash`/
 `denseRecvIndexAll` (receive-candidate index), `DenseVarCsIdx`, `DenseEqConstraintMap`, and
-`densePayloadEntailedEq`. Impl-only (soundness in `BusPairCancelIndexProof.lean`).
+`densePayloadEntailedEq`. Impl-only (soundness in `Proofs/BusPairCancelIndex.lean`).
 
 `denseRecvIndexAll` folds with `foldr` so bucket lists hold **ascending** positions — load-bearing,
 since `denseFirstMatchAt` picks the first `i < j` match by scanning a bucket in list order. -/

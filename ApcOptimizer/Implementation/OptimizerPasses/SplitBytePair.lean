@@ -4,7 +4,7 @@ set_option autoImplicit false
 
 /-! # Dense byte-check pair splitting
 
-Runtime transform for `splitBytePair`; the pass is wrapped in `SplitBytePairProof.lean`. -/
+Runtime transform for `splitBytePair`; the pass is wrapped in `Proofs/SplitBytePair.lean`. -/
 
 namespace ApcOptimizer.Dense
 

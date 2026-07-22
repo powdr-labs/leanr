@@ -3,7 +3,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
 set_option autoImplicit false
 
 /-! # Dense entailed nonlinear substitution — `flagFold` part A.
-Impl-only (correctness in `FxSubstProof.lean`); shares `flagUnify`'s pair-level machinery
+Impl-only (correctness in `Proofs/FxSubst.lean`); shares `flagUnify`'s pair-level machinery
 (`DenseFuData`/`denseFuPairData?`/`DenseFUSeen`/`denseFuCandidates`) wholesale. Assembled with the
 other `flagFold` sub-passes in `FlagFold.lean`. -/
 

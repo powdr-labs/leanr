@@ -7,7 +7,7 @@ set_option autoImplicit false
 The receive scan (`denseFirstMatchAt`), address-disequality refutation
 (`denseMidRefuted`/`densePreRefuted`/`denseProvRecv`), the shield scan (`denseShieldOk`), emitted
 byte checks (`denseMkByteCheck`/`denseMkBytePair`), and the per-candidate acceptance test
-(`denseCheckCancel`). Impl-only; soundness in `BusPairCancelCheckProof.lean`. -/
+(`denseCheckCancel`). Impl-only; soundness in `Proofs/BusPairCancelCheck.lean`. -/
 
 namespace ApcOptimizer.Dense
 

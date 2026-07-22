@@ -4,7 +4,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 set_option autoImplicit false
 
 /-! # Dense carry-branch resolution (runtime). Pass and `DensePassCorrect` proof in
-`CarryBranchProof.lean`; bounds map via `denseBuild` (`DigitFold.lean`). -/
+`Proofs/CarryBranch.lean`; bounds map via `denseBuild` (`DigitFold.lean`). -/
 
 namespace ApcOptimizer.Dense
 

@@ -7,7 +7,7 @@ set_option autoImplicit false
 
 Impl-only: the constant-operand XOR recognizer `denseXorEq?`, the OR/AND generalization
 `denseBoolEq?` (with `denseSimpleTarget`/`denseOpIs`), and the transform `denseXorEqExtractF`;
-correctness in `XorEqExtractProof.lean`. -/
+correctness in `Proofs/XorEqExtract.lean`. -/
 
 namespace ApcOptimizer.Dense
 

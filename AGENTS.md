@@ -32,15 +32,17 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
   master theorem, for all bus facts) plus its instances `simpleOptimizer_maintainsCorrectness`, the
   OpenVM `openVmOptimizer` (`openVmOptimizer_maintainsCorrectness`) and the SP1 `sp1Optimizer`
   (`sp1Optimizer_maintainsCorrectness`).
-- `ApcOptimizer/Implementation/OptimizerPasses/Basic.lean`, `FactPass.lean` — the framework: a `VerifiedPass` bundles its
-  own `PassCorrect` proof, so a pass cannot be written without discharging it.
-- `ApcOptimizer/Implementation/OptimizerPasses/*.lean` — one file per optimization pass.
+- `ApcOptimizer/Implementation/OptimizerPasses/Basic.lean`, `Pass.lean`, `FactPass.lean` — the framework: a
+  pass bundles its own correctness proof, so a pass cannot be written without discharging it.
+- `ApcOptimizer/Implementation/OptimizerPasses/*.lean` — one file per optimization pass (runtime
+  definitions); its correctness proof and the wired pass live in the matching
+  `OptimizerPasses/Proofs/*.lean` file.
 - `ApcOptimizer/Implementation/Optimizer.lean` — assembles the passes into `optimizerWithBusFacts`.
   The pass sequence lives in three labelled lists — `preludePasses` (run once), `cleanupPasses`
   (iterated to a fixpoint), `codaPasses` (run once) — which are the single source of truth: both the
   optimizer (`pipeline` folds them) and the `profile` CLI command (`Main.lean`, which times them)
   consume the same lists, so they cannot drift apart. The cleanup cycle runs to a fixpoint via
-  `iterateToFixpoint`, provably terminating on a lexicographic size measure, with no iteration count
+  `denseIterateToFixpoint`, provably terminating on a lexicographic size measure, with no iteration count
   passed in.
 - `ApcOptimizer/Implementation/BusFacts.lean`, `ApcOptimizer/Implementation/OpenVmFacts.lean`,
   `ApcOptimizer/Implementation/Sp1Facts.lean` — the proven `BusFacts` (design + OpenVM and SP1 instances);
@@ -52,13 +54,14 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
 
 ## Adding an optimization
 
-Write a dense pass — a `DenseVerifiedPassW`, which bundles its own `DensePassCorrect` proof — in
-a new `ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
-`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass.guardDegree b)` entry to
-the `cleanupPasses` list. Build the pass with `DenseVerifiedPassW.of` (registry unchanged) or, for
+Write a dense pass — a `DenseVerifiedPassW`, which bundles its own `DensePassCorrect` proof —
+with its runtime definitions in a new `ApcOptimizer/Implementation/OptimizerPasses/` file and its
+proof plus the wired pass in a matching `OptimizerPasses/Proofs/` file, import the latter in
+`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass)` entry to
+the `cleanupPasses` list (the list applies the degree guard to every entry itself). Build the pass with `DenseVerifiedPassW.of` (registry unchanged) or, for
 passes that mint fresh variables, `DenseVerifiedPassW.ofExtending`; see the worked examples
-`GaussProof.lean`, `DropPassesProof.lean`, `CarryBranchProof.lean` / `RangeBoolProof.lean` and
-`ReencodeProof.lean`. That one list entry is the only edit needed; the profiler picks up the new
+`Proofs/Gauss.lean`, `Proofs/DropPasses.lean`, `Proofs/CarryBranch.lean` / `Proofs/RangeBool.lean` and
+`Proofs/Reencode.lean`. That one list entry is the only edit needed; the profiler picks up the new
 pass for free. Do not touch the audited surface (`Spec.lean`, `OpenVmSemantics.lean`,
 `Sp1Semantics.lean`, `MemoryBus.lean`, `ApcOptimizer/Optimizer.lean`) or the glue in `Basic.lean`;
 correctness follows from the pass's own bundled proof. Build and verify with `lake build`.
@@ -82,7 +85,7 @@ infer most things from the code — so keep them minimal and let the code speak:
 - **Reserve comments for non-obvious, important context** — an invariant, a subtle gate, why an
   ordering matters — never a restatement of what the next line plainly does.
 - **Prefer references over prose.** Point to the relevant definition/theorem/file (e.g. "soundness
-  in `GaussProof.lean`") instead of re-explaining it.
+  in `Proofs/Gauss.lean`") instead of re-explaining it.
 - **Every optimization pass keeps one concise human-readable comment** on its entry point saying
   what it does, ideally with a tiny example (e.g. "for a constraint like `x = 5`, infers the
   assignment `x := 5`").

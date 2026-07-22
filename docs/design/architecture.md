@@ -44,18 +44,23 @@ circuit; a variable with no powdr ID cannot be read from the input trace.)
 `bs` (quantify over `bs` for the "correct for every semantics" reading; fixing it lets a
 semantics-specific optimizer be an instance).
 
-## The framework (`ApcOptimizer/Implementation/OptimizerPasses/Basic.lean`, `FactPass.lean`)
+## The framework (`ApcOptimizer/Implementation/OptimizerPasses/Basic.lean`, `Pass.lean`, `FactPass.lean`)
 
-A **`VerifiedPass`** maps a system to a new one *bundled with a `PassCorrect` proof* (`refines` +
-invariant preservation) — so a pass cannot be written without discharging its obligations.
+A **`DenseVerifiedPassW`** (`Pass.lean`) maps a registry + dense system to a new one *bundled with
+a `PassCorrect` proof on the decode* (`refines` + invariant preservation) — so a pass cannot be
+written without discharging its obligations. `Basic.lean` carries the `Variable`-level relation
+glue (`PassCorrect` itself and its composition lemmas) that the dense results decode into.
 
 - `andThen` composes passes (correctness by composing the per-pass `PassCorrect` proofs, with
-  derivations concatenating); `iterateToFixpoint` runs a pass to a fixpoint, proven to terminate on
-  the well-founded lexicographic size key (see the pipeline section); the top-level
+  derivations concatenating); `denseIterateToFixpoint` runs a pass to a fixpoint, proven to
+  terminate on the well-founded lexicographic size key (see the pipeline section); the top-level
   `*_maintainsCorrectness` theorems are just projections.
-- `guardDegree` wraps each pass to fall back to its input if the output would exceed the degree
-  bound — degree safety is compositional, with zero per-pass proof burden.
-- `VerifiedPassW` is a pass that may additionally consult proven `BusFacts` (below).
+- `guardDegree` falls back to a pass's input if the output would exceed the degree bound; the
+  pipeline's `guardAll` applies it to every stage-list entry, so degree safety is uniform with
+  zero per-pass proof burden.
+- `VerifiedPassW` (`FactPass.lean`) is the `Variable`-level pass type that may additionally
+  consult proven `BusFacts` (below); the pipeline is its one inhabitant, wrapping the dense
+  pipeline between one encode and one decode.
 
 ## Bus knowledge
 
@@ -106,8 +111,8 @@ The pass sequence lives in three labelled lists — the **single source of truth
 (redundant-byte-drop, monic-scale, constant-fold) run once. `cleanupPasses` chains the passes —
 Gauss elimination, normalize, constant-fold, finite-domain propagation (boolean/one-hot case
 analysis and bus-fact domains; prime `p` only), trivial / zero-multiplicity / tautology drops,
-`busUnifyPass`, and re-encoding — each `guardDegree`-wrapped. `pipeline` folds `preludePasses`, runs
-the folded `cleanupPasses` cycle to a fixpoint (`iterateToFixpoint`), then folds `codaPasses`. The
+`busUnifyPass`, and re-encoding — wrapped in the degree guard by `guardAll`. `pipeline` folds `preludePasses`, runs
+the folded `cleanupPasses` cycle to a fixpoint (`denseIterateToFixpoint`), then folds `codaPasses`. The
 `profile` CLI command (`Main.lean`) times those same three lists (stepping the passes in `IO`, which
 the pure `pipeline` can't do), so the profiler cannot drift out of sync with the optimizer as passes
 are added, removed, or reordered. The loop takes **no** iteration bound: it recurses while each cycle strictly lowers the
@@ -116,7 +121,7 @@ significant, matching the effectiveness priority) and stops otherwise. That key 
 (`sizeKey_wf`, the inverse image of `<` on `Nat ×ₗ Nat ×ₗ Nat`), so the loop is proven to terminate
 with no cap a large basic block could exceed — the recursion is guarded by exactly the strict
 decrease `decreasing_by` needs. Two free corollaries: the loop is size-monotone by construction
-(`iterateToFixpoint_monotone` — the optimizer can only shrink the circuit), and correctness is the
+(`denseIterateToFixpoint_monotone` — the optimizer can only shrink the circuit), and correctness is the
 usual `PassCorrect` composition (each kept cycle refines; stopping returns the input). Applied to
 proven facts, `optimizerWithBusFacts` is a
 circuit-to-circuit map; `simpleOptimizer` is the trivial-facts instance (`BusFacts.trivial`). The
@@ -128,10 +133,11 @@ and the OpenVM `openVmOptimizer` (with
 
 ## Adding a pass
 
-Write a dense `DenseVerifiedPassW` — bundling its own `DensePassCorrect` proof — in a new
-`ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
-`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass.guardDegree b)` entry to the
-`cleanupPasses` list. Build it with `DenseVerifiedPassW.of`, or `DenseVerifiedPassW.ofExtending` for
+Write a dense `DenseVerifiedPassW` — bundling its own `DensePassCorrect` proof — with runtime
+definitions in a new `ApcOptimizer/Implementation/OptimizerPasses/` file and the proof plus wired
+pass in a matching `OptimizerPasses/Proofs/` file, import the latter in
+`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass)` entry to the
+`cleanupPasses` list (`guardAll` degree-guards every entry, so no per-pass guard is written). Build it with `DenseVerifiedPassW.of`, or `DenseVerifiedPassW.ofExtending` for
 passes that mint fresh variables. The pipeline encodes the system into the dense `VarId`
 representation once at entry and decodes once at output; the `DensePassCorrect` is lifted to the
 audited `Variable`-based `PassCorrect` at that boundary (`Bridge.lean`). Correctness follows from the
