@@ -807,17 +807,46 @@ theorem denseCompileBis_allV (ops : DenseZModOps p) (isZero : ZMod p → Bool)
         rw [List.all_cons, List.all_cons, ih crest hr]
         simp only [denseCompileBi_evalWithV ops keys pt bi cbi hb, hz]
 
+/-- The compiled constraint loop agrees with `List.all`. -/
+theorem denseAllZeroCWV_eq (ops : DenseZModOps p) (pt : List (ZMod p)) : ∀ ces,
+    denseAllZeroCWV ops pt ces =
+      ces.all (fun ie => decide (denseIExprEvalWithV ops pt ie = ops.zero)) := by
+  intro ces
+  induction ces with
+  | nil => rfl
+  | cons ie rest ih => simp [denseAllZeroCWV, List.all_cons, ih]
+
+/-- The multiplicity-first bus loop agrees with `List.all`. -/
+theorem denseAllBusCWV_eq (ops : DenseZModOps p) (bs : BusSemantics p)
+    (pt : List (ZMod p)) : ∀ cbis,
+    denseAllBusCWV ops bs pt cbis =
+      cbis.all (fun cbi =>
+        let v := denseCBiEvalWithV ops cbi pt
+        decide (v.multiplicity = ops.zero) || !bs.violatesConstraint v) := by
+  intro cbis
+  induction cbis with
+  | nil => rfl
+  | cons cbi rest ih =>
+      simp only [denseAllBusCWV, List.all_cons]
+      rw [ih]
+      unfold denseCBiEvalWithV
+      simp only
+      split <;> simp_all
+
 /-- The value-only compiled survivor predicate under compile success agrees with the uncompiled one. -/
-theorem denseSurvivesAllCWV_eq (ops : DenseZModOps p) (isZero : ZMod p → Bool)
-    (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p) (es : List (DenseExpr p))
+theorem denseSurvivesAllCWV_eq (ops : DenseZModOps p) (bs : BusSemantics p)
+    (es : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId) (ces : List (IExpr p))
     (cbis : List (CBi p)) (pt : List (ZMod p))
     (hce : denseCompileEs keys es = some ces) (hcb : denseCompileBis keys bis = some cbis) :
-    denseSurvivesAllCWV ops isZero bs ces cbis pt = denseSurvivesAllMV bs es bis keys pt := by
+    denseSurvivesAllCWV ops bs ces cbis pt = denseSurvivesAllMV bs es bis keys pt := by
   unfold denseSurvivesAllCWV denseSurvivesAllMV
+  rw [denseAllZeroCWV_eq, denseAllBusCWV_eq]
   congr 1
-  · exact denseCompileEs_allV ops isZero hz keys pt es ces hce
-  · exact denseCompileBis_allV ops isZero hz bs keys pt bis cbis hcb
+  · exact denseCompileEs_allV ops (fun v => decide (v = ops.zero))
+      (fun v => by rw [ops.zero_eq]) keys pt es ces hce
+  · exact denseCompileBis_allV ops (fun v => decide (v = ops.zero))
+      (fun v => by rw [ops.zero_eq]) bs keys pt bis cbis hcb
 
 /-- The value-only compiled survivor predicate agrees with the uncompiled one on every point. -/
 theorem denseCompiledSurvV_eq (bs : BusSemantics p) (es : List (DenseExpr p))
@@ -830,10 +859,9 @@ theorem denseCompiledSurvV_eq (bs : BusSemantics p) (es : List (DenseExpr p))
     cases hcb : denseCompileBis keys bis with
     | none => rfl
     | some cbis =>
-      change denseSurvivesAllCWV denseZModOps (fun v => decide (v = denseZModOps.zero))
-          bs ces cbis pt = denseSurvivesAllMV bs es bis keys pt
-      exact denseSurvivesAllCWV_eq denseZModOps _ (fun _ => rfl)
-        bs es bis keys ces cbis pt hce hcb
+      change denseSurvivesAllCWV denseZModOps bs ces cbis pt =
+        denseSurvivesAllMV bs es bis keys pt
+      exact denseSurvivesAllCWV_eq denseZModOps bs es bis keys ces cbis pt hce hcb
 
 /-- The restriction of a satisfying `denv` survives the covered-item predicate (value-only). -/
 theorem denseSurvivesAllMV_restriction (bs : BusSemantics p) (es : List (DenseExpr p))

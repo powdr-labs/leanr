@@ -39,15 +39,32 @@ def denseCBiEvalWithV (ops : DenseZModOps p) (cbi : CBi p) (pt : List (ZMod p)) 
     multiplicity := denseIExprEvalWithV ops pt cbi.mult,
     payload := cbi.payload.map (fun ie => denseIExprEvalWithV ops pt ie) }
 
+/-- Check that every compiled constraint vanishes, stopping at the first failure. -/
+def denseAllZeroCWV (ops : DenseZModOps p) (pt : List (ZMod p)) : List (IExpr p) → Bool
+  | [] => true
+  | ie :: rest =>
+    if denseIExprEvalWithV ops pt ie = ops.zero then denseAllZeroCWV ops pt rest else false
+
+/-- Check every compiled bus obligation, skipping payload evaluation when multiplicity is zero. -/
+def denseAllBusCWV (ops : DenseZModOps p) (bs : BusSemantics p)
+    (pt : List (ZMod p)) : List (CBi p) → Bool
+  | [] => true
+  | cbi :: rest =>
+    let mult := denseIExprEvalWithV ops pt cbi.mult
+    if mult = ops.zero then denseAllBusCWV ops bs pt rest
+    else
+      let v : BusInteraction (ZMod p) :=
+        { busId := cbi.busId,
+          multiplicity := mult,
+          payload := cbi.payload.map (fun ie => denseIExprEvalWithV ops pt ie) }
+      if bs.violatesConstraint v then false else denseAllBusCWV ops bs pt rest
+
 /-- `survivesAllCW`, over a value-only point: compiled items' zero test plus interactions'
     obligation check. -/
-def denseSurvivesAllCWV (ops : DenseZModOps p) (isZero : ZMod p → Bool)
-    (bs : BusSemantics p) (ces : List (IExpr p)) (cbis : List (CBi p))
+def denseSurvivesAllCWV (ops : DenseZModOps p) (bs : BusSemantics p)
+    (ces : List (IExpr p)) (cbis : List (CBi p))
     (pt : List (ZMod p)) : Bool :=
-  ces.all (fun ie => isZero (denseIExprEvalWithV ops pt ie)) &&
-    cbis.all (fun cbi =>
-      let v := denseCBiEvalWithV ops cbi pt
-      isZero v.multiplicity || !bs.violatesConstraint v)
+  denseAllZeroCWV ops pt ces && denseAllBusCWV ops bs pt cbis
 
 /-! ### The uncompiled fallback
 
@@ -88,9 +105,7 @@ def denseCompiledSurvV (bs : BusSemantics p) (es : List (DenseExpr p))
   match denseCompileEs keys es, denseCompileBis keys bis with
   | some ces, some cbis =>
     let ops : DenseZModOps p := denseZModOps
-    let dec : DecidableEq (ZMod p) := inferInstance
-    let isZero : ZMod p → Bool := fun v => @decide (v = ops.zero) (dec v ops.zero)
-    ⟨fun pt => denseSurvivesAllCWV ops isZero bs ces cbis pt⟩
+    ⟨fun pt => denseSurvivesAllCWV ops bs ces cbis pt⟩
   | _, _ => ⟨denseSurvivesAllMV bs es bis keys⟩
 
 /-! ## Value-only lazy box enumeration -/

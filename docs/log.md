@@ -4391,3 +4391,18 @@ Maintainability pass; no runtime or proof-content change, effectiveness untouche
 
 **Worked: yes (−10 dead theorems; `lake build` warning-free; proof integrity green, correctness
 axioms `{propext, Classical.choice, Quot.sound}`-only).**
+
+### 123. Runtime: multiplicity-first domainBatch survivor loops
+
+The compiled domainBatch survivor predicate now traverses algebraic constraints and bus
+interactions with explicit recursive loops instead of allocating up to two `List.all` closures per box
+point. The bus loop evaluates multiplicity first; a zero multiplicity advances immediately without
+evaluating the payload or constructing a `BusInteraction`. The loops also compare directly with the
+hoisted zero value, removing the separately boxed per-target zero predicate and its per-value
+dispatch.
+
+Both loops have equality theorems back to the previous `List.all` predicates, preserving the exact
+survivor result and therefore the circuit output. The full build and proof-integrity checks pass.
+Generated C has direct recursive loops and `ZMod` equality calls, with payload mapping only in the
+nonzero branch. Runtime A/B is deferred to the draft PR's CI matrix. **Worked: implementation,
+proofs, and codegen yes; runtime result pending CI.**
