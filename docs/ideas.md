@@ -211,10 +211,14 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
    - ~~`iterateToFixpoint` sizeKey recomputation~~ **done (entry 115)**: the input's key is
      threaded (`iterateToFixpointFrom`), halving the per-cycle occurrence-list walks (~6 % of
      whole-run samples).
-   - ~~gauss descriptor field-operation setup~~ **done (entry 118)**: proven `@[csimp]` fast
-     twins box the canonical operations once for coefficient indexing and pivot descriptors,
-     while the logical definitions and proofs stay unchanged. The broader dirty-sweep and
+   - ~~gauss descriptor field-operation setup and repeated index reads~~ **done (entries
+     118–119)**: proven `@[csimp]` fast twins box the canonical operations once and each pivot
+     descriptor now reads its coefficient/count entry once. The broader dirty-sweep and
      allocation-free-pivot experiment in PR #156 was closed after too little whole-run benefit.
+   - ~~gauss empty second sweep and variable-list materialization~~ **done (entry 119)**: an
+     empty first solution map returns immediately, while productive runs retain both sweeps;
+     occurrence and reverse-dependency construction fold expression leaves directly without
+     building `DenseExpr.vars` and its append chains.
 
 **R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
 *medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs

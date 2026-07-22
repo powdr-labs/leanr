@@ -4324,3 +4324,23 @@ sp1/rsp (100 ranked) sets plus both keccak stress sets against the pre-refactor 
   `dedup` (size-neutral but ~9% slower keccak without it).
 
 **Worked: yes (net −655 lines at unchanged effectiveness; runtime within noise on all sets).**
+
+### 120. Runtime: three contained Gauss hot-path cleanups
+
+- Gauss now runs the first constraint sweep separately and returns the input immediately when its
+  solution map is empty. Productive invocations still run the same constraints twice with the
+  first solution state threaded into the second; steady-state fixpoint calls avoid the duplicate
+  no-op sweep and the temporary `constraints ++ constraints` list.
+- The boxed pivot-descriptor twins read each variable's coefficient/count index entry once and
+  reuse the pair for the `±1`, unit, and score checks.
+- `DenseExpr.foldVars` visits leaves in the same left-to-right order as `vars.foldl` (proved by
+  `foldVars_eq`) without allocating variable lists or append chains. Gauss occurrence counting
+  and `DenseSolved` reverse-dependency insertion use the direct fold.
+
+The Gauss proof composes `denseGaussLoop_sound` across the two productive sweeps. The targeted
+build succeeds, and generated C confirms an empty-map branch before the second loop call, one raw
+index lookup per descriptor, and direct expression folds in both consumers. The empty branch and
+productive branch preserve the previous circuit result, so variable, bus-interaction, and
+constraint effectiveness are unchanged. The full build and proof-integrity checks pass; runtime
+A/B and export comparison are deferred to the draft PR's CI matrix. **Worked: implementation/proofs
+yes; runtime result pending CI.**

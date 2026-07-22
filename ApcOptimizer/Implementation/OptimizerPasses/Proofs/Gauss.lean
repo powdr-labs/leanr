@@ -217,18 +217,24 @@ theorem denseGaussLoop_sound (bs : BusSemantics p) (d : DenseConstraintSystem p)
 theorem denseGaussElim_loop_invariant (bs : BusSemantics p) (d : DenseConstraintSystem p) :
     (∀ denv, d.satisfies bs denv → ∀ i t,
         (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-          (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty).fn i = some t →
+          d.algebraicConstraints
+          (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
+            d.algebraicConstraints DenseSolved.empty)).fn i = some t →
           denv i = t.eval denv) ∧
     (∀ i t, (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-        (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty).fn i = some t →
+        d.algebraicConstraints
+        (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
+          d.algebraicConstraints DenseSolved.empty)).fn i = some t →
         ∀ z ∈ t.vars, z ∈ d.occ) := by
-  refine denseGaussLoop_sound bs d (denseOccurrenceMap d) (denseProtectedVars d bs)
-    (d.algebraicConstraints ++ d.algebraicConstraints) DenseSolved.empty
-    (fun _c hc => (List.mem_append.1 hc).elim id id) ?_ ?_
-  · intro denv _ i t hti
-    exact absurd hti (by simp [DenseSolved.fn, DenseSolved.empty])
-  · intro i t hti
-    exact absurd hti (by simp [DenseSolved.fn, DenseSolved.empty])
+  have hfirst := denseGaussLoop_sound bs d (denseOccurrenceMap d) (denseProtectedVars d bs)
+    d.algebraicConstraints DenseSolved.empty (fun _c hc => hc)
+    (fun _ _ _ _ hti => absurd hti (by simp [DenseSolved.fn, DenseSolved.empty]))
+    (fun _ _ hti => absurd hti (by simp [DenseSolved.fn, DenseSolved.empty]))
+  exact denseGaussLoop_sound bs d (denseOccurrenceMap d) (denseProtectedVars d bs)
+    d.algebraicConstraints
+    (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
+      d.algebraicConstraints DenseSolved.empty)
+    (fun _c hc => hc) hfirst.1 hfirst.2
 
 /-- `denseGaussElim` preserves coverage: on the non-trivial branch it substitutes an
     occurrence-closed solution map, whose solutions are covered because their variables occur in a
