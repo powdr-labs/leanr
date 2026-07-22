@@ -17,20 +17,6 @@ namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. -/
-private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
-    (255 - a).val = Nat.xor a.val 255 := by
-  haveI : NeZero p := ⟨by omega⟩
-  have hle : a.val ≤ 255 := by omega
-  have ha' : a = ((a.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse a).symm
-  have hcast : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
-  have hval : (255 - a).val = 255 - a.val := by
-    calc (255 - a).val
-        = ((255 : ZMod p) - ((a.val : ℕ) : ZMod p)).val := by rw [← ha']
-      _ = (((255 - a.val : ℕ) : ZMod p)).val := by rw [Nat.cast_sub hle, hcast]
-      _ = 255 - a.val := ZMod.val_natCast_of_lt (by omega)
-  rw [hval]; exact (nat_xor_255 _ ha).symm
-
 /-- A recognized byte check lives on a stateless bus. -/
 theorem denseByteCheckOperands?_stateless (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (ops : List (DenseExpr p))
@@ -93,9 +79,7 @@ theorem denseByteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts
           have ho2 : o2.eval denv = 255 := o2.constValue?_sound 255 (by simpa using h255) denv
           have hr : r.eval denv = 255 - o1.eval denv := denseIsByteCompl_sound o1 r hcompl denv
           have hob : (o1.eval denv).val < 256 := hops o1 (by simp)
-          have h255v : (255 : ZMod p).val = 255 := by
-            have hc : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
-            rw [← hc, ZMod.val_natCast_of_lt (by omega)]
+          have h255v : (255 : ZMod p).val = 255 := val_255 hple
           refine (key.1 hopEv).mpr ⟨hbound ▸ hob, hbound ▸ ?_, ?_⟩
           · rw [ho2, h255v]; omega
           · rw [hr, ho2, h255v, val_255_sub hple _ hob]
@@ -108,9 +92,7 @@ theorem denseByteCheckOperands?_accepted (bs : BusSemantics p) (facts : BusFacts
           have ho1 : o1.eval denv = 255 := o1.constValue?_sound 255 (by simpa using h255) denv
           have hr : r.eval denv = 255 - o2.eval denv := denseIsByteCompl_sound o2 r hcompl denv
           have hob : (o2.eval denv).val < 256 := hops o2 (by simp)
-          have h255v : (255 : ZMod p).val = 255 := by
-            have hc : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
-            rw [← hc, ZMod.val_natCast_of_lt (by omega)]
+          have h255v : (255 : ZMod p).val = 255 := val_255 hple
           refine (key.1 hopEv).mpr ⟨hbound ▸ ?_, hbound ▸ hob, ?_⟩
           · rw [ho1, h255v]; omega
           · rw [hr, ho1, h255v, val_255_sub hple _ hob]; exact Nat.xor_comm _ _

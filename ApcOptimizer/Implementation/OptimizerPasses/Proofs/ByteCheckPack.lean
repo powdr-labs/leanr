@@ -117,7 +117,7 @@ theorem denseByteBoolSound_decode_iff (bs : BusSemantics p) (facts : BusFacts p 
 /-! ## The NOT-form complement recognizer -/
 
 /-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. -/
-private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
+theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
     (255 - a).val = Nat.xor a.val 255 := by
   haveI : NeZero p := ⟨by omega⟩
   have hle : a.val ≤ 255 := by omega
@@ -131,7 +131,7 @@ private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
   rw [hval]; exact (nat_xor_255 _ ha).symm
 
 /-- `(255 : ZMod p).val = 255` when `256 ≤ p`. -/
-private theorem val_255 (hp : 256 ≤ p) : (255 : ZMod p).val = 255 := by
+theorem val_255 (hp : 256 ≤ p) : (255 : ZMod p).val = 255 := by
   have hc : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
   rw [← hc, ZMod.val_natCast_of_lt (by omega)]
 

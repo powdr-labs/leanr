@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusUnify
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.ByteCheckPack
 
 set_option autoImplicit false
 
@@ -15,18 +16,6 @@ variable {p : ℕ}
 /-- `ZMod.val` is injective (nonzero characteristic). -/
 private theorem val_inj [NeZero p] (a b : ZMod p) (h : a.val = b.val) : a = b :=
   (ZMod.natCast_rightInverse a).symm.trans ((congrArg _ h).trans (ZMod.natCast_rightInverse b))
-
-/-- `(255 − a).val = 255 − a.val` for a byte `a` in a field with `256 ≤ p` (no wraparound). -/
-private theorem sub255_val (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
-    (255 - a).val = 255 - a.val := by
-  haveI : NeZero p := ⟨by omega⟩
-  have hcast255 : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
-  have hle : a.val ≤ 255 := Nat.le_of_lt_succ (by omega)
-  have ha' : a = ((a.val : ℕ) : ZMod p) := (ZMod.natCast_rightInverse a).symm
-  calc (255 - a).val
-      = ((255 : ZMod p) - ((a.val : ℕ) : ZMod p)).val := by rw [← ha']
-    _ = (((255 - a.val : ℕ) : ZMod p)).val := by rw [Nat.cast_sub hle, hcast255]
-    _ = 255 - a.val := ZMod.val_natCast_of_lt (by omega)
 
 theorem denseComplExpr_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
     (denseComplExpr e).eval denv = 255 - e.eval denv := by
@@ -82,25 +71,20 @@ theorem denseXorEq?_eval (bs : BusSemantics p) (facts : BusFacts p bs) (d : Dens
     rw [hzero, ZMod.val_zero] at hrval
     rw [val_inj _ _ (hrval.trans (Nat.xor_zero _)), sub_self]
   · rw [denseEqExpr_eval, denseComplExpr_eval]
-    have hcast255 : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
-    have h255v : (255 : ZMod p).val = 255 := by
-      rw [← hcast255, ZMod.val_natCast_of_lt (by omega)]
+    have h255v : (255 : ZMod p).val = 255 := val_255 hp
     have ho1 : (o1.eval denv) = 255 := by rw [hz]; rfl
     rw [ho1, h255v] at hrval
-    have hx : (r.eval denv).val = 255 - (o2.eval denv).val := by
+    have hx : (r.eval denv).val = (255 - o2.eval denv).val := by
       rw [hrval, show Nat.xor 255 (o2.eval denv).val = Nat.xor (o2.eval denv).val 255
-        from Nat.xor_comm _ _]
-      exact nat_xor_255 _ (hbnd ▸ ho2b)
-    rw [val_inj _ _ (hx.trans (sub255_val hp _ (hbnd ▸ ho2b)).symm), sub_self]
+        from Nat.xor_comm _ _, ← val_255_sub hp _ (hbnd ▸ ho2b)]
+    rw [val_inj _ _ hx, sub_self]
   · rw [denseEqExpr_eval, denseComplExpr_eval]
-    have hcast255 : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
-    have h255v : (255 : ZMod p).val = 255 := by
-      rw [← hcast255, ZMod.val_natCast_of_lt (by omega)]
+    have h255v : (255 : ZMod p).val = 255 := val_255 hp
     have ho2 : (o2.eval denv) = 255 := by rw [hz]; rfl
     rw [ho2, h255v] at hrval
-    have hx : (r.eval denv).val = 255 - (o1.eval denv).val := by
-      rw [hrval]; exact nat_xor_255 _ (hbnd ▸ ho1b)
-    rw [val_inj _ _ (hx.trans (sub255_val hp _ (hbnd ▸ ho1b)).symm), sub_self]
+    have hx : (r.eval denv).val = (255 - o1.eval denv).val := by
+      rw [hrval, ← val_255_sub hp _ (hbnd ▸ ho1b)]
+    rw [val_inj _ _ hx, sub_self]
 
 /-- Every variable of a recognised XOR equality occurs in `d`. -/
 theorem denseXorEq?_vars (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p)
