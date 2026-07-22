@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.ExprOps
-import ApcOptimizer.Implementation.OptimizerPasses.Adapter
+import ApcOptimizer.Implementation.OptimizerPasses.Pass
 
 set_option autoImplicit false
 

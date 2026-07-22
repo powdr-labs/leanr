@@ -20,27 +20,6 @@ deriving DecidableEq, Repr, Inhabited, Hashable
 /-- A default `Variable` for total array access in `resolve`; never observed on valid IDs. -/
 instance : Inhabited Variable := ⟨⟨"", none⟩⟩
 
-/-! `VarId` as a lawful hash-map / hash-set key, for the dense containers used by later passes. -/
-
-instance : BEq VarId := ⟨fun a b => decide (a = b)⟩
-
-instance : ReflBEq VarId where
-  rfl := by intro a; simp [BEq.beq]
-
-instance : LawfulBEq VarId where
-  eq_of_beq := by intro a b h; simpa [BEq.beq] using h
-
-instance : PartialEquivBEq VarId where
-  symm := by intro a b h; cases (LawfulBEq.eq_of_beq h); simp [BEq.beq]
-  trans := by
-    intro a b c hab hbc
-    cases (LawfulBEq.eq_of_beq hab); cases (LawfulBEq.eq_of_beq hbc); simp [BEq.beq]
-
-instance : EquivBEq VarId where
-
-instance : LawfulHashable VarId where
-  hash_eq := by intro a b h; cases (LawfulBEq.eq_of_beq h); rfl
-
 /-- The registered `Variable`s indexed by `VarId`, the reverse map, and the two consistency
     invariants. -/
 structure VarRegistry where

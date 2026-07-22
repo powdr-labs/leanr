@@ -3,7 +3,6 @@ import ApcOptimizer.Implementation.OptimizerPasses.Encoding
 import ApcOptimizer.Implementation.OptimizerPasses.Measure
 import ApcOptimizer.Implementation.OptimizerPasses.Pass
 import ApcOptimizer.Implementation.OptimizerPasses.ExprOps
-import ApcOptimizer.Implementation.OptimizerPasses.Adapter
 import ApcOptimizer.Implementation.OptimizerPasses.Bridge
 import ApcOptimizer.Implementation.OptimizerPasses.BridgeSteps
 import ApcOptimizer.Implementation.OptimizerPasses.Subst

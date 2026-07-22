@@ -31,6 +31,34 @@ def DenseConstraintSystem.CoveredBy (r : VarRegistry) (d : DenseConstraintSystem
 def DenseDerivations.CoveredBy (r : VarRegistry) (dd : DenseDerivations p) : Prop :=
   ∀ x ∈ dd, r.Valid x.1 ∧ x.2.CoveredBy r
 
+theorem denseBICovered_mono {r r' : VarRegistry} (h : r.Extends r')
+    {bi : BusInteraction (DenseExpr p)} (hc : denseBICovered r bi) : denseBICovered r' bi :=
+  ⟨hc.1.mono h, fun e he => (hc.2 e he).mono h⟩
+
+theorem VarRegistry.encodeBIs_covered (r : VarRegistry)
+    (bis : List (BusInteraction (Expression p))) :
+    ∀ bi ∈ (r.encodeBIs bis).2, denseBICovered (r.encodeBIs bis).1 bi := by
+  induction bis generalizing r with
+  | nil => intro bi hbi; simp [VarRegistry.encodeBIs] at hbi
+  | cons b rest ih =>
+      rw [VarRegistry.encodeBIs_cons]
+      intro bi hbi
+      rcases List.mem_cons.mp hbi with heq | hmem
+      · subst heq
+        exact denseBICovered_mono ((r.encodeBI b).1.encodeBIs_extends rest) (r.encodeBI_covered b)
+      · exact ih (r.encodeBI b).1 bi hmem
+
+/-- The encode of a spec system is covered by the registry it produces (the pipeline entry). -/
+theorem VarRegistry.encodeCS_covered (r : VarRegistry) (cs : ConstraintSystem p) :
+    (r.encodeCS cs).2.CoveredBy (r.encodeCS cs).1 := by
+  rw [VarRegistry.encodeCS_fst]
+  refine ⟨fun e he => ?_, fun bi hbi => ?_⟩
+  · rw [VarRegistry.encodeCS_acs] at he
+    exact (r.encodeExprs_covered cs.algebraicConstraints e he).mono
+      ((r.encodeExprs cs.algebraicConstraints).1.encodeBIs_extends cs.busInteractions)
+  · rw [VarRegistry.encodeCS_bis] at hbi
+    exact (r.encodeExprs cs.algebraicConstraints).1.encodeBIs_covered cs.busInteractions bi hbi
+
 /-! ## Decode stability under extension (computation methods, systems, derivations) -/
 
 theorem VarRegistry.Extends.decodeCM_eq {r r' : VarRegistry} (h : r.Extends r')

@@ -23,29 +23,8 @@ def Variable.ofPowdrName (raw : String) : Variable :=
       | none => { name := raw }
   | _ => { name := raw }
 
-instance : ReflBEq Variable where
-  rfl := by intro a; simp [BEq.beq]
-
+/-- `Spec.lean` pins `BEq Variable` to `decide (a = b)`; this is its lawfulness, from which
+    `EquivBEq`/`LawfulHashable` (the hash-map key obligations) are inferred. -/
 instance : LawfulBEq Variable where
-  eq_of_beq := by
-    intro a b h
-    simpa [BEq.beq] using h
-
-instance : PartialEquivBEq Variable where
-  symm := by
-    intro a b h
-    cases (LawfulBEq.eq_of_beq h)
-    simp [BEq.beq]
-  trans := by
-    intro a b c hab hbc
-    cases (LawfulBEq.eq_of_beq hab)
-    cases (LawfulBEq.eq_of_beq hbc)
-    simp [BEq.beq]
-
-instance : EquivBEq Variable where
-
-instance : LawfulHashable Variable where
-  hash_eq := by
-    intro a b h
-    cases (LawfulBEq.eq_of_beq h)
-    rfl
+  rfl := by simp [BEq.beq]
+  eq_of_beq h := by simpa [BEq.beq] using h

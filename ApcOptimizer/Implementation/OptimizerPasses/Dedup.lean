@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.Adapter
+import ApcOptimizer.Implementation.OptimizerPasses.Pass
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 
 set_option autoImplicit false
