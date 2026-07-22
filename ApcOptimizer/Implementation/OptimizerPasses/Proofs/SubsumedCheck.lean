@@ -77,17 +77,7 @@ theorem denseSubsumedCheckOf_spec (bs : BusSemantics p) (facts : BusFacts p bs)
     ∃ valSlot,
       facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?) = some (valSlot, bound) ∧
         bi.multiplicity = DenseExpr.const 1 ∧ bi.payload[valSlot]? = some (DenseExpr.var x) := by
-  unfold denseSubsumedCheckOf at h
-  split at h
-  · rename_i vs bd hrc
-    split_ifs at h with hmc
-    split at h
-    · rename_i x' hxp
-      simp only [Option.some.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      exact ⟨vs, hrc, hmc, hxp⟩
-    · exact absurd h (by simp)
-  · exact absurd h (by simp)
+  grind [denseSubsumedCheckOf]
 
 theorem denseSubsumedCheckOf_sound (bs : BusSemantics p) (facts : BusFacts p bs) :
     SubsumedRecognizerSound bs (denseSubsumedCheckOf bs facts) := by
@@ -113,21 +103,7 @@ theorem denseSubsumedRangeCheck?_spec (bs : BusSemantics p) (facts : BusFacts p 
     facts.varRangeBus bi.busId = true ∧ bi.multiplicity = DenseExpr.const 1 ∧
       ∃ c cv, bi.payload = [DenseExpr.var x, c] ∧ c.constValue? = some cv ∧ cv.val ≤ 17 ∧
         B = 2 ^ cv.val := by
-  unfold denseSubsumedRangeCheck? at h
-  split at h
-  case h_2 => exact absurd h (by simp)
-  case h_1 v c hpay =>
-    split at h
-    case h_2 => exact absurd h (by simp)
-    case h_1 x' hv =>
-      split at h
-      case h_2 => exact absurd h (by simp)
-      case h_1 cv' hcv =>
-        split_ifs at h with hcond
-        obtain ⟨hvr, hm, hle⟩ := hcond
-        simp only [Option.some.injEq, Prod.mk.injEq] at h
-        obtain ⟨rfl, rfl⟩ := h
-        exact ⟨hvr, hm, c, cv', hpay, hcv, hle, rfl⟩
+  grind [denseSubsumedRangeCheck?]
 
 theorem denseSubsumedRangeCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs) :
     SubsumedRecognizerSound bs (denseSubsumedRangeCheck? bs facts) := by

@@ -65,7 +65,6 @@ import ApcOptimizer.Implementation.OptimizerPasses.Proofs.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.HintCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DisconnectedComponent
-import ApcOptimizer.Implementation.OptimizerPasses.Proofs.RangeForceZero
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.RangeBool
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.IntervalForce
