@@ -419,6 +419,96 @@ def assignmentsV : List (FiniteDomain p) → List (List (ZMod p))
   | [] => [[]]
   | d :: rest => (assignmentsV rest).flatMap (fun a => d.toList.map (fun v => v :: a))
 
+/-- Point order used by `denseScanBoxLoopV`, with the accumulated suffix explicit. -/
+def assignmentsRevV : List (FiniteDomain p) → List (ZMod p) → List (List (ZMod p))
+  | [], pt => [pt]
+  | d :: rest, pt => d.toList.flatMap (fun v => assignmentsRevV rest (v :: pt))
+
+/-- The specialized scanner is the early-stop fold over its direct traversal order. -/
+theorem denseScanBoxLoopV_eq (surv : List (ZMod p) → Bool) :
+    ∀ (doms : List (FiniteDomain p)) (pt : List (ZMod p)) (acc : Option (DenseCandsV p)),
+      denseScanBoxLoopV surv doms pt acc =
+        foldlStop (denseScanStepV surv) denseScanStopV (assignmentsRevV doms pt) acc := by
+  intro doms
+  induction doms with
+  | nil =>
+    intro pt acc
+    simp only [denseScanBoxLoopV, assignmentsRevV, foldlStop]
+  | cons d rest ih =>
+    intro pt acc
+    cases d with
+    | explicit values =>
+      rw [denseScanBoxLoopV, assignmentsRevV, FiniteDomain.toList,
+        ← foldlStop_flatMap]
+      induction values generalizing acc with
+      | nil => rw [denseScanExplicitV, foldlStop]
+      | cons v vs ihvs =>
+        rw [denseScanExplicitV, foldlStop]
+        by_cases hstop : denseScanStopV acc = true
+        · rw [if_pos hstop, if_pos hstop]
+        · rw [if_neg hstop, if_neg hstop, ih, ihvs]
+    | range bound =>
+      rw [denseScanBoxLoopV, assignmentsRevV, FiniteDomain.toList,
+        List.range_eq_range', ← foldlStop_flatMap]
+      have hrange : ∀ (start count : Nat) (acc : Option (DenseCandsV p)),
+          denseScanRangeV surv rest pt start count acc =
+            foldlStop
+              (fun acc v => foldlStop (denseScanStepV surv) denseScanStopV
+                (assignmentsRevV rest (v :: pt)) acc)
+              denseScanStopV ((List.range' start count).map (Nat.cast : Nat → ZMod p)) acc := by
+        intro start count
+        induction count generalizing start with
+        | zero => intro acc; rw [denseScanRangeV, List.range', List.map, foldlStop]
+        | succ n ihn =>
+          intro acc
+          rw [denseScanRangeV, List.range'_succ, List.map_cons, foldlStop]
+          by_cases hstop : denseScanStopV acc = true
+          · rw [if_pos hstop, if_pos hstop]
+          · rw [if_neg hstop, if_neg hstop, ih, ihn]
+      exact hrange 0 bound acc
+
+theorem assignmentsRevV_suffix (doms : List (FiniteDomain p)) (suffix : List (ZMod p)) :
+    assignmentsRevV doms suffix =
+      (assignmentsRevV doms []).map (fun pt => pt ++ suffix) := by
+  induction doms generalizing suffix with
+  | nil => simp only [assignmentsRevV, List.map, List.nil_append]
+  | cons d rest ih =>
+    simp only [assignmentsRevV, List.map_flatMap]
+    apply List.flatMap_congr
+    intro v _
+    rw [ih (v :: suffix), ih [v], List.map_map]
+    apply List.map_congr_left
+    intro pt _
+    simp only [Function.comp_apply, List.append_assoc, List.singleton_append]
+
+theorem assignmentsRevV_snoc (doms : List (FiniteDomain p)) (d : FiniteDomain p)
+    (suffix : List (ZMod p)) :
+    assignmentsRevV (doms ++ [d]) suffix =
+      (assignmentsRevV doms []).flatMap
+        (fun pt => d.toList.map (fun v => v :: (pt ++ suffix))) := by
+  induction doms generalizing suffix with
+  | nil =>
+    simp only [List.nil_append, assignmentsRevV, List.flatMap_singleton, List.nil_append]
+    exact (List.map_eq_flatMap (f := fun v => v :: suffix) (l := d.toList)).symm
+  | cons d' rest ih =>
+    simp only [List.cons_append, assignmentsRevV, List.flatMap_assoc]
+    apply List.flatMap_congr
+    intro v _
+    rw [ih (v :: suffix), assignmentsRevV_suffix rest [v], List.flatMap_map]
+    apply List.flatMap_congr
+    intro pt _
+    apply List.map_congr_left
+    intro w _
+    simp only [List.append_assoc, List.singleton_append]
+
+theorem assignmentsRevV_reverse_eq (doms : List (FiniteDomain p)) :
+    assignmentsRevV doms.reverse [] = assignmentsV doms := by
+  induction doms with
+  | nil => rfl
+  | cons d rest ih =>
+    rw [List.reverse_cons, assignmentsRevV_snoc, ih, assignmentsV]
+    simp only [List.append_nil]
+
 /-- `denseBoxFoldV` streams exactly the eager fold over `assignmentsV`. -/
 theorem denseBoxFoldV_eq {β : Type} (f : β → List (ZMod p) → β) (stop : β → Bool)
     (doms : List (FiniteDomain p)) (acc : β) :
@@ -438,6 +528,11 @@ theorem denseBoxFoldV_eq {β : Type} (f : β → List (ZMod p) → β) (stop : �
     show d.foldElts (fun acc'' v => f acc'' (v :: a)) stop acc'
       = foldlStop f stop (d.toList.map (fun v => v :: a)) acc'
     rw [FiniteDomain.foldElts_eq, foldlStop_map]
+
+theorem denseScanBoxV_eq (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p)) :
+    denseScanBoxV surv doms =
+      denseBoxFoldV (denseScanStepV surv) denseScanStopV doms none := by
+  rw [denseScanBoxV, denseScanBoxLoopV_eq, assignmentsRevV_reverse_eq, denseBoxFoldV_eq]
 
 /-- The restriction of a satisfying `denv` to a keyed domain list is one of the value-only
     enumerated assignments. -/
@@ -614,7 +709,7 @@ theorem foldlStop_denseScanStep_none (surv : List (ZMod p) → Bool) :
 /-- **Value-only scan `none` case.** No point of the box survives the scanned predicate. -/
 theorem denseScanBoxV_none_unsat (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p))
     (h : denseScanBoxV surv doms = none) : ∀ pt ∈ assignmentsV doms, surv pt = false := by
-  rw [denseScanBoxV, denseBoxFoldV_eq] at h
+  rw [denseScanBoxV_eq, denseBoxFoldV_eq] at h
   exact foldlStop_denseScanStep_none surv (assignmentsV doms) h
 
 /-- **Value-only scan `some` case.** A `some c` in the returned mask is agreed on by every surviving
@@ -623,7 +718,7 @@ theorem denseScanBoxV_forces (surv : List (ZMod p) → Bool) (doms : List (Finit
     (mask : DenseCandsV p) (h : denseScanBoxV surv doms = some mask) (n : Nat) (c : ZMod p)
     (hmask : mask[n]? = some (some c)) :
     ∀ pt ∈ assignmentsV doms, surv pt = true → pt[n]? = some c := by
-  rw [denseScanBoxV, denseBoxFoldV_eq] at h
+  rw [denseScanBoxV_eq, denseBoxFoldV_eq] at h
   have hne : denseScanStopV (some mask) = false := by
     rw [denseScanStopV, Bool.eq_false_iff]
     intro hall

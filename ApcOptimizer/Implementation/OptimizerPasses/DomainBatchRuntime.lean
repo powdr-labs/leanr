@@ -147,11 +147,41 @@ def denseScanStopV : Option (DenseCandsV p) → Bool
   | none => false
   | some cands => cands.all Option.isNone
 
+mutual
+  /-- Specialized box traversal for the forced-value scan. -/
+  def denseScanBoxLoopV (surv : List (ZMod p) → Bool) :
+      List (FiniteDomain p) → List (ZMod p) → Option (DenseCandsV p) → Option (DenseCandsV p)
+    | [], pt, acc =>
+      if denseScanStopV acc then acc else denseScanStepV surv acc pt
+    | .explicit values :: rest, pt, acc => denseScanExplicitV surv rest pt values acc
+    | .range bound :: rest, pt, acc => denseScanRangeV surv rest pt 0 bound acc
+  termination_by doms _ _ => (doms.length + 1, 0, 0)
+
+  def denseScanExplicitV (surv : List (ZMod p) → Bool) (rest : List (FiniteDomain p))
+      (pt : List (ZMod p)) :
+      List (ZMod p) → Option (DenseCandsV p) → Option (DenseCandsV p)
+    | [], acc => acc
+    | v :: vs, acc =>
+      if denseScanStopV acc then acc
+      else denseScanExplicitV surv rest pt vs (denseScanBoxLoopV surv rest (v :: pt) acc)
+  termination_by values _ => (rest.length + 1, 1, values.length)
+
+  def denseScanRangeV (surv : List (ZMod p) → Bool) (rest : List (FiniteDomain p))
+      (pt : List (ZMod p)) (start : Nat) :
+      Nat → Option (DenseCandsV p) → Option (DenseCandsV p)
+    | 0, acc => acc
+    | n + 1, acc =>
+      if denseScanStopV acc then acc
+      else denseScanRangeV surv rest pt (start + 1) n
+        (denseScanBoxLoopV surv rest (((start : Nat) : ZMod p) :: pt) acc)
+  termination_by count _ => (rest.length + 1, 2, count)
+end
+
 /-- The value-only box scan, streamed lazily over the symbolic domains; the caller
     (`denseForcedOverV`) zips the final mask with `keys` once, after the scan finishes. -/
 def denseScanBoxV (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p)) :
     Option (DenseCandsV p) :=
-  denseBoxFoldV (denseScanStepV surv) denseScanStopV doms none
+  denseScanBoxLoopV surv doms.reverse [] none
 
 /-! ## Redundancy check, value-only -/
 

@@ -4406,3 +4406,19 @@ survivor result and therefore the circuit output. The full build and proof-integ
 Generated C has direct recursive loops and `ZMod` equality calls, with payload mapping only in the
 nonzero branch. Runtime A/B is deferred to the draft PR's CI matrix. **Worked: implementation,
 proofs, and codegen yes; runtime result pending CI.**
+
+### 124. Runtime: specialized domainBatch box scan
+
+The forced-value box scan now traverses explicit and range domains with dedicated recursive loops
+instead of carrying generic step and stop callbacks through `denseBoxFoldV`. Reversing the domain
+list once preserves the previous point order while letting the traversal build each point by
+prepending values. The generated C contains direct calls throughout the scan, with no closure
+allocation or `lean_apply_*` dispatch in the domain traversal.
+
+The specialized traversal is proved equal to the previous early-stop fold, so optimizer output is
+unchanged. On SP1 keccak `apc_001`, two serial runs averaged 48.975 s in `domainBatch`, versus
+49.307 s for three runs of the survivor-loop implementation (0.67% faster); whole-run averages
+were 141.509 s and 141.505 s respectively, so the incremental end-to-end effect was noise. Against
+the exact `origin/main` parent in a fresh ABBA run, the combined changes reduced `domainBatch`
+52.345 s → 48.975 s (6.44%) and total time 145.092 s → 141.509 s (2.47%). The full build and proof
+integrity checks pass. **Worked: pass-level marginal; incremental whole-run neutral.**
