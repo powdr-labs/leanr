@@ -4432,3 +4432,26 @@ identical, but **8 of 100 openvm-eth cases regressed** (+3..+11 vars each; aggre
 cases. Reverted; digitFold stays. Lesson for future removal probes: a small local sample only
 screens — the CI matrix is the real verdict, and openvm-eth's mid-ranked cases (apc_026/034/045/
 051/055/066/085/094) are where digit-ladder shapes live. **Worked: no (reverted).**
+
+### 126. Structure: same-env rewrite transport (`DensePassCorrect.ofEvalAgree`) + small dedups
+
+Proof-only, output byte-identical on the 13-case sample.
+
+- **`DensePassCorrect.ofEvalAgree`** (Bridge.lean): for a pass whose output maps bus interactions
+  by an eval-preserving rewrite and whose constraints vanish exactly when the input's do — both
+  under an anchor `A` that either side's satisfaction establishes — correctness follows with the
+  identity environment. The two domainFold correctness proofs (direct `denseFoldOutV` and
+  in-place `denseFoldOutInPlaceV`) were parallel ~145-line re-derivations of exactly this
+  transport (satisfies/admissible/sideEffects/occ + the `ofEnvEq` assembly); each is now a
+  ~45-line instantiation supplying its membership arguments and the covered-constraints anchor.
+  `denseBIEval_mapExpr_of_agree` moved to Bridge as the shared agreement lemma. Candidates that
+  do NOT fit: `substF` (its soundness direction transforms the environment via `denseEnvF`) and
+  reencode (fresh variables; its own generic `reencode_correct_D` stays put).
+- **intervalForce** rewired through `ofAddConstraints` (the proofs file had a duplicate of the
+  impl's seed-list computation just to state an `_eq` by `rfl`).
+- **Byte-complement arithmetic** (`val_255_sub`/`val_255`) deduplicated: three private copies
+  across `Proofs/{ByteCheckPack,RedundantByteDrop,XorEqExtract}` are now one public pair in
+  `Proofs/ByteCheckPack`.
+
+**Worked: yes (−45 intervalForce, −105 transport, −34 byte lemmas; net vs main now ≈ −290
+excluding the append-only log).**
