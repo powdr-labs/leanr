@@ -13,8 +13,8 @@ derivations, **bundled with**:
 * `correct` — a `PassCorrect` on the *decoded* systems.
 
 Because `correct` is stated on decodes, a dense pass is discharged by proving `PassCorrect`
-between the decoded input and output systems, either directly or (for a `Variable`-based pass
-wrapped via `ofSpec`) by decode-commuting with that pass. Composition here is pure plumbing: it
+between the decoded input and output systems — in practice via `DensePassCorrect.lift` inside
+the `DenseVerifiedPassW.of`/`ofExtending` builders. Composition here is pure plumbing: it
 threads the registry, concatenates dense derivations, and composes the `PassCorrect` certificates
 using registry-stability to align intermediate decodes — no `decode` runs between passes at runtime
 (the `ext`/`covered`/`correct` fields are `Prop` and erase). The dense degree guard and fixpoint use

@@ -9,8 +9,8 @@ Implementation-only dense counterparts of the spec's recursive circuit values, w
 left-to-right, registering each variable occurrence and emitting dense leaves in one traversal.
 
 The correspondence results (`decode ∘ encode = id`, extension agreement, degree/eval/vars
-preservation) are the bridge a dense pass proved by decode-commutation with a `Variable`-based
-pass (via `ofSpec`) rides on. All evidence is `Prop` (erases); no proof wrapper is stored at
+preservation) are what the pipeline's edge encode/decode and the `DensePassCorrect.lift`
+bridge ride on. All evidence is `Prop` (erases); no proof wrapper is stored at
 expression nodes — a single coverage invariant is threaded and local validity derived when needed.
 
 Dense bus interactions reuse the spec's polymorphic `BusInteraction` at `DenseExpr p`, so the
