@@ -206,13 +206,15 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
      first and bisect with a skip-the-body experiment.
    - ~~`normalize` linearize fusion~~ **done (entry 115)** for `normalizePass`
      (`normalizeFused`, proven equal). Gauss's per-constraint `substF |> normalize` still walks
-     the old way — left alone deliberately: open PR #156 rewrites gauss's sweeps (dirty second
-     sweep, allocation-free pivots) and should not be conflicted with.
+     the old way. PR #156's wider gauss sweep rewrite was closed after too little whole-run
+     benefit, so this remains available only if a fresh profile justifies it.
    - ~~`iterateToFixpoint` sizeKey recomputation~~ **done (entry 115)**: the input's key is
      threaded (`iterateToFixpointFrom`), halving the per-cycle occurrence-list walks (~6 % of
      whole-run samples).
-   - `gauss`: covered by open **PR #156** (proven dirty second sweep + allocation-free pivot
-     selection, 0.78× on eth) — do not duplicate here.
+   - ~~gauss descriptor field-operation setup~~ **done (entry 118)**: proven `@[csimp]` fast
+     twins box the canonical operations once for coefficient indexing and pivot descriptors,
+     while the logical definitions and proofs stay unchanged. The broader dirty-sweep and
+     allocation-free-pivot experiment in PR #156 was closed after too little whole-run benefit.
 
 **R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
 *medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs

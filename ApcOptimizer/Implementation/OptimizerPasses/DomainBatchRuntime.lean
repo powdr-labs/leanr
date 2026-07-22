@@ -19,34 +19,34 @@ variable {p : ℕ}
 /-! ## Value-only positional lookup and compiled evaluation -/
 
 /-- Positional lookup in a value-only point (position alone determines the value). -/
-def denseLookupIxV : List (ZMod p) → Nat → ZMod p
-  | [], _ => 0
+def denseLookupIxV (zero : ZMod p) : List (ZMod p) → Nat → ZMod p
+  | [], _ => zero
   | v :: _, 0 => v
-  | _ :: rest, i + 1 => denseLookupIxV rest i
+  | _ :: rest, i + 1 => denseLookupIxV zero rest i
 
 /-- `IExpr.evalWith`, over a value-only point (hoisted `add`/`mul`). -/
-def denseIExprEvalWithV (add mul : ZMod p → ZMod p → ZMod p) (pt : List (ZMod p)) :
+def denseIExprEvalWithV (ops : DenseZModOps p) (pt : List (ZMod p)) :
     IExpr p → ZMod p
   | .const n => n
-  | .ix i => denseLookupIxV pt i
-  | .add a b => add (denseIExprEvalWithV add mul pt a) (denseIExprEvalWithV add mul pt b)
-  | .mul a b => mul (denseIExprEvalWithV add mul pt a) (denseIExprEvalWithV add mul pt b)
+  | .ix i => denseLookupIxV ops.zero pt i
+  | .add a b => ops.add (denseIExprEvalWithV ops pt a) (denseIExprEvalWithV ops pt b)
+  | .mul a b => ops.mul (denseIExprEvalWithV ops pt a) (denseIExprEvalWithV ops pt b)
 
 /-- `CBi.evalWith`, over a value-only point. -/
-def denseCBiEvalWithV (add mul : ZMod p → ZMod p → ZMod p) (cbi : CBi p) (pt : List (ZMod p)) :
+def denseCBiEvalWithV (ops : DenseZModOps p) (cbi : CBi p) (pt : List (ZMod p)) :
     BusInteraction (ZMod p) :=
   { busId := cbi.busId,
-    multiplicity := denseIExprEvalWithV add mul pt cbi.mult,
-    payload := cbi.payload.map (fun ie => denseIExprEvalWithV add mul pt ie) }
+    multiplicity := denseIExprEvalWithV ops pt cbi.mult,
+    payload := cbi.payload.map (fun ie => denseIExprEvalWithV ops pt ie) }
 
 /-- `survivesAllCW`, over a value-only point: compiled items' zero test plus interactions'
     obligation check. -/
-def denseSurvivesAllCWV (add mul : ZMod p → ZMod p → ZMod p) (isZero : ZMod p → Bool)
+def denseSurvivesAllCWV (ops : DenseZModOps p) (isZero : ZMod p → Bool)
     (bs : BusSemantics p) (ces : List (IExpr p)) (cbis : List (CBi p))
     (pt : List (ZMod p)) : Bool :=
-  ces.all (fun ie => isZero (denseIExprEvalWithV add mul pt ie)) &&
+  ces.all (fun ie => isZero (denseIExprEvalWithV ops pt ie)) &&
     cbis.all (fun cbi =>
-      let v := denseCBiEvalWithV add mul cbi pt
+      let v := denseCBiEvalWithV ops cbi pt
       isZero v.multiplicity || !bs.violatesConstraint v)
 
 /-! ### The uncompiled fallback
@@ -87,13 +87,10 @@ def denseCompiledSurvV (bs : BusSemantics p) (es : List (DenseExpr p))
     DenseSurvV p :=
   match denseCompileEs keys es, denseCompileBis keys bis with
   | some ces, some cbis =>
-    let addI : Add (ZMod p) := inferInstance
-    let mulI : Mul (ZMod p) := inferInstance
+    let ops : DenseZModOps p := denseZModOps
     let dec : DecidableEq (ZMod p) := inferInstance
-    let add := addI.add
-    let mul := mulI.mul
-    let isZero : ZMod p → Bool := fun v => @decide (v = 0) (dec v 0)
-    ⟨fun pt => denseSurvivesAllCWV add mul isZero bs ces cbis pt⟩
+    let isZero : ZMod p → Bool := fun v => @decide (v = ops.zero) (dec v ops.zero)
+    ⟨fun pt => denseSurvivesAllCWV ops isZero bs ces cbis pt⟩
   | _, _ => ⟨denseSurvivesAllMV bs es bis keys⟩
 
 /-! ## Value-only lazy box enumeration -/
@@ -152,12 +149,10 @@ def denseConstraintRedundantV (T : DenseDomainTable p) (c : DenseExpr p) : Bool 
     (d.map (fun yd => yd.2.size)).prod ≤ maxEnumSize &&
       match denseCompileE (d.map Prod.fst) c with
       | some ic =>
-        let addI : Add (ZMod p) := inferInstance
-        let mulI : Mul (ZMod p) := inferInstance
+        let ops : DenseZModOps p := denseZModOps
         let dec : DecidableEq (ZMod p) := inferInstance
-        let add := addI.add
-        let mul := mulI.mul
-        denseAllBoxV (fun a => @decide (denseIExprEvalWithV add mul a ic = 0) (dec _ 0))
+        denseAllBoxV
+          (fun a => @decide (denseIExprEvalWithV ops a ic = ops.zero) (dec _ ops.zero))
           (d.map Prod.snd)
       | none =>
         denseAllBoxV (fun a => decide (c.eval (denseEnvOfKeysV (d.map Prod.fst) a) = 0))

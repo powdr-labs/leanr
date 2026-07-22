@@ -290,7 +290,8 @@ private theorem eraseFold_ow {L : List (BusInteraction (DenseExpr p))}
     exact ih (cO.erase d) (erase_ow cO hcO d)
 
 
-theorem denseSweepGo_split {shape : MemoryBusShape} {T : Thunk (DenseTwoRootMap p)}
+theorem denseSweepGo_split {ops : DenseZModOps p} {shape : MemoryBusShape}
+    {T : Thunk (DenseTwoRootMap p)}
     {nw : Thunk (DenseNonzeroWits p)} (L : List (BusInteraction (DenseExpr p)))
     (revSeen rest : List (BusInteraction (DenseExpr p))) (j : Nat)
     (constOpen : Std.HashMap (DenseAddrKey p) (DenseOpenRec p))
@@ -299,9 +300,9 @@ theorem denseSweepGo_split {shape : MemoryBusShape} {T : Thunk (DenseTwoRootMap 
     (hcO : ∀ (k : DenseAddrKey p) (w : DenseOpenRec p), constOpen[k]? = some w → OpenWF L w)
     (hsO : ∀ w ∈ symOpen, OpenWF L w)
     (hacc : ∀ ic ∈ acc, SplitEqC L ic.2) :
-    ∀ ic ∈ denseSweepGo shape T nw revSeen rest j constOpen symOpen acc, SplitEqC L ic.2 := by
+    ∀ ic ∈ denseSweepGo ops shape T nw revSeen rest j constOpen symOpen acc, SplitEqC L ic.2 := by
   revert hsplit hj hcO hsO hacc
-  fun_induction denseSweepGo shape T nw revSeen rest j constOpen symOpen acc with
+  fun_induction denseSweepGo ops shape T nw revSeen rest j constOpen symOpen acc with
   | case1 revSeen j constOpen symOpen acc =>
     intro hsplit hj hcO hsO hacc ic hic
     exact hacc ic hic
@@ -344,7 +345,7 @@ theorem denseSweepGo_split {shape : MemoryBusShape} {T : Thunk (DenseTwoRootMap 
         intro dsa hdsa kw hkw
         obtain ⟨ds, a2⟩ := dsa
         intro ic hic
-        cases hst : denseStepTest shape T nw kw.2.S m with
+        cases hst : denseStepTest ops shape T nw kw.2.S m with
         | consumer =>
           simp only [hst] at hic
           exact denseEmitCand_cons_split kw.2 (hlst kw hkw) j hj m rest' hnow a2 hdsa ic hic
@@ -364,7 +365,7 @@ theorem denseSweepGo_split {shape : MemoryBusShape} {T : Thunk (DenseTwoRootMap 
           intro soa hsoa w hw
           obtain ⟨so2, a2⟩ := soa
           obtain ⟨hso2, ha2⟩ := hsoa
-          cases hst : denseStepTest shape T nw w.S m with
+          cases hst : denseStepTest ops shape T nw w.S m with
           | consumer => exact ⟨hso2, denseEmitCand_cons_split w (hsO w hw) j hj m rest' hnow a2 ha2⟩
           | excluded =>
             exact ⟨List.forall_mem_cons.mpr ⟨hsO w hw, hso2⟩, ha2⟩

@@ -29,12 +29,12 @@ def denseAddrHash (shape : MemoryBusShape) (pl : List (DenseExpr p)) : UInt64 :=
     memory-shaped bus, keyed by bus id mixed with the payload hash (`densePayloadHash`, or
     `denseAddrHash` when `aggressive`). One build serves the whole sweep. -/
 def denseRecvIndexAll {bs : BusSemantics p} (facts : BusFacts p bs) (aggressive : Bool)
-    (arr : Array (BusInteraction (DenseExpr p))) :
+    (ops : DenseZModOps p) (arr : Array (BusInteraction (DenseExpr p))) :
     Std.HashMap UInt64 (List Nat) :=
   (arr.toList.zipIdx).foldr (fun bij m =>
     match facts.memShape bij.1.busId with
     | some shape =>
-      if decide (denseMultConst bij.1 = some (-shape.setNewMult)) then
+      if decide (denseMultConst bij.1 = some (denseGetPreviousMult ops shape)) then
         let h := mixHash (hash bij.1.busId)
           (if aggressive then denseAddrHash shape bij.1.payload else densePayloadHash bij.1.payload)
         m.insert h (bij.2 :: m.getD h [])

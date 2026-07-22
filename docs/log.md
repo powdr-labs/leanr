@@ -4274,3 +4274,21 @@ byte-for-byte the same computation without spawns, so sp1/rsp and openvm-eth beh
 before entry 114 while keccak/SHA-scale invocations keep the parallel win (keccak's ≥8192
 cycles carry ~90 % of its domainBatch cost). keccak and sp1 apc_030 exports byte-identical;
 keccak total steady at ~111 s locally. **Worked: yes (CI re-run pending).**
+
+### 118. Runtime: hoist boxed `ZMod` operations out of hot pass loops
+
+Several hot helpers obtained field constants and operations through fresh `ZMod` typeclass
+projections inside recursive, per-point, or per-window traversals. `DenseZModOps` now boxes the
+canonical operations and constants once and is threaded through domain evaluation and memory-bus
+scans. DomainFold also boxes its survivor predicate so setup remains outside the generated loop;
+Gauss keeps its logical definitions and installs proven `@[csimp]` fast twins for coefficient
+indexing and pivot descriptors. Bus multiplicity selectors have equality theorems tying the
+runtime functions to `MemoryBusShape.setNewMult` and its negation.
+
+`lake build` and proof-integrity checks pass. Generated-C inspection confirms that the targeted
+domain evaluators, gauss fast paths, bus-unify step, receive-index fold, cancellation scan, and
+refutation/check helpers no longer construct `ZMod.commRing` in their inner loops. The remaining
+calls are in colder constructors, pass guards, or logical fallbacks. Every runtime replacement is
+proven equal to the original helper, so variable, bus-interaction, and constraint effectiveness
+are unchanged. Local A/B timing and export comparison are intentionally deferred to the draft
+PR's CI matrix. **Worked: implementation/proofs yes; runtime result pending CI.**

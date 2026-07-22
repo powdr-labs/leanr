@@ -88,11 +88,10 @@ theorem denseGroupSurvivorsEV_eq (es : List (DenseExpr p)) (xs : List VarId)
   | some ces =>
       apply List.filter_congr
       intro a _
-      show denseSurvZeroCWV (inferInstance : Add (ZMod p)).add (inferInstance : Mul (ZMod p)).mul ces a
+      show denseSurvZeroCWV denseZModOps (fun v => decide (v = denseZModOps.zero)) ces a
         = es.all (fun c => decide (c.eval (denseEnvOfKeysV xs a) = 0))
       unfold denseSurvZeroCWV
-      exact denseCompileEs_allV (inferInstance : Add (ZMod p)).add (inferInstance : Mul (ZMod p)).mul
-        (fun _ _ => rfl) (fun _ _ => rfl) (fun v => decide (v = 0)) (fun _ => rfl) xs a es ces hce
+      exact denseCompileEs_allV denseZModOps _ (fun _ => rfl) xs a es ces hce
 
 theorem mem_denseGroupSurvivorsEV (es : List (DenseExpr p)) (xs : List VarId)
     (domVals : List (List (ZMod p))) (pt : List (ZMod p)) (hmem : pt ∈ denseAssignmentsV domVals)
@@ -120,8 +119,7 @@ theorem denseConstOnSurvsV_sound (xs : List VarId) (survsV : List (List (ZMod p)
             simp only [Option.some.injEq] at h
             have hthis := List.all_eq_true.mp hall s hs
             rw [decide_eq_true_eq] at hthis
-            have hev := denseCompileE_evalV (inferInstance : Add (ZMod p)).add
-              (inferInstance : Mul (ZMod p)).mul (fun _ _ => rfl) (fun _ _ => rfl) xs s e ie hce
+            have hev := denseCompileE_evalV denseZModOps xs s e ie hce
             rw [← hev, hthis]; exact h
           · exact absurd h (by simp)
       | none =>
