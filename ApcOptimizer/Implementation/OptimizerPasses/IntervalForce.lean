@@ -225,20 +225,17 @@ def denseAllSeeds (bs : BusSemantics p) (facts : BusFacts p bs) (bnd : VarId →
     (d.busInteractions.flatMap (denseInteractionSeeds bs facts bnd) ++
       d.algebraicConstraints.flatMap (fun c => denseSlotSeeds bnd 1 c))
 
-/-- Interval-force transform: from the integer-window analysis of the system's bounded affine
-    slots, seed every forced equality or zero as a new constraint (e.g. if bounds prove `x = y`
-    must hold, append `x - y = 0`). Single-shot; appends the deduplicated new seeds. -/
-def denseIntervalForceF (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
+/-- The entailed interval-forcing seeds: every seed whose variables all occur in `d` and that is
+    not already a constraint (hash-bucket dedup). Appended by the pass (`Proofs/IntervalForce.lean`). -/
+def denseIntervalForceNew (bs : BusSemantics p) (facts : BusFacts p bs)
+    (d : DenseConstraintSystem p) : List (DenseExpr p) :=
   let idx := denseBoundIdxBuild bs facts d.busInteractions
   let seeds := denseAllSeeds bs facts (fun v => idx[v]?) d
   -- Hash set / hash-bucket lookups replace per-seed linear scans of `d.occ` and the constraints.
   let varSet : Std.HashSet VarId := Std.HashSet.ofList d.occ
   let csBuckets : Std.HashMap UInt64 (List (DenseExpr p)) :=
     d.algebraicConstraints.foldl (fun m c => m.insert c.bHash (c :: m.getD c.bHash [])) ∅
-  let new := (seeds.filter (fun e => e.vars.all (fun z => varSet.contains z))).filter
+  (seeds.filter (fun e => e.vars.all (fun z => varSet.contains z))).filter
     (fun e => !(csBuckets.getD e.bHash []).contains e)
-  if new.isEmpty then d
-  else { d with algebraicConstraints := d.algebraicConstraints ++ new }
 
 end ApcOptimizer.Dense
