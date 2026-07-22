@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
-import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheckProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusPairCancelCheck
 import ApcOptimizer.Implementation.OptimizerPasses.BridgeSteps
 
 set_option autoImplicit false

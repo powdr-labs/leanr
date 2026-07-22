@@ -1,7 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
-import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPackProof
-import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelJustifyProof
-import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDropsProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.ByteCheckPack
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusPairCancelJustify
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.FlagFoldDrops
 
 set_option autoImplicit false
 
@@ -11,7 +11,7 @@ set_option autoImplicit false
 (`RedundantByteDrop.lean`). Every dropped interaction is a recognised byte check whose operands are
 all byte-justified from the non-circular base (`denseByteDropBase`), hence accepted under every
 assignment satisfying the filtered system. Built via `denseFilterBusEntailed`
-(`FlagFoldDropsProof.lean`) and `denseByteJustified_sound` (`BusPairCancelJustifyProof.lean`). -/
+(`Proofs/FlagFoldDrops.lean`) and `denseByteJustified_sound` (`Proofs/BusPairCancelJustify.lean`). -/
 
 namespace ApcOptimizer.Dense
 

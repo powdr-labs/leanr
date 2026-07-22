@@ -7,7 +7,7 @@ set_option autoImplicit false
 
 Impl-only: the recogniser chain (`denseAffineCloser`/`denseReadCloser`/`denseHasProd`/
 `denseDeadFromCloser`/`denseDeadVars`) and the append transform. Correctness in
-`OneHotAnnihilateProof.lean`. -/
+`Proofs/OneHotAnnihilate.lean`. -/
 
 namespace ApcOptimizer.Dense
 

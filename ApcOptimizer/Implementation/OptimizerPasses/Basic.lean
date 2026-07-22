@@ -143,26 +143,6 @@ structure PassResult {p : ℕ} (cs : ConstraintSystem p) (bs : BusSemantics p) w
   derivs : Derivations p
   correct : PassCorrect cs out derivs bs
 
-/-- A proof-carrying optimization pass, bundled with a `PassCorrect` proof. -/
-abbrev VerifiedPass (p : ℕ) :=
-  (cs : ConstraintSystem p) → (bs : BusSemantics p) → PassResult cs bs
-
-def VerifiedPass.id : VerifiedPass p :=
-  fun cs bs => ⟨cs, [], PassCorrect.refl cs bs⟩
-
-/-- Sequential composition: run `f`, then run `g` on its output; concatenate derivations. -/
-def VerifiedPass.andThen (f g : VerifiedPass p) : VerifiedPass p :=
-  fun cs bs =>
-    let r1 := f cs bs
-    let r2 := g r1.out bs
-    ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
-
-/-- Iterate a pass `n` times to drive a local one-step pass to a fixpoint; correct by construction
-    (a pass with nothing to do returns its input unchanged, so extra iterations are harmless). -/
-def VerifiedPass.iterate (f : VerifiedPass p) : Nat → VerifiedPass p
-  | 0 => VerifiedPass.id
-  | n + 1 => (f.iterate n).andThen f
-
 /-! ## Variable-set membership -/
 
 /-- A variable of `cs.vars` occurs in some constraint, multiplicity, or payload expression. -/

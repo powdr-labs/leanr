@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
-import ApcOptimizer.Implementation.OptimizerPasses.BusUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusUnify
 
 set_option autoImplicit false
 

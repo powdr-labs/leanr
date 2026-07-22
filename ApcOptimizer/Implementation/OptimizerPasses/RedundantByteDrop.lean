@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Dense redundant byte-check removal
 
 Runtime recognizer and transform for `redundantByteDrop`; the pass is wrapped in
-`RedundantByteDropProof.lean`. Unlike `denseSvCheck?` (`ByteCheckPack.lean`), the recognizer here
+`Proofs/RedundantByteDrop.lean`. Unlike `denseSvCheck?` (`ByteCheckPack.lean`), the recognizer here
 ignores the dropped check's own multiplicity, returns a *list* of justified operands, and also
 recognizes the packed-pair shape. -/
 

@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
-import ApcOptimizer.Implementation.OptimizerPasses.BusUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusUnify
 
 set_option autoImplicit false
 

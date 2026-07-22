@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
-import ApcOptimizer.Implementation.OptimizerPasses.RangeBoolProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.RangeBool
 
 set_option autoImplicit false
 

@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Witness re-encoding — dense expression ops and the build/step/loop/pass layer.
 
 Impl-only: no theorem is stated here. Correctness and the `ofExtending` wiring live in
-`ReencodeProof.lean`. -/
+`Proofs/Reencode.lean`. -/
 
 namespace ApcOptimizer.Dense
 

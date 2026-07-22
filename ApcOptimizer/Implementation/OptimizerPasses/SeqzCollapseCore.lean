@@ -6,7 +6,7 @@ set_option autoImplicit false
 /-! # Value-level semantic core of the seqz-collapse gadget
 
 Representation-independent `ZMod p`-value lemmas and range-check bus facts underlying the
-`seqzCollapse` pass, consumed by `SeqzCollapseProof.lean`. `sum_zero_all_zero` comes from
+`seqzCollapse` pass, consumed by `Proofs/SeqzCollapse.lean`. `sum_zero_all_zero` comes from
 `HintCollapse.lean`. -/
 
 namespace SeqzCollapse

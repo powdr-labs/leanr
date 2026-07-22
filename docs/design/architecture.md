@@ -128,10 +128,11 @@ and the OpenVM `openVmOptimizer` (with
 
 ## Adding a pass
 
-Write a dense `DenseVerifiedPassW` — bundling its own `DensePassCorrect` proof — in a new
-`ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
-`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass.guardDegree b)` entry to the
-`cleanupPasses` list. Build it with `DenseVerifiedPassW.of`, or `DenseVerifiedPassW.ofExtending` for
+Write a dense `DenseVerifiedPassW` — bundling its own `DensePassCorrect` proof — with runtime
+definitions in a new `ApcOptimizer/Implementation/OptimizerPasses/` file and the proof plus wired
+pass in a matching `OptimizerPasses/Proofs/` file, import the latter in
+`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass)` entry to the
+`cleanupPasses` list (`guardAll` degree-guards every entry, so no per-pass guard is written). Build it with `DenseVerifiedPassW.of`, or `DenseVerifiedPassW.ofExtending` for
 passes that mint fresh variables. The pipeline encodes the system into the dense `VarId`
 representation once at entry and decodes once at output; the `DensePassCorrect` is lifted to the
 audited `Variable`-based `PassCorrect` at that boundary (`Bridge.lean`). Correctness follows from the

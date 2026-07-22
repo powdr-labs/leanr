@@ -7,7 +7,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 set_option autoImplicit false
 
 /-! # Dense interval forcing (runtime, impl-only): integer-window analysis of bounded affine
-slots. No soundness lemma here; the proof and wiring live in `IntervalForceProof.lean`. -/
+slots. No soundness lemma here; the proof and wiring live in `Proofs/IntervalForce.lean`. -/
 
 namespace IntervalForce
 

@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
-import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPackProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancel
 
 set_option autoImplicit false
@@ -8,7 +8,7 @@ set_option autoImplicit false
 
 `DensePassCorrect` for `denseSplitBytePairF` (`SplitBytePair.lean`), over `VarId → ZMod p`. The
 split carries the identical obligation ("both operands are bytes") via the pack/split law
-`denseMkBytePair_iff_singles` (`ByteCheckPackProof.lean`); all stateless, so completeness rides on
+`denseMkBytePair_iff_singles` (`Proofs/ByteCheckPack.lean`); all stateless, so completeness rides on
 `env' = env`. -/
 
 namespace ApcOptimizer.Dense

@@ -8,7 +8,7 @@ A *disconnected component* is a set of algebraic constraints and stateless bus i
 variables never touch a stateful bus interaction. The pass finds one by connectivity from the
 stateful buses, tries the all-zero witness, and drops the component only if the witness certifies
 it at run time (the same re-check `guardDegree` uses). Correctness is in
-`DisconnectedComponentProof.lean`; the connectivity closure is a well-founded recursion (no fuel)
+`Proofs/DisconnectedComponent.lean`; the connectivity closure is a well-founded recursion (no fuel)
 whose decreasing lexicographic measure `(unprocessed-groups-in-range, stack.length)` is proved by
 `denseBfsMeasureDecreasing`. -/
 

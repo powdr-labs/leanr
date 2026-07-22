@@ -3,7 +3,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Adapter
 
 set_option autoImplicit false
 
-/-! # Dense drop-pass runtime recognizers (passes and proofs in `DropPassesProof.lean`) -/
+/-! # Dense drop-pass runtime recognizers (passes and proofs in `Proofs/DropPasses.lean`) -/
 
 namespace ApcOptimizer.Dense
 

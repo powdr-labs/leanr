@@ -4,7 +4,7 @@ set_option autoImplicit false
 
 /-! # Dense subsumed range-check removal
 
-Runtime definitions for `subsumedRangeDrop`; the pass is wrapped in `SubsumedRangeProof.lean`. -/
+Runtime definitions for `subsumedRangeDrop`; the pass is wrapped in `Proofs/SubsumedRange.lean`. -/
 
 namespace ApcOptimizer.Dense
 

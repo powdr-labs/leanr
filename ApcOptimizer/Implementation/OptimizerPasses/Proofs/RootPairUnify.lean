@@ -1,7 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
-import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseqProof
-import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
-import ApcOptimizer.Implementation.OptimizerPasses.DomainFoldProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.AddrDiseq
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DomainBatch
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DomainFold
 import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 import ApcOptimizer.Implementation.OptimizerPasses.RootPairCore
 
@@ -11,10 +11,10 @@ set_option autoImplicit false
 
 `DensePassCorrect` for `denseRootPairUnifyF` (`RootPairUnify.lean`), lifted through
 `DenseVerifiedPassW.of`. A substitution-shaped pass: it eliminates variables via a `DenseSolved` map
-and one `DenseConstraintSystem.substF`, so (through `substF_denseCorrect`, `DomainBatchProof.lean`)
+and one `DenseConstraintSystem.substF`, so (through `substF_denseCorrect`, `Proofs/DomainBatch.lean`)
 it only has to discharge entailment and occurrence-closure of the map — both from the scan-loop
 invariant `denseRpLoop_sound`. The per-adoption entailment is the pair certificate
-`denseRpCheckPair_sound`, combining `denseTwoRootOf?_sound` (`AddrDiseqProof.lean`) with the field
+`denseRpCheckPair_sound`, combining `denseTwoRootOf?_sound` (`Proofs/AddrDiseq.lean`) with the field
 core `rootPair_eq` (`RootPairCore.lean`). -/
 
 namespace ApcOptimizer.Dense

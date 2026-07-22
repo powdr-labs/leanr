@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Reencode
-import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
-import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DomainBatch
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.RootPairUnify
 
 set_option autoImplicit false
 

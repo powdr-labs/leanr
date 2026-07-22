@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.TupleRange
-import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPackProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.ByteCheckPack
 
 set_option autoImplicit false
 
@@ -8,7 +8,7 @@ set_option autoImplicit false
 `DensePassCorrect` for the tuple-range packing pass (`TupleRange.lean`), over `VarId → ZMod p`. A
 tuple range checker `(256, s2)` accepts `[x, y]` iff `x < 256 ∧ y < s2` — exactly a byte check on
 `x` and a range check `[y, b]` with `2 ^ b.val = s2` — so the two stateless interactions pack into
-one via `denseMergeStateless2_correct` (`ByteCheckPackProof.lean`). -/
+one via `denseMergeStateless2_correct` (`Proofs/ByteCheckPack.lean`). -/
 
 namespace ApcOptimizer.Dense
 

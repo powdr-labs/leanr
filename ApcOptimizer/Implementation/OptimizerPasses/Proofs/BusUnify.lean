@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
-import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseqProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.AddrDiseq
 import ApcOptimizer.Implementation.MemoryBusDrop
 
 set_option autoImplicit false

@@ -8,7 +8,7 @@ set_option autoImplicit false
 
 Recognizes pairs of two-root-decomposed constraints sharing a root gap and unifies them via a
 substitution. Impl-only: the top transform `denseRootPairUnifyF` is shaped like `denseBusUnifyF`
-(`BusUnifyNative.lean`), so `RootPairUnifyProof.lean` wraps it with `DenseVerifiedPassW.of`.
+(`BusUnifyNative.lean`), so `Proofs/RootPairUnify.lean` wraps it with `DenseVerifiedPassW.of`.
 
 `ZMod p`'s `Inv` is total for every `p`, so nothing here needs `[Fact p.Prime]` to compute; only
 soundness does. -/

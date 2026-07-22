@@ -6,11 +6,11 @@ set_option autoImplicit false
 
 /-! # Collapsing a multi-limb reciprocal-witness group to one hint
 
-Runtime computation only; correctness (`collapse_correct`) lives in `HintCollapseProof.lean`. Shaped
+Runtime computation only; correctness (`collapse_correct`) lives in `Proofs/HintCollapse.lean`. Shaped
 for `DenseVerifiedPassW.ofExtending`, since it mints a fresh reciprocal-hint witness (like
 `Reencode.lean`). The fresh `VarId` is registered only on the accepting branch. -/
 
-/-! ## Representation-independent field-sum lemmas (consumed by `HintCollapseProof.lean`) -/
+/-! ## Representation-independent field-sum lemmas (consumed by `Proofs/HintCollapse.lean`) -/
 
 section RehomedHintCollapse
 variable {p : ℕ}

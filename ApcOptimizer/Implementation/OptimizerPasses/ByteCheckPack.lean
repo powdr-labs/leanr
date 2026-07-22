@@ -7,7 +7,7 @@ set_option autoImplicit false
 /-! # Dense single-value byte-check packing
 
 Runtime recognizers and the pair-finding scan for `byteCheckPack`; the pass is assembled in
-`ByteCheckPackProof.lean`. -/
+`Proofs/ByteCheckPack.lean`. -/
 
 namespace ApcOptimizer.Dense
 

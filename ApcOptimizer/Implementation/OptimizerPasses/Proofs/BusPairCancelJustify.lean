@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelJustify
-import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.RootPairUnify
 
 set_option autoImplicit false
 

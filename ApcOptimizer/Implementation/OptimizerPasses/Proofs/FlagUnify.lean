@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
-import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.RootPairUnify
 
 set_option autoImplicit false
 
@@ -295,7 +295,7 @@ theorem DenseSolved.insertAll_preserves {Q : VarId → DenseExpr p → Prop}
   simp only [DenseSolved.fn, DenseSolved.insertAll_map] at ht
   exact foldl_insert_getElem pairs σ.map (fun i t h => hσ i t h) hpairs i t ht
 
-/-! ## The scan-loop invariant (parallels `RootPairUnifyProof.lean`) -/
+/-! ## The scan-loop invariant (parallels `Proofs/RootPairUnify.lean`) -/
 
 /-- `denseFuInsertAll` preserves the `seen`-bucket invariant (every entry's `bi` is in `S`). -/
 theorem denseFuInsertAll_seen {S : List (BusInteraction (DenseExpr p))} :

@@ -51,11 +51,11 @@ def DenseLinExpr.toExpr (l : DenseLinExpr p) : DenseExpr p :=
 
 `coeff`/`others`, `trySolve`/`trySolveUnit`, and the pivot enumerators
 `densePm1PivotsOf`/`denseUnitPivotsOf`, which compare variables (filter on `t.1 = x`) and are
-consumed by the Gauss proof (`GaussProof.lean`). -/
+consumed by the Gauss proof (`Proofs/Gauss.lean`). -/
 
 /-! ## `denseLinearize` introduces no new variable
 
-Proved locally here (Normalize.lean sits downstream); consumed by `GaussProof.lean`. -/
+Proved locally here (Normalize.lean sits downstream); consumed by `Proofs/Gauss.lean`. -/
 
 /-- Every term variable of `denseLinearize e` occurs in `e`. -/
 theorem denseLinearize_mem_vars (e : DenseExpr p) (l : DenseLinExpr p)

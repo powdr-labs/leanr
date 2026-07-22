@@ -6,7 +6,7 @@ set_option autoImplicit false
 
 Filter algebraic constraints or bus interactions by a keep-predicate (drop-only, so coverage is
 preserved), plus the small expression predicates the drop passes key on. The drop-pass proofs built
-on these live in `DropPassesProof.lean`. -/
+on these live in `Proofs/DropPasses.lean`. -/
 
 namespace ApcOptimizer.Dense
 

@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDrops
-import ApcOptimizer.Implementation.OptimizerPasses.FlagUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.FlagUnify
 
 set_option autoImplicit false
 

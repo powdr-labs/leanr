@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelIndex
-import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelJustifyProof
-import ApcOptimizer.Implementation.OptimizerPasses.BusUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusPairCancelJustify
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusUnify
 
 set_option autoImplicit false
 

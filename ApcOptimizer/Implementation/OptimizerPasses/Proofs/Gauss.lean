@@ -1,12 +1,12 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
-import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
-import ApcOptimizer.Implementation.OptimizerPasses.FlagUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DomainBatch
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.FlagUnify
 
 set_option autoImplicit false
 
 /-! # Correctness for the dense Gauss-elimination pass.
 Substitution-shaped: correctness rides on `DenseConstraintSystem.substF_denseCorrect`
-(`DomainBatchProof.lean`), fed the final solution map's entailment and occurrence closure, both
+(`Proofs/DomainBatch.lean`), fed the final solution map's entailment and occurrence closure, both
 established by `denseGaussLoop_sound`. -/
 
 namespace ApcOptimizer.Dense

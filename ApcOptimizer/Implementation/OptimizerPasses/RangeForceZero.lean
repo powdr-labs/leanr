@@ -5,7 +5,7 @@ set_option autoImplicit false
 /-! # Dense width-0 range check → equality
 
 Impl-only: recognizer `denseForceZeroAt`, seed collection `denseForceZeroSeeds`, transform
-`denseRangeForceZeroF`; correctness and wiring in `RangeForceZeroProof.lean`. -/
+`denseRangeForceZeroF`; correctness and wiring in `Proofs/RangeForceZero.lean`. -/
 
 namespace ApcOptimizer.Dense
 

@@ -5,7 +5,7 @@ set_option autoImplicit false
 /-! # Collapsing the `sltu x, 1` (seqz) gadget — dense `VarId` port (impl-only)
 
 Dense `VarId` definitions for the seqz-collapse pass: expression templates, the recognizer, and
-the scanning driver. This file states no correctness theorem; see `SeqzCollapseProof.lean`. The
+the scanning driver. This file states no correctness theorem; see `Proofs/SeqzCollapse.lean`. The
 pass mints a fresh `inv` witness, so it is wired with `DenseVerifiedPassW.ofExtending`. -/
 
 namespace ApcOptimizer.Dense

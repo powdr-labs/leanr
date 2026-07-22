@@ -1,5 +1,5 @@
-import ApcOptimizer.Implementation.OptimizerPasses.BoxRewriteProof
-import ApcOptimizer.Implementation.OptimizerPasses.FxSubstProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BoxRewrite
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.FxSubst
 
 set_option autoImplicit false
 

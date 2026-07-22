@@ -1,7 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRange
-import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDropsProof
-import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnifyProof
-import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.FlagFoldDrops
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.RootPairUnify
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DomainBatch
 
 set_option autoImplicit false
 
@@ -10,8 +10,8 @@ set_option autoImplicit false
 `DensePassCorrect` — over `VarId → ZMod p` — for the subsumed variable-range-check dropper
 (`SubsumedRange.lean`). Every dropped range check has its variable bounded `< 2^w.val` by the
 non-circular base, hence accepted under every assignment satisfying the filtered system. Built via
-`denseFilterBusEntailed` (`FlagFoldDropsProof.lean`) and `denseFindVarBound_sound`
-(`RootPairUnifyProof.lean`). -/
+`denseFilterBusEntailed` (`Proofs/FlagFoldDrops.lean`) and `denseFindVarBound_sound`
+(`Proofs/RootPairUnify.lean`). -/
 
 namespace ApcOptimizer.Dense
 

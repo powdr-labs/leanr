@@ -7,7 +7,7 @@ set_option autoImplicit false
 
 Impl-only (no correctness here): the two transforms `denseBoxTautoDropF`/`densePointwiseDupDropF`
 are shaped like `denseFlagUnifyF` minus `facts`, and wrapped with `DenseVerifiedPassW.of` in
-`FlagFoldDropsProof.lean`. Part C's `bs` is read (`bs.isStateful`); part B's is unused. -/
+`Proofs/FlagFoldDrops.lean`. Part C's `bs` is read (`bs.isStateful`); part B's is unused. -/
 
 namespace ApcOptimizer.Dense
 

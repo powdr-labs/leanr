@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZero
-import ApcOptimizer.Implementation.OptimizerPasses.BusUnifyProof
-import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusUnify
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DomainBatch
 
 set_option autoImplicit false
 

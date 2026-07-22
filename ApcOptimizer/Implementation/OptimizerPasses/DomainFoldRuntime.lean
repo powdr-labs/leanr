@@ -9,7 +9,7 @@ The hot evaluators (`denseGroupSurvivorsEV`, `denseConstOnSurvsV`) compile the g
 constraints once (via `DomainBatch.lean`'s `IExpr`) and evaluate every enumerated point by index,
 value-only (`List (ZMod p)` points, no `VarId` per point). Systems at least
 `domainFoldIndexThreshold` large use the index-preserving indexed loop; smaller ones the direct
-loop. Runtime only — correctness is in `DomainFoldProof.lean`. -/
+loop. Runtime only — correctness is in `Proofs/DomainFold.lean`. -/
 
 namespace ApcOptimizer.Dense
 

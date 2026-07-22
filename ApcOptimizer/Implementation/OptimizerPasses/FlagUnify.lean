@@ -5,7 +5,7 @@ set_option autoImplicit false
 /-! # Dense flag unification across duplicate scaled range checks
 
 Data and runtime definitions; the top transform `denseFlagUnifyF` is wrapped directly with
-`DenseVerifiedPassW.of` (proof in `FlagUnifyProof.lean`). -/
+`DenseVerifiedPassW.of` (proof in `Proofs/FlagUnify.lean`). -/
 
 /-- Two summands below `M` that complete the same integer against multiples of `M` are equal. -/
 theorem residue_uniq (M A B w1 w2 : Nat) (h : M * A + w1 = M * B + w2)

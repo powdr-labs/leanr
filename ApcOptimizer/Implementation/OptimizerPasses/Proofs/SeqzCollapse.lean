@@ -1,6 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapseCore
-import ApcOptimizer.Implementation.OptimizerPasses.HintCollapseProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.HintCollapse
 
 set_option autoImplicit false
 
@@ -9,7 +9,7 @@ set_option autoImplicit false
 `DensePassCorrect` for the dense `seqzCollapse` port (`SeqzCollapse.lean`), over `Bridge.lean`'s
 dense semantics. The representation-independent value-level engines (`seqz_forward`,
 `seqz_reconstruct`, and the byte/bus facts) come from `SeqzCollapseCore.lean`; freshness and
-registry helpers from `HintCollapseProof.lean`; byte bounds from `denseBuild_sound`. -/
+registry helpers from `Proofs/HintCollapse.lean`; byte bounds from `denseBuild_sound`. -/
 
 namespace ApcOptimizer.Dense
 

@@ -9,7 +9,7 @@ set_option autoImplicit false
 
 Runtime-only certificates for deciding whether an expression is provably a byte (`< 256`) or
 otherwise bounded, used by the byte-justified drops. A leaf file — definitions only, no soundness
-lemma (that lives in `BusPairCancelJustifyProof.lean`). -/
+lemma (that lives in `Proofs/BusPairCancelJustify.lean`). -/
 
 namespace ApcOptimizer.Dense
 

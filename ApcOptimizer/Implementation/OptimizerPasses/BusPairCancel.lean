@@ -1,7 +1,7 @@
-import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheckProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusPairCancelCheck
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelWits
-import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelIndexProof
-import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseqProof
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.BusPairCancelIndex
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.AddrDiseq
 
 set_option autoImplicit false
 
