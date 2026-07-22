@@ -6,17 +6,10 @@ set_option autoImplicit false
 
 /-! # Dense affine normalization
 
-`DenseExpr.normalize` replaces every maximal affine subexpression by its **merged** normal form
-(`denseLinearize`, combine coefficients of equal `VarId`s, drop zeros, rebuild via
-`DenseLinExpr.toExpr`).
-
-The pass (`denseNormalizePass`) computes through the fused walk `denseNormalizeFused` — one bottom-up
-traversal returning both the normalized expression and the node's linear form, avoiding
-`DenseExpr.normalize`'s own O(size × depth) `denseLinearize` re-walks along non-affine paths. Its
-correctness is proved as a `DensePassCorrect` over `VarId → ZMod p` environments (the walk is
-eval-preserving and introduces no variables) and lifted to the spec `PassCorrect` once, at the
-pipeline edge, by `DenseVerifiedPassW.of`. Same shape as `denseConstantFoldPass`
-(`Dense/ExprOps.lean`). -/
+`DenseExpr.normalize` replaces every maximal affine subexpression by its merged normal form
+(`denseLinearize` → combine like terms → drop zeros → `DenseLinExpr.toExpr`). The pass
+(`denseNormalizePass`) runs the fused single-pass walk `denseNormalizeFused`; same shape as
+`denseConstantFoldPass` (`ExprOps.lean`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -37,19 +30,11 @@ def denseMergeTerms (ts : List (VarId × ZMod p)) : List (VarId × ZMod p) :=
 
 /-! ## Linear like-term merge (runtime `@[csimp]` replacement for `denseMergeTerms`)
 
-`denseMergeTerms`/`denseAddCoeff` are O(terms²): every input term linearly scans the accumulated
-deduped list. For long affine forms (post-substitution reduced constraints; large blocks such as the
-sha256 APC) this is the dominant cost. `denseMergeTermsFast` accumulates each `VarId`'s coefficient
-in a `Std.HashMap` while recording first-occurrence order in an `Array`, then rebuilds by walking the
-recorded order — O(terms) expected. Below a small constant threshold the list fold is faster (no hash
-setup), so a hybrid keeps the tiny-form path (asymptotically still linear: the bounded branch is
-O(1)). Proven `= denseMergeTerms` and installed via `@[csimp]`, so every call site
-(`DenseLinExpr.norm`, hence the fused normalize walk and gauss's per-constraint reduce) uses it at
-runtime with no further proof obligation. -/
+`denseMergeTermsFast` merges via a `Std.HashMap` keyed by `VarId` (O(terms) vs the list fold's
+O(terms²)), with a list-fold fast path for small inputs. Proven `= denseMergeTerms` and installed
+via `@[csimp]`, so every call site uses it at runtime with no further proof obligation. -/
 
-/-- The coefficient the first-occurrence-ordered accumulator holds for `v` after merging (the
-    coefficient of the unique accumulator entry for `v`, if any). Follows `denseAddCoeff`'s
-    structure so its update lemmas are one-line inductions. -/
+/-- The coefficient the accumulator holds for `v` (the coefficient of its unique entry, if any). -/
 def denseAssocCoeff : List (VarId × ZMod p) → VarId → Option (ZMod p)
   | [], _ => none
   | (v', c') :: rest, v => if v' = v then some c' else denseAssocCoeff rest v
@@ -263,8 +248,9 @@ def DenseLinExpr.norm (l : DenseLinExpr p) : DenseLinExpr p :=
 
 /-! ## The dense normalization traversal -/
 
-/-- Recursively collect like terms: replace each maximal affine subexpression by its merged linear
-    form; recurse into genuine variable×variable products. -/
+/-- Affine normalization: replace each maximal affine subexpression by its merged linear form (like
+    terms combined, zero terms dropped), recursing into genuine variable×variable products.
+    E.g. `2*x + 3 + x` normalizes to `3 + 3*x`. -/
 def DenseExpr.normalize : DenseExpr p → DenseExpr p
   | .const n => .const n
   | .var x => .var x
@@ -279,10 +265,7 @@ def DenseExpr.normalize : DenseExpr p → DenseExpr p
 
 /-! ## Eval-preservation of the merge / normal form
 
-Proved over `VarId → ZMod p` environments (no prime hypothesis needed). Consolidated here at their
-definitions' home so every downstream proof shares one copy; the affine-form eval lemmas
-(`denseLinearize_eval`, `DenseLinExpr.norm_eval`'s `add`/`scale`/`toExpr` pieces) live in
-`Dense/Affine.lean`. -/
+The affine-form eval lemmas (`denseLinearize_eval` etc.) live in `Affine.lean`. -/
 
 theorem denseAddCoeff_eval (v : VarId) (c : ZMod p) (ts : List (VarId × ZMod p))
     (denv : VarId → ZMod p) :
@@ -322,12 +305,10 @@ theorem denseDropZero_eval (ts : List (VarId × ZMod p)) (denv : VarId → ZMod 
       · rw [List.filter_cons_of_pos (by simpa using h), List.map_cons, List.sum_cons, ih,
             List.map_cons, List.sum_cons]
 
-/-- **The dense normal form is eval-preserving.** -/
 theorem DenseLinExpr.norm_eval (l : DenseLinExpr p) (denv : VarId → ZMod p) :
     l.norm.eval denv = l.eval denv := by
   simp only [DenseLinExpr.norm, DenseLinExpr.eval, denseDropZero_eval, denseMergeTerms_eval]
 
-/-- **`DenseExpr.normalize` is eval-preserving.** No prime hypothesis needed. -/
 theorem DenseExpr.normalize_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
     e.normalize.eval denv = e.eval denv := by
   induction e with
@@ -350,7 +331,6 @@ theorem DenseExpr.normalize_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
 
 /-! ## Variable bounds (`normalize` introduces no new variable) -/
 
-/-- Every variable of `denseAddCoeff v c ts` is `v` or one of `ts`'s. -/
 theorem denseAddCoeff_fst (v : VarId) (c : ZMod p) (ts : List (VarId × ZMod p)) (x : VarId)
     (h : x ∈ (denseAddCoeff v c ts).map Prod.fst) : x = v ∨ x ∈ ts.map Prod.fst := by
   induction ts with
@@ -424,7 +404,6 @@ theorem DenseLinExpr.scale_terms_fst (k : ZMod p) (l : DenseLinExpr p) :
     (l.scale k).terms.map Prod.fst = l.terms.map Prod.fst := by
   simp [DenseLinExpr.scale, List.map_map, Function.comp_def]
 
-/-- `denseLinearize` introduces no variable outside the expression. -/
 theorem denseLinearize_vars (e : DenseExpr p) (l : DenseLinExpr p) (h : denseLinearize e = some l) :
     ∀ i ∈ l.terms.map Prod.fst, i ∈ e.vars := by
   induction e generalizing l with
@@ -466,7 +445,6 @@ theorem denseLinearize_vars (e : DenseExpr p) (l : DenseLinExpr p) (h : denseLin
               rw [if_neg h1, if_neg h2] at h
               exact absurd h (by simp)
 
-/-- `DenseExpr.normalize` introduces no new variable. -/
 theorem DenseExpr.normalize_vars (e : DenseExpr p) : ∀ i ∈ e.normalize.vars, i ∈ e.vars := by
   induction e with
   | const n => intro i hi; simpa [DenseExpr.normalize] using hi
@@ -490,10 +468,9 @@ theorem DenseExpr.normalize_vars (e : DenseExpr p) : ∀ i ∈ e.normalize.vars,
 
 /-! ## Fused normalization walk
 
-One bottom-up pass returning the normalized expression *and* the node's dense linear form
-(`denseLinearize`'s value). `DenseExpr.normalize` re-runs `denseLinearize` — a full subtree walk — at
-every `add`/`mul` node along non-affine paths (O(size × depth)); threading the linear form up removes
-the re-walks. `denseNormalizeFused_eq` pins both components to the original functions. -/
+One bottom-up pass returning both the normalized expression and the node's dense linear form, so
+`denseLinearize` is not re-walked at every node. `denseNormalizeFused_eq` pins both components to
+(`normalize`, `denseLinearize`). -/
 
 def denseNormalizeFused : DenseExpr p → DenseExpr p × Option (DenseLinExpr p)
   | .const n => (.const n, some ⟨n, []⟩)
@@ -561,14 +538,9 @@ theorem denseNormalizeFused_fst_vars (e : DenseExpr p) :
     ∀ i ∈ ((denseNormalizeFused e).1).vars, i ∈ e.vars := by
   rw [denseNormalizeFused_fst]; exact DenseExpr.normalize_vars e
 
-/-! ## The dense normalization pass
+/-! ## The dense normalization pass -/
 
-The affine-normalization pass, computing through the fused walk. Its correctness is proved
-as a `DensePassCorrect` (the fused walk is eval-preserving and introduces no variables)
-and lifted to the spec `PassCorrect` by `DenseVerifiedPassW.of`. Same shape as
-`denseConstantFoldPass` (`Dense/ExprOps.lean`). -/
-
-/-- The dense affine-normalization pass (wired into `normalize1`/`normalize2`). -/
+/-- The dense affine-normalization pass (see `DenseExpr.normalize`). -/
 def denseNormalizePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun _ _ d => d.mapExpr (fun e => (denseNormalizeFused e).1))

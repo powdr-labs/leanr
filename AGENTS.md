@@ -71,6 +71,24 @@ interactions and then constraints.
 
 When asked to improve the optimizer, use the `autoopt` skill.
 
+## Comments
+
+Comments under `ApcOptimizer/Implementation/` are read by agents, not auditors, and agents can
+infer most things from the code — so keep them minimal and let the code speak:
+
+- **Describe only the current state.** A comment is not a changelog: never narrate history or a
+  change ("used to be X, now Y", "previously", "renamed from", "now also handles…").
+- **Leave self-explanatory code uncommented.** If the code is easy to follow, don't comment it.
+- **Reserve comments for non-obvious, important context** — an invariant, a subtle gate, why an
+  ordering matters — never a restatement of what the next line plainly does.
+- **Prefer references over prose.** Point to the relevant definition/theorem/file (e.g. "soundness
+  in `GaussProof.lean`") instead of re-explaining it.
+- **Every optimization pass keeps one concise human-readable comment** on its entry point saying
+  what it does, ideally with a tiny example (e.g. "for a constraint like `x = 5`, infers the
+  assignment `x := 5`").
+
+Keep the implementation lean; don't let comments regrow.
+
 ## Pushing work
 
 - All commits have to compile without warnings.

@@ -7,53 +7,31 @@ variable {p : ℕ}
 
 /-! # Optimizer scaffolding
 
-The reusable framework for building the circuit optimizer out of small, individually-proven
-optimization *passes*. Nothing here is specific to a particular optimization; concrete passes
-live in `ApcOptimizer/Implementation/OptimizerPasses/`, and the pipeline that assembles them into the
-`optimizer` lives in `ApcOptimizer/Implementation/Optimizer.lean` (with the audited correctness theorems
-in `ApcOptimizer/Optimizer.lean`).
+The reusable framework for building the optimizer out of small, individually-proven passes: the
+relation glue (`≈`, `ConstraintSystem.implies`/`.reconstructs`), `PassCorrect`, and `VerifiedPass`
+bundling a pass with its own `PassCorrect` proof. -/
 
-This module provides:
-
-* the relation glue that lets passes *compose* without re-proving a growing monolith: `≈` on
-  `BusState`, plus `ConstraintSystem.implies` / `.reconstructs` (the soundness- and
-  reconstruction-halves the spec's `isSoundReplacementOf` / `isCompleteReplacementOf` are built from
-  at the pipeline top), with their reflexivity and transitivity lemmas;
-* `PassCorrect`, the per-step correctness obligation;
-* `VerifiedPass`, a pass bundled with its own `PassCorrect` proof (so a pass cannot be written
-  without discharging its obligations), and `VerifiedPass.andThen`/`VerifiedPass.id` to compose
-  and seed pipelines.
-
-These proofs are purely structural; none of them need `p` to be prime. -/
-
-/-! ## Equivalence is an equivalence relation -/
-
-/-- `≈` on `BusState` is reflexive: every message trivially has the same net multiplicity in a
-    state as in itself. -/
 theorem BusState.equiv_refl (s : BusState p) : s ≈ s :=
   fun _ => rfl
 
-/-- `≈` on `BusState` is symmetric. -/
 theorem BusState.equiv_symm {s t : BusState p} (h : s ≈ t) : t ≈ s :=
   fun message => (h message).symm
 
-/-- `≈` on `BusState` is transitive. -/
 theorem BusState.equiv_trans {s t u : BusState p} (h1 : s ≈ t) (h2 : t ≈ u) : s ≈ u :=
   fun message => (h1 message).trans (h2 message)
 
-/-- Soundness half of a replacement (glue, formerly in `Spec.lean`): every satisfying assignment of
-    `self` maps to one of `other` with the same stateful side effects. The spec's
-    `isSoundReplacementOf` is exactly this together with invariant preservation. -/
+/-- Soundness half of a replacement: every satisfying assignment of `self` maps to one of `other`
+    with the same stateful side effects. The spec's `isSoundReplacementOf` is this plus invariant
+    preservation. -/
 def ConstraintSystem.implies (self other : ConstraintSystem p) (busSemantics : BusSemantics p) :
     Prop :=
   ∀ env, self.satisfies busSemantics env →
     ∃ env', other.satisfies busSemantics env' ∧
       self.sideEffects busSemantics env ≈ other.sideEffects busSemantics env'
 
-/-- Derived-variable reconstruction under `e` (glue, formerly in `Spec.lean`): every no-powdr-ID
-    variable of `cs` is computed by the method `ds` uses for it, reading only powdr-ID variables
-    from the fixed original input variable set. Threaded through the passes; the pipeline top uses
-    it to match the spec's `witgen` output and `Derivations.cover`. -/
+/-- Every no-powdr-ID variable of `cs` is computed by `ds`'s method for it, reading only powdr-ID
+    variables from `inputVars`. Threaded through passes; the pipeline top uses it to match the
+    spec's `witgen` output and `Derivations.cover`. -/
 def ConstraintSystem.reconstructs (inputVars : List Variable) (cs : ConstraintSystem p)
     (ds : Derivations p) (e : Variable → ZMod p) : Prop :=
   ∀ v ∈ cs.vars, v.powdrId? = none →
@@ -62,13 +40,10 @@ def ConstraintSystem.reconstructs (inputVars : List Variable) (cs : ConstraintSy
       (∀ x ∈ cm.vars, x ∈ inputVars) ∧
       cm.eval e = e v
 
-/-- Any constraint system implies itself: the same satisfying assignment works and its side
-    effects are (reflexively) equal. -/
 theorem ConstraintSystem.implies_refl (cs : ConstraintSystem p) (busSemantics : BusSemantics p) :
     cs.implies cs busSemantics :=
   fun env hsat => ⟨env, hsat, BusState.equiv_refl _⟩
 
-/-- `implies` is transitive: chain the witness assignments and the side-effect equalities. -/
 theorem ConstraintSystem.implies_trans {a b c : ConstraintSystem p} {busSemantics : BusSemantics p}
     (h1 : a.implies b busSemantics) (h2 : b.implies c busSemantics) : a.implies c busSemantics :=
   fun env hsat =>
@@ -78,50 +53,29 @@ theorem ConstraintSystem.implies_trans {a b c : ConstraintSystem p} {busSemantic
 
 /-! ## Precomputed primality witness
 
-`decide (Nat.Prime p)` is an expensive trial division (≈ √p steps for the field modulus). Every
-prime-gated pass needs to know whether `p` is prime, but re-deciding it once per pass invocation —
-and again on every cleanup iteration — repeats that cost dozens of times per optimizer run.
-`PrimeWitness p` computes the decision **once** (`PrimeWitness.of`) and carries the `Bool` together
-with a proof that `true` entails `Nat.Prime p`; the pipeline builds one and threads it to each
-prime-gated pass, which then branches on the `Bool` in O(1) instead of re-deciding. Purely a runtime
-optimization — the soundness proof a pass gets from `pw.correct` is the same `Nat.Prime p` it
-previously obtained from `of_decide_eq_true`. -/
+`decide (Nat.Prime p)` is expensive (≈ √p trial division). `PrimeWitness p` computes it once and
+carries the `Bool` with a proof that `true` entails `Nat.Prime p`; the pipeline threads one to each
+prime-gated pass, which branches on it in O(1). -/
 
-/-- A once-computed decision of `p`'s primality: the `Bool` result of `decide (Nat.Prime p)`
-    together with the proof that `true` entails primality. -/
 structure PrimeWitness (p : ℕ) where
-  /-- Whether `p` is prime (the result of the one expensive `decide`). -/
   isPrime : Bool
   /-- `isPrime = true` entails `Nat.Prime p` — the fact prime-gated passes consume. -/
   correct : isPrime = true → Nat.Prime p
 
-/-- Compute the witness. This is the single `decide (Nat.Prime p)` per optimizer run. -/
+/-- The single `decide (Nat.Prime p)` per optimizer run. -/
 def PrimeWitness.of (p : ℕ) : PrimeWitness p :=
   ⟨decide (Nat.Prime p), fun h => of_decide_eq_true h⟩
 
 /-! ## Verified passes
 
-A single optimization step, packaged with its correctness proof. `VerifiedPass` is a function
-that, given a constraint system and bus semantics, returns a new constraint system **together
-with a proof** that it (a) is a sound and (real-trace) complete replacement for the input and
-(b) preserves invariants. Because the proof is part of the return value, there is no separate
-theorem to weaken: a pass simply cannot be written down without discharging its obligations.
+A `VerifiedPass` maps a constraint system to a new one bundled with a `PassCorrect` proof, so a
+pass cannot be written without discharging its obligations. Passes compose with `andThen`. -/
 
-Passes compose with `VerifiedPass.andThen` (run one, then the next), which threads the two proofs
-through `PassCorrect.andThen` (soundness via `implies_trans`, reconstruction by concatenating
-derivations) and the composition of invariant-preservation.
-
-**To add an optimization:** create a `VerifiedPass` for it in a new file under
-`ApcOptimizer/Implementation/OptimizerPasses/`, then `.andThen` it into `pipeline` in
-`ApcOptimizer/Implementation/Optimizer.lean`. Prove `PassCorrect` for your transformation; do not change
-`Spec.lean` or the glue above. -/
-
-/-- The per-pass correctness obligation. `out` is sound (`implies cs`), preserves invariants, adds
-    no new powdr-ID column, and satisfies the completeness direction: every admissible satisfying
-    assignment of `cs` extends to one of `out` with equal side effects that keeps every input-column
-    value and reconstructs `out`'s derived variables from the input columns. `dsLocal` are the
-    derivations this step introduces; reconstruction is threaded through any incoming `dsIn`, so
-    passes compose simply by concatenating derivations. -/
+/-- The per-pass correctness obligation: `out` is sound (`implies cs`), preserves invariants, adds
+    no new powdr-ID column, and is real-trace complete — every admissible satisfying assignment of
+    `cs` extends to one of `out` with equal side effects, preserving input-column values and
+    reconstructing `out`'s derived variables. `dsLocal` are the derivations this step introduces,
+    concatenated onto any incoming `dsIn` so passes compose. -/
 def PassCorrect (cs out : ConstraintSystem p) (dsLocal : Derivations p) (bs : BusSemantics p) :
     Prop :=
   out.implies cs bs ∧
@@ -135,7 +89,6 @@ def PassCorrect (cs out : ConstraintSystem p) (dsLocal : Derivations p) (bs : Bu
         ∀ dsIn, cs.reconstructs inputVars dsIn env →
           out.reconstructs inputVars (dsIn ++ dsLocal) env'))
 
-/-- Reflexivity: the unchanged system with no new derivations is correct. -/
 theorem PassCorrect.refl (cs : ConstraintSystem p) (bs : BusSemantics p) :
     PassCorrect cs cs [] bs :=
   ⟨cs.implies_refl bs, _root_.id, fun _ hv _ => hv,
@@ -143,8 +96,8 @@ theorem PassCorrect.refl (cs : ConstraintSystem p) (bs : BusSemantics p) :
      ⟨env, hsat, hadm, BusState.equiv_refl _,
        ⟨fun _ _ => rfl, fun _ _ dsIn hrec => by rwa [List.append_nil]⟩⟩⟩
 
-/-- Sequential composition: derivations concatenate, soundness/invariants compose, and the threaded
-    reconstruction chains (`dsIn ↦ dsIn ++ df ↦ (dsIn ++ df) ++ dg = dsIn ++ (df ++ dg)`). -/
+/-- Sequential composition: derivations concatenate, soundness/invariants compose, reconstruction
+    chains. -/
 theorem PassCorrect.andThen {cs mid out : ConstraintSystem p} {bs : BusSemantics p}
     {df dg : Derivations p} (hf : PassCorrect cs mid df bs) (hg : PassCorrect mid out dg bs) :
     PassCorrect cs out (df ++ dg) bs := by
@@ -162,9 +115,8 @@ theorem PassCorrect.andThen {cs mid out : ConstraintSystem p} {bs : BusSemantics
   have := hr2 inputVars hmidIn (dsIn ++ df) (hr1 inputVars hpowIn dsIn hrec)
   rwa [List.append_assoc] at this
 
-/-- Build `PassCorrect` for a pass whose completeness witness is the input assignment itself and
-    which introduces no new variables (`out.vars ⊆ cs.vars`) — the shape of every pass except the
-    column-introducing re-encoder. It emits no derivations. -/
+/-- `PassCorrect` for a pass whose completeness witness is the input assignment itself and which
+    introduces no new variables (`out.vars ⊆ cs.vars`); emits no derivations. -/
 theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
     (hsound : out.implies cs bs)
     (hinv : cs.guaranteesInvariants bs → out.guaranteesInvariants bs)
@@ -179,28 +131,22 @@ theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
   rw [List.append_nil]
   exact fun v hvout hvnone => hrec v (hsub v hvout) hvnone
 
-/-- Soundness bridge to the audited spec: a `PassCorrect` gives `isSoundReplacementOf` (soundness
-    plus invariant preservation). The completeness half (`isCompleteReplacementOf`) is discharged at
-    the pipeline top in `ApcOptimizer/Implementation/Optimizer.lean`, where it is stated as satisfaction of
-    the concrete `witgen` output and so needs the evaluation-congruence lemmas proved among the
-    passes. -/
+/-- A `PassCorrect` gives the audited `isSoundReplacementOf`. The completeness half is discharged
+    at the pipeline top (`Implementation/Optimizer.lean`). -/
 theorem PassCorrect.toSound {cs out : ConstraintSystem p} {ds : Derivations p}
     {bs : BusSemantics p} (h : PassCorrect cs out ds bs) : out.isSoundReplacementOf cs bs :=
   ⟨h.1, h.2.1⟩
 
-/-- The result of a verified pass: the transformed system, the derivations it introduces, and the
-    correctness proof. -/
+/-- The result of a verified pass: transformed system, introduced derivations, correctness proof. -/
 structure PassResult {p : ℕ} (cs : ConstraintSystem p) (bs : BusSemantics p) where
   out : ConstraintSystem p
   derivs : Derivations p
   correct : PassCorrect cs out derivs bs
 
-/-- A proof-carrying optimization pass: maps a constraint system to a new one and the derivations it
-    introduces, bundled with a `PassCorrect` proof. -/
+/-- A proof-carrying optimization pass, bundled with a `PassCorrect` proof. -/
 abbrev VerifiedPass (p : ℕ) :=
   (cs : ConstraintSystem p) → (bs : BusSemantics p) → PassResult cs bs
 
-/-- The identity pass: returns the system unchanged, correct by reflexivity. -/
 def VerifiedPass.id : VerifiedPass p :=
   fun cs bs => ⟨cs, [], PassCorrect.refl cs bs⟩
 
@@ -211,20 +157,15 @@ def VerifiedPass.andThen (f g : VerifiedPass p) : VerifiedPass p :=
     let r2 := g r1.out bs
     ⟨r2.out, r1.derivs ++ r2.derivs, r1.correct.andThen r2.correct⟩
 
-/-- Iterate a pass `n` times. Used to run local, one-step passes (e.g. "substitute one variable")
-    to a fixpoint: each application is a `VerifiedPass`, so the composite is correct by construction.
-    A pass that finds nothing to do returns its input unchanged, so extra iterations are harmless. -/
+/-- Iterate a pass `n` times to drive a local one-step pass to a fixpoint; correct by construction
+    (a pass with nothing to do returns its input unchanged, so extra iterations are harmless). -/
 def VerifiedPass.iterate (f : VerifiedPass p) : Nat → VerifiedPass p
   | 0 => VerifiedPass.id
   | n + 1 => (f.iterate n).andThen f
 
-/-! ## Variable-set membership
+/-! ## Variable-set membership -/
 
-Helpers for discharging the `out.vars ⊆ cs.vars` obligation of `PassCorrect.ofEnvEq`: a variable of
-a sub-expression is a variable of the whole system, and vice versa. -/
-
-/-- Membership in `cs.vars`: a variable occurs in some constraint, some multiplicity, or some
-    payload expression. -/
+/-- A variable of `cs.vars` occurs in some constraint, multiplicity, or payload expression. -/
 theorem ConstraintSystem.mem_vars {cs : ConstraintSystem p} {x : Variable} :
     x ∈ cs.vars ↔
       (∃ c ∈ cs.algebraicConstraints, x ∈ c.vars) ∨
@@ -247,9 +188,7 @@ theorem ConstraintSystem.mem_vars_of_payload {cs : ConstraintSystem p}
 
 /-! ## Decidable degree-bound check
 
-`ConstraintSystem.withinDegree` (the spec's degree-bound property) is a `Prop`; the degree-guard
-machinery needs a `Bool` twin to branch on. This is optimizer infrastructure, not part of the
-audited spec, so it lives here rather than in `Spec.lean`. -/
+A `Bool` twin of the spec's `ConstraintSystem.withinDegree` for the degree guard to branch on. -/
 
 /-- Decidable twin of `ConstraintSystem.withinDegree`. -/
 def ConstraintSystem.withinDegreeB (s : ConstraintSystem p) (b : DegreeBound) : Bool :=

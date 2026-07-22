@@ -4,11 +4,8 @@ set_option autoImplicit false
 
 /-! # Dense substitution
 
-Substitution over `DenseExpr`/`DenseConstraintSystem` — the core variable-elimination machinery
-Gauss and the domain passes build on. The runtime cores (`DenseExpr.subst`, `denseBIsubst`,
-`DenseConstraintSystem.subst`) and their variable-bound / coverage-preservation lemmas
-(`DenseExpr.subst_vars`, `DenseExpr.subst_covered`, `DenseConstraintSystem.subst_covered`) are
-proved directly over `VarId`. -/
+Single-variable substitution over `DenseExpr`/`DenseConstraintSystem` (the variable-elimination
+core Gauss and the domain passes build on), with its variable-bound and coverage lemmas. -/
 
 namespace ApcOptimizer.Dense
 
@@ -16,7 +13,6 @@ variable {p : ℕ}
 
 /-! ## Substitution on dense expressions -/
 
-/-- Substitute `VarId` `i` by dense expression `t` throughout a dense expression. -/
 def DenseExpr.subst (e : DenseExpr p) (i : VarId) (t : DenseExpr p) : DenseExpr p :=
   match e with
   | .const n => .const n
@@ -24,7 +20,6 @@ def DenseExpr.subst (e : DenseExpr p) (i : VarId) (t : DenseExpr p) : DenseExpr 
   | .add a b => .add (a.subst i t) (b.subst i t)
   | .mul a b => .mul (a.subst i t) (b.subst i t)
 
-/-- Substitution introduces no variable outside `e` and `t`. -/
 theorem DenseExpr.subst_vars (e : DenseExpr p) (i : VarId) (t : DenseExpr p) :
     ∀ k ∈ (e.subst i t).vars, k ∈ e.vars ∨ k ∈ t.vars := by
   induction e with
@@ -48,7 +43,6 @@ theorem DenseExpr.subst_vars (e : DenseExpr p) (i : VarId) (t : DenseExpr p) :
       · exact (iha k hk).imp (List.mem_append.2 <| Or.inl ·) id
       · exact (ihb k hk).imp (List.mem_append.2 <| Or.inr ·) id
 
-/-- Substitution preserves coverage when the substituted expression is covered. -/
 theorem DenseExpr.subst_covered {reg : VarRegistry} {e t : DenseExpr p} {i : VarId}
     (he : e.CoveredBy reg) (ht : t.CoveredBy reg) : (e.subst i t).CoveredBy reg := by
   intro k hk
@@ -58,20 +52,17 @@ theorem DenseExpr.subst_covered {reg : VarRegistry} {e t : DenseExpr p} {i : Var
 
 /-! ## Substitution on dense constraint systems -/
 
-/-- Substitute `i := t` in a dense bus interaction. -/
 def denseBIsubst (bi : BusInteraction (DenseExpr p)) (i : VarId) (t : DenseExpr p) :
     BusInteraction (DenseExpr p) :=
   { busId := bi.busId,
     multiplicity := bi.multiplicity.subst i t,
     payload := bi.payload.map (·.subst i t) }
 
-/-- Substitute `i := t` everywhere in a dense constraint system. -/
 def DenseConstraintSystem.subst (d : DenseConstraintSystem p) (i : VarId) (t : DenseExpr p) :
     DenseConstraintSystem p :=
   { algebraicConstraints := d.algebraicConstraints.map (·.subst i t),
     busInteractions := d.busInteractions.map (denseBIsubst · i t) }
 
-/-- Substitution preserves system coverage when `t` is covered. -/
 theorem DenseConstraintSystem.subst_covered {reg : VarRegistry} {d : DenseConstraintSystem p}
     {t : DenseExpr p} {i : VarId} (hd : d.CoveredBy reg) (ht : t.CoveredBy reg) :
     (d.subst i t).CoveredBy reg := by

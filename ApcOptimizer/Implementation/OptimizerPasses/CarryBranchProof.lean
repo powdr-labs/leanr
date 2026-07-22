@@ -3,16 +3,8 @@ import ApcOptimizer.Implementation.OptimizerPasses.DigitFoldProof
 
 set_option autoImplicit false
 
-/-! # Correctness for the dense carry-branch resolution
-
-`VarId`-level correctness for `denseCarryBranchPass` (`CarryBranch.lean`), proved over dense
-environments `VarId → ZMod p`. The two-sided interval certificate (`denseSplitSum_val` /
-`denseLinNeverZeroSplit` / `denseIntervalCert_sound` / `denseNeverZeroB_sound`) and the resolution
-equivalence (`denseResolveExpr_eval_iff`) are proved directly over the dense defs — the `ZMod`
-arithmetic is representation-independent — and the pass correctness is `DensePassCorrect.ofEnvEq`
-(the rewrite preserves the satisfying set exactly; bus interactions, side effects and admissibility
-are untouched). The fact-derived value bounds are consumed through `denseBuild_sound`
-(`DigitFoldProof.lean`). -/
+/-! # Correctness for the dense carry-branch resolution (`CarryBranch.lean`). Value bounds are
+consumed through `denseBuild_sound` (`DigitFoldProof.lean`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -20,8 +12,7 @@ variable {p : ℕ}
 
 /-! ## Two-sided interval certificate -/
 
-/-- The bounded value interval of a term list: `some (maxPos, maxNeg)` with the sum provably
-    `P − N`, `P.val ≤ maxPos`, `N.val ≤ maxNeg`. -/
+/-- The term sum decomposes as `P − N` with `P.val ≤ maxPos`, `N.val ≤ maxNeg`. -/
 theorem denseSplitSum_val (B : Std.HashMap VarId Nat)
     (terms : List (VarId × ZMod p)) (mp mn : Nat)
     (h : denseSplitSumMax B terms = some (mp, mn)) (hmp : mp < p) (hmn : mn < p)
@@ -141,10 +132,8 @@ theorem denseResolveExpr_eval_iff [Fact p.Prime] (B : Std.HashMap VarId Nat) (e 
 
 /-! ## The pass correctness -/
 
-/-- **Carry-branch correctness.** The rewrite through `denseResolveExpr` preserves the
-    satisfying set exactly (both directions use the input assignment); bus interactions, side
-    effects and admissibility are untouched, and no variable is introduced. The value bounds needed
-    by `denseResolveExpr_eval_iff` hold for every satisfying assignment via `denseBuild_sound`. -/
+/-- Carry-branch correctness: the `denseResolveExpr` rewrite preserves the satisfying set exactly;
+    value bounds hold for every satisfying assignment via `denseBuild_sound`. -/
 theorem denseCarryBranchF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : BusSemantics p)
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     DensePassCorrect reg.isInput d (denseCarryBranchF pw bs facts d) [] bs := by
@@ -209,9 +198,7 @@ theorem denseCarryBranchF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs 
   · rw [show denseCarryBranchF pw bs facts d = d from by unfold denseCarryBranchF; rw [if_neg hpB]]
     exact DensePassCorrect.refl reg.isInput d bs
 
-/-- The dense carry-branch-resolution pass: collapse every product constraint with a certified
-    never-vanishing factor to its other factor. Fact-consuming; proved over `VarId` via
-    `denseCarryBranchF_correct`. Identity for composite `p`. -/
+/-- The dense carry-branch-resolution pass; correctness via `denseCarryBranchF_correct`. -/
 def denseCarryBranchPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (denseCarryBranchF pw)

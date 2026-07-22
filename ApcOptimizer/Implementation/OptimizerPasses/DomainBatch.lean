@@ -10,24 +10,14 @@ set_option autoImplicit false
 
 /-! # Dense finite-domain-table construction
 
-The domain-derivation layer: the table of finite domains derived from product-of-affine-factor
-constraints (`denseRootsIn`) and from fact-bounded bus payload slots (`denseInteractionDomainF`).
-
-`FiniteDomain p` is variable-free. The runtime dense table is a plain
-`Std.HashMap VarId (FiniteDomain p)` (no soundness field); its correctness flows through a
-correspondence proof, established elsewhere, to the decoded system's domain table. The
-fact-consuming `denseInteractionDomainF` uses `facts : BusFacts p bs` (keyed by bus IDs + field
-patterns, VM-neutral) via `denseInteractionBound` from `Dense/DigitFold.lean` — the DigitFold
-fact-layer template. -/
+Finite domains per `VarId`, derived from product-of-affine-factor constraints (`denseRootsIn`) and
+fact-bounded bus payload slots (`denseInteractionDomainF`). -/
 
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Dense `rootsIn`
-
-`denseRootsIn` returns a variable-free `List (ZMod p)`. The only variable comparison is `y = x` in
-the single-term case. -/
+/-! ## Dense `rootsIn` -/
 
 /-- Find the affine root of `c * v + i` if `[(j, a)]` is a single term `j = i` with `a ≠ 0`. -/
 def denseRootsOfTerms (i : VarId) (c : ZMod p) :
@@ -55,16 +45,12 @@ def denseRootsIn (i : VarId) : DenseExpr p → Option (List (ZMod p))
       | some ra, some rb => some (ra ++ rb)
       | _, _ => none
 
-/-! ## The dense domain table
-
-A plain runtime structure wrapping `Std.HashMap VarId (FiniteDomain p)`; correctness comes from the
-correspondence, not a carried invariant. -/
+/-! ## The dense domain table -/
 
 /-- Finite domains for `VarId`s (runtime-only; no soundness field). -/
 structure DenseDomainTable (p : ℕ) where
   map : Std.HashMap VarId (FiniteDomain p)
 
-/-- The empty dense domain table. -/
 def DenseDomainTable.empty : DenseDomainTable p := ⟨∅⟩
 
 /-- Insert an entailed domain, keeping the smaller of two candidate domains. -/
@@ -86,7 +72,6 @@ def DenseDomainTable.doms (T : DenseDomainTable p) :
 
 /-! ## `.map`-extraction helpers and the insert correspondence -/
 
-/-- The `.map` field of the dense `insertEntry`. -/
 theorem DenseDomainTable.insertEntry_map (T : DenseDomainTable p) (i : VarId) (d : FiniteDomain p) :
     (T.insertEntry i d).map
       = (if (match T.map[i]? with | some d0 => decide (d.size < d0.size) | none => (true : Bool))
@@ -120,8 +105,7 @@ def denseAddConstraintDoms : List (DenseExpr p) → DenseDomainTable p → Dense
 def densePayloadRawVars (bi : BusInteraction (DenseExpr p)) : List VarId :=
   bi.payload.filterMap (fun e => match e with | .var i => some i | _ => none)
 
-/-- A bus obligation's range domain for `i`, kept symbolically, using the DigitFold fact-layer
-    `denseInteractionBound` on `facts`. -/
+/-- A bus obligation's range domain for `i`, via `denseInteractionBound`. -/
 def denseInteractionDomainF (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (i : VarId) : Option (FiniteDomain p) :=
   match denseInteractionBound bs facts bi i with
@@ -146,29 +130,18 @@ def denseAddBusDoms (bs : BusSemantics p) (facts : BusFacts p bs) :
   | bi :: rest, T =>
     denseAddBusDoms bs facts rest (denseAddBusVars bs facts bi (densePayloadRawVars bi).dedup T)
 
-/-! ## Dense enumeration engine
+/-! ## Dense enumeration engine -/
 
-The joint box-scan enumeration, instantiated over `VarId` keys / `List (VarId × ZMod p)` points. The
-compiled predicates (`IExpr`/`CBi`) and the symbolic `FiniteDomain` enumeration are variable-free;
-only the *key type* of the enumerated points and the environment/compile leaves are `VarId`-typed.
-Every dense def here operates directly on `VarId` (no `Variable` materialized on the scan's hot path). -/
-
-/-- Enumeration-time `VarId` lookup; compares `VarId`s directly. -/
 def denseEnvOfFast : List (VarId × ZMod p) → VarId → ZMod p
   | [], _ => 0
   | (x, v) :: rest, y => if (y == x) = true then v else denseEnvOfFast rest y
 
-/-- Whether `y` occurs in `xs`, using the same discriminator-fold trick as `denseEnvOfFast`, for the
-    covered-item scans. -/
 def denseContainsFast (xs : List VarId) (y : VarId) : Bool :=
   match xs with
   | [] => false
   | x :: rest => (y == x) || denseContainsFast rest y
 
-/-! ### Index-compiled evaluation over dense points
-
-`IExpr`/`CBi` are variable-free; the compiled term's evaluation over a dense point ignores keys and
-reads positionally. -/
+/-! ### Index-compiled evaluation over dense points -/
 
 /-- Positional lookup in a dense assignment; ignores keys. -/
 def denseLookupIx : List (VarId × ZMod p) → Nat → ZMod p
@@ -213,7 +186,6 @@ def denseCompileEs (keys : List VarId) : List (DenseExpr p) → Option (List (IE
     | some ie, some irest => some (ie :: irest)
     | _, _ => none
 
-/-- Compile a dense bus interaction. -/
 def denseCompileBi (keys : List VarId) (bi : BusInteraction (DenseExpr p)) : Option (CBi p) :=
   match denseCompileE keys bi.multiplicity, denseCompileEs keys bi.payload with
   | some m, some pl => some ⟨bi.busId, m, pl⟩
@@ -228,10 +200,7 @@ def denseCompileBis (keys : List VarId) : List (BusInteraction (DenseExpr p)) �
     | some cbi, some crest => some (cbi :: crest)
     | _, _ => none
 
-/-! ### `DenseExpr.eval` congruence
-
-`DenseExpr.eval` depends only on the values of the variables that occur — reused by the value-only
-enumeration engine (`DomainBatchRuntime`) and its correctness proofs. -/
+/-! ### `DenseExpr.eval` congruence -/
 
 /-- `DenseExpr.eval` depends only on the values of the variables that occur. -/
 theorem DenseExpr.eval_congr (e : DenseExpr p) (f g : VarId → ZMod p)
@@ -246,10 +215,7 @@ theorem DenseExpr.eval_congr (e : DenseExpr p) (f g : VarId → ZMod p)
       simp only [DenseExpr.vars, List.mem_append] at h
       simp only [DenseExpr.eval, iha (fun i hi => h i (Or.inl hi)), ihb (fun i hi => h i (Or.inr hi))]
 
-/-! ## Dense `varsInF`
-
-The covered-set predicates the enumeration engine filters items by. Their only variable comparisons
-go through `denseContainsFast`. -/
+/-! ## Dense `varsInF` -/
 
 /-- Whether every variable of the expression lies in `xs`. -/
 def DenseExpr.varsInF (xs : List VarId) : DenseExpr p → Bool
@@ -262,10 +228,7 @@ def DenseExpr.varsInF (xs : List VarId) : DenseExpr p → Bool
 def denseBIVarsInF (xs : List VarId) (bi : BusInteraction (DenseExpr p)) : Bool :=
   bi.multiplicity.varsInF xs && bi.payload.all (fun e => e.varsInF xs)
 
-/-! ## Dense `biInformative`
-
-The informativeness gate on a covered obligation, through `DenseExpr.isVar`/`.constValue?` and the
-DigitFold fact-layer `denseInteractionBound`. -/
+/-! ## Dense `biInformative` -/
 
 /-- Whether a bus interaction is informative: some payload entry is neither a variable nor a known
     constant, or is a variable whose interaction bound is unknown. -/
@@ -278,23 +241,19 @@ def denseBiInformative (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-! ## Dense inverted index
 
-The `VarId`-keyed inverted index the enumeration engine uses to find covered items in O(local): the
-candidate list for a target is the union of the buckets under its variables plus the variable-less
-positions. -/
+The candidate list for a target is the union of the buckets under its variables plus the
+variable-less positions. -/
 
-/-- The dense inverted index. -/
 structure DenseCovIndex where
   buckets : Std.HashMap VarId (List Nat)
   varless : List Nat
 
-/-- One dense index-build step. -/
 def denseBuildStep {α : Type} (varsOf : α → List VarId) (ai : α × Nat) (idx : DenseCovIndex) :
     DenseCovIndex :=
   match varsOf ai.1 with
   | [] => ⟨idx.buckets, ai.2 :: idx.varless⟩
   | vs => ⟨vs.foldl (fun m v => m.insert v (ai.2 :: m.getD v [])) idx.buckets, idx.varless⟩
 
-/-- Build the dense inverted index. -/
 def denseCovBuild {α : Type} (varsOf : α → List VarId) (items : List α) : DenseCovIndex :=
   items.zipIdx.foldr (denseBuildStep varsOf) ⟨∅, []⟩
 
@@ -322,8 +281,7 @@ theorem denseBuildStep_buckets_cons {α : Type} (varsOf : α → List VarId) (ai
 
 /-! ### Dense `ForcedIdx` and its correspondence -/
 
-/-- The dense per-target index bundle (plain data — no soundness witnesses; correctness is
-    established by a correspondence proof elsewhere). -/
+/-- The per-target index bundle (plain data; correctness via correspondence). -/
 structure DenseForcedIdx (p : ℕ) where
   csIdx : DenseCovIndex
   arrCs : Array (DenseExpr p)
@@ -378,21 +336,12 @@ theorem denseCoveredIdxUnord_mem_of_eq {α : Type} (idx : DenseCovIndex) (l : Li
   have hi' : i < l.length := by simpa using hi
   exact ⟨by simp [l.getElem_mem hi'], hq⟩
 
-/-- Canonical dedup key of a dense variable set: its exact set identity as a sorted, duplicate-free
-    `List VarId`. Registry injectivity makes a `VarId` a full variable identity, so `VarId`-set
-    equality *is* set equality of the underlying `Variable`s — and, unlike a name-based key, two
-    distinct variables with equal `name` but different `powdrId?` never collide. Sorting by the
-    underlying index and dropping duplicates makes the list canonical, so the key is invariant under
-    the order and multiplicity of `xs` and needs no registry lookup or string building. -/
+/-- Canonical dedup key of a variable set: the sorted, duplicate-free `List VarId`, so the key is
+    invariant under the order and multiplicity of `xs` and distinct variables never collide. -/
 def denseVarSetKey (xs : List VarId) : List VarId :=
   xs.dedup.mergeSort (fun a b => compare a.index b.index != .gt)
 
-/-! ### Regression guards: the key is an exact `VarId` set (equal-name variables do not collide)
-
-Construct two variables with the same `name` but different `powdrId?`: they are distinct `Variable`
-identities, so the injective registry assigns them distinct `VarId`s. A name-based key would collide
-them; the exact `VarId`-set key does not. The guards check distinctness, order-independence, and set
-(duplicate-collapsing) semantics — with no reference to any legacy name key. -/
+/-! ### Regression guards: the key is an exact `VarId` set -/
 
 private def egRegA : VarRegistry × VarId :=
   VarRegistry.empty.register { name := "x", powdrId? := some 1 }
@@ -401,11 +350,11 @@ private def egRegB : VarRegistry × VarId :=
 private def egA : VarId := egRegA.2
 private def egB : VarId := egRegB.2
 
--- (a) distinct equal-name variables get distinct singleton keys (a name key would collide them)
+-- distinct equal-name variables get distinct singleton keys
 #guard denseVarSetKey [egA] != denseVarSetKey [egB]
--- (c) order-independence: the key does not depend on the order of `xs`
+-- order-independence
 #guard denseVarSetKey [egA, egB] == denseVarSetKey [egB, egA]
--- (d) set semantics: duplicate ids collapse
+-- set semantics: duplicate ids collapse
 #guard denseVarSetKey [egA, egA, egB] == denseVarSetKey [egA, egB]
 
 /-- Apply a dense solution map to a system, unless it is empty. Kept as a standalone function so

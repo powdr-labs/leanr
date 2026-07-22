@@ -7,30 +7,11 @@ set_option autoImplicit false
 /-! # Dense two-root decomposition unification
 
 Recognizes pairs of two-root-decomposed constraints sharing a root gap and unifies them via a
-substitution: `denseRpCheckPair` (the pair certificate), `denseRpCandidates`/`denseRpKeyHash`/
-`denseRpInsertAll`/`denseRpLoop` (the scan), and the pass transform `denseRootPairUnifyF`. This file
-is **impl-only**: it carries no `DensePassCorrect`/`DenseVerifiedPassW` wrapper here — the top-level
-transform `denseRootPairUnifyF` is shaped exactly like `denseBusUnifyF`
-(`Dense/BusUnifyNative.lean`), so it can be wrapped directly with `DenseVerifiedPassW.of`.
+substitution. Impl-only: the top transform `denseRootPairUnifyF` is shaped like `denseBusUnifyF`
+(`BusUnifyNative.lean`), so `RootPairUnifyProof.lean` wraps it with `DenseVerifiedPassW.of`.
 
-## Notes
-
-* `denseTwoRootOf?` (`Dense/AddrDiseq.lean`) is reused unchanged, not re-derived.
-* `DenseExpr.splitAt` (`e = k·x + r` with `k` a field constant and `r` an `x`-free expression) is a
-  shared dense helper placed in this file; other passes that need it should import this file and
-  reuse `DenseExpr.splitAt` directly, not re-derive it.
-* `denseFindDomainAlg` (`Dense/DomainFold.lean`) and `denseAssignments`/`denseEnvOfFast`
-  (`Dense/DomainFold.lean`/`Dense/DomainBatch.lean`) are reused unchanged, not re-derived.
-  `denseFindVarBound` has no existing dense port elsewhere, so the minimal slice needed here is
-  defined in this file, built entirely from `denseInteractionBound` (`Dense/DigitFold.lean`).
-* `DenseRPSeen` carries no `cs`-scoping parameter: with no `mem` membership proof field to state,
-  there is nothing left needing one. For the same reason `denseRpLoop` threads `bis`/`domCs`
-  explicitly as plain parameters, rather than through any `cs`-scoped field access — both are read
-  by real runtime calls inside `denseRpCheckPair`'s bound machinery.
-* Every decidable condition that gates *behavior* (the `pw.isPrime = true` primality gate,
-  `denseRpCheckPair`'s whole certificate) is kept as a plain `if`/`Bool` computation. Neither
-  `denseRpCheckPair` nor `denseRpLoop` needs `[Fact p.Prime]` to *compute* — `ZMod p`'s `Inv` is
-  total for every `p`; only a soundness proof would need primality. -/
+`ZMod p`'s `Inv` is total for every `p`, so nothing here needs `[Fact p.Prime]` to compute; only
+soundness does. -/
 
 namespace ApcOptimizer.Dense
 
@@ -38,8 +19,8 @@ variable {p : ℕ}
 
 /-! ## Constant-coefficient decomposition (`DenseExpr.splitAt`, shared dense helper)
 
-`e = k·x + r` with `k` a field constant and `r` an `x`-free expression — unlike `denseLinearize`,
-the remainder may be *nonlinear*, so this succeeds exactly where the affine machinery gives up. -/
+Unlike `denseLinearize`, the remainder may be nonlinear, so this succeeds where the affine machinery
+gives up. -/
 
 /-- Decompose `e` as `k·x + r`: `k` a field constant, `r` not mentioning `x` (by construction). -/
 def DenseExpr.splitAt (x : VarId) : DenseExpr p → Option (ZMod p × DenseExpr p)
@@ -67,18 +48,9 @@ def DenseExpr.splitAt (x : VarId) : DenseExpr p → Option (ZMod p × DenseExpr 
 
 /-! ## Bounds through scaled range checks
 
-`denseFindDomainAlg` (`Dense/DomainFold.lean`, built there for the group-domain enumeration) is
-reused unchanged here, not re-derived under a new name.
-
-### `denseScaledSlotBound`
-
-The low mem-ptr limb's range check does not carry the limb raw: the checked slot is
-`4⁻¹·(x − F)` for a small flag polynomial `F`. The slot *value* is still fact-bounded, so
-`x = k⁻¹·slot − k⁻¹·R` is bounded once the offset part enumerates over its (tiny, provable) flag
-domains. Consumes `facts.slotBound` at RUNTIME — the facts parameter is kept (precedent:
-`denseCollectAllBuses` in `Dense/BusUnifyNative.lean`). Reuses `denseAssignments`
-(`Dense/DomainFold.lean`) and `denseEnvOfFast` (`Dense/DomainBatch.lean`), not re-derived under new
-names. -/
+The low mem-ptr limb's range check carries not the raw limb but a scaled slot `4⁻¹·(x − F)` for a
+small flag polynomial `F`. The slot value is still fact-bounded, so `x = k⁻¹·slot − k⁻¹·R` is
+bounded once the offset part `R` enumerates over its (tiny, provable) flag domains. -/
 
 /-- Bound `x` through one interaction: find a slot whose expression is affine in `x` with a unit
     coefficient and a bus-fact value bound; enumerate the remaining variables' proven finite domains
@@ -113,9 +85,7 @@ def denseScaledSlotBound (bs : BusSemantics p) (facts : BusFacts p bs)
               else none
             else none)
 
-/-! ## Value bound lookup
-
-Built entirely from `denseInteractionBound` (`Dense/DigitFold.lean`). -/
+/-! ## Value bound lookup -/
 
 /-- The value bound of `x` derived from the first bus obligation that bounds it. -/
 def denseFindVarBound (bs : BusSemantics p) (facts : BusFacts p bs) :
@@ -138,9 +108,7 @@ def denseAnyVarBound (bs : BusSemantics p) (facts : BusFacts p bs)
 /-! ## The pair certificate (dense) -/
 
 /-- Decidable certificate that constraints `cX` (in `x`) and `cY` (in `y`) are two-root twins and
-    both variables are range-bounded below the root gap. Does not need `[Fact p.Prime]` to
-    compute — `ZMod p`'s `Inv` is total for every `p`; only a soundness proof would need
-    primality. -/
+    both variables are range-bounded below the root gap. -/
 def denseRpCheckPair (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (DenseExpr p))) (domCs : List (DenseExpr p))
     (cX cY : DenseExpr p) (x y : VarId) : Bool :=
@@ -158,9 +126,7 @@ def denseRpCheckPair (bs : BusSemantics p) (facts : BusFacts p bs)
 /-! ## The scan loop and the pass (dense) -/
 
 /-- A previously seen two-root constraint: the constraint, its variable, and the matching key
-    `(k, A.terms, A.const, δ)`. Keys are compared before the (expensive) certificate is
-    attempted. Plain data — no membership proof field, and hence no `cs`-scoping parameter to
-    state one over. -/
+    `(k, A.terms, A.const, δ)`. Keys are compared before the expensive certificate is attempted. -/
 structure DenseRPSeen (p : ℕ) where
   c : DenseExpr p
   x : VarId
@@ -172,10 +138,8 @@ structure DenseRPSeen (p : ℕ) where
     every boolean variable a (never-unifiable, expensive-to-reject) candidate. -/
 def denseRpCandidates (c : DenseExpr p) :
     List (VarId × (ZMod p × List (VarId × ZMod p) × ZMod p × ZMod p)) :=
-  -- The two factors are linearized **once**, not once per candidate variable (`denseTwoRootOf?`
-  -- would re-walk both factor trees per variable); each `x` then reads its coefficient and x-free
-  -- part off the shared linear forms — exactly `denseTwoRootOf?`'s values, so the candidate list
-  -- (and the pass output) is unchanged.
+  -- Both factors are linearized once (not per candidate variable); each `x` reads its coefficient
+  -- and x-free part off the shared linear forms — exactly `denseTwoRootOf?`'s values.
   match c with
   | .mul f1 f2 =>
     (match denseLinearize f1, denseLinearize f2 with
@@ -206,9 +170,7 @@ def denseRpInsertAll (m : Std.HashMap UInt64 (List (DenseRPSeen p)))
     m
 
 /-- Scan the constraints: for each two-root candidate, look for an earlier twin with the same key
-    whose pair certificate passes, and adopt the entailed equality into the solution map. Threads
-    `bis`/`domCs` explicitly as plain parameters, and `DenseSolved` as the plain (non-proof-carrying)
-    solution map. -/
+    whose pair certificate passes, and adopt the entailed equality into the solution map. -/
 def denseRpLoop (bs : BusSemantics p) (facts : BusFacts p bs)
     (bis : List (BusInteraction (DenseExpr p))) (domCs : List (DenseExpr p)) :
     List (DenseExpr p) → Std.HashMap UInt64 (List (DenseRPSeen p)) → DenseSolved p → DenseSolved p
@@ -229,11 +191,10 @@ def denseRpLoop (bs : BusSemantics p) (facts : BusFacts p bs)
         denseRpLoop bs facts bis domCs rest
           (denseRpInsertAll seen (cands.map (fun xk => (⟨c, xk.1, xk.2⟩ : DenseRPSeen p)))) σ
 
-/-- Two-root decomposition unification's runtime transform. Prime `p` only (re-checked at runtime,
-    as in `denseDomainBatchTransformV`); identity otherwise. One sweep; the cleanup fixpoint
-    iterates the pass. Solutions are bare variables, so substitution can never grow a degree. Shaped
-    as `(pw) → (bs) → (facts) → (d) → out`, so after currying `pw` it matches `denseBusUnifyF`'s
-    shape for `DenseVerifiedPassW.of` (`Dense/BusUnifyNative.lean`). -/
+/-- For twin constraints `(a+k·x)(a+δ+k·x)=0` and `(a+k·y)(a+δ+k·y)=0` — each pinning its variable
+    to one of two roots a fixed gap `g = k⁻¹·δ` apart — when both variables are range-bounded below
+    the gap they must land on the same root, so `x = y`; the pass substitutes `y := x` everywhere.
+    Identity unless `p` is prime; each substitution is a bare variable, so degree never grows. -/
 def denseRootPairUnifyF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then

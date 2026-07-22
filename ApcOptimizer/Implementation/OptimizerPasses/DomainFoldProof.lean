@@ -5,25 +5,9 @@ set_option autoImplicit false
 
 /-! # Correctness for the value-only dense `domainFold`
 
-This module proves `DensePassCorrect` for the value-only rebuild of `domainFold`
-(`DomainFoldRuntime.lean`) over dense environments `VarId → ZMod p`, with no `decode` in the
-discharged obligations, over the dense semantics of `Bridge.lean`.
-
-The fold is a pure rewrite: every wholly-in-group subexpression constant on the group's surviving
-joint assignments is replaced by that constant, keeping the group's variables, and keeping the
-group's covered (domain-pinning) constraints verbatim. Any assignment satisfying either system pins
-the group to a survivor, under which the rewrite agrees with the identity — so `env' = env` is the
-completeness witness and no derivations are produced.
-
-Reused from `DomainBatchProof.lean`: the root/domain soundness (`denseRootsIn_sound`), the
-value-only compiled-evaluation correspondence (`denseCompileE_evalV`, `denseCompileEs_allV`,
-`denseEnvOfKeysV_map`), `DensePassCorrect_refl`, and the `DenseExpr.eval`
-congruence/`filter_map_busId_comm` glue. Newly proved here: `denseFindDomainAlg`/`denseGroupDoms`
-soundness, the value-only survivor certificate (`mem_denseAssignmentsV_of_sound`,
-`denseGroupSurvivorsEV_eq`, `mem_denseGroupSurvivorsEV`, `denseConstOnSurvsV_sound`), the fold
-agreement (`denseFoldRewriteGoV_agree`, `denseFoldRewriteV_agree_covered`), the single-fold
-correctness (`denseFoldOutV_correct`), the loop composition (`DensePassCorrect.trans`), and the
-whole-pass correctness/coverage. -/
+Proves `DensePassCorrect` for the fold of `DomainFoldRuntime.lean`. The fold is a pure rewrite: any
+assignment satisfying either system pins the group to a survivor, under which the rewrite agrees
+with the identity — so `env' = env` is the completeness witness and no derivations are produced. -/
 
 namespace ApcOptimizer.Dense
 
@@ -31,8 +15,6 @@ variable {p : ℕ}
 
 /-! ## Domain soundness -/
 
-/-- If `denseFindDomainAlg all i = some dm`, every assignment zeroing every `c ∈ all` puts `denv i`
-    in `dm`. -/
 theorem denseFindDomainAlg_sound [Fact p.Prime] (denv : VarId → ZMod p) :
     ∀ (all : List (DenseExpr p)) (i : VarId) (dm : List (ZMod p)),
       denseFindDomainAlg all i = some dm → (∀ c ∈ all, c.eval denv = 0) → denv i ∈ dm := by
@@ -54,8 +36,6 @@ theorem denseFindDomainAlg_sound [Fact p.Prime] (denv : VarId → ZMod p) :
       · rw [if_neg (by simpa using hm)] at h
         exact ih i dm h (fun c' hc' => hsat c' (List.mem_cons_of_mem _ hc'))
 
-/-- If `denseGroupDoms es xs = some doms`, every assignment zeroing every `c ∈ es` puts each group
-    variable in its domain. -/
 theorem denseGroupDoms_sound [Fact p.Prime] (denv : VarId → ZMod p) (es : List (DenseExpr p))
     (hsat : ∀ c ∈ es, c.eval denv = 0) :
     ∀ (xs : List VarId) (doms : List (VarId × List (ZMod p))),
@@ -81,7 +61,6 @@ theorem denseGroupDoms_sound [Fact p.Prime] (denv : VarId → ZMod p) (es : List
 
 /-! ## Value-only survivor certificate -/
 
-/-- The value-only assignment of `denv` over `doms` is one of the enumerated points. -/
 theorem mem_denseAssignmentsV_of_sound (denv : VarId → ZMod p) :
     ∀ (doms : List (VarId × List (ZMod p))), (∀ yd ∈ doms, denv yd.1 ∈ yd.2) →
       (doms.map (fun yd => denv yd.1)) ∈ denseAssignmentsV (doms.map Prod.snd) := by
@@ -98,7 +77,6 @@ theorem mem_denseAssignmentsV_of_sound (denv : VarId → ZMod p) :
       rw [denseAssignmentsV, List.mem_flatMap]
       exact ⟨rest.map (fun yd => denv yd.1), htail, List.mem_map.2 ⟨denv i, hhead, rfl⟩⟩
 
-/-- The compiled survivor filter equals the direct one (value-only). -/
 theorem denseGroupSurvivorsEV_eq (es : List (DenseExpr p)) (xs : List VarId)
     (domVals : List (List (ZMod p))) :
     denseGroupSurvivorsEV es xs domVals
@@ -116,7 +94,6 @@ theorem denseGroupSurvivorsEV_eq (es : List (DenseExpr p)) (xs : List VarId)
       exact denseCompileEs_allV (inferInstance : Add (ZMod p)).add (inferInstance : Mul (ZMod p)).mul
         (fun _ _ => rfl) (fun _ _ => rfl) (fun v => decide (v = 0)) (fun _ => rfl) xs a es ces hce
 
-/-- A point in the enumeration that zeroes every covered constraint survives. -/
 theorem mem_denseGroupSurvivorsEV (es : List (DenseExpr p)) (xs : List VarId)
     (domVals : List (List (ZMod p))) (pt : List (ZMod p)) (hmem : pt ∈ denseAssignmentsV domVals)
     (hzero : ∀ c ∈ es, c.eval (denseEnvOfKeysV xs pt) = 0) :
@@ -128,7 +105,6 @@ theorem mem_denseGroupSurvivorsEV (es : List (DenseExpr p)) (xs : List VarId)
   rw [decide_eq_true_eq]
   exact hzero c hc
 
-/-- If `denseConstOnSurvsV` accepts `e` with value `c`, then `e` evaluates to `c` on every survivor. -/
 theorem denseConstOnSurvsV_sound (xs : List VarId) (survsV : List (List (ZMod p)))
     (e : DenseExpr p) (c : ZMod p) (h : denseConstOnSurvsV xs survsV e = some c) :
     ∀ s ∈ survsV, e.eval (denseEnvOfKeysV xs s) = c := by
@@ -160,8 +136,6 @@ theorem denseConstOnSurvsV_sound (xs : List VarId) (survsV : List (List (ZMod p)
 
 /-! ## The fold rewrite: agreement and variable containment (value-only) -/
 
-/-- On an environment agreeing on `xs` with a survivor `pt`, `denseFoldRewriteGoV` is
-    evaluation-preserving. -/
 theorem denseFoldRewriteGoV_agree (xs : List VarId) (survsV : List (List (ZMod p)))
     (denv : VarId → ZMod p) (pt : List (ZMod p)) (hpt : pt ∈ survsV)
     (hcongr : ∀ e : DenseExpr p, e.varsInF xs = true →
@@ -208,8 +182,6 @@ theorem denseFoldRewriteGoV_agree (xs : List VarId) (survsV : List (List (ZMod p
           = a.eval denv * b.eval denv
         rw [iha, ihb]
 
-/-- On any environment zeroing all the covered constraints, `denseFoldRewriteV` (over the survivors of
-    those constraints) is evaluation-preserving. -/
 theorem denseFoldRewriteV_agree_covered [Fact p.Prime] (d : DenseConstraintSystem p)
     (xs : List VarId) (doms : List (VarId × List (ZMod p)))
     (hdoms : denseGroupDoms (denseCoveredCsOf d xs) xs = some doms) (denv : VarId → ZMod p)
@@ -566,8 +538,8 @@ theorem denseFoldStepV_fst (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p)
   | none => rfl
   | some doms => simp only [apply_ite Prod.fst]
 
-/-- The step's refreshed index keeps the input's constraint bucket map (the flip's no-rebuild
-    refresh: `DenseFoldIdx.refresh` sets `idx := old.idx`). -/
+/-- The step's refreshed index keeps the input's constraint bucket map (`refresh` sets
+    `idx := old.idx`). -/
 theorem denseFoldStepV_snd_idx_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId) :
     (denseFoldStepV d fidx xs).2.idx = fidx.idx := by
   simp only [denseFoldStepV]; split
@@ -588,8 +560,8 @@ theorem denseFoldStepV_snd_arr (d : DenseConstraintSystem p) (fidx : DenseFoldId
   · exact harr
   · split_ifs <;> first | rfl | exact harr
 
-/-- The step's output system is either the input verbatim (no fold accepted) or the sparse fold of
-    it (`denseFoldOutIdxV`). The single case analysis all three completeness/array invariants share. -/
+/-- The step's output is either the input verbatim or the sparse fold (`denseFoldOutIdxV`) — the
+    case split shared by the completeness/array invariants. -/
 theorem denseFoldStepV_fst_alg (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId) :
     (denseFoldStepV d fidx xs).1 = d ∨
       ∃ survsV, (denseFoldStepV d fidx xs).1 = denseFoldOutIdxV d fidx xs survsV := by
@@ -601,9 +573,8 @@ theorem denseFoldStepV_fst_alg (d : DenseConstraintSystem p) (fidx : DenseFoldId
     · exact Or.inl rfl
     · exact Or.inl rfl
 
-/-- Under the constraint-side bucket-completeness invariant (and array-sync), the covered set the
-    index serves equals the direct covered set — refreshed stale-superset indexes work exactly like fresh builds, since bucket completeness is
-    all that is needed. -/
+/-- Under bucket-completeness (and array-sync), the covered set the index serves equals the direct
+    covered set — a stale superset index is fine, bucket completeness is all that is needed. -/
 theorem denseFoldStepV_es_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
     (hidx : ∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
       ∀ v ∈ d.algebraicConstraints[i].vars, i ∈ fidx.idx.buckets.getD v [])
@@ -617,13 +588,8 @@ theorem denseFoldStepV_es_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx 
 
 /-! ## The index-preserving indexed path
 
-Correctness for `denseFoldRewriteIdxV`/`denseFoldOutInPlaceV`/`denseTouchedSet`/`denseFoldOutIdxV`
-(`DomainFoldRuntime.lean`): the `anyVarIn`-only-gated rewrite, the in-place fold's
-satisfies/admissible/side-effect/coverage/occurrence lemmas, and the sparse fold's equality to the
-in-place fold. `denseFoldStepV`/`denseFoldLoopV` (below) run on this path, supplying the
-completeness hypotheses `denseFoldOutIdxV_eq` is parameterized by from
-`denseCoveredIdx_eq_filter_of_complete`/`denseBuild_complete` (`DomainFold.lean`). Reuses the fully
-generic `zipIdx_map_sparse` (`ListSplit.lean`) directly. -/
+Correctness for the `anyVarIn`-only-gated rewrite, the in-place fold, and the sparse fold's equality
+to it. -/
 
 /-- `DenseExpr.anyVarIn` finds a genuinely shared variable. -/
 theorem denseAnyVarIn_exists {xs : List VarId} {e : DenseExpr p}
@@ -648,15 +614,13 @@ theorem denseAnyVarIn_exists {xs : List VarId} {e : DenseExpr p}
     · obtain ⟨i, hi, hx⟩ := ihb h
       exact ⟨i, by rw [DenseExpr.vars]; exact List.mem_append_right _ hi, hx⟩
 
-/-- `denseFoldRewriteIdxV` is (definitionally) the identity on an expression sharing no variable with
-    the group — the linchpin that lets the sparse `denseFoldOutIdxV` pass untouched items through by
-    position. -/
+/-- `denseFoldRewriteIdxV` is the identity on an expression sharing no variable with the group — what
+    lets the sparse `denseFoldOutIdxV` pass untouched items through by position. -/
 theorem denseFoldRewriteIdxV_eq_self {xs : List VarId} {survsV : List (List (ZMod p))}
     {e : DenseExpr p} (h : e.anyVarIn xs = false) : denseFoldRewriteIdxV xs survsV e = e := by
   rw [denseFoldRewriteIdxV, h]; rfl
 
-/-- Folding never introduces a `VarId` (gated indexed form). Wraps the same core as
-    `denseFoldRewriteV_vars`. -/
+/-- Folding never introduces a `VarId` (gated indexed form). -/
 theorem denseFoldRewriteIdxV_vars (xs : List VarId) (survsV : List (List (ZMod p)))
     (e : DenseExpr p) : ∀ i ∈ (denseFoldRewriteIdxV xs survsV e).vars, i ∈ e.vars := by
   intro i hi
@@ -670,10 +634,8 @@ theorem denseFoldRewriteIdxV_covered (reg : VarRegistry) (xs : List VarId)
     (denseFoldRewriteIdxV xs survsV e).CoveredBy reg :=
   fun i hi => hc i (denseFoldRewriteIdxV_vars xs survsV e i hi)
 
-/-- On an environment agreeing on `xs` with a survivor `pt`, `denseFoldRewriteIdxV` is
-    evaluation-preserving. Factors over the shared `denseFoldRewriteGoV`: the weaker
-    (`anyVarIn`-only) gate splits and delegates to the same `denseFoldRewriteGoV_agree` that
-    `denseFoldRewriteV_agree_covered` already uses. -/
+/-- On an env agreeing with a survivor `pt` on `xs`, `denseFoldRewriteIdxV` is
+    evaluation-preserving. -/
 theorem denseFoldRewriteIdxV_agree (xs : List VarId) (survsV : List (List (ZMod p)))
     (denv : VarId → ZMod p) (pt : List (ZMod p)) (hpt : pt ∈ survsV)
     (hcongr : ∀ e : DenseExpr p, e.varsInF xs = true →
@@ -685,9 +647,8 @@ theorem denseFoldRewriteIdxV_agree (xs : List VarId) (survsV : List (List (ZMod 
   · exact denseFoldRewriteGoV_agree xs survsV denv pt hpt hcongr e
   · rfl
 
-/-- If `denv` zeroes every covered constraint, the group is pinned to a survivor `pt` that `denv`
-    agrees with on `xs`. The witness is the value-only assignment `xs.map denv`. Shared by both
-    rewrites' covered-agreement lemmas. -/
+/-- If `denv` zeroes every covered constraint, the group is pinned to a survivor `pt` (the witness
+    `xs.map denv`) that `denv` agrees with on `xs`. -/
 theorem denseGroupSurvivorsEV_mem_agree [Fact p.Prime] (d : DenseConstraintSystem p)
     (xs : List VarId) (doms : List (VarId × List (ZMod p)))
     (hdoms : denseGroupDoms (denseCoveredCsOf d xs) xs = some doms) (denv : VarId → ZMod p)
@@ -722,8 +683,6 @@ theorem denseGroupSurvivorsEV_mem_agree [Fact p.Prime] (d : DenseConstraintSyste
     exact (denseEnvOfKeysV_map denv xs v (denseVarsInF_sound xs e he v hv)).symm
   exact ⟨xs.map denv, hptSurv, hcongr⟩
 
-/-- On any environment zeroing all the covered constraints, `denseFoldRewriteIdxV` (over the survivors
-    of those constraints) is evaluation-preserving. -/
 theorem denseFoldRewriteIdxV_agree_covered [Fact p.Prime] (d : DenseConstraintSystem p)
     (xs : List VarId) (doms : List (VarId × List (ZMod p)))
     (hdoms : denseGroupDoms (denseCoveredCsOf d xs) xs = some doms) (denv : VarId → ZMod p)
@@ -738,9 +697,7 @@ theorem denseFoldRewriteIdxV_agree_covered [Fact p.Prime] (d : DenseConstraintSy
 /-! ### The in-place fold `denseFoldOutInPlaceV` -/
 
 /-- A rewritten interaction evaluates identically, given expression-level agreement — the general
-    form over any rewrite `g` (the bus side of `denseFoldOutInPlaceV` is structurally identical to
-    `denseFoldOutV`'s, only `g` differs; `denseBIEval_foldRewriteV` is the `g = denseFoldRewriteV`
-    instance). -/
+    form over any rewrite `g`. -/
 theorem denseBIEval_mapExpr_of_agree (g : DenseExpr p → DenseExpr p) (denv : VarId → ZMod p)
     (hag : ∀ e : DenseExpr p, (g e).eval denv = e.eval denv)
     (bi : BusInteraction (DenseExpr p)) :
@@ -808,9 +765,7 @@ theorem denseFoldOutInPlaceV_occ_subset (d : DenseConstraintSystem p) (xs : List
         rw [denseBIVars, List.mem_append, List.mem_flatMap]
         exact Or.inr ⟨e0, he0, denseFoldRewriteIdxV_vars xs survsV e0 i hie⟩)
 
-/-- Under an agreeing `denv`, the in-place folded system is satisfied iff the input is: every
-    covered constraint is kept verbatim in place, every other expression is rewritten
-    evaluation-preservingly. -/
+/-- Under an agreeing `denv`, the in-place folded system is satisfied iff the input is. -/
 theorem denseFoldOutInPlaceV_satisfies_iff (bs : BusSemantics p) (d : DenseConstraintSystem p)
     (xs : List VarId) (survsV : List (List (ZMod p))) (denv : VarId → ZMod p)
     (hag : ∀ e : DenseExpr p, (denseFoldRewriteIdxV xs survsV e).eval denv = e.eval denv) :
@@ -846,10 +801,8 @@ theorem denseFoldOutInPlaceV_satisfies_iff (bs : BusSemantics p) (d : DenseConst
       rw [denseBIEval_mapExpr_of_agree (denseFoldRewriteIdxV xs survsV) denv hag bi0]
       exact hsat.2 bi0 hbi0
 
-/-- **Correctness of one in-place fold**: routes through `denseFoldOutInPlaceV_satisfies_iff`, the
-    covered constraints (kept verbatim in place) pinning the group so the rewrite agrees with the
-    identity. Same `DensePassCorrect`-shaped conclusion (via `ofEnvEq`) `denseFoldOutV_correct`
-    gives. -/
+/-- Correctness of one in-place fold: the covered constraints pin the group so the rewrite agrees
+    with the identity. -/
 theorem denseFoldOutInPlaceV_correct [Fact p.Prime] (bs : BusSemantics p) (d : DenseConstraintSystem p)
     (xs : List VarId) (doms : List (VarId × List (ZMod p)))
     (hdoms : denseGroupDoms (denseCoveredCsOf d xs) xs = some doms) (isInput : VarId → Bool) :
@@ -906,8 +859,7 @@ theorem denseTouchedSet_contains_iff (idx : DenseCovIndex) (xs : List VarId) (i 
   simp [Std.HashSet.not_mem_empty]
 
 /-- An untouched interaction maps to itself under an inline rewrite that fixes each of its
-    expressions (the dense fold rewrites interactions field-by-field; there is no
-    `BusInteraction.mapExpr`). -/
+    expressions. -/
 theorem denseMapExpr_eq_self {bi : BusInteraction (DenseExpr p)} {g : DenseExpr p → DenseExpr p}
     (hm : g bi.multiplicity = bi.multiplicity) (hp : ∀ e ∈ bi.payload, g e = e) :
     { bi with multiplicity := g bi.multiplicity, payload := bi.payload.map g } = bi := by
@@ -915,8 +867,7 @@ theorem denseMapExpr_eq_self {bi : BusInteraction (DenseExpr p)} {g : DenseExpr 
     (List.map_congr_left (g := id) hp).trans (List.map_id _)
   rw [hm, hpl]
 
-/-- A rewrite that introduces no variables per expression keeps an interaction's variables (inline
-    field-by-field rewrite form). -/
+/-- A rewrite that introduces no variables per expression keeps an interaction's variables. -/
 theorem denseMapExpr_vars_subset (g : DenseExpr p → DenseExpr p)
     (hg : ∀ (e : DenseExpr p) (i : VarId), i ∈ (g e).vars → i ∈ e.vars)
     (bi : BusInteraction (DenseExpr p)) :
@@ -929,12 +880,9 @@ theorem denseMapExpr_vars_subset (g : DenseExpr p → DenseExpr p)
   · obtain ⟨e0, he0, rfl⟩ := List.mem_map.1 he
     exact Or.inr ⟨e0, he0, hg e0 i hi⟩
 
-/-- **The sparse fold is the in-place fold**: every non-candidate position holds an item sharing no
+/-- The sparse fold is the in-place fold: every non-candidate position holds an item sharing no
     variable with `xs` (bucket completeness, contraposed), on which `denseFoldRewriteIdxV` is the
-    identity — so skipping it is exact. Parameterized by the constraint- and interaction-side
-    bucket-completeness hypotheses `hidx`/`hbis`, which `denseFoldLoopV_correct` (below) supplies
-    from `denseBuild_complete`/`denseCoveredIdx_eq_filter_of_complete` (`DomainFold.lean`). Reuses
-    the fully generic `zipIdx_map_sparse` directly. -/
+    identity, so skipping it is exact. `hidx`/`hbis` are the bucket-completeness hypotheses. -/
 theorem denseFoldOutIdxV_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
     (survsV : List (List (ZMod p)))
     (hidx : ∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
@@ -1005,11 +953,8 @@ theorem denseFoldOutIdxV_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p
 
 /-! ### Completeness preservation across an in-place fold
 
-`denseFoldOutInPlaceV` rewrites items in place (order- and length-preserving) and only ever shrinks
-an expression's variable set (`denseFoldRewriteIdxV_vars` on the constraint side, that plus
-`denseMapExpr_vars_subset` on the interaction side), so a bucket map complete for the input stays
-complete for the folded output. On the data-only dense `DenseFoldIdx` these live as standalone
-lemmas the loop threads. -/
+The in-place fold is order- and length-preserving and only shrinks variable sets, so a bucket map
+complete for the input stays complete for the output. -/
 
 /-- Constraint-side bucket completeness survives an in-place fold. -/
 theorem denseFoldOutInPlaceV_hidx (bkts : Std.HashMap VarId (List Nat)) (d : DenseConstraintSystem p)
@@ -1057,9 +1002,8 @@ theorem denseFoldOutInPlaceV_hbis (bkts : Std.HashMap VarId (List Nat)) (d : Den
       (denseFoldRewriteIdxV_vars xs survsV) (d.busInteractions[i]'hlen) v hv
   exact hbis i hlen v hv'
 
-/-- Coverage survives the sparse indexed fold: it only rewrites — never introduces — variables at
-    each position, so every item stays registered. Proved directly, without the completeness
-    hypotheses, so the coverage loop needs none. -/
+/-- Coverage survives the sparse indexed fold: it only rewrites, never introduces, variables. Proved
+    without the completeness hypotheses, so the coverage loop needs none. -/
 theorem denseFoldOutIdxV_covered (reg : VarRegistry) (d : DenseConstraintSystem p)
     (fidx : DenseFoldIdx p) (hcov : d.CoveredBy reg) (xs : List VarId)
     (survsV : List (List (ZMod p))) :
@@ -1105,9 +1049,8 @@ theorem denseFoldOutIdxV_covered (reg : VarRegistry) (d : DenseConstraintSystem 
 
 /-! ## The indexed fold loop (index-preserving path) -/
 
-/-- Constraint-side completeness of the input's index survives one step: the refreshed index keeps
-    the old bucket map (`denseFoldStepV_snd_idx_eq`), which stays complete for the step's output
-    (identity, or the sparse fold via `denseFoldOutInPlaceV_hidx`). -/
+/-- Constraint-side index completeness survives one step: the refreshed index keeps the old bucket
+    map, which stays complete for the step's output. -/
 theorem denseFoldStepV_snd_idx (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
     (hidx : ∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
       ∀ v ∈ d.algebraicConstraints[i].vars, i ∈ fidx.idx.buckets.getD v [])
@@ -1122,8 +1065,7 @@ theorem denseFoldStepV_snd_idx (d : DenseConstraintSystem p) (fidx : DenseFoldId
   · rw [h, denseFoldOutIdxV_eq d fidx xs survsV hidx hbis]
     exact denseFoldOutInPlaceV_hidx fidx.idx.buckets d xs survsV hidx
 
-/-- Interaction-side completeness survives one step (dual of `denseFoldStepV_snd_idx`, via
-    `denseFoldOutInPlaceV_hbis`). -/
+/-- Interaction-side completeness survives one step (dual of `denseFoldStepV_snd_idx`). -/
 theorem denseFoldStepV_snd_bis (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p) (xs : List VarId)
     (hidx : ∀ (i : Nat) (_ : i < d.algebraicConstraints.length),
       ∀ v ∈ d.algebraicConstraints[i].vars, i ∈ fidx.idx.buckets.getD v [])
@@ -1245,8 +1187,7 @@ theorem denseDomainFoldFV_covered (pw : PrimeWitness p) (reg : VarRegistry)
       exact denseFoldLoopDirectV_covered reg (denseTargetsV d) d hcov
   · rw [if_neg hpB]; exact hcov
 
-/-- **The value-only dense domain-fold pass.** Connects to the audited spec via
-    `DensePassCorrect.lift` (through `of`) — no `decode` in a discharged obligation. -/
+/-- The registered domain-fold pass (transform `denseDomainFoldFV`, `DomainFoldRuntime.lean`). -/
 def denseDomainFoldPassV (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
     (fun _ _ d => denseDomainFoldFV pw d)

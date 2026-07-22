@@ -4,20 +4,9 @@ import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
 
 set_option autoImplicit false
 
-/-! # Dense interval forcing: proof and wiring
-
-`DensePassCorrect` proof for the dense `intervalForce` transform (`IntervalForce.lean`),
-lifted to the audited spec via `DenseVerifiedPassW.of`. The pass is a single-shot **append of
-entailed constraints**, so its correctness rides on the reusable
-`DensePassCorrect.denseAddConstraints` (`BusUnifyProof.lean`) once every appended seed is shown to
-evaluate to `0` on any satisfying dense assignment.
-
-The seed soundness is an integer-window argument over `DensePTerm`/`DenseExpr` and dense
-`VarId → ZMod p` environments. The variable-type-independent `Int`/`ZMod` lemmas
-(`IntervalForce.srep_cast`/`term_window`/`int_window`) are reused unqualified; the per-invocation
-bounds index's soundness is established here as an external fold invariant over the dense
-`Std.HashMap VarId Nat`, discharged value-level by `denseInteractionBound_sound`
-(`DomainBatchProof.lean`). -/
+/-! # Dense interval forcing: proof and wiring for `denseIntervalForceF` (`IntervalForce.lean`).
+The pass appends entailed constraints, so correctness rides on
+`DensePassCorrect.denseAddConstraints` once each seed is shown to evaluate to `0`. -/
 
 namespace ApcOptimizer.Dense
 
@@ -27,8 +16,8 @@ variable {p : ℕ}
 
 /-! ## The integer value of a dense processed-term list (proof-side only) -/
 
-/-- The integer value of a dense processed-term list under an assignment (not
-    part of the runtime — used only to state the window lemmas). -/
+/-- The integer value of a processed-term list under an assignment (proof-side only; states the
+    window lemmas). -/
 def denseIntEval (denv : VarId → ZMod p) (pts : List DensePTerm) : Int :=
   (pts.map (fun t => t.sc * ((denv t.v).val : Int))).sum
 
@@ -280,8 +269,8 @@ theorem denseSlotSeeds_sound (bnd : VarId → Option Nat) (B : Nat) (e : DenseEx
 
 /-! ## The per-invocation bounds index soundness (external fold invariant) -/
 
-/-- The witnessing invariant on the dense bounds map: every entry is produced by some member
-    interaction's `denseInteractionBound`. -/
+/-- Bounds-map invariant: every entry is produced by some member interaction's
+    `denseInteractionBound`. -/
 def DenseBoundIdxWitnessed {bs : BusSemantics p} (facts : BusFacts p bs)
     (bis : List (BusInteraction (DenseExpr p))) (I : Std.HashMap VarId Nat) : Prop :=
   ∀ (x : VarId) (B : Nat), I[x]? = some B →
@@ -494,8 +483,7 @@ theorem denseIntervalForceF_correct (reg : VarRegistry) (bs : BusSemantics p) (f
       (denseIntervalForceNew_vars bs facts d)
       (fun denv _ hsat => denseIntervalForceNew_sound bs facts d denv hsat)
 
-/-- **The dense `intervalForce` pass.** Threads the original `facts` unchanged, connected to
-    the audited spec via `DensePassCorrect.lift` (through `of`). -/
+/-- The dense `intervalForce` pass; correctness via `denseIntervalForceF_correct`. -/
 def denseIntervalForcePass : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of denseIntervalForceF (fun _ _ _ => [])
     (fun reg bs facts d hcov => denseIntervalForceF_covered reg bs facts d hcov)

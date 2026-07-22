@@ -4,13 +4,9 @@ set_option autoImplicit false
 
 /-! # Dense simultaneous substitution + `mentions`
 
-The *batch* substitution machinery `DenseExpr.substF` / `DenseConstraintSystem.substF` and the
-syntactic occurrence test `DenseExpr.mentions`. These are the dense substitution primitives
-the Gauss / domain / flag / rootPair passes consume: `DenseExpr.substF` / `denseBIsubstF` /
-`DenseConstraintSystem.substF`, their variable-bound and coverage-preservation lemmas
-(`substF_vars` / `substF_covered`), and `DenseExpr.mentions`. All pure/equational, over `VarId`.
-
-`GaussProof.lean`'s correctness proof needs only these dense cores. -/
+Batch substitution `DenseExpr.substF` / `DenseConstraintSystem.substF` (with its variable-bound and
+coverage lemmas) and the syntactic occurrence test `DenseExpr.mentions`, consumed by the Gauss /
+domain / flag / rootPair passes. -/
 
 namespace ApcOptimizer.Dense
 
@@ -26,9 +22,8 @@ def DenseExpr.substF (df : VarId → Option (DenseExpr p)) : DenseExpr p → Den
   | .add a b => .add (a.substF df) (b.substF df)
   | .mul a b => .mul (a.substF df) (b.substF df)
 
-/-- Simultaneous substitution introduces no variable outside `e` and the mapped solutions; each new
-    variable comes from a solution `df i = some t` for some `i` *occurring in* `e`. The occurrence
-    of `i` in `e` is what makes coverage preservation gate `df` only on valid ids. -/
+/-- Every new variable of `e.substF df` comes from a solution `df i = some t` for an `i` occurring
+    in `e` — which is what lets coverage gate `df` only on valid ids (see `substF_covered`). -/
 theorem DenseExpr.substF_vars (df : VarId → Option (DenseExpr p)) (e : DenseExpr p) :
     ∀ k ∈ (e.substF df).vars,
       k ∈ e.vars ∨ ∃ i ∈ e.vars, ∃ t, df i = some t ∧ k ∈ t.vars := by
@@ -64,8 +59,8 @@ theorem DenseExpr.substF_vars (df : VarId → Option (DenseExpr p)) (e : DenseEx
         · exact Or.inl (List.mem_append.2 (Or.inr h))
         · exact Or.inr ⟨i, List.mem_append.2 (Or.inr hi), t, hft, hkt⟩
 
-/-- Substitution preserves coverage when every solution `df` produces for a *valid* id is covered.
-    (Only valid ids are ever looked up, since `e` is covered — see `substF_vars`.) -/
+/-- Coverage is preserved when every solution `df` produces for a *valid* id is covered (only valid
+    ids are looked up when `e` is covered — see `substF_vars`). -/
 theorem DenseExpr.substF_covered {reg : VarRegistry} {e : DenseExpr p}
     {df : VarId → Option (DenseExpr p)} (he : e.CoveredBy reg)
     (hdf : ∀ i, reg.Valid i → ∀ t, df i = some t → t.CoveredBy reg) :
@@ -77,21 +72,17 @@ theorem DenseExpr.substF_covered {reg : VarRegistry} {e : DenseExpr p}
 
 /-! ## Simultaneous substitution on dense bus interactions and systems -/
 
-/-- Substitute the map `df` in every expression of a dense bus interaction. -/
 def denseBIsubstF (bi : BusInteraction (DenseExpr p)) (df : VarId → Option (DenseExpr p)) :
     BusInteraction (DenseExpr p) :=
   { busId := bi.busId,
     multiplicity := bi.multiplicity.substF df,
     payload := bi.payload.map (·.substF df) }
 
-/-- Substitute the map `df` everywhere in a dense constraint system. -/
 def DenseConstraintSystem.substF (d : DenseConstraintSystem p)
     (df : VarId → Option (DenseExpr p)) : DenseConstraintSystem p :=
   { algebraicConstraints := d.algebraicConstraints.map (·.substF df),
     busInteractions := d.busInteractions.map (denseBIsubstF · df) }
 
-/-- Bus-interaction coverage is preserved by substitution when every `df`-value (for valid ids) is
-    covered. -/
 theorem denseBIsubstF_covered {reg : VarRegistry} {bi : BusInteraction (DenseExpr p)}
     {df : VarId → Option (DenseExpr p)} (hbi : denseBICovered reg bi)
     (hdf : ∀ i, reg.Valid i → ∀ t, df i = some t → t.CoveredBy reg) :
@@ -102,7 +93,6 @@ theorem denseBIsubstF_covered {reg : VarRegistry} {bi : BusInteraction (DenseExp
   obtain ⟨e0, he0, rfl⟩ := he
   exact DenseExpr.substF_covered (hp e0 he0) hdf
 
-/-- Substitution preserves system coverage when every `df`-value (for valid ids) is covered. -/
 theorem DenseConstraintSystem.substF_covered {reg : VarRegistry} {d : DenseConstraintSystem p}
     {df : VarId → Option (DenseExpr p)} (hd : d.CoveredBy reg)
     (hdf : ∀ i, reg.Valid i → ∀ t, df i = some t → t.CoveredBy reg) :
@@ -118,7 +108,6 @@ theorem DenseConstraintSystem.substF_covered {reg : VarRegistry} {d : DenseConst
 
 /-! ## The syntactic occurrence test -/
 
-/-- Does the dense expression mention `VarId` `i`? -/
 def DenseExpr.mentions (i : VarId) : DenseExpr p → Bool
   | .const _ => false
   | .var j => j == i

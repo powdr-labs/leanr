@@ -6,19 +6,10 @@ set_option autoImplicit false
 
 /-! # Correctness for the value-only dense `domainBatch`
 
-This module proves `DensePassCorrect` for the value-only rebuild of `domainBatch`
-(`Dense/DomainBatchNative.lean`) over dense environments `VarId → ZMod p`, with no decode in the
-discharged obligations.
-
-The pass output is `applyσ dσ d` — a batch substitution of forced *constants* into `d`. The proof has
-two halves:
-
-* a simultaneous-substitution correctness lemma (`substF_denseCorrect`): substituting an *entailed*
-  map of constants yields `DensePassCorrect`;
-* an entailment for the collected forced map (`denseDomainBatchσV`): every forced pair
-  `(i, .const c)` satisfies `denv i = c` for every satisfying `denv`, established through
-  domain-table soundness (`rootsIn` roots, fact-bounded payload slots) and a value-only box-scan
-  certificate over the fixed-length candidate mask. -/
+Proves `DensePassCorrect` for `denseDomainBatchTransformV`. The output is `applyσ dσ d`, a batch
+substitution of forced constants; the proof combines a simultaneous-substitution correctness lemma
+(`substF_denseCorrect`) with an entailment for the collected forced map (`denseDomainBatchσV_entailed`),
+the latter via domain-table soundness and a value-only box-scan certificate. -/
 
 namespace ApcOptimizer.Dense
 
@@ -168,10 +159,8 @@ theorem DenseConstraintSystem.substF_denseCorrect (d : DenseConstraintSystem p)
 
 /-! ## Root soundness
 
-The affine-form / term-merge / normalize eval-preservation lemmas this section builds on
-(`DenseLinExpr.add_eval`/`scale_eval`/`toExpr_eval`/`norm_eval`, `denseLinearize_eval`,
-`denseMergeTerms_eval`, `denseDropZero_eval`, `DenseExpr.normalize_eval`) live at their definitions'
-home in `Dense/Affine.lean` and `Dense/Normalize.lean` (shared, proved once). -/
+The affine-form eval-preservation lemmas used here live in `Dense/Affine.lean` and
+`Dense/Normalize.lean`. -/
 
 theorem denseRootsOfTerms_sound [Fact p.Prime] (i : VarId) (c : ZMod p)
     (ts : List (VarId × ZMod p)) (roots : List (ZMod p))
@@ -846,8 +835,7 @@ theorem denseSurvivesAllCWV_eq (add mul : ZMod p → ZMod p → ZMod p)
   · exact denseCompileEs_allV add mul hadd hmul isZero hz keys pt es ces hce
   · exact denseCompileBis_allV add mul hadd hmul isZero hz bs keys pt bis cbis hcb
 
-/-- The value-only compiled survivor predicate agrees with the uncompiled one on every point.
-    (`.run` projects the boxed closure out of `DenseSurvV`; see `denseCompiledSurvV`.) -/
+/-- The value-only compiled survivor predicate agrees with the uncompiled one on every point. -/
 theorem denseCompiledSurvV_eq (bs : BusSemantics p) (es : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId) (pt : List (ZMod p)) :
     (denseCompiledSurvV bs es bis keys).run pt = denseSurvivesAllMV bs es bis keys pt := by
@@ -1086,17 +1074,12 @@ theorem EntailedMap_foldl_insert (d : DenseConstraintSystem p) (bs : BusSemantic
         exact hm i t hit
     · exact fun pr' hpr' => hpairs pr' (List.mem_cons_of_mem _ hpr')
 
-/-- `(Task.spawn f).get` reduces to `f ()`: `Task` is a one-field structure and `Task.spawn` fills
-    it with `fn ()`, so this holds definitionally in this toolchain. Kept local to this module (not
-    exported under the `Task` namespace) to avoid clashing with any future core lemma. -/
+/-- `(Task.spawn f).get` reduces to `f ()` definitionally (`Task` is a one-field structure filled
+    with `fn ()`). -/
 theorem get_spawn {α : Type} (f : Unit → α) : (Task.spawn f).get = f () := rfl
 
-/-- The parallel and serial branches of `denseCollectForcedV` compute the same solution map. The
-    per-target `Task.spawn`/`.get` round-trip is definitional (`get_spawn`), and `tasks.foldl` over
-    the spawned list is `List.foldl_map` of exactly the order-preserving fold the serial branch runs
-    directly — so both branches equal the serial fold over `denseDedupTargetsV`. This collapses the
-    novel parallel structure once, up front, so the entailment invariant is proved over the single
-    serial fold. -/
+/-- The parallel and serial branches of `denseCollectForcedV` compute the same solution map, so the
+    entailment invariant can be proved over the single serial fold over `denseDedupTargetsV`. -/
 theorem denseCollectForcedV_eq_serial (bs : BusSemantics p) (facts : BusFacts p bs)
     (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (parallel : Bool)
     (targets : List (List VarId)) (seen : Std.HashSet (List VarId)) (dσ0 : DenseSolved p) :
@@ -1109,10 +1092,8 @@ theorem denseCollectForcedV_eq_serial (bs : BusSemantics p) (facts : BusFacts p 
   · simp only [List.foldl_map, get_spawn]
   · rfl
 
-/-- The value-only `collectForced` fold preserves the entailment invariant. Both branches reduce to
-    the same order-preserving fold over the deduped targets (`denseCollectForcedV_eq_serial`); dedup
-    no longer complicates the invariant, since the forced-pair hypothesis `hforced` is stated for
-    **every** variable set. -/
+/-- The `collectForced` fold preserves the entailment invariant (via
+    `denseCollectForcedV_eq_serial`; `hforced` is stated for every variable set). -/
 theorem denseCollectForcedV_entailed (bs : BusSemantics p) (facts : BusFacts p bs)
     (T : DenseDomainTable p) (fidx : DenseForcedIdx p)
     (d : DenseConstraintSystem p)
@@ -1260,8 +1241,7 @@ theorem denseDomainBatchTransformV_correct (pw : PrimeWitness p) (reg : VarRegis
         from by simp only [denseDomainBatchTransformV, if_neg hpB]]
     exact DensePassCorrect_refl reg.isInput d bs
 
-/-- **The value-only dense domain-batch pass.** Threads `reg`/`pw`, connects to the audited spec
-    via `DensePassCorrect.lift` on the `DensePassCorrect` proof above. -/
+/-- The dense domain-batch pass (see `denseDomainBatchσV`). -/
 def denseDomainBatchPassV (pw : PrimeWitness p) : DenseVerifiedPassW p := fun reg d hcov bs facts =>
   { reg' := reg
     out := denseDomainBatchTransformV pw bs facts d

@@ -5,27 +5,14 @@ set_option autoImplicit false
 
 /-! # Dense variable identifiers and the canonical registry
 
-An implementation-only dense representation of circuit variables. A `VarId` is a one-field newtype
-around a `Nat` index; a `VarRegistry` is a bijection between valid `VarId`s and the complete
-spec-level `Variable` values it has registered.
-
-`Variable` identity is the *pair* `(name, powdrId?)` — its derived `DecidableEq` — not just the
-display string; the registry therefore keys its reverse map on the full structured variable.
-
-The two invariants are phrased with `Array.getElem?` (option-valued, so no bound-proof plumbing
-leaks into statements):
-
-* `fwd` — if the reverse map sends `v ↦ i`, then slot `i.index` of `byId` holds `v`;
-* `bwd` — if slot `i` of `byId` holds `v`, then the reverse map sends `v ↦ ⟨i⟩`.
-
-Together they give the round-trip and injectivity results downstream passes rely on. All of this is
-implementation support: nothing here is audited (it discharges its own obligations by construction).
--/
+Implementation-only dense variable representation. A `VarId` is a `Nat`-index newtype; a
+`VarRegistry` is a bijection between valid `VarId`s and the `Variable` values it has registered
+(identity is the pair `(name, powdrId?)`, not just the display string). Nothing here is audited. -/
 
 namespace ApcOptimizer.Dense
 
-/-- A dense, implementation-only variable identifier: a one-field newtype over `Nat` so the type
-    checker rejects mixing variable IDs with unrelated indexes (bus IDs, payload slots, …). -/
+/-- A `Nat`-index newtype so the type checker rejects mixing variable IDs with unrelated indexes
+    (bus IDs, payload slots, …). -/
 structure VarId where
   index : Nat
 deriving DecidableEq, Repr, Inhabited, Hashable
@@ -33,8 +20,7 @@ deriving DecidableEq, Repr, Inhabited, Hashable
 /-- A default `Variable` for total array access in `resolve`; never observed on valid IDs. -/
 instance : Inhabited Variable := ⟨⟨"", none⟩⟩
 
-/-! `VarId` as a lawful hash-map / hash-set key, mirroring `Variable`'s instances — needed for the
-    dense containers (`HashSet VarId`, `HashMap VarId α`) used by later passes and the loop measure. -/
+/-! `VarId` as a lawful hash-map / hash-set key, for the dense containers used by later passes. -/
 
 instance : BEq VarId := ⟨fun a b => decide (a = b)⟩
 
@@ -55,12 +41,11 @@ instance : EquivBEq VarId where
 instance : LawfulHashable VarId where
   hash_eq := by intro a b h; cases (LawfulBEq.eq_of_beq h); rfl
 
-/-- The canonical registry: a dense array `byId` of the registered `Variable`s (index = its `VarId`)
-    together with the reverse map `toId`, and the two consistency invariants. -/
+/-- The registered `Variable`s indexed by `VarId`, the reverse map, and the two consistency
+    invariants. -/
 structure VarRegistry where
   /-- Registered variables, indexed by `VarId`. Append-only; removed variables keep their slot. -/
   byId : Array Variable
-  /-- Reverse lookup by full structured-variable identity. -/
   toId : Std.HashMap Variable VarId
   /-- Forward consistency: `toId` never points outside `byId`, and it points to the right slot. -/
   fwd : ∀ (v : Variable) (i : VarId), toId[v]? = some i → byId[i.index]? = some v
@@ -69,38 +54,33 @@ structure VarRegistry where
 
 namespace VarRegistry
 
-/-- Resolve a `VarId` to its `Variable`. Total (a default fills an out-of-range ID, never hit on a
-    valid ID); `resolve_eq` / `resolve_idOf` give the exact value on valid/registered IDs. -/
+/-- Resolve a `VarId` to its `Variable`. Total via a default for out-of-range IDs (never hit on a
+    valid ID). -/
 def resolve (r : VarRegistry) (i : VarId) : Variable := (r.byId[i.index]?).getD default
 
-/-- Look up the `VarId` of a variable, if registered. -/
 def idOf? (r : VarRegistry) (v : Variable) : Option VarId := r.toId[v]?
 
-/-- An ID is *valid* in `r` when its index is in range. Every ID appearing in a covered dense value
-    is valid (see `Encoding.lean`). -/
+/-- An ID is *valid* in `r` when its index is in range. Every ID in a covered dense value is valid
+    (see `Encoding.lean`). -/
 def Valid (r : VarRegistry) (i : VarId) : Prop := i.index < r.byId.size
 
 /-! ## Round-trip and injectivity -/
 
-/-- On a valid ID, `resolve` is the array entry. -/
 theorem resolve_eq {r : VarRegistry} {i : VarId} (h : i.index < r.byId.size) :
     r.resolve i = r.byId[i.index] := by
   simp [resolve, Array.getElem?_eq_getElem h]
 
-/-- `resolve (idOf v) = v` for a registered variable. -/
 theorem resolve_idOf {r : VarRegistry} {v : Variable} {i : VarId} (h : r.idOf? v = some i) :
     r.resolve i = v := by
   have hf := r.fwd v i h
   simp [resolve, hf]
 
-/-- A registered variable's ID is valid. -/
 theorem valid_of_idOf {r : VarRegistry} {v : Variable} {i : VarId} (h : r.idOf? v = some i) :
     r.Valid i := by
   have hf := r.fwd v i h
   rw [Array.getElem?_eq_some_iff] at hf
   exact hf.choose
 
-/-- `idOf (resolve i) = i` for a valid ID. -/
 theorem idOf_resolve {r : VarRegistry} {i : VarId} (h : r.Valid i) :
     r.idOf? (r.resolve i) = some i := by
   have hb : r.byId[i.index]? = some (r.byId[i.index]'h) := Array.getElem?_eq_getElem h
@@ -108,12 +88,10 @@ theorem idOf_resolve {r : VarRegistry} {i : VarId} (h : r.Valid i) :
   rw [resolve_eq h, idOf?]
   simpa using this
 
-/-- `idOf` is injective on registered variables: equal IDs come from equal variables. -/
 theorem idOf_inj {r : VarRegistry} {x y : Variable} {i : VarId}
     (hx : r.idOf? x = some i) (hy : r.idOf? y = some i) : x = y := by
   rw [← r.resolve_idOf hx, ← r.resolve_idOf hy]
 
-/-- `resolve` is injective on valid IDs. -/
 theorem resolve_inj {r : VarRegistry} {i j : VarId} (hi : r.Valid i) (hj : r.Valid j)
     (h : r.resolve i = r.resolve j) : i = j := by
   have := r.idOf_resolve hi
@@ -122,7 +100,6 @@ theorem resolve_inj {r : VarRegistry} {i j : VarId} (hi : r.Valid i) (hj : r.Val
 
 /-! ## The empty registry -/
 
-/-- The empty registry: no variables registered. -/
 def empty : VarRegistry where
   byId := #[]
   toId := ∅
@@ -131,9 +108,8 @@ def empty : VarRegistry where
 
 /-! ## Append-only registration -/
 
-/-- Register `v`, returning the (possibly extended) registry and `v`'s stable `VarId`. If `v` is
-    already registered its existing ID is returned unchanged; otherwise a fresh trailing ID is
-    allocated. Threaded consume-and-replace so Lean can reuse the array and map in place. -/
+/-- Register `v`, returning the (possibly extended) registry and `v`'s stable `VarId`. Already
+    registered `v` returns its existing ID; otherwise a fresh trailing ID is allocated. -/
 def register (r : VarRegistry) (v : Variable) : VarRegistry × VarId :=
   match hlook : r.toId[v]? with
   | some i => (r, i)
@@ -179,14 +155,12 @@ def register (r : VarRegistry) (v : Variable) : VarRegistry × VarId :=
 
 /-! ## Extension -/
 
-/-- `r'` extends `r`: every filled slot of `r` is preserved (same index, same variable) in `r'`.
-    Registration produces an extension; extension lets old IDs resolve identically. -/
+/-- `r'` extends `r`: every filled slot of `r` is preserved (same index, same variable) in `r'`. -/
 def Extends (r r' : VarRegistry) : Prop :=
   ∀ (i : Nat) (v : Variable), r.byId[i]? = some v → r'.byId[i]? = some v
 
 theorem Extends.refl (r : VarRegistry) : Extends r r := fun _ _ h => h
 
-/-- A valid ID stays valid after an extension. -/
 theorem Extends.valid {r r' : VarRegistry} (h : Extends r r') {i : VarId} (hi : r.Valid i) :
     r'.Valid i := by
   have hb : r.byId[i.index]? = some (r.byId[i.index]'hi) := Array.getElem?_eq_getElem hi
@@ -197,14 +171,12 @@ theorem Extends.valid {r r' : VarRegistry} (h : Extends r r') {i : VarId} (hi : 
 theorem Extends.trans {r r' r'' : VarRegistry} (h1 : Extends r r') (h2 : Extends r' r'') :
     Extends r r'' := fun i v h => h2 i v (h1 i v h)
 
-/-- `resolve` agrees on old (valid-in-`r`) IDs after an extension. -/
 theorem Extends.resolve_eq {r r' : VarRegistry} (h : Extends r r') {i : VarId} (hi : r.Valid i) :
     r'.resolve i = r.resolve i := by
   have hb : r.byId[i.index]? = some (r.byId[i.index]'hi) := Array.getElem?_eq_getElem hi
   have hb' := h i.index (r.byId[i.index]'hi) hb
   simp [resolve, hb, hb']
 
-/-- `idOf` agrees on old (registered-in-`r`) variables after an extension. -/
 theorem Extends.idOf_eq {r r' : VarRegistry} (h : Extends r r') {v : Variable} {i : VarId}
     (hv : r.idOf? v = some i) : r'.idOf? v = some i := by
   have hf := r.fwd v i hv
@@ -213,7 +185,6 @@ theorem Extends.idOf_eq {r r' : VarRegistry} (h : Extends r r') {v : Variable} {
   rw [idOf?]
   simpa using this
 
-/-- Registration extends the registry. -/
 theorem register_extends (r : VarRegistry) (v : Variable) : Extends r (r.register v).1 := by
   unfold register
   split
@@ -227,7 +198,6 @@ theorem register_extends (r : VarRegistry) (v : Variable) : Extends r (r.registe
 
 /-! ## Registration results -/
 
-/-- The ID returned by `register` resolves to the variable. -/
 theorem register_resolve (r : VarRegistry) (v : Variable) :
     (r.register v).1.resolve (r.register v).2 = v := by
   unfold register
@@ -238,7 +208,6 @@ theorem register_resolve (r : VarRegistry) (v : Variable) :
     show ((r.byId.push v)[r.byId.size]?).getD default = v
     rw [Array.getElem?_push_size, Option.getD_some]
 
-/-- The ID returned by `register` is registered to the variable. -/
 theorem register_idOf (r : VarRegistry) (v : Variable) :
     (r.register v).1.idOf? v = some (r.register v).2 := by
   unfold register
@@ -248,7 +217,6 @@ theorem register_idOf (r : VarRegistry) (v : Variable) :
     show (r.toId.insert v ⟨r.byId.size⟩)[v]? = some ⟨r.byId.size⟩
     rw [Std.HashMap.getElem?_insert_self]
 
-/-- The returned ID is valid in the resulting registry. -/
 theorem register_valid (r : VarRegistry) (v : Variable) :
     (r.register v).1.Valid (r.register v).2 :=
   valid_of_idOf (register_idOf r v)

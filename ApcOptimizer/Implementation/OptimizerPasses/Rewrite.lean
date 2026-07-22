@@ -4,10 +4,9 @@ set_option autoImplicit false
 
 /-! # Dense constraint/bus filtering + small predicates
 
-Filtering out algebraic constraints or bus interactions by a keep-predicate, plus the small
-expression predicates the drop passes key on. Filtering only drops, so it preserves coverage
-trivially. The `DensePassCorrect` proofs for the drop passes built on these live in
-`DropPassesProof.lean`. -/
+Filter algebraic constraints or bus interactions by a keep-predicate (drop-only, so coverage is
+preserved), plus the small expression predicates the drop passes key on. The drop-pass proofs built
+on these live in `DropPassesProof.lean`. -/
 
 namespace ApcOptimizer.Dense
 

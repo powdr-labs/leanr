@@ -5,22 +5,11 @@ set_option autoImplicit false
 
 /-! # Collapsing a multi-limb reciprocal-witness group to one hint — proof
 
-`VarId` correctness for the dense `hintCollapse` transform (`HintCollapse.lean`), proved over
-dense environments `VarId → ZMod p`, using the semantics of `Bridge.lean` (satisfaction /
-admissibility / stateful-bus side effects / `DensePassCorrect` / `DenseOutReconstructs`).
-
-The transport is the dense analogue of `collapse_correct`: substituting the once-occurring witnesses
-`D` to a common value (or `coeffᵢ·w`, for the sum-of-squares shape), the target constraint `E`
-collapses to `denom·inv + rest`; the fresh inverse witness `inv = QuotientOrZero(−rest, denom)` is
-minted (registered with `powdrId? = none`, so `isInput` is preserved pointwise), and reconstruction
-of `inv` on the completeness side reads only the (input-column) coefficient/remainder variables.
-
-The **field-level** wrap-free-sum lemmas (`sum_val_eq` / `sum_zero_all_zero` / `sq_diff_val_lt`) are
-representation-independent, defined in `HintCollapse.lean`. The **bounds map** (`denseBuild`,
-`DigitFold.lean`) is consumed through its value-level soundness `denseBuild_sound`
-(`DigitFoldProof.lean`) — no `decode`. Everything else — peel / `extractLinear` / `sumExpr` eval
-structure, the coefficient recognizers, `occursOnlyInTarget` soundness, the reassignment frames — is
-proved directly over `DenseExpr`. -/
+`VarId` correctness for `denseHintCollapseF` (`HintCollapse.lean`) over dense environments
+`VarId → ZMod p`, via `Bridge.lean`. Substituting the once-occurring witnesses `D` to a common value
+collapses target `E` to `denom·inv + rest`, with `inv = QuotientOrZero(−rest, denom)` a fresh
+`powdrId? = none` witness (so `isInput` is preserved pointwise). Field-sum lemmas come from
+`HintCollapse.lean`; the bounds map through `denseBuild_sound` (`DigitFoldProof.lean`). -/
 
 namespace ApcOptimizer.Dense
 
@@ -43,7 +32,6 @@ private theorem hcEvalCongr (e : DenseExpr p) (d1 d2 : VarId → ZMod p)
       rw [iha (fun i hi => h i (by simp [DenseExpr.vars, hi])),
           ihb (fun i hi => h i (by simp [DenseExpr.vars, hi]))]
 
-/-- `mentions i e = false` ⟹ `i ∉ e.vars`. -/
 theorem denseMentions_false_not_mem (i : VarId) (e : DenseExpr p) (h : e.mentions i = false) :
     i ∉ e.vars := by
   induction e with
@@ -452,8 +440,7 @@ theorem register_snd_eq_of_none {reg : VarRegistry} {v : Variable}
     rw [show reg.idOf? v = some i from hlook] at h; exact absurd h (by simp)
   · rfl
 
-/-- Registering a `powdrId? = none` variable preserves `isInput` pointwise (local copy of
-    `ReencodeProof.register_isInput_eq`, following the `BridgeSteps` file-local precedent). -/
+/-- Registering a `powdrId? = none` variable preserves `isInput` pointwise. -/
 theorem hcRegisterIsInputEq (reg : VarRegistry) (v : Variable) (hv : v.powdrId? = none)
     (i : VarId) : (reg.register v).1.isInput i = reg.isInput i := by
   by_cases hvalid : reg.Valid i
@@ -533,10 +520,8 @@ theorem dense_collapse_correct [Fact p.Prime] (isInput : VarId → Bool)
   have hob : out.busInteractions = d.busInteractions := by rw [hout]
   have hoa : out.algebraicConstraints
       = d.algebraicConstraints.map (fun c => if c = E then E' else c) := by rw [hout]
-  -- `E'` evaluates as `denom·(denv inv) + rest`.
   have hE'eval : ∀ denv : VarId → ZMod p,
       E'.eval denv = denom.eval denv * denv invId + rest.eval denv := fun denv => rfl
-  -- A constraint of `out` is `E'` or an unchanged constraint of `d`.
   have hmemOut : ∀ c' ∈ out.algebraicConstraints, c' = E' ∨ c' ∈ d.algebraicConstraints := by
     intro c' hc'
     rw [hoa] at hc'
@@ -546,12 +531,10 @@ theorem dense_collapse_correct [Fact p.Prime] (isInput : VarId → Bool)
     · exact Or.inr (by simpa [h] using hc)
   have hE'mem : E' ∈ out.algebraicConstraints := by
     rw [hoa]; exact List.mem_map.2 ⟨E, hE, by simp⟩
-  -- Frame: an expression free of every witness is unaffected by the reassignment.
   have hframe_ne : ∀ (c : DenseExpr p), (∀ dw ∈ D, dw ∉ c.vars) →
       ∀ (w : ZMod p) (denv : VarId → ZMod p), c.eval (reasg denv w) = c.eval denv := by
     intro c hc w denv
     exact hcEvalCongr c _ _ (fun x hx => hagree denv w x (fun hxD => hc x hxD hx))
-  -- Every bus of `d` (= `out`) is witness-free: the reassignment leaves its evaluation unchanged.
   have hbe : ∀ (denv : VarId → ZMod p) (bi : BusInteraction (DenseExpr p)),
       bi ∈ d.busInteractions → denseBIEval bi (reasg denv (denv invId)) = denseBIEval bi denv := by
     intro denv bi hbi
@@ -564,7 +547,6 @@ theorem dense_collapse_correct [Fact p.Prime] (isInput : VarId → Bool)
       · exact hm hx
       · exact hp e he hxe
     exact hagree denv (denv invId) x hxfree
-  -- `out.satisfies denv` ⟹ `d` is satisfied at the witness-collapsed environment.
   have hcssat : ∀ denv, out.satisfies bs denv → d.satisfies bs (reasg denv (denv invId)) := by
     intro denv hsat
     refine ⟨fun c hc => ?_, fun bi hbi => ?_⟩
@@ -580,7 +562,6 @@ theorem dense_collapse_correct [Fact p.Prime] (isInput : VarId → Bool)
         rwa [hfc] at hc0
     · rw [hbe denv bi (hob ▸ hbi)]
       exact hsat.2 bi (hob ▸ hbi)
-  -- Soundness.
   have hsound : out.implies d bs := by
     intro denv hsat
     refine ⟨reasg denv (denv invId), hcssat denv hsat, ?_⟩
@@ -590,7 +571,6 @@ theorem dense_collapse_correct [Fact p.Prime] (isInput : VarId → Bool)
       refine List.map_congr_left (fun bi hbi => ?_)
       rw [hbe denv bi (List.mem_of_mem_filter hbi)]
     rw [hse]; exact BusState.equiv_refl _
-  -- `out`'s occurrences are `d`'s (dropping witnesses) plus possibly `inv`.
   have hout_occ : ∀ i ∈ out.occ, i = invId ∨ i ∈ d.occ := by
     intro i hi
     rw [hcMemOcc] at hi
@@ -782,7 +762,6 @@ theorem dense_collapse_bundle [Fact p.Prime] (reg : VarRegistry) (invVar : Varia
   have hcorrect := dense_collapse_correct (reg.register invVar).1.isInput d bs E denom rest D
     (reg.register invVar).2 reasg hE hagree hEeq hbyte hinv_fresh hinv_id hDonce hDbus
     hrest_sub hden_sub hden_pow1 hrest_pow1
-  -- coverage of the replacement's variables
   have hEvalid : ∀ i ∈ (DenseExpr.add (DenseExpr.mul denom (DenseExpr.var (reg.register invVar).2))
         rest).vars, (reg.register invVar).1.Valid i := by
     intro i hi
@@ -825,7 +804,6 @@ theorem denseTryOne_correct [Fact p.Prime] {bs : BusSemantics p} (facts : BusFac
   -- `split_ifs` discharges every non-accepting branch (its `none = some r` is impossible).
   split_ifs at hr with h2len hbyteOK hrfreeG hrpowG hfreshG hfitG
   obtain rfl := Option.some.inj hr
-  -- structural facts
   have hcfree : ∀ c ∈ (densePeel D E).1, ∀ dw ∈ D, dw ∉ c.vars := by
     intro c hc dw hd
     obtain ⟨a, _, hDf, _, _, _⟩ :=
@@ -897,7 +875,6 @@ theorem denseTryOneSq_correct [Fact p.Prime] {bs : BusSemantics p} (facts : BusF
   simp only [denseTryOneSq] at hr
   split_ifs at hr with h2len hsqOK hrfreeG hrpowG hfreshG hfitG
   obtain rfl := Option.some.inj hr
-  -- structural facts
   have hcfree : ∀ c ∈ (densePeel D E).1, ∀ dw ∈ D, dw ∉ c.vars := by
     intro c hc dw hd
     obtain ⟨a, b, _, hDf, _, _, _, _, _⟩ :=

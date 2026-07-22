@@ -75,7 +75,5 @@ import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapseProof
 
 /-! # Dense `VarId` internal representation — umbrella import
 
-Imports every dense `VarId` module now living flat under `OptimizerPasses/`, so that a plain
-`lake build` compiles them all — even those not yet reachable from a scheduled pass (e.g. shared
-expression ops awaiting their consumer). `Implementation/Optimizer.lean` imports this
-umbrella, keeping the whole dense layer in the default build graph. -/
+Imports every dense module under `OptimizerPasses/` so a plain `lake build` compiles them all,
+including those not yet reached by a scheduled pass. -/
