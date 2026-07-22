@@ -27,7 +27,7 @@ Benchmark harness for the optimizer on powdr `SymbolicMachine` exports
 `vm` is an optional leading `openvm` (default, BabyBear) or `sp1` (KoalaBear) token, selecting the
 VM whose bus semantics and fact-aware optimizer to use.
 
-The optimizer takes no iteration count: its cleanup loop (`iterateToFixpoint`) runs to a fixpoint,
+The optimizer takes no iteration count: its cleanup loop (`denseIterateToFixpoint`) runs to a fixpoint,
 provably terminating on the lexicographic size key `(vars, bus, constraints)`.
 -/
 

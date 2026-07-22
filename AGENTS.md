@@ -42,7 +42,7 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
   (iterated to a fixpoint), `codaPasses` (run once) — which are the single source of truth: both the
   optimizer (`pipeline` folds them) and the `profile` CLI command (`Main.lean`, which times them)
   consume the same lists, so they cannot drift apart. The cleanup cycle runs to a fixpoint via
-  `iterateToFixpoint`, provably terminating on a lexicographic size measure, with no iteration count
+  `denseIterateToFixpoint`, provably terminating on a lexicographic size measure, with no iteration count
   passed in.
 - `ApcOptimizer/Implementation/BusFacts.lean`, `ApcOptimizer/Implementation/OpenVmFacts.lean`,
   `ApcOptimizer/Implementation/Sp1Facts.lean` — the proven `BusFacts` (design + OpenVM and SP1 instances);
