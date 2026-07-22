@@ -160,24 +160,65 @@ def denseConstraintRedundantV (T : DenseDomainTable p) (c : DenseExpr p) : Bool 
 
 /-! ## `forcedOver`, value-only -/
 
+structure DenseConstraintGatherV (p : ℕ) where
+  fullCount : Nat
+  active : List (DenseExpr p)
+
+def denseGatherConstraintsLoopV (arr : Array (DenseConstraintPlan p)) (xs : List VarId) :
+    List Nat → DenseConstraintGatherV p → DenseConstraintGatherV p
+  | [], acc => acc
+  | i :: rest, acc =>
+    if h : i < arr.size then
+      let plan := arr[i]
+      if denseVarsInListF xs plan.vars then
+        denseGatherConstraintsLoopV arr xs rest
+          { fullCount := acc.fullCount + 1,
+            active := if plan.active then plan.expr :: acc.active else acc.active }
+      else denseGatherConstraintsLoopV arr xs rest acc
+    else denseGatherConstraintsLoopV arr xs rest acc
+
+def denseGatherConstraintsV (fidx : DenseForcedIdx p) (xs : List VarId) :
+    DenseConstraintGatherV p :=
+  denseGatherConstraintsLoopV fidx.arrCs xs (denseCandidates fidx.csIdx xs) ⟨0, []⟩
+
+structure DenseBusGatherV (p : ℕ) where
+  count : Nat
+  informative : Bool
+  interactions : List (BusInteraction (DenseExpr p))
+
+def denseGatherBusesLoopV (arr : Array (DenseBusPlan p)) (xs : List VarId) :
+    List Nat → DenseBusGatherV p → DenseBusGatherV p
+  | [], acc => acc
+  | i :: rest, acc =>
+    if h : i < arr.size then
+      let plan := arr[i]
+      if plan.usable && denseVarsInListF xs plan.vars then
+        denseGatherBusesLoopV arr xs rest
+          { count := acc.count + 1,
+            informative := acc.informative || plan.informative,
+            interactions := plan.interaction :: acc.interactions }
+      else denseGatherBusesLoopV arr xs rest acc
+    else denseGatherBusesLoopV arr xs rest acc
+
+def denseGatherBusesV (fidx : DenseForcedIdx p) (xs : List VarId) : DenseBusGatherV p :=
+  denseGatherBusesLoopV fidx.arrBis xs (denseCandidates fidx.bisIdx xs) ⟨0, false, []⟩
+
 /-- All checked forced constants over the variable set `xs`. `keys` drives the compiler and the
     final zip; the unkeyed `doms` drives the value-only scan. -/
-def denseForcedOverV (bs : BusSemantics p) (facts : BusFacts p bs) (T : DenseDomainTable p)
+def denseForcedOverV (bs : BusSemantics p) (_facts : BusFacts p bs) (T : DenseDomainTable p)
     (fidx : DenseForcedIdx p) (xs : List VarId) : List (VarId × ZMod p) :=
   match T.doms xs with
   | none => []
   | some fdoms =>
     let boxSize := (fdoms.map (fun yd => yd.2.size)).prod
     if boxSize ≤ maxEnumSize then
-      let esFull := denseCoveredIdxUnord fidx.csIdx fidx.arrCs (fun c => c.varsInF xs) xs
-      let bis := denseCoveredIdxUnord fidx.bisIdx fidx.arrBis
-        (fun bi => denseBIVarsInF xs bi && !bs.isStateful bi.busId) xs
-      let es := denseCoveredIdxUnord fidx.activeIdx fidx.arrActive (fun c => c.varsInF xs) xs
-      let informative := !esFull.isEmpty || bis.any (denseBiInformative bs facts)
-      if informative && boxSize * (esFull.length + bis.length) ≤ maxEnumWork then
+      let cs := denseGatherConstraintsV fidx xs
+      let bis := denseGatherBusesV fidx xs
+      let informative := cs.fullCount != 0 || bis.informative
+      if informative && boxSize * (cs.fullCount + bis.count) ≤ maxEnumWork then
         let keys := fdoms.map Prod.fst
         let doms := fdoms.map Prod.snd
-        let survC := denseCompiledSurvV bs es bis keys
+        let survC := denseCompiledSurvV bs cs.active bis.interactions keys
         match denseScanBoxV survC.run doms with
         | none =>
           -- no surviving point: the box has no solutions, so everything is vacuously forced
@@ -228,6 +269,33 @@ def denseCollectForcedV (bs : BusSemantics p) (facts : BusFacts p bs)
 
 /-! ## The pass transform, value-only -/
 
+def denseConstraintPlansV (T : DenseDomainTable p) (cs : List (DenseExpr p)) :
+    List (DenseConstraintPlan p) :=
+  cs.map fun c =>
+    { expr := c,
+      vars := HashedDedup.hashedDedup (hash ·) c.vars,
+      active := !denseConstraintRedundantV T c }
+
+def denseBusPlansV (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bis : List (BusInteraction (DenseExpr p))) : List (DenseBusPlan p) :=
+  bis.map fun bi =>
+    let usable := !bs.isStateful bi.busId
+    { interaction := bi,
+      vars := HashedDedup.hashedDedup (hash ·) (denseBIVars bi),
+      usable,
+      informative := usable && denseBiInformative bs facts bi }
+
+def densePlanTargetsV (cs : List (DenseConstraintPlan p)) (bis : List (DenseBusPlan p)) :
+    List (List VarId) :=
+  cs.map (fun c => c.vars) ++ bis.map (fun bi => bi.vars)
+
+def denseForcedIdxV (cs : List (DenseConstraintPlan p)) (bis : List (DenseBusPlan p)) :
+    DenseForcedIdx p :=
+  { csIdx := denseAnchorCovBuild (fun c => c.vars) cs,
+    arrCs := cs.toArray,
+    bisIdx := denseAnchorCovBuild (fun bi => bi.vars) bis,
+    arrBis := bis.toArray }
+
 /-- Domain-batch: builds a finite domain per variable (from constraints like `x*(x-1)=0` giving
     `x ∈ {0,1}`, and from bus range checks), enumerates the small Cartesian product of those
     domains, and for each variable that takes the same value in every surviving assignment infers
@@ -237,16 +305,10 @@ def denseDomainBatchσV (bs : BusSemantics p) (facts : BusFacts p bs)
   let T : DenseDomainTable p :=
     denseAddBusDoms bs facts d.busInteractions
       (denseAddConstraintDoms d.algebraicConstraints DenseDomainTable.empty)
-  let targets := d.algebraicConstraints.map (fun e => HashedDedup.hashedDedup (hash ·) e.vars) ++
-    d.busInteractions.map (fun bi => HashedDedup.hashedDedup (hash ·) (denseBIVars bi))
-  let activeCs := d.algebraicConstraints.filter (fun c => !denseConstraintRedundantV T c)
-  let fidx : DenseForcedIdx p :=
-    { csIdx := denseCovBuild DenseExpr.vars d.algebraicConstraints,
-      arrCs := d.algebraicConstraints.toArray,
-      bisIdx := denseCovBuild denseBIVars d.busInteractions,
-      arrBis := d.busInteractions.toArray,
-      activeIdx := denseCovBuild DenseExpr.vars activeCs,
-      arrActive := activeCs.toArray }
+  let csPlans := denseConstraintPlansV T d.algebraicConstraints
+  let busPlans := denseBusPlansV bs facts d.busInteractions
+  let targets := densePlanTargetsV csPlans busPlans
+  let fidx := denseForcedIdxV csPlans busPlans
   -- Fan out only at keccak/SHA scale; below it the sequential fold avoids spawn overhead.
   denseCollectForcedV bs facts T fidx (8192 ≤ d.algebraicConstraints.length) targets ∅
     DenseSolved.empty

@@ -929,15 +929,113 @@ theorem mem_zip_filterMap {α : Type} (keys : List α) (cands : DenseCandsV p) (
           · obtain ⟨n, hn1, hn2⟩ := ih ocs hf'
             exact ⟨n + 1, by simpa using hn1, by simpa using hn2⟩
 
+theorem denseGatherConstraintsLoopV_active_mem (arr : Array (DenseConstraintPlan p))
+    (xs : List VarId) (candidates : List Nat) (acc : DenseConstraintGatherV p)
+    (hacc : ∀ e ∈ acc.active, ∃ i, ∃ h : i < arr.size,
+      arr[i].expr = e ∧ denseVarsInListF xs arr[i].vars = true ∧ arr[i].active = true) :
+    ∀ e ∈ (denseGatherConstraintsLoopV arr xs candidates acc).active,
+      ∃ i, ∃ h : i < arr.size,
+        arr[i].expr = e ∧ denseVarsInListF xs arr[i].vars = true ∧ arr[i].active = true := by
+  induction candidates generalizing acc with
+  | nil => simpa [denseGatherConstraintsLoopV] using hacc
+  | cons i rest ih =>
+      by_cases hi : i < arr.size
+      · by_cases hvars : denseVarsInListF xs arr[i].vars = true
+        · simp only [denseGatherConstraintsLoopV, hi, ↓reduceDIte, hvars, ↓reduceIte]
+          apply ih
+          intro e he
+          by_cases hactive : arr[i].active = true
+          · simp only [hactive, ↓reduceIte] at he
+            rcases List.mem_cons.1 he with he | he
+            · subst e; exact ⟨i, hi, rfl, hvars, hactive⟩
+            · exact hacc e he
+          · simp [hactive] at he
+            exact hacc e he
+        · simpa [denseGatherConstraintsLoopV, hi, hvars] using ih acc hacc
+      · simpa [denseGatherConstraintsLoopV, hi] using ih acc hacc
+
+theorem denseGatherConstraintsV_active_mem (fidx : DenseForcedIdx p) (xs : List VarId)
+    {e : DenseExpr p} (he : e ∈ (denseGatherConstraintsV fidx xs).active) :
+    ∃ i, ∃ h : i < fidx.arrCs.size,
+      fidx.arrCs[i].expr = e ∧ denseVarsInListF xs fidx.arrCs[i].vars = true ∧
+        fidx.arrCs[i].active = true := by
+  apply denseGatherConstraintsLoopV_active_mem fidx.arrCs xs (denseCandidates fidx.csIdx xs)
+    ⟨0, []⟩ (by simp) e
+  exact he
+
+theorem denseGatherConstraintsV_plan_mem (fidx : DenseForcedIdx p)
+    (plans : List (DenseConstraintPlan p)) (harr : fidx.arrCs = plans.toArray)
+    (xs : List VarId) {e : DenseExpr p} (he : e ∈ (denseGatherConstraintsV fidx xs).active) :
+    ∃ plan ∈ plans, plan.expr = e ∧ denseVarsInListF xs plan.vars = true ∧
+      plan.active = true := by
+  obtain ⟨i, hi, hie, hvars, hactive⟩ := denseGatherConstraintsV_active_mem fidx xs he
+  let plan := fidx.arrCs[i]
+  have hmemA : plan ∈ fidx.arrCs := by
+    simp [plan]
+  have hmem : plan ∈ plans := by
+    rw [harr] at hmemA
+    simpa using hmemA
+  exact ⟨plan, hmem, by simpa [plan] using hie, by simpa [plan] using hvars,
+    by simpa [plan] using hactive⟩
+
+theorem denseGatherBusesLoopV_interactions_mem (arr : Array (DenseBusPlan p))
+    (xs : List VarId) (candidates : List Nat) (acc : DenseBusGatherV p)
+    (hacc : ∀ bi ∈ acc.interactions, ∃ i, ∃ h : i < arr.size,
+      arr[i].interaction = bi ∧ arr[i].usable = true ∧
+        denseVarsInListF xs arr[i].vars = true) :
+    ∀ bi ∈ (denseGatherBusesLoopV arr xs candidates acc).interactions,
+      ∃ i, ∃ h : i < arr.size,
+        arr[i].interaction = bi ∧ arr[i].usable = true ∧
+          denseVarsInListF xs arr[i].vars = true := by
+  induction candidates generalizing acc with
+  | nil => simpa [denseGatherBusesLoopV] using hacc
+  | cons i rest ih =>
+      by_cases hi : i < arr.size
+      · by_cases husable : arr[i].usable = true
+        · by_cases hvars : denseVarsInListF xs arr[i].vars = true
+          · simp only [denseGatherBusesLoopV, hi, ↓reduceDIte, husable, hvars,
+              Bool.and_self, ↓reduceIte]
+            apply ih
+            intro bi hbi
+            rcases List.mem_cons.1 hbi with hbi | hbi
+            · subst bi; exact ⟨i, hi, rfl, husable, hvars⟩
+            · exact hacc bi hbi
+          · simpa [denseGatherBusesLoopV, hi, husable, hvars] using ih acc hacc
+        · simpa [denseGatherBusesLoopV, hi, husable] using ih acc hacc
+      · simpa [denseGatherBusesLoopV, hi] using ih acc hacc
+
+theorem denseGatherBusesV_interactions_mem (fidx : DenseForcedIdx p) (xs : List VarId)
+    {bi : BusInteraction (DenseExpr p)} (hbi : bi ∈ (denseGatherBusesV fidx xs).interactions) :
+    ∃ i, ∃ h : i < fidx.arrBis.size,
+      fidx.arrBis[i].interaction = bi ∧ fidx.arrBis[i].usable = true ∧
+        denseVarsInListF xs fidx.arrBis[i].vars = true := by
+  apply denseGatherBusesLoopV_interactions_mem fidx.arrBis xs (denseCandidates fidx.bisIdx xs)
+    ⟨0, false, []⟩ (by simp) bi
+  exact hbi
+
+theorem denseGatherBusesV_plan_mem (fidx : DenseForcedIdx p) (plans : List (DenseBusPlan p))
+    (harr : fidx.arrBis = plans.toArray) (xs : List VarId)
+    {bi : BusInteraction (DenseExpr p)} (hbi : bi ∈ (denseGatherBusesV fidx xs).interactions) :
+    ∃ plan ∈ plans, plan.interaction = bi ∧ plan.usable = true ∧
+      denseVarsInListF xs plan.vars = true := by
+  obtain ⟨i, hi, hbi', husable, hvars⟩ := denseGatherBusesV_interactions_mem fidx xs hbi
+  let plan := fidx.arrBis[i]
+  have hmemA : plan ∈ fidx.arrBis := by
+    simp [plan]
+  have hmem : plan ∈ plans := by
+    rw [harr] at hmemA
+    simpa using hmemA
+  exact ⟨plan, hmem, by simpa [plan] using hbi', by simpa [plan] using husable,
+    by simpa [plan] using hvars⟩
+
 /-- **Value-only `forcedOver` entailment.** Every forced pair `(x, c)` is entailed by `denv`, given
     the domain table is sound at `denv` and the covered items evaluate/oblige correctly. -/
 theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
     (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (xs : List VarId) (denv : VarId → ZMod p)
     (hTs : DenseTableSoundAt denv T)
-    (hes : ∀ e ∈ denseCoveredIdxUnord fidx.activeIdx fidx.arrActive (fun c => c.varsInF xs) xs,
+    (hes : ∀ e ∈ (denseGatherConstraintsV fidx xs).active,
       e.eval denv = 0 ∧ ∀ i ∈ e.vars, i ∈ xs)
-    (hbis : ∀ bi ∈ denseCoveredIdxUnord fidx.bisIdx fidx.arrBis
-        (fun bi => denseBIVarsInF xs bi && !bs.isStateful bi.busId) xs,
+    (hbis : ∀ bi ∈ (denseGatherBusesV fidx xs).interactions,
       ((denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false)
         ∧ ∀ i ∈ denseBIVars bi, i ∈ xs) :
     ∀ f ∈ denseForcedOverV bs facts T fidx xs, denv f.1 = f.2 := by
@@ -953,9 +1051,8 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
     dsimp only
     split_ifs with hbox hwork
     · have hsurv : (denseCompiledSurvV bs
-          (denseCoveredIdxUnord fidx.activeIdx fidx.arrActive (fun c => c.varsInF xs) xs)
-          (denseCoveredIdxUnord fidx.bisIdx fidx.arrBis
-            (fun bi => denseBIVarsInF xs bi && !bs.isStateful bi.busId) xs)
+          (denseGatherConstraintsV fidx xs).active
+          (denseGatherBusesV fidx xs).interactions
           (fdoms.map Prod.fst)).run ((fdoms.map Prod.fst).map denv) = true := by
         apply denseCompiledSurvV_restriction
         · exact fun e he => (hes e he).1
@@ -963,9 +1060,8 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
         · intro e he i hi; rw [hkeys]; exact (hes e he).2 i hi
         · intro bi hbi i hi; rw [hkeys]; exact (hbis bi hbi).2 i hi
       cases hscan : denseScanBoxV (denseCompiledSurvV bs
-          (denseCoveredIdxUnord fidx.activeIdx fidx.arrActive (fun c => c.varsInF xs) xs)
-          (denseCoveredIdxUnord fidx.bisIdx fidx.arrBis
-            (fun bi => denseBIVarsInF xs bi && !bs.isStateful bi.busId) xs)
+          (denseGatherConstraintsV fidx xs).active
+          (denseGatherBusesV fidx xs).interactions
           (fdoms.map Prod.fst)).run (fdoms.map Prod.snd) with
       | none =>
           intro f hf
@@ -994,38 +1090,16 @@ theorem denseContainsFast_mem (xs : List VarId) (y : VarId) (h : denseContainsFa
       exact this ▸ List.mem_cons_self ..
     · exact List.mem_cons_of_mem _ (ih h)
 
-theorem denseExpr_varsInF_mem (xs : List VarId) :
-    ∀ (e : DenseExpr p), e.varsInF xs = true → ∀ i ∈ e.vars, i ∈ xs := by
-  intro e
-  induction e with
-  | const n => intro _ i hi; simp [DenseExpr.vars] at hi
-  | var y =>
-      intro h i hi
-      simp only [DenseExpr.vars, List.mem_singleton] at hi
-      rw [hi]; exact denseContainsFast_mem xs y h
-  | add a b iha ihb =>
-      intro h i hi
-      rw [DenseExpr.varsInF, Bool.and_eq_true] at h
-      simp only [DenseExpr.vars, List.mem_append] at hi
-      rcases hi with hi | hi
-      · exact iha h.1 i hi
-      · exact ihb h.2 i hi
-  | mul a b iha ihb =>
-      intro h i hi
-      rw [DenseExpr.varsInF, Bool.and_eq_true] at h
-      simp only [DenseExpr.vars, List.mem_append] at hi
-      rcases hi with hi | hi
-      · exact iha h.1 i hi
-      · exact ihb h.2 i hi
-
-theorem denseBIVarsInF_mem (xs : List VarId) (bi : BusInteraction (DenseExpr p))
-    (h : denseBIVarsInF xs bi = true) : ∀ i ∈ denseBIVars bi, i ∈ xs := by
-  rw [denseBIVarsInF, Bool.and_eq_true] at h
-  intro i hi
-  simp only [denseBIVars, List.mem_append, List.mem_flatMap] at hi
-  rcases hi with hi | ⟨e, he, hie⟩
-  · exact denseExpr_varsInF_mem xs bi.multiplicity h.1 i hi
-  · exact denseExpr_varsInF_mem xs e (List.all_eq_true.1 h.2 e he) i hie
+theorem denseVarsInListF_mem (xs vs : List VarId) (h : denseVarsInListF xs vs = true) :
+    ∀ i ∈ vs, i ∈ xs := by
+  induction vs with
+  | nil => intro i hi; simp at hi
+  | cons v rest ih =>
+      rw [denseVarsInListF, Bool.and_eq_true] at h
+      intro i hi
+      rcases List.mem_cons.mp hi with hi | hi
+      · subst i; exact denseContainsFast_mem xs _ h.1
+      · exact ih h.2 i hi
 
 /-! ## The entailment invariant on the collected solution map -/
 
@@ -1135,38 +1209,36 @@ def dbT (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem
   denseAddBusDoms bs facts d.busInteractions
     (denseAddConstraintDoms d.algebraicConstraints DenseDomainTable.empty)
 
-/-- The non-redundant active-constraint set built by `denseDomainBatchσV`. -/
-def dbActiveCs (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
-    List (DenseExpr p) :=
-  d.algebraicConstraints.filter (fun c => !denseConstraintRedundantV (dbT bs facts d) c)
+def dbConstraintPlans (bs : BusSemantics p) (facts : BusFacts p bs)
+    (d : DenseConstraintSystem p) : List (DenseConstraintPlan p) :=
+  denseConstraintPlansV (dbT bs facts d) d.algebraicConstraints
+
+def dbBusPlans (bs : BusSemantics p) (facts : BusFacts p bs)
+    (d : DenseConstraintSystem p) : List (DenseBusPlan p) :=
+  denseBusPlansV bs facts d.busInteractions
 
 /-- The target list built by `denseDomainBatchσV`. -/
-def dbTargets (d : DenseConstraintSystem p) : List (List VarId) :=
-  d.algebraicConstraints.map (fun e => HashedDedup.hashedDedup (hash ·) e.vars) ++
-    d.busInteractions.map (fun bi => HashedDedup.hashedDedup (hash ·) (denseBIVars bi))
+def dbTargets (bs : BusSemantics p) (facts : BusFacts p bs)
+    (d : DenseConstraintSystem p) : List (List VarId) :=
+  densePlanTargetsV (dbConstraintPlans bs facts d) (dbBusPlans bs facts d)
 
 /-- The inverted index built by `denseDomainBatchσV`. -/
 def dbFidx (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     DenseForcedIdx p :=
-  { csIdx := denseCovBuild DenseExpr.vars d.algebraicConstraints,
-    arrCs := d.algebraicConstraints.toArray,
-    bisIdx := denseCovBuild denseBIVars d.busInteractions,
-    arrBis := d.busInteractions.toArray,
-    activeIdx := denseCovBuild DenseExpr.vars (dbActiveCs bs facts d),
-    arrActive := (dbActiveCs bs facts d).toArray }
+  denseForcedIdxV (dbConstraintPlans bs facts d) (dbBusPlans bs facts d)
 
 theorem denseDomainBatchσV_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     denseDomainBatchσV bs facts d
       = denseCollectForcedV bs facts (dbT bs facts d) (dbFidx bs facts d)
-          (8192 ≤ d.algebraicConstraints.length) (dbTargets d) ∅ DenseSolved.empty := rfl
+          (8192 ≤ d.algebraicConstraints.length) (dbTargets bs facts d) ∅ DenseSolved.empty := rfl
 
 theorem denseDomainBatchσV_entailed [Fact p.Prime] [NeZero p]
     (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     EntailedMap d bs (denseDomainBatchσV bs facts d).map := by
   rw [denseDomainBatchσV_eq]
   refine denseCollectForcedV_entailed bs facts (dbT bs facts d) (dbFidx bs facts d) d
-    ?hforced (8192 ≤ d.algebraicConstraints.length) (dbTargets d) ∅ DenseSolved.empty ?hbase
+    ?hforced (8192 ≤ d.algebraicConstraints.length) (dbTargets bs facts d) ∅ DenseSolved.empty ?hbase
   case hbase =>
     intro i t h
     rw [DenseSolved.empty, Std.HashMap.getElem?_empty] at h
@@ -1177,15 +1249,30 @@ theorem denseDomainBatchσV_entailed [Fact p.Prime] [NeZero p]
       ?_ ?_ ?_ f hf
     · exact denseDomainTable_soundAt bs facts d denv hsat
     · intro e he
-      obtain ⟨hmem, hQ⟩ := denseCoveredIdxUnord_mem_of_eq (dbFidx bs facts d).activeIdx
-        (dbActiveCs bs facts d) (dbFidx bs facts d).arrActive rfl (fun c => c.varsInF xs) xs he
-      exact ⟨hsat.1 e (List.mem_of_mem_filter hmem), denseExpr_varsInF_mem xs e hQ⟩
+      obtain ⟨plan, hplan, hpe, hpvars, _⟩ := denseGatherConstraintsV_plan_mem
+        (dbFidx bs facts d) (dbConstraintPlans bs facts d) rfl xs he
+      rw [dbConstraintPlans, denseConstraintPlansV] at hplan
+      obtain ⟨c, hc, rfl⟩ := List.mem_map.mp hplan
+      simp only at hpe hpvars
+      subst e
+      refine ⟨hsat.1 c hc, ?_⟩
+      intro i hi
+      apply denseVarsInListF_mem xs (HashedDedup.hashedDedup (hash ·) c.vars) hpvars i
+      rw [HashedDedup.hashedDedup_eq]
+      simpa using hi
     · intro bi hbi
-      obtain ⟨hmem, hQ⟩ := denseCoveredIdxUnord_mem_of_eq (dbFidx bs facts d).bisIdx
-        d.busInteractions (dbFidx bs facts d).arrBis rfl
-        (fun bi => denseBIVarsInF xs bi && !bs.isStateful bi.busId) xs hbi
-      rw [Bool.and_eq_true] at hQ
-      exact ⟨hsat.2 bi hmem, denseBIVarsInF_mem xs bi hQ.1⟩
+      obtain ⟨plan, hplan, hpbi, _, hpvars⟩ := denseGatherBusesV_plan_mem
+        (dbFidx bs facts d) (dbBusPlans bs facts d) rfl xs hbi
+      rw [dbBusPlans, denseBusPlansV] at hplan
+      obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.mp hplan
+      simp only at hpbi hpvars
+      subst bi
+      refine ⟨hsat.2 bi0 hbi0, ?_⟩
+      intro i hi
+      apply denseVarsInListF_mem xs
+        (HashedDedup.hashedDedup (hash ·) (denseBIVars bi0)) hpvars i
+      rw [HashedDedup.hashedDedup_eq]
+      simpa using hi
 
 /-! ## The value-only domain-batch pass -/
 
