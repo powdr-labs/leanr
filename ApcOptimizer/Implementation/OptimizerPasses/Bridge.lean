@@ -791,20 +791,6 @@ def DenseVerifiedPassW.of
       correct := DensePassCorrect.lift hcovd (hcov reg bs facts d hcovd)
         (hdcov reg bs facts d hcovd) (hcorrect reg bs facts d hcovd) }
 
-/-- `of` respects the degree bound whenever its dense output stays within bound. -/
-theorem DenseVerifiedPassW.of_respectsDeg {b : DegreeBound}
-    {denseF : (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
-      DenseConstraintSystem p}
-    {denseDerivsF : (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
-      DenseDerivations p}
-    {hcov hdcov hcorrect}
-    (hdeg : ∀ (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
-      (d : DenseConstraintSystem p), d.CoveredBy reg →
-      (reg.decodeCS d).withinDegree b → (reg.decodeCS (denseF bs facts d)).withinDegree b) :
-    DenseRespectsDeg b (of denseF denseDerivsF hcov hdcov hcorrect) := by
-  intro reg d hcovd bs facts hin
-  exact hdeg reg bs facts d hcovd hin
-
 /-! ## The registry-extending dense-pass builder
 
 `ofExtending` is the sibling of `of` for fresh-variable passes: the transform returns the extended
@@ -854,19 +840,6 @@ def DenseVerifiedPassW.ofExtending
         have hcovd' : d.CoveredBy t.1 := denseCS_coveredBy_mono hext' hcovd
         have hlift := DensePassCorrect.lift hcovd' hcov' hdcov' hcorrect'
         rwa [hext'.decodeCS_eq hcovd] at hlift }
-
-/-- `ofExtending` respects the degree bound whenever its dense output stays within bound. -/
-theorem DenseVerifiedPassW.ofExtending_respectsDeg {b : DegreeBound}
-    {transform : VarRegistry → (bs : BusSemantics p) → BusFacts p bs → DenseConstraintSystem p →
-      VarRegistry × DenseConstraintSystem p × DenseDerivations p}
-    {hext hcov hdcov hcorrect}
-    (hdeg : ∀ (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
-      (d : DenseConstraintSystem p), d.CoveredBy reg →
-      (reg.decodeCS d).withinDegree b →
-      ((transform reg bs facts d).1.decodeCS (transform reg bs facts d).2.1).withinDegree b) :
-    DenseRespectsDeg b (ofExtending transform hext hcov hdcov hcorrect) := by
-  intro reg d hcovd bs facts hin
-  exact hdeg reg bs facts d hcovd hin
 
 /-! ### Sanity check: a trivial registry-minting stub composes through the builder -/
 

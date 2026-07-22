@@ -115,22 +115,6 @@ theorem PassCorrect.andThen {cs mid out : ConstraintSystem p} {bs : BusSemantics
   have := hr2 inputVars hmidIn (dsIn ++ df) (hr1 inputVars hpowIn dsIn hrec)
   rwa [List.append_assoc] at this
 
-/-- `PassCorrect` for a pass whose completeness witness is the input assignment itself and which
-    introduces no new variables (`out.vars ⊆ cs.vars`); emits no derivations. -/
-theorem PassCorrect.ofEnvEq {cs out : ConstraintSystem p} {bs : BusSemantics p}
-    (hsound : out.implies cs bs)
-    (hinv : cs.guaranteesInvariants bs → out.guaranteesInvariants bs)
-    (hsub : ∀ v ∈ out.vars, v ∈ cs.vars)
-    (hcomp : ∀ env, cs.admissible bs env → cs.satisfies bs env →
-      out.satisfies bs env ∧ out.admissible bs env ∧
-        cs.sideEffects bs env ≈ out.sideEffects bs env) :
-    PassCorrect cs out [] bs := by
-  refine ⟨hsound, hinv, fun v hv _ => hsub v hv, fun env hadm hsat => ?_⟩
-  obtain ⟨ho1, ho2, ho3⟩ := hcomp env hadm hsat
-  refine ⟨env, ho1, ho2, ho3, ⟨fun _ _ => rfl, fun _ _ dsIn hrec => ?_⟩⟩
-  rw [List.append_nil]
-  exact fun v hvout hvnone => hrec v (hsub v hvout) hvnone
-
 /-- A `PassCorrect` gives the audited `isSoundReplacementOf`. The completeness half is discharged
     at the pipeline top (`Implementation/Optimizer.lean`). -/
 theorem PassCorrect.toSound {cs out : ConstraintSystem p} {ds : Derivations p}

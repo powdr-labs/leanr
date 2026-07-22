@@ -196,29 +196,4 @@ theorem denseIterateToFixpoint_respectsDeg {b : DegreeBound} {f : DenseVerifiedP
   intro reg d hcov bs facts hin
   exact denseIterateToFixpointFrom_respectsDeg hf reg d hcov bs facts d.sizeKey rfl hin
 
-/-- `denseIterateToFixpointFrom` never grows the size key (strong induction, key generalized). -/
-theorem denseIterateToFixpointFrom_monotone {f : DenseVerifiedPassW p} (reg : VarRegistry)
-    (d : DenseConstraintSystem p) :
-    ∀ (hcov : d.CoveredBy reg) (bs : BusSemantics p) (facts : BusFacts p bs)
-      (k : Nat ×ₗ Nat ×ₗ Nat) (hk : d.sizeKey = k),
-      (denseIterateToFixpointFrom f reg d hcov bs facts k hk).out.sizeKey ≤ d.sizeKey := by
-  induction d using denseSizeKey_wf.induction generalizing reg with
-  | _ d ih =>
-    intro hcov bs facts k hk
-    rw [denseIterateToFixpointFrom]
-    split
-    · rename_i h
-      exact le_trans
-        (ih _ (by rw [hk]; exact h) _ (f reg d hcov bs facts).covered bs facts _ rfl)
-        (le_of_lt (by rw [hk]; exact h))
-    · exact le_refl _
-
-/-- The dense cleanup loop can only improve the circuit: the output's `sizeKey` never exceeds the
-    input's. -/
-theorem denseIterateToFixpoint_monotone {f : DenseVerifiedPassW p} (reg : VarRegistry)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) (bs : BusSemantics p)
-    (facts : BusFacts p bs) :
-    (denseIterateToFixpoint f reg d hcov bs facts).out.sizeKey ≤ d.sizeKey :=
-  denseIterateToFixpointFrom_monotone reg d hcov bs facts d.sizeKey rfl
-
 end ApcOptimizer.Dense
