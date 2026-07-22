@@ -138,7 +138,12 @@ definitions in a new `ApcOptimizer/Implementation/OptimizerPasses/` file and the
 pass in a matching `OptimizerPasses/Proofs/` file, import the latter in
 `ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass)` entry to the
 `cleanupPasses` list (`guardAll` degree-guards every entry, so no per-pass guard is written). Build it with `DenseVerifiedPassW.of`, or `DenseVerifiedPassW.ofExtending` for
-passes that mint fresh variables. The pipeline encodes the system into the dense `VarId`
+passes that mint fresh variables. Two common shapes skip the wiring entirely
+(`Proofs/EntailedCheck.lean`): `DenseVerifiedPassW.ofCheckRules` builds an append-and-drop pass
+from `DenseCheckRule`s — recognizers whose acceptance is exactly the vanishing of the emitted
+constraint (`degenRange` is the worked example) — and `DenseVerifiedPassW.ofAddConstraints`
+builds an append-only pass from an emitted-constraint list plus its containment/entailment
+obligations (`oneHotAnnihilate`, `zeroRegister`, `xorEqExtract`). The pipeline encodes the system into the dense `VarId`
 representation once at entry and decodes once at output; the `DensePassCorrect` is lifted to the
 audited `Variable`-based `PassCorrect` at that boundary (`Bridge.lean`). Correctness follows from the
 pass's own `DensePassCorrect`, and the profiler picks up the new pass for free since it consumes the

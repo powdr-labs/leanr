@@ -59,8 +59,13 @@ with its runtime definitions in a new `ApcOptimizer/Implementation/OptimizerPass
 proof plus the wired pass in a matching `OptimizerPasses/Proofs/` file, import the latter in
 `ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass)` entry to
 the `cleanupPasses` list (the list applies the degree guard to every entry itself). Build the pass with `DenseVerifiedPassW.of` (registry unchanged) or, for
-passes that mint fresh variables, `DenseVerifiedPassW.ofExtending`; see the worked examples
-`Proofs/Gauss.lean`, `Proofs/DropPasses.lean`, `Proofs/CarryBranch.lean` / `Proofs/RangeBool.lean` and
+passes that mint fresh variables, `DenseVerifiedPassW.ofExtending`. Two common shapes have
+dedicated builders in `Proofs/EntailedCheck.lean` that reduce a pass to recognizers plus
+soundness lemmas: `DenseVerifiedPassW.ofCheckRules` (recognize stateless checks, append the
+entailed constraints, drop the checks — see `Proofs/DegenRange.lean`) and
+`DenseVerifiedPassW.ofAddConstraints` (append entailed constraints only — see
+`Proofs/OneHotAnnihilate.lean`). Other worked examples: `Proofs/Gauss.lean`,
+`Proofs/DropPasses.lean`, `Proofs/CarryBranch.lean` and
 `Proofs/Reencode.lean`. That one list entry is the only edit needed; the profiler picks up the new
 pass for free. Do not touch the audited surface (`Spec.lean`, `OpenVmSemantics.lean`,
 `Sp1Semantics.lean`, `MemoryBus.lean`, `ApcOptimizer/Optimizer.lean`) or the glue in `Basic.lean`;

@@ -19,7 +19,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Proofs.SplitBytePair
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.SeqzCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
-import ApcOptimizer.Implementation.OptimizerPasses.RangeBool
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DegenRange
 import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubst
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.IdentitySubst
 import ApcOptimizer.Implementation.OptimizerPasses.DenseUmbrella
@@ -58,8 +58,7 @@ def cleanupPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
   -- O(1) instead of re-running `decide (Nat.Prime p)`).
   let pw := PrimeWitness.of p
   guardAll b
-  [ ("zeroWidthRange", denseZeroWidthRangePass pw),
-    ("rangeBool", denseRangeBoolPass pw),
+  [ ("degenRange", denseDegenRangePass pw),
     ("xorEqExtract", denseXorEqExtractPass),
     ("carryBranch", denseCarryBranchPass pw),
     ("gauss", denseGaussElimPass),

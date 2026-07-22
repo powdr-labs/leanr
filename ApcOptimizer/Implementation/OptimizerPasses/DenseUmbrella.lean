@@ -26,8 +26,10 @@ import ApcOptimizer.Implementation.OptimizerPasses.ZeroRegister
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.ZeroRegister
 import ApcOptimizer.Implementation.OptimizerPasses.CarryBranch
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.CarryBranch
-import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
-import ApcOptimizer.Implementation.OptimizerPasses.Proofs.ZeroWidthRange
+import ApcOptimizer.Implementation.OptimizerPasses.DegenRange
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DegenRange
+import ApcOptimizer.Implementation.OptimizerPasses.EntailedCheck
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.EntailedCheck
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFoldRuntime
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DomainFold
@@ -65,7 +67,6 @@ import ApcOptimizer.Implementation.OptimizerPasses.Proofs.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.HintCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DisconnectedComponent
-import ApcOptimizer.Implementation.OptimizerPasses.Proofs.RangeBool
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.IntervalForce
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse

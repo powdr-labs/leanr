@@ -92,6 +92,32 @@ global rebuild — collect every surviving range obligation, drop solver-implied
 exact-cover — is bus-only and variable-neutral. Caution: 2–7-bit checks must not be packed as
 bytes (weakens them).
 
+## Structural follow-ups (from PR #177, 2026-07-22)
+
+Consolidations analyzed but deliberately left out of #177 (worse risk/benefit; pick up when
+touching these files anyway):
+
+- **Classifier dispatch for the entailment recognizers**: `denseXorEq?`/`denseBoolEq?`
+  (XorEqExtract) and `denseIdentityPairAt` (IdentitySubst) could recognize shapes via
+  `denseByteShape?` and keep only their bespoke conclusions (entailed equality / var-equality).
+  Est. −20..40 lines. The seqz build-and-compare path shares only the encode layout — leave it.
+- **Keyed vs value-only compiled-eval twins**: `denseCompileE_eval`/`denseCompileEs_all`
+  (Proofs/Reencode, keyed points) duplicate `denseCompileE_evalV`/`denseCompileEs_allV`
+  (Proofs/DomainBatch, value-only) — one lemma over an abstract point/lookup interface with two
+  instantiations. Est. −60..80 lines, but the abstraction must be stated carefully.
+- **Enumeration-membership triplets**: `mem_assignmentsV` (DomainBatch), 
+  `mem_denseAssignmentsV_of_sound` (DomainFold), `mem_denseAssignments` (RootPairUnify) are the
+  same induction over three domain-element types. Est. −30.
+- **`ofAddConstraints` with coverage**: busUnify's soundness needs `reg`/`hcov`, so it could not
+  rewire through `DenseVerifiedPassW.ofAddConstraints`; a coverage-threading variant would let it
+  drop its guard/covered/correct blocks. Est. −25.
+- **Pass-removal probes**: never trust a small sample — digitFold looked identical on 13 cases
+  and regressed 8/100 openvm-eth cases in the CI matrix (entries 124–125). Probe with the list
+  entry removed, then let the PR CI matrix decide. Not yet probed: hintCollapse, rootPairUnify,
+  flagUnify, bytePack (early instance), disconnected, splitBytePair, identitySubst,
+  redundantByteDrop, subsumedRange, subsumedCheck, tupleRange, monicScale, busPairCancelLate
+  (oneHotAnnihilate's probe was interrupted).
+
 ## Runtime
 
 Rewritten 2026-07-18 from a fresh profiling session (per-pass `profile`, per-cycle timing, gdb

@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheck
+import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 
 set_option autoImplicit false
 
@@ -24,21 +24,15 @@ def denseTupleCheck (busId : Nat) (x y : DenseExpr p) : BusInteraction (DenseExp
 
 /-! ## Recognizing a candidate half of a pack -/
 
-/-- If `bi` is a single-value byte check (decoded op `= xorOp`, `o₁ = o₂`, result `0`, multiplicity
-    `1`) on a `byteXorSpec` bus with byte bound `256`, return the bus spec and checked value. -/
+/-- If `bi` is a multiplicity-1 XOR self-check `[x, x, 0]` (the structural `selfCheck` shape of
+    `denseByteShape?`), return the bus spec and checked value. -/
 def denseMatchByteSingle (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) : Option (ByteXorSpec p × DenseExpr p) :=
-  match facts.byteXorSpec bi.busId with
-  | none => none
-  | some spec =>
-    if decide (spec.bound = 256) then
-      match spec.decode bi.payload with
-      | some (op, o1, o2, r) =>
-          if bi.multiplicity = DenseExpr.const 1 ∧ op = DenseExpr.const spec.xorOp
-              ∧ o1 = o2 ∧ r = DenseExpr.const 0
-          then some (spec, o1) else none
-      | none => none
-    else none
+  if bi.multiplicity = DenseExpr.const 1 then
+    match denseByteShape? denseCmpStructural bs facts bi with
+    | some (.selfCheck, spec, o1, _) => some (spec, o1)
+    | _ => none
+  else none
 
 /-- If `bi` is a range check `[y, b]` (multiplicity `1`, constant supported width, exact size
     `2 ^ b = s2`) on a `varRangeBus`, return `(y, b)`. -/

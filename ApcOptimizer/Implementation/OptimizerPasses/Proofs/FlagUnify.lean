@@ -467,13 +467,13 @@ theorem denseFlagUnifyF_correct (pw : PrimeWitness p) (reg : VarRegistry) (bs : 
     DensePassCorrect reg.isInput d (denseFlagUnifyF pw bs facts d) [] bs := by
   rw [denseFlagUnifyF_eq]
   split_ifs with hp hempty
-  · exact dpcRefl reg.isInput d bs
+  · exact DensePassCorrect.refl reg.isInput d bs
   · haveI : Fact p.Prime := ⟨pw.correct hp⟩
     have hinv := denseFlagUnify_loop_invariant bs facts d
     exact DenseConstraintSystem.substF_denseCorrect d _ bs reg.isInput
       (fun denv hsat i t hti => hinv.1 denv hsat i t hti)
       (fun i t hti z hz => hinv.2 i t hti z hz)
-  · exact dpcRefl reg.isInput d bs
+  · exact DensePassCorrect.refl reg.isInput d bs
 
 /-- The dense `flagUnify` pass (transform `denseFlagUnifyF`). -/
 def denseFlagUnifyPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=

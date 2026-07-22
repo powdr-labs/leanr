@@ -4,7 +4,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DomainBatch
 
 set_option autoImplicit false
 
-/-! # Dense interval forcing: proof and wiring for `denseIntervalForceF` (`IntervalForce.lean`).
+/-! # Dense interval forcing: proof and wiring for `denseIntervalForceNew` (`IntervalForce.lean`).
 The pass appends entailed constraints, so correctness rides on
 `DensePassCorrect.denseAddConstraints` once each seed is shown to evaluate to `0`. -/
 
@@ -422,24 +422,6 @@ theorem denseAllSeeds_sound {bs : BusSemantics p} (facts : BusFacts p bs)
 
 /-! ## The pass -/
 
-/-- The appended list of entailed seeds (reconstructs `denseIntervalForceF`'s internal `new`). -/
-def denseIntervalForceNew (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
-    List (DenseExpr p) :=
-  let idx := denseBoundIdxBuild bs facts d.busInteractions
-  let seeds := denseAllSeeds bs facts (fun v => idx[v]?) d
-  let varSet : Std.HashSet VarId := Std.HashSet.ofList d.occ
-  let csBuckets : Std.HashMap UInt64 (List (DenseExpr p)) :=
-    d.algebraicConstraints.foldl (fun m c => m.insert c.bHash (c :: m.getD c.bHash [])) ∅
-  (seeds.filter (fun e => e.vars.all (fun z => varSet.contains z))).filter
-    (fun e => !(csBuckets.getD e.bHash []).contains e)
-
-theorem denseIntervalForceF_eq (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) :
-    denseIntervalForceF bs facts d =
-      if (denseIntervalForceNew bs facts d).isEmpty then d
-      else { d with algebraicConstraints := d.algebraicConstraints ++ denseIntervalForceNew bs facts d } :=
-  rfl
-
 theorem denseIntervalForceNew_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     ∀ c ∈ denseIntervalForceNew bs facts d, ∀ z ∈ c.vars, z ∈ d.occ := by
@@ -461,33 +443,9 @@ theorem denseIntervalForceNew_sound (bs : BusSemantics p) (facts : BusFacts p bs
     (fun v B hb => denseBoundIdxBuild_lookup_sound facts d denv (fun bi hbi => hsat.2 bi hbi) v B hb)
     hsat c hcseed
 
-theorem denseIntervalForceF_covered (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
-    (denseIntervalForceF bs facts d).CoveredBy reg := by
-  rw [denseIntervalForceF_eq]
-  split
-  · exact hcov
-  · refine ⟨fun e he => ?_, hcov.2⟩
-    rcases List.mem_append.1 he with h' | h'
-    · exact hcov.1 e h'
-    · intro i hi
-      exact DenseConstraintSystem.occ_valid hcov i (denseIntervalForceNew_vars bs facts d e h' i hi)
-
-theorem denseIntervalForceF_correct (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
-    (d : DenseConstraintSystem p) :
-    DensePassCorrect reg.isInput d (denseIntervalForceF bs facts d) [] bs := by
-  rw [denseIntervalForceF_eq]
-  split
-  · exact DensePassCorrect.refl reg.isInput d bs
-  · exact DensePassCorrect.denseAddConstraints d bs (denseIntervalForceNew bs facts d)
-      (denseIntervalForceNew_vars bs facts d)
-      (fun denv _ hsat => denseIntervalForceNew_sound bs facts d denv hsat)
-
-/-- The dense `intervalForce` pass; correctness via `denseIntervalForceF_correct`. -/
+/-- The dense `intervalForce` pass: appends the entailed interval-forcing seeds. -/
 def denseIntervalForcePass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.of denseIntervalForceF (fun _ _ _ => [])
-    (fun reg bs facts d hcov => denseIntervalForceF_covered reg bs facts d hcov)
-    (fun _ _ _ _ _ => by intro x hx; simp at hx)
-    (fun reg bs facts d _ => denseIntervalForceF_correct reg bs facts d)
+  DenseVerifiedPassW.ofAddConstraints denseIntervalForceNew denseIntervalForceNew_vars
+    (fun bs facts d denv _ hsat => denseIntervalForceNew_sound bs facts d denv hsat)
 
 end ApcOptimizer.Dense

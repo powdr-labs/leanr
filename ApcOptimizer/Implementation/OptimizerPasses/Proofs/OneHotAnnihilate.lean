@@ -148,31 +148,15 @@ theorem denseDeadVarsNew_vars (d : DenseConstraintSystem p) :
     rw [hcform]
     exact List.mem_append_right _ (List.mem_singleton.2 rfl)
 
-theorem denseOneHotAnnihilateF_covered (reg : VarRegistry) (d : DenseConstraintSystem p)
-    (hcov : d.CoveredBy reg) : (denseOneHotAnnihilateF d).CoveredBy reg := by
-  unfold denseOneHotAnnihilateF
-  refine ⟨fun e he => ?_, hcov.2⟩
-  rcases List.mem_append.1 he with h' | h'
-  · exact hcov.1 e h'
-  · intro i hi
-    exact DenseConstraintSystem.occ_valid hcov i (denseDeadVarsNew_vars d e h' i hi)
-
-theorem denseOneHotAnnihilateF_correct (reg : VarRegistry) (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) :
-    DensePassCorrect reg.isInput d (denseOneHotAnnihilateF d) [] bs := by
-  unfold denseOneHotAnnihilateF
-  exact DensePassCorrect.denseAddConstraints d bs
-    ((denseDeadVars d).map (fun i => DenseExpr.var i))
-    (denseDeadVarsNew_vars d)
-    (fun denv _ hsat c hc => by
+/-- The dense one-hot annihilation pass: when a one-hot closer `(x₁ + … + xₙ − 1)·x = 0` is
+    present together with every product `xᵢ·x = 0`, the variable `x` is forced to `0`; appends
+    `x = 0` for each such annihilated `x`. -/
+def denseOneHotAnnihilatePass : DenseVerifiedPassW p :=
+  DenseVerifiedPassW.ofAddConstraints
+    (fun _ _ d => (denseDeadVars d).map (fun i => DenseExpr.var i))
+    (fun _ _ d => denseDeadVarsNew_vars d)
+    (fun bs _ d denv _ hsat c hc => by
       obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hc
       exact denseDeadVars_entailed d bs denv hsat x hx)
-
-/-- The dense one-hot annihilation pass. -/
-def denseOneHotAnnihilatePass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.of (fun _ _ d => denseOneHotAnnihilateF d) (fun _ _ _ => [])
-    (fun reg _ _ d hcov => denseOneHotAnnihilateF_covered reg d hcov)
-    (fun _ _ _ _ _ => by intro x hx; simp at hx)
-    (fun reg bs _ d _ => denseOneHotAnnihilateF_correct reg bs d)
 
 end ApcOptimizer.Dense

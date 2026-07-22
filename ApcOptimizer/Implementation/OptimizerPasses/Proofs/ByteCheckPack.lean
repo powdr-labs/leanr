@@ -117,7 +117,7 @@ theorem denseByteBoolSound_decode_iff (bs : BusSemantics p) (facts : BusFacts p 
 /-! ## The NOT-form complement recognizer -/
 
 /-- `255 − a` with no wraparound is the byte complement, hence `a`'s XOR with `255`. -/
-private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
+theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
     (255 - a).val = Nat.xor a.val 255 := by
   haveI : NeZero p := ⟨by omega⟩
   have hle : a.val ≤ 255 := by omega
@@ -131,7 +131,7 @@ private theorem val_255_sub (hp : 256 ≤ p) (a : ZMod p) (ha : a.val < 256) :
   rw [hval]; exact (nat_xor_255 _ ha).symm
 
 /-- `(255 : ZMod p).val = 255` when `256 ≤ p`. -/
-private theorem val_255 (hp : 256 ≤ p) : (255 : ZMod p).val = 255 := by
+theorem val_255 (hp : 256 ≤ p) : (255 : ZMod p).val = 255 := by
   have hc : ((255 : ℕ) : ZMod p) = (255 : ZMod p) := by norm_cast
   rw [← hc, ZMod.val_natCast_of_lt (by omega)]
 
@@ -155,122 +155,133 @@ theorem denseMem_biVars_of_payload (bi : BusInteraction (DenseExpr p)) (e : Dens
   rw [denseBIVars, List.mem_append]
   exact Or.inr (List.mem_flatMap.2 ⟨e, he, hv⟩)
 
+/-! ## The shape classifier is sound -/
+
+/-- `denseCmpStructural` hits pin evaluation. -/
+theorem denseCmpStructural_sound (e : DenseExpr p) (c : ZMod p) (denv : VarId → ZMod p)
+    (h : denseCmpStructural e c = true) : e.eval denv = c := by
+  obtain rfl : e = DenseExpr.const c := by simpa [denseCmpStructural] using h
+  rfl
+
+/-- `denseCmpFolded` hits pin evaluation. -/
+theorem denseCmpFolded_sound (e : DenseExpr p) (c : ZMod p) (denv : VarId → ZMod p)
+    (h : denseCmpFolded e c = true) : e.eval denv = c :=
+  e.constValue?_sound c (by simpa [denseCmpFolded] using h) denv
+
+/-- A classifier hit is a stateless byte check on its shape's operands: they are payload entries,
+    and acceptance is exactly "every operand is a byte" — for any `cmp` whose hits pin evaluation
+    (`denseCmpStructural_sound` / `denseCmpFolded_sound`). One branch per shape. -/
+theorem denseByteShape?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
+    {cmp : DenseExpr p → ZMod p → Bool}
+    (hcmp : ∀ (e : DenseExpr p) (c : ZMod p) (denv : VarId → ZMod p),
+      cmp e c = true → e.eval denv = c)
+    (bi : BusInteraction (DenseExpr p)) (sh : DenseByteShape) (spec : ByteXorSpec p)
+    (o1 o2 : DenseExpr p) (h : denseByteShape? cmp bs facts bi = some (sh, spec, o1, o2)) :
+    bs.isStateful bi.busId = false ∧ (∀ e ∈ sh.operands o1 o2, e ∈ bi.payload) ∧
+      ∀ denv, bs.violatesConstraint (denseBIEval bi denv) = false ↔
+        ∀ e ∈ sh.operands o1 o2, (e.eval denv).val < 256 := by
+  unfold denseByteShape? at h
+  split at h
+  · exact absurd h (by simp)
+  · rename_i spec' hspec
+    split at h
+    · rename_i hb
+      have hbound : spec'.bound = 256 := of_decide_eq_true hb
+      split at h
+      · exact absurd h (by simp)
+      · rename_i op o1' o2' r hdec
+        have hstateless := (facts.byteXorSpec_sound bi.busId spec' hspec).1
+        obtain ⟨hmemO1, hmemO2, -⟩ := spec'.decode_mem bi.payload op o1' o2' r hdec
+        have key := denseByteXorSpec_decode_iff bs facts spec' bi hspec op o1' o2' r hdec
+        split_ifs at h with hxor hA hB hC hD hE hor hOA hOB hpair <;>
+            simp only [Option.some.injEq, Prod.mk.injEq] at h <;>
+            obtain ⟨rfl, rfl, rfl, rfl⟩ := h <;>
+            simp only [DenseByteShape.operands, List.forall_mem_cons, List.not_mem_nil,
+              false_implies, forall_true_iff, and_true]
+        · -- self-check: o₁ = o₂, r = 0
+          obtain ⟨rfl, hr0⟩ : o1' = o2' ∧ cmp r 0 = true := by simpa using hA
+          refine ⟨hstateless, hmemO1, fun denv => ?_⟩
+          rw [(key denv).1 (hcmp op _ denv hxor), hbound, hcmp r 0 denv hr0, ZMod.val_zero]
+          exact ⟨fun hh => hh.1, fun hh => ⟨hh, hh, (Nat.xor_self _).symm⟩⟩
+        · -- XOR-with-zero: o₂ = 0, o₁ = r
+          obtain ⟨hz, rfl⟩ : cmp o2' 0 = true ∧ o1' = r := by simpa using hB
+          refine ⟨hstateless, hmemO1, fun denv => ?_⟩
+          rw [(key denv).1 (hcmp op _ denv hxor), hbound, hcmp o2' 0 denv hz, ZMod.val_zero]
+          exact ⟨fun hh => hh.1, fun hh => ⟨hh, by omega, (Nat.xor_zero _).symm⟩⟩
+        · -- mirror XOR-with-zero: o₁ = 0, o₂ = r
+          obtain ⟨hz, rfl⟩ : cmp o1' 0 = true ∧ o2' = r := by simpa using hC
+          refine ⟨hstateless, hmemO2, fun denv => ?_⟩
+          rw [(key denv).1 (hcmp op _ denv hxor), hbound, hcmp o1' 0 denv hz, ZMod.val_zero]
+          exact ⟨fun hh => hh.2.1, fun hh => ⟨by omega, hh, (Nat.zero_xor _).symm⟩⟩
+        · -- NOT-form: o₂ = 255, r = 255 − o₁
+          obtain ⟨⟨hple, h255⟩, hcompl⟩ :
+              (256 ≤ p ∧ cmp o2' 255 = true) ∧ denseIsByteCompl o1' r = true := by simpa using hD
+          refine ⟨hstateless, hmemO1, fun denv => ?_⟩
+          rw [(key denv).1 (hcmp op _ denv hxor), hbound, hcmp o2' 255 denv h255,
+            denseIsByteCompl_sound o1' r hcompl denv, val_255 hple]
+          exact ⟨fun hh => hh.1, fun hh => ⟨hh, by omega, val_255_sub hple _ hh⟩⟩
+        · -- mirror NOT-form: o₁ = 255, r = 255 − o₂
+          obtain ⟨⟨hple, h255⟩, hcompl⟩ :
+              (256 ≤ p ∧ cmp o1' 255 = true) ∧ denseIsByteCompl o2' r = true := by simpa using hE
+          refine ⟨hstateless, hmemO2, fun denv => ?_⟩
+          rw [(key denv).1 (hcmp op _ denv hxor), hbound, hcmp o1' 255 denv h255,
+            denseIsByteCompl_sound o2' r hcompl denv, val_255 hple]
+          exact ⟨fun hh => hh.2.1, fun hh =>
+            ⟨by omega, hh, by rw [val_255_sub hple _ hh]; exact Nat.xor_comm _ _⟩⟩
+        · -- OR identity: o₂ = 0, o₁ = r
+          obtain ⟨hz, rfl⟩ : cmp o2' 0 = true ∧ o1' = r := by simpa using hOA
+          cases hoo : spec'.orOp with
+          | none => rw [hoo] at hor; simp [Option.any] at hor
+          | some oop =>
+            rw [hoo] at hor; simp only [Option.any] at hor
+            refine ⟨hstateless, hmemO1, fun denv => ?_⟩
+            rw [(denseByteBoolSound_decode_iff bs facts spec' bi hspec op o1' o2' o1' hdec denv).1
+                oop hoo (hcmp op oop denv hor), hbound, hcmp o2' 0 denv hz, ZMod.val_zero]
+            exact ⟨fun hh => hh.1, fun hh => ⟨hh, by omega, by simp⟩⟩
+        · -- mirror OR identity: o₁ = 0, o₂ = r
+          obtain ⟨hz, rfl⟩ : cmp o1' 0 = true ∧ o2' = r := by simpa using hOB
+          cases hoo : spec'.orOp with
+          | none => rw [hoo] at hor; simp [Option.any] at hor
+          | some oop =>
+            rw [hoo] at hor; simp only [Option.any] at hor
+            refine ⟨hstateless, hmemO2, fun denv => ?_⟩
+            rw [(denseByteBoolSound_decode_iff bs facts spec' bi hspec op o1' o2' o2' hdec denv).1
+                oop hoo (hcmp op oop denv hor), hbound, hcmp o1' 0 denv hz, ZMod.val_zero]
+            exact ⟨fun hh => hh.2.1, fun hh => ⟨by omega, hh, by simp⟩⟩
+        · -- packed pair: r = 0
+          obtain ⟨hpc, hr0⟩ : cmp op spec'.pairOp = true ∧ cmp r 0 = true := by simpa using hpair
+          refine ⟨hstateless, ⟨hmemO1, hmemO2⟩, fun denv => ?_⟩
+          rw [(key denv).2 (hcmp op _ denv hpc), hbound]
+          exact ⟨fun hh => ⟨hh.1, hh.2.1⟩, fun hh => ⟨hh.1, hh.2, hcmp r 0 denv hr0⟩⟩
+    · exact absurd h (by simp)
+
 /-! ## The single-value byte-check recognizer is sound -/
 
 /-- A recognized single-value byte check is stateless, has multiplicity 1, its value is a payload
-    entry, and its acceptance is exactly "the value is a byte" (7 branches, one per recognized
-    shape). -/
+    entry, and its acceptance is exactly "the value is a byte". -/
 theorem denseSvCheck?_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     (bi : BusInteraction (DenseExpr p)) (e : DenseExpr p)
     (h : denseSvCheck? bs facts bi = some e) :
     bs.isStateful bi.busId = false ∧ bi.multiplicity = DenseExpr.const 1 ∧ e ∈ bi.payload ∧
       (∀ denv, bs.violatesConstraint (denseBIEval bi denv) = false ↔ (e.eval denv).val < 256) := by
   unfold denseSvCheck? at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i spec hspec
-    split at h
-    · rename_i hb
-      have hbound : spec.bound = 256 := of_decide_eq_true hb
-      split at h
-      · exact absurd h (by simp)
-      · rename_i op o1 o2 r hdec
-        have hstateless := (facts.byteXorSpec_sound bi.busId spec hspec).1
-        obtain ⟨hmemO1, hmemO2, _⟩ := spec.decode_mem bi.payload op o1 o2 r hdec
-        have key := denseByteXorSpec_decode_iff bs facts spec bi hspec op o1 o2 r hdec
-        split_ifs at h with hmo hA hB hC hD hE hor hOA hOB
-        · -- self-check: o₁ = o₂, r = 0
-          obtain ⟨hm, hop⟩ := hmo; obtain ⟨he12, hr0⟩ := hA
-          obtain rfl : o1 = e := by simpa using h
-          refine ⟨hstateless, hm, hmemO1, fun denv => ?_⟩
-          have hopEv : op.eval denv = spec.xorOp := by rw [hop]; rfl
-          rw [(key denv).1 hopEv, hbound]
-          refine ⟨fun hh => hh.1, fun hh => ⟨hh, he12 ▸ hh, ?_⟩⟩
-          rw [show r.eval denv = 0 by rw [hr0]; rfl, ZMod.val_zero, ← he12]
-          exact (Nat.xor_self _).symm
-        · -- XOR-with-zero: o₂ = 0, o₁ = r
-          obtain ⟨hm, hop⟩ := hmo; obtain ⟨hz, heq⟩ := hB
-          obtain rfl : o1 = e := by simpa using h
-          refine ⟨hstateless, hm, hmemO1, fun denv => ?_⟩
-          have hopEv : op.eval denv = spec.xorOp := by rw [hop]; rfl
-          rw [(key denv).1 hopEv, hbound]
-          refine ⟨fun hh => hh.1, fun hh => ⟨hh, ?_, ?_⟩⟩
-          · rw [show o2.eval denv = 0 by rw [hz]; rfl, ZMod.val_zero]; omega
-          · rw [show r.eval denv = o1.eval denv by rw [heq], show o2.eval denv = 0 by rw [hz]; rfl,
-              ZMod.val_zero]
-            exact (Nat.xor_zero _).symm
-        · -- mirror XOR-with-zero: o₁ = 0, o₂ = r
-          obtain ⟨hm, hop⟩ := hmo; obtain ⟨hz, heq⟩ := hC
-          obtain rfl : o2 = e := by simpa using h
-          refine ⟨hstateless, hm, hmemO2, fun denv => ?_⟩
-          have hopEv : op.eval denv = spec.xorOp := by rw [hop]; rfl
-          rw [(key denv).1 hopEv, hbound]
-          refine ⟨fun hh => hh.2.1, fun hh => ⟨?_, hh, ?_⟩⟩
-          · rw [show o1.eval denv = 0 by rw [hz]; rfl, ZMod.val_zero]; omega
-          · rw [show r.eval denv = o2.eval denv by rw [heq], show o1.eval denv = 0 by rw [hz]; rfl,
-              ZMod.val_zero]
-            exact (Nat.zero_xor _).symm
-        · -- NOT-form: o₂ = 255, r = 255 − o₁
-          obtain ⟨hm, hop⟩ := hmo; obtain ⟨hpp, hz, hcompl⟩ := hD
-          obtain rfl : o1 = e := by simpa using h
-          have hple : 256 ≤ p := of_decide_eq_true hpp
-          refine ⟨hstateless, hm, hmemO1, fun denv => ?_⟩
-          have hopEv : op.eval denv = spec.xorOp := by rw [hop]; rfl
-          have ho2 : o2.eval denv = 255 := by rw [hz]; rfl
-          have hr : r.eval denv = 255 - o1.eval denv := denseIsByteCompl_sound o1 r hcompl denv
-          rw [(key denv).1 hopEv, hbound]
-          refine ⟨fun hh => hh.1, fun hh => ⟨hh, ?_, ?_⟩⟩
-          · rw [ho2, val_255 hple]; omega
-          · rw [hr, ho2, val_255 hple, val_255_sub hple _ hh]
-        · -- mirror NOT-form: o₁ = 255, r = 255 − o₂
-          obtain ⟨hm, hop⟩ := hmo; obtain ⟨hpp, hz, hcompl⟩ := hE
-          obtain rfl : o2 = e := by simpa using h
-          have hple : 256 ≤ p := of_decide_eq_true hpp
-          refine ⟨hstateless, hm, hmemO2, fun denv => ?_⟩
-          have hopEv : op.eval denv = spec.xorOp := by rw [hop]; rfl
-          have ho1 : o1.eval denv = 255 := by rw [hz]; rfl
-          have hr : r.eval denv = 255 - o2.eval denv := denseIsByteCompl_sound o2 r hcompl denv
-          rw [(key denv).1 hopEv, hbound]
-          refine ⟨fun hh => hh.2.1, fun hh => ⟨?_, hh, ?_⟩⟩
-          · rw [ho1, val_255 hple]; omega
-          · rw [hr, ho1, val_255 hple, val_255_sub hple _ hh]; exact Nat.xor_comm _ _
-        · -- OR identity: o₂ = 0, o₁ = r
-          obtain ⟨hm, horAny⟩ := hor; obtain ⟨hz, heq⟩ := hOA
-          obtain rfl : o1 = e := by simpa using h
-          cases hoo : spec.orOp with
-          | none => rw [hoo] at horAny; simp [Option.any] at horAny
-          | some oop =>
-            rw [hoo] at horAny
-            simp only [Option.any, beq_iff_eq] at horAny
-            refine ⟨hstateless, hm, hmemO1, fun denv => ?_⟩
-            have hopEv : op.eval denv = oop := by rw [horAny]; rfl
-            have keyOr := (denseByteBoolSound_decode_iff bs facts spec bi hspec op o1 o2 r hdec denv).1
-              oop hoo hopEv
-            rw [keyOr, hbound]
-            refine ⟨fun hh => hh.1, fun hh => ⟨hh, ?_, ?_⟩⟩
-            · rw [show o2.eval denv = 0 by rw [hz]; rfl, ZMod.val_zero]; omega
-            · rw [show r.eval denv = o1.eval denv by rw [heq],
-                show o2.eval denv = 0 by rw [hz]; rfl, ZMod.val_zero]
-              simp
-        · -- mirror OR identity: o₁ = 0, o₂ = r
-          obtain ⟨hm, horAny⟩ := hor; obtain ⟨hz, heq⟩ := hOB
-          obtain rfl : o2 = e := by simpa using h
-          cases hoo : spec.orOp with
-          | none => rw [hoo] at horAny; simp [Option.any] at horAny
-          | some oop =>
-            rw [hoo] at horAny
-            simp only [Option.any, beq_iff_eq] at horAny
-            refine ⟨hstateless, hm, hmemO2, fun denv => ?_⟩
-            have hopEv : op.eval denv = oop := by rw [horAny]; rfl
-            have keyOr := (denseByteBoolSound_decode_iff bs facts spec bi hspec op o1 o2 r hdec denv).1
-              oop hoo hopEv
-            rw [keyOr, hbound]
-            refine ⟨fun hh => hh.2.1, fun hh => ⟨?_, hh, ?_⟩⟩
-            · rw [show o1.eval denv = 0 by rw [hz]; rfl, ZMod.val_zero]; omega
-            · rw [show r.eval denv = o2.eval denv by rw [heq],
-                show o1.eval denv = 0 by rw [hz]; rfl, ZMod.val_zero]
-              simp
-    · exact absurd h (by simp)
+  split_ifs at h with hm
+  cases hc : denseByteShape? denseCmpStructural bs facts bi with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some t =>
+    obtain ⟨sh, spec, o1, o2⟩ := t
+    simp only [hc] at h
+    obtain ⟨hst, hmem, hacc⟩ :=
+      denseByteShape?_sound bs facts denseCmpStructural_sound bi sh spec o1 o2 hc
+    cases hops : sh.operands o1 o2 with
+    | nil => rw [hops] at h; exact absurd h (by simp)
+    | cons a tl =>
+      cases tl with
+      | nil =>
+        rw [hops] at h
+        obtain rfl : a = e := by simpa using h
+        exact ⟨hst, hm, hmem a (by simp [hops]), fun denv => by rw [hacc denv, hops]; simp⟩
+      | cons b tl' => rw [hops] at h; exact absurd h (by simp)
 
 /-- If `denseFindSecond` returns `(mid, b, eB, post)` then `b` is a recognized single-value byte
     check with value `eB`. -/

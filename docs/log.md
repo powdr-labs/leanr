@@ -4391,3 +4391,85 @@ Maintainability pass; no runtime or proof-content change, effectiveness untouche
 
 **Worked: yes (−10 dead theorems; `lake build` warning-free; proof integrity green, correctness
 axioms `{propext, Classical.choice, Quot.sound}`-only).**
+
+### 123. Structure: generic entailed-check skeleton; zeroWidthRange+rangeBool → degenRange
+
+Maintainability pass (PR #177); output byte-identical on the 13-case sample (5 openvm-eth,
+5 sp1/rsp, 3 wasm-eth).
+
+`EntailedCheck.lean` + `Proofs/EntailedCheck.lean` factor the recurring "recognize a stateless
+check, append the entailed constraint, drop the check" shape: `DenseCheckRule` bundles a
+recognizer with its four obligations (unit multiplicity, statelessness, variable containment,
+acceptance ⟺ vanishing), `DenseVerifiedPassW.ofCheckRules` turns a rule list into the
+append-and-drop pass (grouped per recognizer — provably the same output as running the rules as
+consecutive passes), and `DenseVerifiedPassW.ofAddConstraints` is the append-only sibling. The
+reusable `denseAddConstraints`/`denseFilterBusEntailed` moved here from their historical homes in
+`Proofs/BusUnify.lean`/`Proofs/FlagFoldDrops.lean`; the two private `dpcRefl` copies of
+`DensePassCorrect.refl` are gone. zeroWidthRange+rangeBool became one `degenRange` entry
+(`DegenRange.lean`, two rules); xorEqExtract/oneHotAnnihilate/zeroRegister rewired through
+`ofAddConstraints`, each dropping its covered/correct/wiring block. **Worked: yes (net −148
+lines; a new pass of either shape is now recognizers + soundness lemmas + one builder call).**
+
+### 124. Structure: digitFold pass removed; bounds engine renamed FactBounds
+
+Removal probe (the entry-119 method): dropping the `digitFold` cleanup entry leaves per-case
+sizes identical on the 13-case sample — its base-256 ladder folding is fully covered by the
+surrounding domainBatch/intervalForce-era passes (digitFold predates both). The unused-theorem
+linter then flagged the entire ladder/solution-grid proof stack (22 theorems), deleted with the
+pass; what remains of `DigitFold.lean` is the widely-shared fact-derived bounds map
+(`denseBuild` + probes), renamed `FactBounds.lean`/`Proofs/FactBounds.lean` to match its actual
+role. The single-variable `subst` machinery only digitFold consumed went too (Gauss keeps
+`DenseExpr.subst`). Full-set verification via the PR #177 CI matrix. Removal probes that
+regressed the sample and were kept: carryBranch, zeroRegister, intervalForce (plus earlier
+zeroWidthRange, xorEqExtract). **Worked: yes (net −610 lines; one sample case differs byte-wise
+at identical sizes).**
+
+### 125. digitFold removal reverted: the CI matrix caught an openvm-eth regression
+
+Entry 124's full-set verification came back: wasm-eth, both keccaks and sp1/rsp per-case
+identical, but **8 of 100 openvm-eth cases regressed** (+3..+11 vars each; aggregate variables
+4.553× → 4.543×) — digitFold is not subsumed there, and the 13-case sample had missed all eight
+cases. Reverted; digitFold stays. Lesson for future removal probes: a small local sample only
+screens — the CI matrix is the real verdict, and openvm-eth's mid-ranked cases (apc_026/034/045/
+051/055/066/085/094) are where digit-ladder shapes live. **Worked: no (reverted).**
+
+### 126. Structure: same-env rewrite transport (`DensePassCorrect.ofEvalAgree`) + small dedups
+
+Proof-only, output byte-identical on the 13-case sample.
+
+- **`DensePassCorrect.ofEvalAgree`** (Bridge.lean): for a pass whose output maps bus interactions
+  by an eval-preserving rewrite and whose constraints vanish exactly when the input's do — both
+  under an anchor `A` that either side's satisfaction establishes — correctness follows with the
+  identity environment. The two domainFold correctness proofs (direct `denseFoldOutV` and
+  in-place `denseFoldOutInPlaceV`) were parallel ~145-line re-derivations of exactly this
+  transport (satisfies/admissible/sideEffects/occ + the `ofEnvEq` assembly); each is now a
+  ~45-line instantiation supplying its membership arguments and the covered-constraints anchor.
+  `denseBIEval_mapExpr_of_agree` moved to Bridge as the shared agreement lemma. Candidates that
+  do NOT fit: `substF` (its soundness direction transforms the environment via `denseEnvF`) and
+  reencode (fresh variables; its own generic `reencode_correct_D` stays put).
+- **intervalForce** rewired through `ofAddConstraints` (the proofs file had a duplicate of the
+  impl's seed-list computation just to state an `_eq` by `rfl`).
+- **Byte-complement arithmetic** (`val_255_sub`/`val_255`) deduplicated: three private copies
+  across `Proofs/{ByteCheckPack,RedundantByteDrop,XorEqExtract}` are now one public pair in
+  `Proofs/ByteCheckPack`.
+
+**Worked: yes (−45 intervalForce, −105 transport, −34 byte lemmas; net vs main now ≈ −290
+excluding the append-only log).**
+
+### 127. Structure: one byte-check classifier behind the three duplicate recognizers
+
+`denseSvCheck?` (ByteCheckPack), `denseByteCheckOperands?` (RedundantByteDrop) and
+`denseMatchByteSingle` (TupleRange) matched the same `byteXorSpec` shape family — XOR self-check,
+zero-operand mirrors, NOT/255 forms, OR-identity mirrors, packed pair — with near-identical
+twin branch proofs (~110 lines each). One classifier `denseByteShape?` (shape enum
+`DenseByteShape`, parameterized on the constant-comparison predicate: structural for
+ByteCheckPack/TupleRange, `constValue?`-folded for RedundantByteDrop, preserving each consumer's
+exact branch order, gates and multiplicity policy) now carries the single per-shape soundness
+proof; the recognizers are thin projections, their soundness lemmas short corollaries with
+unchanged statements. `denseAsBytePair` (SplitBytePair) stays bespoke — it has no bound gate, so
+a classifier projection would change its recognition domain. Output byte-identical on the
+13-case sample. **Worked: yes (net −79 lines).** Remaining recognizer-family candidates for a
+future pass: `denseXorEq?`/`denseBoolEq?` (XorEqExtract) and `denseIdentityPairAt`
+(IdentitySubst) could share the classifier's shape dispatch but keep bespoke conclusions
+(entailed equality / var-equality); the seqz build-and-compare path shares only the encode
+layout and should stay put.

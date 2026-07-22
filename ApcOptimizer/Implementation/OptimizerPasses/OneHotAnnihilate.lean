@@ -44,10 +44,4 @@ def denseDeadFromCloser (d : DenseConstraintSystem p) (c : DenseExpr p) : Option
 def denseDeadVars (d : DenseConstraintSystem p) : List VarId :=
   d.algebraicConstraints.filterMap (denseDeadFromCloser d)
 
-/-- When a one-hot closer `(x₁ + … + xₙ − 1)·x = 0` is present together with every product
-    `xᵢ·x = 0`, the variable `x` is forced to `0`; appends `x = 0` for each such annihilated `x`. -/
-def denseOneHotAnnihilateF (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
-  { d with algebraicConstraints :=
-      d.algebraicConstraints ++ (denseDeadVars d).map (fun i => DenseExpr.var i) }
-
 end ApcOptimizer.Dense
