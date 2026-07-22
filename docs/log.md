@@ -4423,3 +4423,12 @@ role. The single-variable `subst` machinery only digitFold consumed went too (Ga
 regressed the sample and were kept: carryBranch, zeroRegister, intervalForce (plus earlier
 zeroWidthRange, xorEqExtract). **Worked: yes (net −610 lines; one sample case differs byte-wise
 at identical sizes).**
+
+### 125. digitFold removal reverted: the CI matrix caught an openvm-eth regression
+
+Entry 124's full-set verification came back: wasm-eth, both keccaks and sp1/rsp per-case
+identical, but **8 of 100 openvm-eth cases regressed** (+3..+11 vars each; aggregate variables
+4.553× → 4.543×) — digitFold is not subsumed there, and the 13-case sample had missed all eight
+cases. Reverted; digitFold stays. Lesson for future removal probes: a small local sample only
+screens — the CI matrix is the real verdict, and openvm-eth's mid-ranked cases (apc_026/034/045/
+051/055/066/085/094) are where digit-ladder shapes live. **Worked: no (reverted).**
