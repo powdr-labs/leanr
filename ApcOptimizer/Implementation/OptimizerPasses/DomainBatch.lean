@@ -1,7 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.EnumEngine
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 import ApcOptimizer.Implementation.OptimizerPasses.SearchBudgets
-import ApcOptimizer.Implementation.OptimizerPasses.FactBounds
+import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.Rewrite

@@ -69,6 +69,7 @@ def cleanupPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     ("constFold2", denseConstantFoldPass),
     ("zeroRegister", denseZeroRegisterPass),
     ("intervalForce", denseIntervalForcePass),
+    ("digitFold", denseDigitFoldPass),
     ("oneHotAnnihilate", denseOneHotAnnihilatePass),
     ("hintCollapse", denseHintCollapsePass pw),
     ("rootPairUnify", denseRootPairUnifyPass pw),

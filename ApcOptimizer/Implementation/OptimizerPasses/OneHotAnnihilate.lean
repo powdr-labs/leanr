@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Dedup
-import ApcOptimizer.Implementation.OptimizerPasses.FactBounds
+import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 
 set_option autoImplicit false
 

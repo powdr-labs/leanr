@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.EntailedCheck
-import ApcOptimizer.Implementation.OptimizerPasses.FactBounds
+import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
 import Mathlib.Tactic.LinearCombination
 
 set_option autoImplicit false
