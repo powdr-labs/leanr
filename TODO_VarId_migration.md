@@ -19,8 +19,9 @@ independently landable.
   (`densePipeline` inside `pipeline`); the Bridge lift to the audited `Variable`-based spec sits
   at exactly those edges. The `profile` CLI command steps the same three lists densely, with
   encode and decode timed as their own lines, never charged to a pass.
-- `DenseVerifiedPassW.ofSpec` has zero schedule call sites; it remains the documented on-ramp
-  for contributing a `Variable`-based pass (Task 4 decides its fate).
+- The pass-entry API is native-only: `DenseVerifiedPassW.of` (registry unchanged) and
+  `DenseVerifiedPassW.ofExtending` (fresh-variable passes) are the two builders. The old
+  `ofSpec` decode → run → re-encode on-ramp for a `Variable`-based pass was deleted in Task 4.
 - The dense-cleanup milestone was verified byte-identical to the pre-migration optimizer on
   every benchmark corpus (identical per-case circuit sizes, effectiveness delta exactly 0), with
   whole-corpus runtime improvements of 16% (openvm-eth), 30% (wasm-eth), 17% (keccak), 11%
@@ -74,9 +75,9 @@ independently landable.
   `GaussProof.lean` (loop-invariant threading through a solver loop), `DigitFoldProof.lean`
   (value-level fact soundness — `denseBuild_sound` — with no registry or decode in the
   statement), `CarryBranchProof.lean` and `RangeBoolProof.lean` (single-shot
-  `DenseVerifiedPassW.ofNative`, prime-witness-gated), `DropPassesProof.lean` (drop/filter
+  `DenseVerifiedPassW.of`, prime-witness-gated), `DropPassesProof.lean` (drop/filter
   passes via `DensePassCorrect.ofEnvEq` and the entailed-filter helpers), `ReencodeProof.lean`
-  with `ofNativeExtending` in `Bridge.lean` (passes that mint fresh variables and extend the
+  with `ofExtending` in `Bridge.lean` (passes that mint fresh variables and extend the
   registry), `BridgeSteps.lean` (drain/foldList combinators for internally-iterating passes).
 
 ## Task 1 — Extend the dense region to the pipeline edges — DONE
@@ -92,7 +93,7 @@ tasks:
   audit-only.
 - `bytePackLate` uses `denseByteCheckPackPass`, whose internal drain subsumes the old
   `iterateToFixpoint ByteCheckPack.byteCheckPackPass` wrapper; `seqzCollapse` keeps its
-  reference fixpoint as `denseIterateToFixpoint` around the `ofNativeExtending`-built step.
+  reference fixpoint as `denseIterateToFixpoint` around the `ofExtending`-built step.
 - Pass/VM coverage of the local byte-identity cases: `subsumedCheck` is a no-op on OpenVM
   (`rangeCheckAt` empty there) and `subsumedRange` is a no-op on SP1 (no `varRangeBus`), so the
   corpus-wide CI run is the real check for the respective other side.
@@ -313,22 +314,32 @@ the build graph until deletion (several — `Identity`, `ZeroRegister`, `CarryBr
 - the four content-vestigial keepers `ByteCheckPack.lean`, `DisconnectedComponent.lean`,
   `RangeBool.lean`, `RangeForceZero.lean`.
 
-## Task 4 — Delete the legacy tree
+## Task 4 — Delete the legacy tree — DONE
 
-When Tasks 1–3 are done: delete `OldVariableBased/` (42 files) and every reachability keeper
-listed at the end of Task 3 (the four import-only keeper files, the four content-vestigial
-keepers, the legacy import lines inside the eight Task 1 port files, and
-`Implementation/Optimizer.lean`'s legacy import block); re-attempt the
-two deferred lemma moves (the Gauss `argmin_map_key`/`map_filterMap` pair and the
-`BusPairCancelJustify` constants — their blockers are gone by now); decide the fate of
-`DenseVerifiedPassW.ofSpec` (currently zero call sites; it is the documented on-ramp in
-"Adding an optimization" for spec-side passes — either keep it for contributor ergonomics or
-delete it and make new passes native-only; `AGENTS.md` must match the decision).
+The `OldVariableBased/` tree (42 files) and every reachability keeper are gone: the four
+import-only wrapper files (`ConstantFold`/`TautoBus`/`TrivialConstraint`/`ZeroMultBus`),
+`Implementation/Optimizer.lean`'s legacy import block, and the keeper `import` line inside each of
+the twelve files that host dense content (they stay — only the import line died). Every textual
+reference to the legacy tree is gone from the non-legacy code, comments, and docs. The two lemma
+moves an earlier plan deferred (`argmin_map_key`/`map_filterMap`, the `BusPairCancelJustify`
+constants) had already been completed in Task 3 (Steps A/F, into `ListSplit.lean`), so nothing
+remained to re-attempt.
+
+Two design decisions (made by the repo owner) were carried out:
+- **Native-only pass API.** `DenseVerifiedPassW.ofSpec` (the decode → run → re-encode on-ramp for a
+  `Variable`-based pass, zero call sites) was deleted, together with the derivation-encoding chain
+  (`encodeCM`/`encodeDerivs` and their extension/coverage/round-trip lemmas, plus `encodeCS_extends`)
+  that only it consumed. `Adapter.lean` keeps only the still-consumed coverage lemmas
+  (`DenseConstraintSystem.CoveredBy.mono`, `encodeCS_covered` and their dependencies).
+- **Rename.** `DenseVerifiedPassW.ofNative` → `DenseVerifiedPassW.of` and `ofNativeExtending` →
+  `ofExtending`; these two builders are now the whole pass-entry API. `AGENTS.md`, the
+  `Implementation/Optimizer.lean` docstrings, `Bridge.lean`, and `docs/design/architecture.md` match.
 
 Permanent, by design — do NOT delete: `Encoding.lean`'s encode/decode round-trip,
 `Bridge.lean`/`Measure.lean` (the lift to the audited `Variable`-based spec at the pipeline
 edges), `Registry.lean`, and the dense pass tree. The audited specification remains
-`Variable`-based; encode-at-entry/decode-at-output are the permanent boundary.
+`Variable`-based; encode-at-entry/decode-at-output are the permanent boundary. `Adapter.lean` is no
+longer an adapter (its `ofSpec` is gone); it now hosts the constraint-system coverage lemmas.
 
 ## Task 5 — Comment and terminology hygiene
 
@@ -356,6 +367,6 @@ exhaustive list — apply the principle, not just the list.
   `DomainBatchRuntime.lean:43`, `BoxRewrite.lean:66`, `Reencode.lean:84`,
   `DomainFoldRuntime.lean:38`, `Bridge.lean:7`. Replace each with a self-contained statement of
   the relevant policy (all policies are in this file's Standing rules).
-- Identifier names are OUT of scope for the sweep (no API churn), with one noted exception to
-  decide at Task 4: `DenseVerifiedPassW.ofNative` keeps its meaning only as the counterpart of
-  `ofSpec` — revisit the name when `ofSpec`'s fate is decided.
+- Identifier names are OUT of scope for the sweep (no API churn). The one exception flagged for
+  Task 4 is resolved: `ofSpec` is deleted and `ofNative`/`ofNativeExtending` are renamed to
+  `DenseVerifiedPassW.of`/`ofExtending`.
