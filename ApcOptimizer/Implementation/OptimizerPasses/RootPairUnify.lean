@@ -51,14 +51,6 @@ namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## `twoRootVarsOk` (dense) -/
-
-/-- `x` genuinely occurs in a recognized constraint (needed for `Solved.varsIn`). Mirrors
-    `twoRootVarsOk` — unused elsewhere in the reference file too (dead code there, kept here for
-    line-parallel fidelity, not dropped as an "improvement"). -/
-def denseTwoRootVarsOk (c : DenseExpr p) (x : VarId) : Bool :=
-  decide (x ∈ c.vars)
-
 /-! ## Constant-coefficient decomposition (`DenseExpr.splitAt`, NEW shared dense helper)
 
 `e = k·x + r` with `k` a field constant and `r` an `x`-free expression — unlike `denseLinearize`,

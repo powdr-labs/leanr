@@ -329,8 +329,12 @@ Two design decisions (made by the repo owner) were carried out:
 - **Native-only pass API.** `DenseVerifiedPassW.ofSpec` (the decode → run → re-encode on-ramp for a
   `Variable`-based pass, zero call sites) was deleted, together with the derivation-encoding chain
   (`encodeCM`/`encodeDerivs` and their extension/coverage/round-trip lemmas, plus `encodeCS_extends`)
-  that only it consumed. `Adapter.lean` keeps only the still-consumed coverage lemmas
-  (`DenseConstraintSystem.CoveredBy.mono`, `encodeCS_covered` and their dependencies).
+  that only it consumed. `Adapter.lean` keeps the coverage lemmas
+  (`encodeCS_covered` and their dependencies, still consumed by the pipeline; and
+  `DenseConstraintSystem.CoveredBy.mono`, a deliberate *public* sibling of the copies that
+  `Bridge.lean` and `ReencodeProof.lean` carry privately — those modules are off its import path,
+  so the public copy is unconsumed but intentional, as `Bridge.lean`'s `denseCS_coveredBy_mono`
+  docstring records).
 - **Rename.** `DenseVerifiedPassW.ofNative` → `DenseVerifiedPassW.of` and `ofNativeExtending` →
   `ofExtending`; these two builders are now the whole pass-entry API. `AGENTS.md`, the
   `Implementation/Optimizer.lean` docstrings, `Bridge.lean`, and `docs/design/architecture.md` match.
@@ -371,10 +375,30 @@ exhaustive list — apply the principle, not just the list.
   Task 4 is resolved: `ofSpec` is deleted and `ofNative`/`ofNativeExtending` are renamed to
   `DenseVerifiedPassW.of`/`ofExtending`.
 
-Ordering note: run Task 6 (below) first — its deletions remove whole files of stale comments,
-shrinking this sweep.
+Ordering note: Task 6 (below) is done — its deletions already removed whole files of stale
+comments, shrinking this sweep. What remains for Task 5 is the migration-jargon/strategy-relative
+comment hygiene across the surviving tree (including a few now-dangling references to deleted
+files/decls that Task 6 left in descriptive "mirrors …" comments, e.g. `MemoryUnify.lean`,
+`interactionBoundPat`, `CoveredIndex.coveredIdx`).
 
-## Task 6 — Delete the orphaned Variable-side layer (unused-declaration sweep findings)
+## Task 6 — Delete the orphaned Variable-side layer (unused-declaration sweep findings) — DONE
+
+Completed: deleted the four fully-dead files (`SubstCore`, `LinExprCore`, `BytePack`,
+`MemoryUnify`); shrank `DomainProp` to its 9 shared survivors, `FactPass` to the live core
+(`VerifiedPassW`, the `BusInteraction` `DecidableEq`, the `varCount`/`sizeKey` measure, and
+`RespectsDeg`), and `CoveredIndex` out of existence (its 3 generic list lemmas re-homed to
+`ListSplit`, the 13-lemma `DomainBatch` decode cluster dropped); removed the `ListSplit`
+split-equation cluster, the `ByteCheckPack` prototype, and the item-4 singletons; and pruned the
+clearly-dead imports. The post-sweep residual is exactly the keep-lists below plus three
+deliberate/forced keeps: **`FactPass.ConstraintSystem.sizeKey`** (worklist slated it for deletion,
+but the kept `Measure` decode helpers `decodeCS_sizeKey`/`decodeCS_varCount` `unfold` it, so it —
+and `varCount` — stay); **`get_spawn`** (`DomainBatchProof`; worklist item-4 singleton, but it is
+`simp`-consumed at `DomainBatchProof.lean:1112`, so restored); and **`Adapter`'s
+`DenseConstraintSystem.CoveredBy.mono`** (unconsumed, but a deliberate *public* sibling — see the
+re-verified Task-4 note above). `OpenVmFacts`/`Sp1Facts` keep their `MemoryBusDrop` import (they use
+`admissibleMemoryBus_dropPair`/`filter_split` directly, reachable via no other path), and
+`Utils/Size` keeps `Mathlib.Data.Rat.Defs` (`ℚ`); both were listed as dead imports but the compiler
+disagreed.
 
 Found by an untracked local reachability script (`Scripts/FindUnusedDecls.lean`, not committed;
 recreate as: a `lake env lean`-run meta-script computing environment reachability from `main`,

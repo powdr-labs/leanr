@@ -52,12 +52,6 @@ def FiniteDomain.toList : FiniteDomain p → List (ZMod p)
   | .explicit vs => vs.length
   | .range b => b
 
-theorem FiniteDomain.size_eq (d : FiniteDomain p) : d.size = d.toList.length := by
-  cases d with
-  | explicit vs => rfl
-  | range b => simp only [FiniteDomain.toList, FiniteDomain.size, List.length_map,
-      List.length_range]
-
 /-! ## The `Nat`-loop element fold
 
 `rangeFoldFrom` streams a `range` domain by a `Nat` loop (no element list is ever built) and stops the

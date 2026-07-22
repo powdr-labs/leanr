@@ -823,27 +823,6 @@ theorem denseFoldOutInPlaceV_occ_subset (d : DenseConstraintSystem p) (xs : List
         rw [denseBIVars, List.mem_append, List.mem_flatMap]
         exact Or.inr ⟨e0, he0, denseFoldRewriteIdxV_vars xs survsV e0 i hie⟩)
 
-theorem denseFoldOutInPlaceV_covered (reg : VarRegistry) (d : DenseConstraintSystem p)
-    (hcov : d.CoveredBy reg) (xs : List VarId) (survsV : List (List (ZMod p))) :
-    (denseFoldOutInPlaceV d xs survsV).CoveredBy reg := by
-  refine ⟨fun e he => ?_, fun bi hbi => ?_⟩
-  · have he' : e ∈ d.algebraicConstraints.map
-        (fun c => if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c) := he
-    obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 he'
-    by_cases hcc : denseCoveredBy xs c0 = true
-    · rw [if_pos hcc]; exact hcov.1 c0 hc0
-    · rw [if_neg hcc]; exact denseFoldRewriteIdxV_covered reg xs survsV (hcov.1 c0 hc0)
-  · have hbi' : bi ∈ d.busInteractions.map
-        (fun bi => { bi with
-          multiplicity := denseFoldRewriteIdxV xs survsV bi.multiplicity,
-          payload := bi.payload.map (denseFoldRewriteIdxV xs survsV) }) := hbi
-    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
-    obtain ⟨hm, hp⟩ := hcov.2 bi0 hbi0
-    refine ⟨denseFoldRewriteIdxV_covered reg xs survsV hm, fun e he => ?_⟩
-    have he' : e ∈ bi0.payload.map (denseFoldRewriteIdxV xs survsV) := he
-    obtain ⟨e0, he0, rfl⟩ := List.mem_map.1 he'
-    exact denseFoldRewriteIdxV_covered reg xs survsV (hp e0 he0)
-
 /-- Under an agreeing `denv`, the in-place folded system is satisfied iff the input is (native mirror
     of `foldOut_satisfies_iff`, `DomainFold.lean:434`): every covered constraint is kept verbatim in
     place, every other expression is rewritten evaluation-preservingly. -/

@@ -1,5 +1,4 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Registry
-import ApcOptimizer.Utils.Size
 
 set_option autoImplicit false
 

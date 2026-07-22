@@ -305,20 +305,6 @@ theorem denseBuild_complete (varsOf : α → List VarId) (items : List α)
     rw [List.getElem?_zipIdx, List.getElem?_eq_getElem hi]; simp
   exact denseBuildStep_bucket_complete varsOf items.zipIdx items[i] i (List.mem_of_getElem? hz) v hv
 
-/-- **`denseCoveredIdx` of a fresh `build` equals the plain filter** whenever every `Q`-item shares
-    a variable with `xs`: the build is complete (`denseBuild_complete`), so every `Q`-position is a
-    candidate (mirrors `CoveredIndex.coveredIdx_eq_filter`). -/
-theorem denseCoveredIdx_eq_filter (varsOf : α → List VarId) (items : List α)
-    (Q : α → Bool) (xs : List VarId)
-    (hcomplete : ∀ (i : Nat) (hi : i < items.length),
-      Q items[i] = true → ∃ v ∈ varsOf items[i], v ∈ xs) :
-    denseCoveredIdx (denseCovBuild varsOf items) items.toArray Q xs = items.filter Q := by
-  refine denseCoveredIdx_eq_filter_of_complete (denseCovBuild varsOf items) items Q xs ?_
-  intro i hi hQ
-  obtain ⟨v, hvvars, hvxs⟩ := hcomplete i hi hQ
-  exact denseMem_candidates (denseCovBuild varsOf items) xs v i hvxs
-    (denseBuild_complete varsOf items i hi v hvvars)
-
 /-! ## The dense fold index
 
 Kept as shared infrastructure: `Dense/DomainFoldNative.lean` and its native proof

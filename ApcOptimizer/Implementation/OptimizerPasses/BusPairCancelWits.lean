@@ -77,13 +77,6 @@ def denseInteractionBoundPat (bs : BusSemantics p) (facts : BusFacts p bs)
       | none => none
       | some slot => facts.slotBound bi.busId mval pat slot
 
-/-- `denseInteractionBoundPat` at the canonical (hoisted) arguments is `denseInteractionBound` —
-    definitionally, exactly as `interactionBoundPat_eq` for the spec. -/
-theorem denseInteractionBoundPat_eq (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (DenseExpr p)) (i : VarId) :
-    denseInteractionBoundPat bs facts bi bi.multiplicity.constValue?
-      (bi.payload.map DenseExpr.constValue?) i = denseInteractionBound bs facts bi i := rfl
-
 /-! ### The bound-witness position index -/
 
 /-- Candidate positions of bound-deriving interactions, per variable: every array position whose

@@ -144,38 +144,4 @@ def denseFindGo (bs : BusSemantics p) (facts : BusFacts p bs)
       | none => denseFindGo bs facts (a :: revPre) rest
     | none => denseFindGo bs facts (a :: revPre) rest
 
-/-- Repeatedly find-and-pack a byte-check pair until none remain, in **one** call. Fuel-bounded
-    structural recursion, fuel initialized to the interaction-list length at the call site
-    (`denseByteCheckPackF`): each successful pack strictly drops that list's length by one (two
-    single-value checks replaced by one pair check), so the fuel is never actually exhausted before
-    `denseFindGo` reports `none` — the prover may restructure this as well-founded recursion on the
-    list length instead (mirroring `denseCancelLoop`'s pattern in `BusPairCancel.lean`), which is
-    exactly the measure `iterateToFixpoint` itself recurses on (`ConstraintSystem.sizeKey`'s
-    bus-interaction component; packing never changes the variable count, since `eA`/`eB` are already
-    payload entries of the replaced interactions). Folds the label's outer
-    `iterateToFixpoint ByteCheckPack.byteCheckPackPass` (`Implementation/Optimizer.lean`'s
-    `"bytePack"`/`"bytePackLate"` entries) into this single dense call, so the pass can slot into the
-    dense schedule as one `DenseVerifiedPassW.of` entry rather than a wrapped
-    `denseIterateToFixpoint`. -/
-def denseDrainBytePacks (bs : BusSemantics p) (facts : BusFacts p bs) :
-    Nat → List (BusInteraction (DenseExpr p)) → List (BusInteraction (DenseExpr p))
-  | 0, bis => bis
-  | fuel + 1, bis =>
-    match denseFindGo bs facts [] bis with
-    | some (busId, spec, pre, eA, mid, eB, post) =>
-      denseDrainBytePacks bs facts fuel (pre ++ denseMkBytePair spec busId eA eB :: mid ++ post)
-    | none => bis
-
-/-- The dense pack-until-fixpoint transform (`of` shape: registry unchanged, no fresh
-    variables). Mirrors `byteCheckPackPass`'s `hp1`
-    self-gate (VM-neutral: with a trivial `BusFacts`, `byteXorSpec` is `none` everywhere,
-    `denseSvCheck?` returns `none`, and the drain is the identity in its first step) composed with
-    the label's outer `iterateToFixpoint`, folded into `denseDrainBytePacks` (see its doc comment). -/
-def denseByteCheckPackF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
-    DenseConstraintSystem p :=
-  if (1 : ZMod p) ≠ 0 then
-    { d with busInteractions :=
-        denseDrainBytePacks bs facts d.busInteractions.length d.busInteractions }
-  else d
-
 end ApcOptimizer.Dense
