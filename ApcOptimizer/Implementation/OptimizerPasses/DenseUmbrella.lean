@@ -1,0 +1,81 @@
+import ApcOptimizer.Implementation.OptimizerPasses.Registry
+import ApcOptimizer.Implementation.OptimizerPasses.Encoding
+import ApcOptimizer.Implementation.OptimizerPasses.Measure
+import ApcOptimizer.Implementation.OptimizerPasses.Pass
+import ApcOptimizer.Implementation.OptimizerPasses.ExprOps
+import ApcOptimizer.Implementation.OptimizerPasses.Adapter
+import ApcOptimizer.Implementation.OptimizerPasses.Bridge
+import ApcOptimizer.Implementation.OptimizerPasses.BridgeSteps
+import ApcOptimizer.Implementation.OptimizerPasses.Subst
+import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
+import ApcOptimizer.Implementation.OptimizerPasses.Affine
+import ApcOptimizer.Implementation.OptimizerPasses.Rewrite
+import ApcOptimizer.Implementation.OptimizerPasses.DropPasses
+import ApcOptimizer.Implementation.OptimizerPasses.Normalize
+import ApcOptimizer.Implementation.OptimizerPasses.Dedup
+import ApcOptimizer.Implementation.OptimizerPasses.DedupProof
+import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
+import ApcOptimizer.Implementation.OptimizerPasses.DigitFoldProof
+import ApcOptimizer.Implementation.OptimizerPasses.Gauss
+import ApcOptimizer.Implementation.OptimizerPasses.GaussProof
+import ApcOptimizer.Implementation.OptimizerPasses.DomainBatch
+import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchRuntime
+import ApcOptimizer.Implementation.OptimizerPasses.DomainBatchProof
+import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
+import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilateProof
+import ApcOptimizer.Implementation.OptimizerPasses.ZeroRegister
+import ApcOptimizer.Implementation.OptimizerPasses.ZeroRegisterProof
+import ApcOptimizer.Implementation.OptimizerPasses.CarryBranch
+import ApcOptimizer.Implementation.OptimizerPasses.CarryBranchProof
+import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
+import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRangeProof
+import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
+import ApcOptimizer.Implementation.OptimizerPasses.DomainFoldRuntime
+import ApcOptimizer.Implementation.OptimizerPasses.DomainFoldProof
+import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseq
+import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseqProof
+import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
+import ApcOptimizer.Implementation.OptimizerPasses.BusUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
+import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
+import ApcOptimizer.Implementation.OptimizerPasses.FlagUnifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDrops
+import ApcOptimizer.Implementation.OptimizerPasses.FlagFoldDropsProof
+import ApcOptimizer.Implementation.OptimizerPasses.DropPassesProof
+import ApcOptimizer.Implementation.OptimizerPasses.FxSubst
+import ApcOptimizer.Implementation.OptimizerPasses.FxSubstProof
+import ApcOptimizer.Implementation.OptimizerPasses.BoxRewrite
+import ApcOptimizer.Implementation.OptimizerPasses.BoxRewriteProof
+import ApcOptimizer.Implementation.OptimizerPasses.FlagFold
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelJustify
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelJustifyProof
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCore
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelIndex
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelIndexProof
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelLive
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheck
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheckProof
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelWits
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancel
+import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
+import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPackProof
+import ApcOptimizer.Implementation.OptimizerPasses.TupleRange
+import ApcOptimizer.Implementation.OptimizerPasses.Reencode
+import ApcOptimizer.Implementation.OptimizerPasses.ReencodeProof
+import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.HintCollapseProof
+import ApcOptimizer.Implementation.OptimizerPasses.DisconnectedComponentProof
+import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZeroProof
+import ApcOptimizer.Implementation.OptimizerPasses.RangeBoolProof
+import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtractProof
+import ApcOptimizer.Implementation.OptimizerPasses.IntervalForceProof
+import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapseProof
+
+/-! # Dense `VarId` internal representation — umbrella import
+
+Imports every dense `VarId` module now living flat under `OptimizerPasses/`, so that a plain
+`lake build` compiles them all — even those not yet reachable from a scheduled pass (e.g. shared
+expression ops awaiting their consumer). `Implementation/Optimizer.lean` imports this
+umbrella, keeping the whole dense layer in the default build graph. -/

@@ -1,1671 +1,518 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatch
+import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
 
 set_option autoImplicit false
 
-/-! # Witness re-encoding (fewer variables for enumerable witness sets)
+/-! # Witness re-encoding — dense expression operations
 
-A new *kind* of optimization: all passes so far eliminate variables whose values are
-**entailed**. This pass eliminates *witness freedom* that is merely **inefficiently encoded**:
-if the constraints over a variable group `xs` (all constraints whose variables lie inside the
-group) restrict it to `m` joint values, then `⌈log₂ m⌉` fresh boolean variables suffice to
-select among them — e.g. OpenVM's load/store `flags` (4 variables, 4 valid combinations
-selecting the runtime shift) become 2 booleans, and a runtime one-hot selector of width `w`
-becomes `⌈log₂ w⌉` bits. The original group is *substituted away* by interpolation
-polynomials in the fresh bits, the group-only constraints are dropped (every bit pattern maps
-into the valid set), and booleanity constraints for the bits are added.
+Dense `VarId` definitions for witness re-encoding: environment
+extension, the fast hoisted evaluator, the booleanity constraint, the group substitution and bit
+box, the degree-aware group rewrite (`indicatorExpr`/`interpOfV`/`candSelect`/`groupRewriteCand`/
+`groupRewrite`), the re-encoded output, the group's survivor enumeration and the checked
+re-encoding certificate, the fresh bits' derived-variable methods (`imgVal`/`matchCM`/`bitCM`), the
+interpolation polynomial, and the `foldRewrite`-gate test `sharesVarIn`. This is **impl-only**:
+no correctness theorem is stated here — nothing here states or proves anything beyond the runtime
+computation.
 
-Correctness is different from substitution: neither system's witnesses extend the other's.
-The transport core (`reencode_correct`) takes two *witness transformations* — forward
-(satisfying `env` ↦ bit assignment matching the group's current value) and backward (boolean
-bits ↦ the selected group value) — under which every original expression **evaluates
-identically**, so constraints, bus obligations, side effects, and the memory discipline all
-transfer by pointwise equality of the evaluated messages.
+## The build/step/loop/pass layer
 
-Everything the proofs consume is decidable and index-free: the valid set is enumerated over
-constraint-derived domains (`findDomainAlg` roots), the bit patterns over `{0,1}` boxes
-(`assignments`), and the two coverage checks are `∀ pattern, image satisfies dropped` and
-`∀ survivor, ∃ pattern with that image`. Requires prime `p` (booleanity needs an integral
-domain); gated at runtime like the domain passes. -/
+This section adds the *proof-free construction* layer on top of the expression ops above:
+`denseBuildReencode` (including its hopeless-target prefilter and its indexed-vs-direct
+covered-set gathering — reusing `denseCoveredIdx` (`DomainFold.lean`) and
+`denseCovBuild`/`denseBuildStep` (`DomainBatch.lean`)), `denseDegPreReject` (the degree pre-gate),
+`denseReencodeStep`/`denseReencodeLoop` (the per-candidate step and the sequential driver, including
+the registry-extending fresh-variable plumbing), and `denseReencodeF` (a plain transform matching
+the `ofExtending` builder's shape — the prover wires it with `DenseVerifiedPassW.ofExtending
+(denseReencodeF pw b) …`). The correctness proof and the `ofExtending` wiring live in
+`ReencodeProof.lean`.
+
+### Fresh bits: where they are minted, and the freshness prefilter mechanism
+
+`denseBuildReencode` mints the fresh bit variables only on its single accepting path (box small
+enough, not the single-var-only hopeless case, `2 ≤ survs.length`, `k < xs.length`):
+`denseRegisterBits` constructs the `Variable` values `{ name := freshBase ++ "_" ++ toString j }`
+for `j = 0, …, k-1`, in order, and registers each via `reg.register`, threading the registry through
+only that branch; every rejecting branch returns the registry **unchanged**. `VarRegistry.register`
+is append-only and idempotent on an already-registered `Variable` (returns the existing `VarId`), so
+a `denseReencodeStep` invocation whose candidate is later rejected by
+`denseDegPreReject`/`denseCheckReencode`/`withinDegreeB` still threads the registry *as extended by*
+`denseBuildReencode` onward: this is harmless, since the orphaned bit `VarId`s never occur in any
+expression and so cannot affect any downstream `VarId`-keyed decision.
+
+The **freshness prefilter** in `denseReencodeStep` runs *before* `denseBuildReencode`, so no bit
+exists yet to look up by `VarId`: it tests
+`match reg.idOf? { name := freshBase ++ "_0" } with | some i => varSet.contains i | none => false`.
+If the candidate name was never registered at all it cannot be a system member (everything a
+`DenseConstraintSystem` mentions is registered, by the pipeline's own coverage invariant), so the
+`none` case is a clean "no collision"; if it *was* registered, membership in the current `varSet`
+decides it.
+
+### `varSet` is a plain `Std.HashSet VarId`
+
+`denseReencodeStep`/`denseReencodeLoop` carry **no proof at all** (this file is impl-only), so
+`varSet` here is a plain `Std.HashSet VarId`: the `.contains` decision and the accept-time rebuild
+(`Std.HashSet.ofList ro.occ`) track the current system's occurring variables. Any
+membership-implies-coverage fact needed for a proof is for the prover to restate and discharge
+against `DenseConstraintSystem.CoveredBy`, not re-derived here.
+
+### Ordering of the candidate-group targets
+
+`denseReencodeF`'s target list sorts each candidate group with a **resolve-based comparator**,
+`compare (reg.resolve a) (reg.resolve b) != .gt`, rather than a `VarId.index`-native order. This
+matters because the candidate order is directly the *iteration* order of `denseReencodeLoop`'s
+greedy, order-sensitive accept/reject sequence: it accepts or rejects each candidate group in turn
+and threads its state to the next, so the group order determines which groups end up accepted. The
+comparator only runs once per fixpoint iteration on this pass's cold target-construction path (not
+per box point), unlike the hot per-box-point paths in
+`Dense/DomainFoldNative.lean`/`BoxRewrite.lean`. `dedupHash`'s dedup order is list-order-preserving
+regardless of the key's hash, so it introduces no further reordering.
+
+### `denseBuildPruned`: a local twin of `CoveredIndex.buildPruned`
+
+No dense twin of `CoveredIndex.buildPruned` (`CoveredIndex.lean:59`) exists elsewhere yet, so
+`denseBuildPruned` below is a local, `VarId`-keyed definition (reusing the already-dense
+`denseBuildStep`/`DenseCovIndex` from `DomainBatch.lean`), used for the pass-level initial index and
+the accept-time rebuilt index in `denseReencodeStep`.
+
+## Import-graph note
+
+This file imports the dense `DomainFold.lean` primitives (`denseFindDomainAlg`, `denseCoveredBy`,
+`denseCoveredCsOf`, `denseGroupDoms`, `denseAssignments`, `DenseExpr.hasVar`) directly — no local
+copies.
+
+The group-survivor enumeration (`denseSurvZeroCW`/`denseGroupSurvivorsE` below) is defined directly
+against the *keyed* compiled evaluator `denseCompileEs`/`denseIExprEvalWith` (`DomainBatch.lean`).
+This is a different function from `denseGroupSurvivorsEV` (`DomainFold`-side machinery, a value-only
+rebuild used for a `domainFold`-specific perf path) — do not conflate the two.
+
+## Other reuse decisions
+
+* `VarId` equality is already a direct `Nat` comparison, so there is no separate "fast" env-lookup
+  twin needed: every lookup below routes through `denseEnvOfFast` (`DomainBatch.lean`). Likewise
+  `DenseExpr.varsInF` (`DomainBatch.lean`) and `DenseExpr.mentions` (`SubstMap.lean`) are each the
+  single dense name used below wherever a "fast"-vs-plain distinction would otherwise apply.
+* `DenseExpr.evalWith`/`DenseExpr.evalFast` hoist the `Add`/`Mul (ZMod p)` instance derivation once
+  per call rather than once per expression node — this fast-path structure is unrelated to the
+  `Variable`→`VarId` representation and is preserved here verbatim.
+* `indicatorExpr` is **not** the same function as `FxSubst.lean`'s `denseIndicatorProd`: the latter
+  (`others : List VarId`, `pt : List (VarId × ZMod p)`) folds over a separate variable list and looks
+  each one up in `pt` via `denseEnvOfFast` (a scan per element), while `indicatorExpr`/
+  `denseIndicatorExpr` folds directly over the pattern list itself, reading each pair's own stored
+  value with no lookup at all — a different (and cheaper) computation. Defined fresh below as
+  `denseIndicatorExpr`, not reused.
+* `dedupHash` is fully generic
+  (`{α : Type} [BEq α] [Hashable α]`) and representation-independent; it is reused unqualified at
+  `VarId`, as `DomainFoldRuntime.lean`'s `denseTargetsV` also does — no dense-specific version is
+  defined here. -/
+
+namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
 /-! ## Environment extension by an association list -/
 
-/-- Override `env` on the keys of `pairs` (first match wins, mirroring `envOf`). -/
-def envExt : List (Variable × ZMod p) → (Variable → ZMod p) → Variable → ZMod p
-  | [], env, y => env y
-  | (x, v) :: rest, env, y => if y = x then v else envExt rest env y
-
-/-- On the keys, `envExt` agrees with `envOf`. -/
-theorem envExt_eq_envOf_of_mem (pairs : List (Variable × ZMod p)) (env : Variable → ZMod p)
-    (y : Variable) (h : y ∈ pairs.map Prod.fst) : envExt pairs env y = envOf pairs y := by
-  induction pairs with
-  | nil => simp at h
-  | cons t rest ih =>
-    obtain ⟨x, v⟩ := t
-    simp only [envExt, envOf]
-    by_cases hyx : y = x
-    · rw [if_pos hyx, if_pos hyx]
-    · rw [if_neg hyx, if_neg hyx]
-      apply ih
-      simp only [List.map_cons, List.mem_cons] at h
-      rcases h with h | h
-      · exact absurd h hyx
-      · exact h
-
-/-- Off the keys, `envExt` is `env`. -/
-theorem envExt_eq_env_of_notmem (pairs : List (Variable × ZMod p)) (env : Variable → ZMod p)
-    (y : Variable) (h : y ∉ pairs.map Prod.fst) : envExt pairs env y = env y := by
-  induction pairs with
-  | nil => rfl
-  | cons t rest ih =>
-    obtain ⟨x, v⟩ := t
-    simp only [List.map_cons, List.mem_cons, not_or] at h
-    simp only [envExt, if_neg h.1]
-    exact ih h.2
-
-/-! ## `mentions` and variable membership -/
-
-theorem mentions_false_not_mem_vars (x : Variable) (e : Expression p)
-    (h : e.mentions x = false) : x ∉ e.vars := by
-  induction e with
-  | const n => simp [Expression.vars]
-  | var y =>
-      simp only [Expression.mentions] at h
-      simp only [Expression.vars, List.mem_singleton]
-      intro hxy
-      subst hxy
-      simp at h
-  | add a b iha ihb =>
-      simp only [Expression.mentions, Bool.or_eq_false_iff] at h
-      simp only [Expression.vars, List.mem_append]
-      rintro (hx | hx)
-      · exact iha h.1 hx
-      · exact ihb h.2 hx
-  | mul a b iha ihb =>
-      simp only [Expression.mentions, Bool.or_eq_false_iff] at h
-      simp only [Expression.vars, List.mem_append]
-      rintro (hx | hx)
-      · exact iha h.1 hx
-      · exact ihb h.2 hx
+/-- Override `denv` on the keys of `pairs` (first match wins). -/
+def denseEnvExt : List (VarId × ZMod p) → (VarId → ZMod p) → VarId → ZMod p
+  | [], denv, y => denv y
+  | (x, v) :: rest, denv, y => if y = x then v else denseEnvExt rest denv y
 
 /-! ## Fast evaluation (hoisted ring operations)
 
-`+`/`*` on `ZMod p` with a *runtime* `p` re-derive the whole `CommRing (ZMod p)` instance chain
-at every expression node (see `IExpr.evalWith` in `DomainBatch.lean`). The pattern/survivor
-evaluations below are the pass's hot loops; `Expression.evalFast` extracts the two operations
-from the instances once per evaluation call, so each node is a direct closure call. It is
-extensionally `Expression.eval` (`evalFast_eq`), which is all the proofs consume. -/
+`+`/`*` on `ZMod p` with a *runtime* `p` re-derive the whole `CommRing (ZMod p)` instance chain at
+every expression node: `evalFast` extracts the two operations from the instances once per
+evaluation call, so each node is a direct closure call. -/
 
-/-- `Expression.eval` with the ring operations passed in. -/
-def Expression.evalWith (add mul : ZMod p → ZMod p → ZMod p) (env : Variable → ZMod p) :
-    Expression p → ZMod p
+/-- `DenseExpr.eval` with the ring operations passed in. -/
+def DenseExpr.evalWith (add mul : ZMod p → ZMod p → ZMod p) (denv : VarId → ZMod p) :
+    DenseExpr p → ZMod p
   | .const n => n
-  | .var y => env y
-  | .add a b => add (a.evalWith add mul env) (b.evalWith add mul env)
-  | .mul a b => mul (a.evalWith add mul env) (b.evalWith add mul env)
+  | .var i => denv i
+  | .add a b => add (a.evalWith add mul denv) (b.evalWith add mul denv)
+  | .mul a b => mul (a.evalWith add mul denv) (b.evalWith add mul denv)
 
-theorem Expression.evalWith_eq (add mul : ZMod p → ZMod p → ZMod p)
-    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
-    (env : Variable → ZMod p) (e : Expression p) : e.evalWith add mul env = e.eval env := by
-  induction e with
-  | const n => rfl
-  | var y => rfl
-  | add a b iha ihb => simp only [Expression.evalWith, Expression.eval, hadd, iha, ihb]
-  | mul a b iha ihb => simp only [Expression.evalWith, Expression.eval, hmul, iha, ihb]
-
-/-- `Expression.eval`, deriving the field operations once per call instead of per node. -/
-def Expression.evalFast (e : Expression p) (env : Variable → ZMod p) : ZMod p :=
+/-- `DenseExpr.eval`, deriving the field operations once per call instead of per node. -/
+def DenseExpr.evalFast (e : DenseExpr p) (denv : VarId → ZMod p) : ZMod p :=
   let addI : Add (ZMod p) := inferInstance
   let mulI : Mul (ZMod p) := inferInstance
-  e.evalWith addI.add mulI.mul env
+  e.evalWith addI.add mulI.mul denv
 
-theorem Expression.evalFast_eq (e : Expression p) (env : Variable → ZMod p) :
-    e.evalFast env = e.eval env :=
-  Expression.evalWith_eq _ _ (fun _ _ => rfl) (fun _ _ => rfl) env e
-
-/-- `Expression.mentions`, testing the cheap `powdrId?` discriminator before the name String
-    (`containsFast`'s trick; the freshness scans probe a no-ID bit against every system
-    variable, so the discriminator almost always decides). -/
-def Expression.mentionsF (x : Variable) : Expression p → Bool
-  | .const _ => false
-  | .var y => y.powdrId? == x.powdrId? && y.name == x.name
-  | .add a b => a.mentionsF x || b.mentionsF x
-  | .mul a b => a.mentionsF x || b.mentionsF x
-
-theorem Expression.mentionsF_eq (x : Variable) (e : Expression p) :
-    e.mentionsF x = e.mentions x := by
-  induction e with
-  | const n => rfl
-  | var y =>
-    show (y.powdrId? == x.powdrId? && y.name == x.name) = (y == x)
-    by_cases h : y = x
-    · subst h
-      simp
-    · have h1 : (y.powdrId? == x.powdrId? && y.name == x.name) = false := by
-        rw [Bool.eq_false_iff]
-        intro hc
-        exact h ((varFastEq_iff y x).mp hc)
-      have h2 : (y == x) = false := by
-        rw [Bool.eq_false_iff]
-        intro hc
-        exact h (by simpa using hc)
-      rw [h1, h2]
-  | add a b iha ihb => rw [Expression.mentionsF, Expression.mentions, iha, ihb]
-  | mul a b iha ihb => rw [Expression.mentionsF, Expression.mentions, iha, ihb]
-
-/-! ## The transport core -/
-
-/-- The soundness + completeness + invariant obligations of the re-encoder, *without* the
-    derived-variable reconstruction (and input-column frame) that the threaded `PassCorrect`
-    additionally requires. This is the pre-derivations refinement, spelled out (`implies` + a plain
-    admissible-completeness witness + invariant preservation) rather than via the audited
-    `refines`, which now also carries the derivations. The transport proofs below establish this;
-    wiring the fresh bits' `ComputationMethod`s into a full `PassCorrect` (so the re-encoder can
-    rejoin the pipeline) is the remaining work — see the note on `reencodePass`. -/
-def ConstraintSystem.reencCorrect (cs out : ConstraintSystem p) (bs : BusSemantics p) : Prop :=
-  (out.implies cs bs ∧
-    (∀ env, cs.admissible bs env → cs.satisfies bs env →
-      ∃ env', out.satisfies bs env' ∧ out.admissible bs env' ∧
-        cs.sideEffects bs env ≈ out.sideEffects bs env')) ∧
-  (cs.guaranteesInvariants bs → out.guaranteesInvariants bs)
-
-/-- **Re-encoding correctness.** `out` replaces every expression `e` by `e.substF σ`, keeps
-    only the constraints selected by `keep`, and appends `newCs`. If satisfying assignments
-    transport in both directions such that every original expression *evaluates identically*
-    (forward additionally establishing `newCs`, backward additionally the dropped
-    constraints), the step is `reencCorrect`. Nothing here mentions bits or groups — it is a
-    generic witness-transport principle. -/
-theorem ConstraintSystem.reencode_correct (cs : ConstraintSystem p) (bsem : BusSemantics p)
-    (rw : Expression p → Expression p) (keep : Expression p → Bool)
-    (newCs : List (Expression p))
-    (hfwd : ∀ env, cs.satisfies bsem env → ∃ env',
-      (∀ c ∈ cs.algebraicConstraints, (rw c).eval env' = c.eval env) ∧
-      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) ∧
-      (∀ c ∈ newCs, c.eval env' = 0))
-    (hbwd : ∀ env',
-      (ConstraintSystem.satisfies
-        { algebraicConstraints :=
-            ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
-          busInteractions := cs.busInteractions.map (·.mapExpr rw) } bsem env') → ∃ env,
-      (∀ c ∈ cs.algebraicConstraints, (rw c).eval env' = c.eval env) ∧
-      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) ∧
-      (∀ c ∈ cs.algebraicConstraints, keep c = false → c.eval env = 0)) :
-    ConstraintSystem.reencCorrect cs
-      { algebraicConstraints :=
-          ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
-        busInteractions := cs.busInteractions.map (·.mapExpr rw) } bsem := by
-  unfold ConstraintSystem.reencCorrect
-  set out : ConstraintSystem p :=
-    { algebraicConstraints :=
-        ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
-      busInteractions := cs.busInteractions.map (·.mapExpr rw) } with hout
-  -- message-list equality under expression-wise agreement
-  have hmsgs : ∀ (env env' : Variable → ZMod p),
-      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
-      ∀ busId, (out.busInteractions.filter (fun bi => bi.busId = busId)).map
-          (fun bi => bi.eval env')
-        = (cs.busInteractions.filter (fun bi => bi.busId = busId)).map
-          (fun bi => bi.eval env) := by
-    intro env env' hB busId
-    show ((cs.busInteractions.map (·.mapExpr rw)).filter (fun bi => bi.busId = busId)).map
-        (fun bi => bi.eval env') = _
-    rw [List.filter_map]
-    rw [List.filter_congr (fun bi _ => (rfl :
-      ((fun b : BusInteraction (Expression p) => decide (b.busId = busId)) ∘
-        (fun b => b.mapExpr rw)) bi = decide (bi.busId = busId)))]
-    rw [List.map_map]
-    exact List.map_congr_left (fun bi hbi =>
-      hB bi (List.mem_of_mem_filter hbi))
-  -- side-effect equality under expression-wise agreement
-  have hside : ∀ (env env' : Variable → ZMod p),
-      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
-      out.sideEffects bsem env' = cs.sideEffects bsem env := by
-    intro env env' hB
-    show ((cs.busInteractions.map (·.mapExpr rw)).filter
-        (fun bi => bsem.isStateful bi.busId)).map _ = _
-    rw [List.filter_map]
-    rw [List.filter_congr (fun bi _ => (rfl :
-      ((fun b : BusInteraction (Expression p) => bsem.isStateful b.busId) ∘
-        (fun b => b.mapExpr rw)) bi = bsem.isStateful bi.busId))]
-    rw [List.map_map]
-    exact List.map_congr_left (fun bi hbi => by
-      simp only [Function.comp_apply, hB bi (List.mem_of_mem_filter hbi)])
-  -- admissible transfer under expression-wise agreement (the evaluated messages coincide)
-  have hdisc : ∀ (env env' : Variable → ZMod p),
-      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
-      (out.admissible bsem env' ↔ cs.admissible bsem env) := by
-    intro env env' hB
-    unfold ConstraintSystem.admissible
-    have hmap : (out.busInteractions.map (fun bi => bi.eval env'))
-        = cs.busInteractions.map (fun bi => bi.eval env) := by
-      show ((cs.busInteractions.map (·.mapExpr rw)).map (fun bi => bi.eval env')) = _
-      rw [List.map_map]
-      exact List.map_congr_left (fun bi hbi => hB bi hbi)
-    rw [hmap]
-  refine ⟨⟨?_, ?_⟩, ?_⟩
-  · -- soundness: out implies cs
-    intro env' hsat'
-    obtain ⟨env, hA, hB, hdrop⟩ := hbwd env' hsat'
-    refine ⟨env, ⟨?_, ?_⟩, ?_⟩
-    · intro c hc
-      by_cases hk : keep c = true
-      · have hmem : rw c ∈ out.algebraicConstraints :=
-          List.mem_append_left _ (List.mem_map.2 ⟨c, List.mem_filter.2 ⟨hc, hk⟩, rfl⟩)
-        have := hsat'.1 _ hmem
-        rw [hA c hc] at this
-        exact this
-      · exact hdrop c hc (by simpa using hk)
-    · intro bi hbi
-      have hmem : bi.mapExpr rw ∈ out.busInteractions := List.mem_map.2 ⟨bi, hbi, rfl⟩
-      have := hsat'.2 _ hmem
-      rw [hB bi hbi] at this
-      exact this
-    · rw [hside env env' hB]
-      exact BusState.equiv_refl _
-  · -- completeness: cs intended-implies out
-    intro env hint hsat
-    obtain ⟨env', hA, hB, hnew⟩ := hfwd env hsat
-    refine ⟨env', ⟨?_, ?_⟩, (hdisc env env' hB).2 hint, ?_⟩
-    · intro c hc
-      rcases List.mem_append.1 hc with h | h
-      · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 h
-        rw [hA c0 (List.mem_of_mem_filter hc0)]
-        exact hsat.1 c0 (List.mem_of_mem_filter hc0)
-      · exact hnew c h
-    · intro bi hbi
-      obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi
-      rw [hB bi0 hbi0]
-      exact hsat.2 bi0 hbi0
-    · rw [hside env env' hB]
-      exact BusState.equiv_refl _
-  · -- invariant preservation
-    intro hinv env' hsat' bi' hbi'
-    obtain ⟨env, hA, hB, hdrop⟩ := hbwd env' hsat'
-    have hsatcs : cs.satisfies bsem env := by
-      refine ⟨?_, ?_⟩
-      · intro c hc
-        by_cases hk : keep c = true
-        · have hmem : rw c ∈ out.algebraicConstraints :=
-            List.mem_append_left _ (List.mem_map.2 ⟨c, List.mem_filter.2 ⟨hc, hk⟩, rfl⟩)
-          have := hsat'.1 _ hmem
-          rw [hA c hc] at this
-          exact this
-        · exact hdrop c hc (by simpa using hk)
-      · intro bi hbi
-        have hmem : bi.mapExpr rw ∈ out.busInteractions := List.mem_map.2 ⟨bi, hbi, rfl⟩
-        have := hsat'.2 _ hmem
-        rw [hB bi hbi] at this
-        exact this
-    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi'
-    rw [hB bi0 hbi0]
-    exact hinv env hsatcs bi0 hbi0
-
-/-- The threaded (derived-variable) version of `reencode_correct`: the same transport, but the forward
-    additionally keeps every input column's value (`hpow`) and reconstructs the output's derived
-    columns from the input columns via `deriv` (`hrecon`), and no new powdr-ID column is introduced
-    (`hS`). Produces the full `PassCorrect` the pipeline consumes. -/
-theorem ConstraintSystem.reencode_correct_D (cs : ConstraintSystem p) (bsem : BusSemantics p)
-    (rw : Expression p → Expression p) (keep : Expression p → Bool)
-    (newCs : List (Expression p)) (deriv : Derivations p)
-    (hfwd : ∀ env, cs.satisfies bsem env → ∃ env',
-      (∀ c ∈ cs.algebraicConstraints, (rw c).eval env' = c.eval env) ∧
-      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) ∧
-      (∀ c ∈ newCs, c.eval env' = 0) ∧
-      (∀ v : Variable, v.powdrId?.isSome → env' v = env v) ∧
-      (∀ inputVars, (∀ v ∈ cs.vars, v.powdrId?.isSome → v ∈ inputVars) →
-        ∀ dsIn : Derivations p, cs.reconstructs inputVars dsIn env →
-        ({ algebraicConstraints := ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
-           busInteractions := cs.busInteractions.map (·.mapExpr rw) } :
-             ConstraintSystem p).reconstructs inputVars (dsIn ++ deriv) env'))
-    (hbwd : ∀ env',
-      (ConstraintSystem.satisfies
-        { algebraicConstraints :=
-            ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
-          busInteractions := cs.busInteractions.map (·.mapExpr rw) } bsem env') → ∃ env,
-      (∀ c ∈ cs.algebraicConstraints, (rw c).eval env' = c.eval env) ∧
-      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) ∧
-      (∀ c ∈ cs.algebraicConstraints, keep c = false → c.eval env = 0))
-    (hS : ∀ v ∈ ({ algebraicConstraints := ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
-                    busInteractions := cs.busInteractions.map (·.mapExpr rw) } :
-                    ConstraintSystem p).vars, v.powdrId?.isSome → v ∈ cs.vars) :
-    PassCorrect cs
-      { algebraicConstraints :=
-          ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
-        busInteractions := cs.busInteractions.map (·.mapExpr rw) } deriv bsem := by
-  set out : ConstraintSystem p :=
-    { algebraicConstraints :=
-        ((cs.algebraicConstraints.filter keep).map rw) ++ newCs,
-      busInteractions := cs.busInteractions.map (·.mapExpr rw) } with hout
-  have hside : ∀ (env env' : Variable → ZMod p),
-      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
-      out.sideEffects bsem env' = cs.sideEffects bsem env := by
-    intro env env' hB
-    show ((cs.busInteractions.map (·.mapExpr rw)).filter
-        (fun bi => bsem.isStateful bi.busId)).map _ = _
-    rw [List.filter_map]
-    rw [List.filter_congr (fun bi _ => (rfl :
-      ((fun b : BusInteraction (Expression p) => bsem.isStateful b.busId) ∘
-        (fun b => b.mapExpr rw)) bi = bsem.isStateful bi.busId))]
-    rw [List.map_map]
-    exact List.map_congr_left (fun bi hbi => by
-      simp only [Function.comp_apply, hB bi (List.mem_of_mem_filter hbi)])
-  have hdisc : ∀ (env env' : Variable → ZMod p),
-      (∀ bi ∈ cs.busInteractions, (bi.mapExpr rw).eval env' = bi.eval env) →
-      (out.admissible bsem env' ↔ cs.admissible bsem env) := by
-    intro env env' hB
-    unfold ConstraintSystem.admissible
-    have hmap : (out.busInteractions.map (fun bi => bi.eval env'))
-        = cs.busInteractions.map (fun bi => bi.eval env) := by
-      show ((cs.busInteractions.map (·.mapExpr rw)).map (fun bi => bi.eval env')) = _
-      rw [List.map_map]
-      exact List.map_congr_left (fun bi hbi => hB bi hbi)
-    rw [hmap]
-  -- soundness and invariant come from the plain transport
-  have hplain := cs.reencode_correct bsem rw keep newCs
-    (fun env hsat => let ⟨env', hA, hB, hnew, _, _⟩ := hfwd env hsat; ⟨env', hA, hB, hnew⟩) hbwd
-  rw [ConstraintSystem.reencCorrect] at hplain
-  refine ⟨hplain.1.1, hplain.2, hS, ?_⟩
-  intro env hadm hsat
-  obtain ⟨env', hA, hB, hnew, hpow, hrecon⟩ := hfwd env hsat
-  refine ⟨env', ⟨?_, ?_⟩, (hdisc env env' hB).2 hadm, ?_, hpow, hrecon⟩
-  · intro c hc
-    rcases List.mem_append.1 hc with h | h
-    · obtain ⟨c0, hc0, rfl⟩ := List.mem_map.1 h
-      rw [hA c0 (List.mem_of_mem_filter hc0)]
-      exact hsat.1 c0 (List.mem_of_mem_filter hc0)
-    · exact hnew c h
-  · intro bi hbi
-    obtain ⟨bi0, hbi0, rfl⟩ := List.mem_map.1 hbi
-    rw [hB bi0 hbi0]
-    exact hsat.2 bi0 hbi0
-  · rw [hside env env' hB]; exact BusState.equiv_refl _
-
-/-! ## Structure of enumerated assignments -/
-
-/-- Every enumerated assignment has the domains' keys, in order. -/
-theorem assignments_keys (doms : List (Variable × List (ZMod p)))
-    (a : List (Variable × ZMod p)) (h : a ∈ assignments doms) :
-    a.map Prod.fst = doms.map Prod.fst := by
-  induction doms generalizing a with
-  | nil =>
-      simp only [assignments, List.mem_singleton] at h
-      subst h
-      rfl
-  | cons xd rest ih =>
-    obtain ⟨x, d⟩ := xd
-    simp only [assignments, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨a', ha', v, hv, rfl⟩ := h
-    simp [ih a' ha']
-
-/-- Every enumerated assignment's value at a (distinct-keyed) domain entry lies in that
-    domain. -/
-theorem envOf_mem_of_assignments (doms : List (Variable × List (ZMod p)))
-    (hnd : (doms.map Prod.fst).Nodup) (a : List (Variable × ZMod p))
-    (h : a ∈ assignments doms) : ∀ xd ∈ doms, envOf a xd.1 ∈ xd.2 := by
-  induction doms generalizing a with
-  | nil => simp
-  | cons xd0 rest ih =>
-    obtain ⟨x, d⟩ := xd0
-    simp only [assignments, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨a', ha', v, hv, rfl⟩ := h
-    simp only [List.map_cons, List.nodup_cons] at hnd
-    intro yd hyd
-    rcases List.mem_cons.1 hyd with rfl | hyd
-    · simp [envOf, hv]
-    · have hne : yd.1 ≠ x := by
-        intro heq
-        exact hnd.1 (heq ▸ List.mem_map.2 ⟨yd, hyd, rfl⟩)
-      simp only [envOf, if_neg hne]
-      exact ih hnd.2 a' ha' yd hyd
-
-/-- `envOf` of a zipped image list reads off the image function. -/
-theorem envOf_zipimg (xs : List Variable) (g : Variable → ZMod p) (y : Variable) (hy : y ∈ xs) :
-    envOf (xs.map (fun x => (x, g x))) y = g y := by
-  induction xs with
-  | nil => simp at hy
-  | cons x rest ih =>
-    simp only [List.map_cons, envOf]
-    by_cases hyx : y = x
-    · rw [if_pos hyx, hyx]
-    · rw [if_neg hyx]
-      exact ih (by
-        rcases List.mem_cons.1 hy with h | h
-        · exact absurd h hyx
-        · exact h)
-
-/-! ## Pointwise environment facts for the substitution map -/
-
-/-- `envF` at any variable is the evaluation of the substituted variable expression. -/
-theorem envF_eq_varSubst (σ : Variable → Option (Expression p)) (env : Variable → ZMod p)
-    (y : Variable) : envF σ env y = ((Expression.var y).substF σ).eval env := by
-  show (match σ y with | some t => t.eval env | none => env y)
-    = ((match σ y with | some t => t | none => .var y) : Expression p).eval env
-  cases σ y <;> rfl
-
-/-- Expression-level agreement from pointwise environment agreement. -/
-theorem substF_eval_agree (σ : Variable → Option (Expression p)) (env₀ env₁ : Variable → ZMod p)
-    (e : Expression p) (h : ∀ y ∈ e.vars, envF σ env₀ y = env₁ y) :
-    (e.substF σ).eval env₀ = e.eval env₁ := by
-  rw [Expression.eval_substF]
-  exact Expression.eval_congr e _ _ h
-
-/-- Bus-interaction-level agreement from pointwise environment agreement over its vars. -/
-theorem substF_bi_agree (σ : Variable → Option (Expression p)) (env₀ env₁ : Variable → ZMod p)
-    (bi : BusInteraction (Expression p)) (h : ∀ y ∈ bi.vars, envF σ env₀ y = env₁ y) :
-    (bi.substF σ).eval env₀ = bi.eval env₁ := by
-  rw [BusInteraction.eval_substF]
-  exact BusInteraction.eval_congr bi _ _ h
-
-/-! ## Booleanity constraints for the fresh bits -/
+/-! ## Booleanity constraint for the fresh bits -/
 
 /-- `b · (b − 1)`. -/
-def boolConstraint (b : Variable) : Expression p :=
+def denseBoolConstraint (b : VarId) : DenseExpr p :=
   .mul (.var b) (.add (.var b) (.const (-1)))
 
-theorem boolConstraint_eval_of_bool (b : Variable) (env : Variable → ZMod p)
-    (h : env b = 0 ∨ env b = 1) : (boolConstraint b).eval env = 0 := by
-  show env b * (env b + (-1)) = 0
-  rcases h with h | h <;> rw [h] <;> ring
+/-! ## The group substitution and the fresh bits' domain box -/
 
-theorem bool_of_boolConstraint_eval [Fact p.Prime] (b : Variable) (env : Variable → ZMod p)
-    (h : (boolConstraint b).eval env = 0) : env b = 0 ∨ env b = 1 := by
-  have h' : env b * (env b + (-1)) = 0 := h
-  rcases mul_eq_zero.mp h' with h0 | h1
-  · exact Or.inl h0
-  · right
-    linear_combination h1
-
-/-! ## The checked re-encoding step -/
-
-/-- Does the expression contain any variable? (No allocation.) -/
-def Expression.hasVar : Expression p → Bool
-  | .const _ => false
-  | .var _ => true
-  | .add a b => a.hasVar || b.hasVar
-  | .mul a b => a.hasVar || b.hasVar
-
-/-- Constraints whose (nonempty) variable set lies inside the group (fast membership tests,
-    `varsInF_eq`). -/
-def coveredBy (xs : List Variable) (c : Expression p) : Bool :=
-  c.hasVar && c.varsInF xs
-
-/-- Domains for the group's variables, from the covered constraints only. -/
-def groupDoms (es : List (Expression p)) : List Variable → Option (List (Variable × List (ZMod p)))
-  | [] => some []
-  | x :: rest =>
-    match findDomainAlg es x, groupDoms es rest with
-    | some d, some ds => some ((x, d) :: ds)
-    | _, _ => none
-
-theorem groupDoms_fst (es : List (Expression p)) (xs : List Variable)
-    (doms : List (Variable × List (ZMod p))) (h : groupDoms es xs = some doms) :
-    doms.map Prod.fst = xs := by
-  induction xs generalizing doms with
-  | nil => simp only [groupDoms, Option.some.injEq] at h; subst h; rfl
-  | cons x rest ih =>
-    rw [groupDoms] at h
-    cases hd : findDomainAlg es x with
-    | none => rw [hd] at h; exact absurd h (by simp)
-    | some d =>
-      cases hr : groupDoms es rest with
-      | none => rw [hd, hr] at h; exact absurd h (by simp)
-      | some ds =>
-        rw [hd, hr] at h
-        simp only [Option.some.injEq] at h
-        subst h
-        simp [ih ds hr]
-
-theorem groupDoms_sound [Fact p.Prime] (es : List (Expression p)) (xs : List Variable)
-    (doms : List (Variable × List (ZMod p))) (h : groupDoms es xs = some doms)
-    (env : Variable → ZMod p) (hall : ∀ c ∈ es, c.eval env = 0) :
-    ∀ yd ∈ doms, env yd.1 ∈ yd.2 := by
-  induction xs generalizing doms with
-  | nil => simp only [groupDoms, Option.some.injEq] at h; subst h; simp
-  | cons x rest ih =>
-    rw [groupDoms] at h
-    cases hd : findDomainAlg es x with
-    | none => rw [hd] at h; exact absurd h (by simp)
-    | some d =>
-      cases hr : groupDoms es rest with
-      | none => rw [hd, hr] at h; exact absurd h (by simp)
-      | some ds =>
-        rw [hd, hr] at h
-        simp only [Option.some.injEq] at h
-        subst h
-        intro yd hyd
-        rcases List.mem_cons.1 hyd with rfl | hyd
-        · exact findDomainAlg_sound es x d hd env hall
-        · exact ih ds hr yd hyd
-
-/-- The group substitution: defined on the group only, backed by a hash map. -/
-def groupSubst (xs : List Variable) (hm : Std.HashMap Variable (Expression p)) :
-    Variable → Option (Expression p) :=
-  fun y => if containsFast xs y then hm[y]? else none
+/-- The group substitution: defined on the group only, backed by a hash map. Reuses
+    `denseContainsFast` (`DomainBatch.lean`). -/
+def denseGroupSubst (xs : List VarId) (hm : Std.HashMap VarId (DenseExpr p)) :
+    VarId → Option (DenseExpr p) :=
+  fun y => if denseContainsFast xs y then hm[y]? else none
 
 /-- The `{0,1}` domain box of the fresh bits. -/
-def bitBox (bits : List Variable) : List (Variable × List (ZMod p)) :=
+def denseBitBox (bits : List VarId) : List (VarId × List (ZMod p)) :=
   bits.map (fun b => (b, ([0, 1] : List (ZMod p))))
 
-/-! ## Degree-aware group rewriting
+/-! ## Degree-aware group rewriting -/
 
-Substituting the interpolation polynomials variable-by-variable composes their degree with
-the surrounding expression and overshoots the zkVM's degree bound (`DegreeBound`). Instead,
-every *maximal wholly-in-group subexpression* is replaced by its own interpolation over the
-bit patterns — any function of `k` bits is multilinear of degree ≤ `k`. The rewrite is
-self-checking: the folded interpolation candidate is accepted only if its variables lie in
-the bits and it agrees with the plain substitution on every pattern (a decidable, exhaustive
-check), otherwise the rewrite falls back to the plain substitution (and the step-level
-degree guard decides). -/
-
-/-- `Π_j (bit_j or its complement)`: `1` exactly at the given pattern. -/
-def indicatorExpr (aβ : List (Variable × ZMod p)) : Expression p :=
+/-- `Π_j (bit_j or its complement)`: `1` exactly at the given pattern. **Not** the same computation
+    as `FxSubst.lean`'s `denseIndicatorProd` (see the module header: different fold shape). -/
+def denseIndicatorExpr (aβ : List (VarId × ZMod p)) : DenseExpr p :=
   aβ.foldl (fun acc bv =>
     .mul acc (if bv.2 = 1 then .var bv.1
               else .add (.const 1) (.mul (.const (-1)) (.var bv.1)))) (.const 1)
 
-/-- The interpolation of a whole subexpression over the bit patterns, from its **precomputed**
-    per-pattern values (`vals`, one per pattern, in order). When the subexpression takes the
-    **same value on every pattern** (e.g. a register index that is `52` regardless of
-    the opcode flags being re-encoded), we emit that bare constant instead of the one-hot
-    polynomial `Σ indicator·c`. That keeps such an address literally constant — so downstream
-    memory unification's `addrConstsEq` still recognizes it and the register access keeps
-    chaining — and lowers the degree. Only the `varsIn`/agreement check in `candSelect`
-    consumes the interpolation, and a constant passes both (no vars; equals the shared value on
-    every pattern), so this is transparent to the correctness proof. -/
-def interpOfV (patts : List (List (Variable × ZMod p))) (vals : List (ZMod p)) : Expression p :=
+/-- The interpolation of a whole subexpression over the bit patterns, from its precomputed
+    per-pattern values. -/
+def denseInterpOfV (patts : List (List (VarId × ZMod p))) (vals : List (ZMod p)) : DenseExpr p :=
   match vals with
   | [] => .const 0
   | v₀ :: _ =>
     if vals.all (fun v => decide (v = v₀)) then .const v₀
     else (patts.zip vals).foldl (fun acc av =>
-      .add acc (.mul (indicatorExpr av.1) (.const av.2))) (.const 0)
+      .add acc (.mul (denseIndicatorExpr av.1) (.const av.2))) (.const 0)
 
-/-- The interpolation acceptance check on precomputed pieces: take `cand` only if its variables
-    lie in the bits and it agrees with the (precomputed) substitution values on every pattern,
-    else fall back to the plain substitution `sub`. -/
-def candSelect (bits : List Variable) (patts : List (List (Variable × ZMod p)))
-    (sub cand : Expression p) (vals : List (ZMod p)) : Expression p :=
-  if cand.varsIn bits &&
-      (patts.zip vals).all (fun av => decide (cand.evalFast (envOf av.1) = av.2))
+/-- The interpolation acceptance check on precomputed pieces: take `cand` only if its variables lie
+    in the bits and it agrees with the (precomputed) substitution values on every pattern, else fall
+    back to the plain substitution `sub`. Reuses `DenseExpr.varsInF` and `denseEnvOfFast`. -/
+def denseCandSelect (bits : List VarId) (patts : List (List (VarId × ZMod p)))
+    (sub cand : DenseExpr p) (vals : List (ZMod p)) : DenseExpr p :=
+  if cand.varsInF bits &&
+      (patts.zip vals).all (fun av => decide (cand.evalFast (denseEnvOfFast av.1) = av.2))
   then cand
   else sub
 
-/-- Interpolation candidate with the checked fallback to plain substitution. The substituted
-    expression and its per-pattern values are computed **once** (they were previously rebuilt and
-    re-evaluated ~3× per pattern), and the evaluations derive the field operations once per call
-    (`evalFast`). -/
-def groupRewriteCand (bits : List Variable) (σfn : Variable → Option (Expression p))
-    (patts : List (List (Variable × ZMod p))) (e : Expression p) : Expression p :=
+/-- Interpolation candidate with the checked fallback to plain substitution. Reuses
+    `DenseExpr.substF` (`SubstMap.lean`), `denseEnvOfFast`, and `DenseExpr.fold` (`ExprOps.lean`). -/
+def denseGroupRewriteCand (bits : List VarId) (σfn : VarId → Option (DenseExpr p))
+    (patts : List (List (VarId × ZMod p))) (e : DenseExpr p) : DenseExpr p :=
   let sub := e.substF σfn
-  let vals := patts.map (fun aβ => sub.evalFast (envOf aβ))
-  candSelect bits patts sub ((interpOfV patts vals).fold) vals
-
-/-- Membership of the graph pairs in the zip of a list with its image. -/
-theorem zip_map_self_mem {α β : Type} (f : α → β) (l : List α) (a : α) (ha : a ∈ l) :
-    (a, f a) ∈ l.zip (l.map f) := by
-  induction l with
-  | nil => simp at ha
-  | cons x rest ih =>
-    rcases List.mem_cons.1 ha with rfl | ha
-    · simp
-    · simp only [List.map_cons, List.zip_cons_cons]
-      exact List.mem_cons_of_mem _ (ih ha)
+  let vals := patts.map (fun aβ => sub.evalFast (denseEnvOfFast aβ))
+  denseCandSelect bits patts sub ((denseInterpOfV patts vals).fold) vals
 
 /-- Replace maximal wholly-in-group subexpressions by their interpolations; substitute
-    variable-wise everywhere else. -/
-def groupRewrite (xs bits : List Variable) (σfn : Variable → Option (Expression p))
-    (patts : List (List (Variable × ZMod p))) : Expression p → Expression p
+    variable-wise everywhere else. Reuses `denseContainsFast` and `DenseExpr.varsInF`. -/
+def denseGroupRewrite (xs bits : List VarId) (σfn : VarId → Option (DenseExpr p))
+    (patts : List (List (VarId × ZMod p))) : DenseExpr p → DenseExpr p
   | .const n => .const n
   | .var y =>
-      if containsFast xs y then groupRewriteCand bits σfn patts (.var y) else .var y
+      if denseContainsFast xs y then denseGroupRewriteCand bits σfn patts (.var y) else .var y
   | .add a b =>
-      if (Expression.add a b).varsInF xs then groupRewriteCand bits σfn patts (.add a b)
-      else .add (groupRewrite xs bits σfn patts a) (groupRewrite xs bits σfn patts b)
+      if (DenseExpr.add a b).varsInF xs then denseGroupRewriteCand bits σfn patts (.add a b)
+      else .add (denseGroupRewrite xs bits σfn patts a) (denseGroupRewrite xs bits σfn patts b)
   | .mul a b =>
-      if (Expression.mul a b).varsInF xs then groupRewriteCand bits σfn patts (.mul a b)
-      else .mul (groupRewrite xs bits σfn patts a) (groupRewrite xs bits σfn patts b)
+      if (DenseExpr.mul a b).varsInF xs then denseGroupRewriteCand bits σfn patts (.mul a b)
+      else .mul (denseGroupRewrite xs bits σfn patts a) (denseGroupRewrite xs bits σfn patts b)
 
-theorem groupRewriteCand_agree (xs bits : List Variable)
-    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
-    (env₀ env₁ : Variable → ZMod p) (aβ : List (Variable × ZMod p)) (haβ : aβ ∈ patts)
-    (hbitsagree : ∀ b ∈ bits, env₀ b = envOf aβ b)
-    (hpolyvars : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
-    (hpoint : ∀ y, y ∉ bits → envF σfn env₀ y = env₁ y)
-    (e : Expression p) (hin : e.varsIn xs = true)
-    (hfresh : ∀ b ∈ bits, e.mentions b = false) :
-    (groupRewriteCand bits σfn patts e).eval env₀ = e.eval env₁ := by
-  have hnotbits : ∀ y ∈ e.vars, y ∉ bits := by
-    intro y hy hyb
-    exact absurd hy (mentions_false_not_mem_vars y e (hfresh y hyb))
-  have hsubstF : (e.substF σfn).eval env₀ = e.eval env₁ := by
-    rw [Expression.eval_substF]
-    apply Expression.eval_congr
-    intro y hy
-    exact hpoint y (hnotbits y hy)
-  simp only [groupRewriteCand]
-  unfold candSelect
-  split
-  · next hchk =>
-    rw [Bool.and_eq_true] at hchk
-    have hβ := of_decide_eq_true (List.all_eq_true.mp hchk.2 _
-      (zip_map_self_mem (fun aβ => (e.substF σfn).evalFast (envOf aβ)) patts aβ haβ))
-    have hchk1 := hchk.1
-    simp only [Expression.evalFast_eq] at hβ hchk1 ⊢
-    have hcvars : ∀ v ∈ ((interpOfV patts (patts.map (fun aβ =>
-          (e.substF σfn).eval (envOf aβ)))).fold).vars, v ∈ bits :=
-      Expression.varsIn_sound bits _ hchk1
-    have h₀β : ((interpOfV patts (patts.map (fun aβ =>
-          (e.substF σfn).eval (envOf aβ)))).fold).eval env₀
-        = ((interpOfV patts (patts.map (fun aβ =>
-          (e.substF σfn).eval (envOf aβ)))).fold).eval (envOf aβ) := by
-      apply Expression.eval_congr
-      intro v hv
-      exact hbitsagree v (hcvars v hv)
-    rw [h₀β, hβ, Expression.eval_substF]
-    apply Expression.eval_congr
-    intro y hy
-    have hyx : y ∈ xs := Expression.varsIn_sound xs e hin y hy
-    rw [envF_eq_varSubst]
-    have hstep : ((Expression.var y).substF σfn).eval (envOf aβ)
-        = ((Expression.var y).substF σfn).eval env₀ := by
-      apply Expression.eval_congr
-      intro v hv
-      exact (hbitsagree v (hpolyvars y hyx v hv)).symm
-    rw [hstep, ← envF_eq_varSubst]
-    exact hpoint y (hnotbits y hy)
-  · exact hsubstF
+/-! ## The re-encoded system -/
 
-theorem groupRewrite_agree (xs bits : List Variable)
-    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
-    (hσnone : ∀ y, y ∉ xs → σfn y = none)
-    (env₀ env₁ : Variable → ZMod p) (aβ : List (Variable × ZMod p)) (haβ : aβ ∈ patts)
-    (hbitsagree : ∀ b ∈ bits, env₀ b = envOf aβ b)
-    (hpolyvars : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
-    (hpoint : ∀ y, y ∉ bits → envF σfn env₀ y = env₁ y)
-    (e : Expression p) (hfresh : ∀ b ∈ bits, e.mentions b = false) :
-    (groupRewrite xs bits σfn patts e).eval env₀ = e.eval env₁ := by
-  induction e with
-  | const n => rfl
-  | var y =>
-      simp only [groupRewrite]
-      by_cases hyx : containsFast xs y = true
-      · rw [if_pos hyx]
-        exact groupRewriteCand_agree xs bits σfn patts env₀ env₁ aβ haβ hbitsagree
-          hpolyvars hpoint (.var y)
-          (by
-            simp only [Expression.varsIn]
-            exact containsFast_eq xs y ▸ hyx) hfresh
-      · rw [if_neg hyx]
-        have hyxs : y ∉ xs := fun h =>
-          hyx (containsFast_eq xs y ▸ List.contains_iff_mem.mpr h)
-        have hynb : y ∉ bits := by
-          intro hyb
-          have := hfresh y hyb
-          simp [Expression.mentions] at this
-        have := hpoint y hynb
-        unfold envF at this
-        rw [hσnone y hyxs] at this
-        exact this
-  | add a b iha ihb =>
-      simp only [groupRewrite]
-      have hfa : ∀ c ∈ bits, a.mentions c = false := by
-        intro c hc
-        have := hfresh c hc
-        simp only [Expression.mentions, Bool.or_eq_false_iff] at this
-        exact this.1
-      have hfb : ∀ c ∈ bits, b.mentions c = false := by
-        intro c hc
-        have := hfresh c hc
-        simp only [Expression.mentions, Bool.or_eq_false_iff] at this
-        exact this.2
-      by_cases hin : (Expression.add a b).varsInF xs = true
-      · rw [if_pos hin]
-        exact groupRewriteCand_agree xs bits σfn patts env₀ env₁ aβ haβ hbitsagree
-          hpolyvars hpoint (.add a b) (Expression.varsInF_eq xs _ ▸ hin) hfresh
-      · rw [if_neg hin]
-        show ((groupRewrite xs bits σfn patts a).eval env₀)
-          + ((groupRewrite xs bits σfn patts b).eval env₀) = a.eval env₁ + b.eval env₁
-        rw [iha hfa, ihb hfb]
-  | mul a b iha ihb =>
-      simp only [groupRewrite]
-      have hfa : ∀ c ∈ bits, a.mentions c = false := by
-        intro c hc
-        have := hfresh c hc
-        simp only [Expression.mentions, Bool.or_eq_false_iff] at this
-        exact this.1
-      have hfb : ∀ c ∈ bits, b.mentions c = false := by
-        intro c hc
-        have := hfresh c hc
-        simp only [Expression.mentions, Bool.or_eq_false_iff] at this
-        exact this.2
-      by_cases hin : (Expression.mul a b).varsInF xs = true
-      · rw [if_pos hin]
-        exact groupRewriteCand_agree xs bits σfn patts env₀ env₁ aβ haβ hbitsagree
-          hpolyvars hpoint (.mul a b) (Expression.varsInF_eq xs _ ▸ hin) hfresh
-      · rw [if_neg hin]
-        show ((groupRewrite xs bits σfn patts a).eval env₀)
-          * ((groupRewrite xs bits σfn patts b).eval env₀) = a.eval env₁ * b.eval env₁
-        rw [iha hfa, ihb hfb]
-
-/-- Bus-interaction-level agreement for the group rewrite. -/
-theorem groupRewrite_bi_agree (xs bits : List Variable)
-    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
-    (hσnone : ∀ y, y ∉ xs → σfn y = none)
-    (env₀ env₁ : Variable → ZMod p) (aβ : List (Variable × ZMod p)) (haβ : aβ ∈ patts)
-    (hbitsagree : ∀ b ∈ bits, env₀ b = envOf aβ b)
-    (hpolyvars : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
-    (hpoint : ∀ y, y ∉ bits → envF σfn env₀ y = env₁ y)
-    (bi : BusInteraction (Expression p))
-    (hfreshM : ∀ b ∈ bits, bi.multiplicity.mentions b = false)
-    (hfreshP : ∀ e ∈ bi.payload, ∀ b ∈ bits, e.mentions b = false) :
-    (bi.mapExpr (groupRewrite xs bits σfn patts)).eval env₀ = bi.eval env₁ := by
-  unfold BusInteraction.mapExpr BusInteraction.eval
-  simp only [List.map_map]
-  congr 1
-  · exact groupRewrite_agree xs bits σfn patts hσnone env₀ env₁ aβ haβ hbitsagree
-      hpolyvars hpoint bi.multiplicity hfreshM
-  · apply List.map_congr_left
-    intro e he
-    exact groupRewrite_agree xs bits σfn patts hσnone env₀ env₁ aβ haβ hbitsagree
-      hpolyvars hpoint e (hfreshP e he)
-
-/-- The re-encoded system: substitute the group everywhere, keep only uncovered constraints,
-    add booleanity for the bits. -/
-def reencodeOut (cs : ConstraintSystem p) (xs bits : List Variable)
-    (hm : Std.HashMap Variable (Expression p)) : ConstraintSystem p :=
+/-- The re-encoded system: substitute the group everywhere, keep only uncovered constraints, add
+    booleanity for the bits. Reuses the (locally re-derived) `denseCoveredBy` and `denseAssignments`
+    above. No dense `BusInteraction.mapExpr` exists, so the bus-interaction rewrite is inlined
+    field-by-field, matching the shape already established by `DomainFoldRuntime.lean`'s fold-out
+    functions. The whole rewrite closure (`groupSubst`/`bitBox`/`assignments`) is recomputed for the
+    constraints and again for the bus interactions (no extra `let`-hoist across the two). -/
+def denseReencodeOut (d : DenseConstraintSystem p) (xs bits : List VarId)
+    (hm : Std.HashMap VarId (DenseExpr p)) : DenseConstraintSystem p :=
   { algebraicConstraints :=
-      ((cs.algebraicConstraints.filter (fun c => !coveredBy xs c)).map
-        (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))) ++ bits.map boolConstraint,
-    busInteractions := cs.busInteractions.map (·.mapExpr (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))) }
+      ((d.algebraicConstraints.filter (fun c => !denseCoveredBy xs c)).map
+        (denseGroupRewrite xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))))
+        ++ bits.map denseBoolConstraint,
+    busInteractions := d.busInteractions.map (fun bi => { bi with
+      multiplicity :=
+        denseGroupRewrite xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))
+          bi.multiplicity,
+      payload := bi.payload.map
+        (denseGroupRewrite xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))) }) }
 
-/-- The group's covered constraints. -/
-def coveredCsOf (cs : ConstraintSystem p) (xs : List Variable) : List (Expression p) :=
-  cs.algebraicConstraints.filter (coveredBy xs)
+/-! ## The group's surviving values
+
+Defined directly against the *keyed* compiled evaluator `denseCompileEs`/`denseIExprEvalWith`
+(`DomainBatch.lean`, safely importable — see the module header: no `DomainFold.lean` dependency
+needed here at all). -/
 
 /-- All covered constraints zero at a point, with the ring ops hoisted out of the per-point
-    evaluation (cf. `survivesAllCW` in `DomainBatch`): `add`/`mul` are extracted from the `ZMod p`
-    instances once by the caller and passed in, so each `IExpr` node is a direct closure call
-    instead of re-deriving the `CommRing (ZMod p)` chain. -/
-def survZeroCW (add mul : ZMod p → ZMod p → ZMod p) (ces : List (IExpr p))
-    (a : List (Variable × ZMod p)) : Bool :=
-  ces.all (fun ie => decide (ie.evalWith add mul a = 0))
-
-theorem survZeroCW_eq (add mul : ZMod p → ZMod p → ZMod p)
-    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
-    (ces : List (IExpr p)) (a : List (Variable × ZMod p)) :
-    survZeroCW add mul ces a = ces.all (fun ie => decide (ie.eval a = 0)) := by
-  simp only [survZeroCW, IExpr.evalWith_eq add mul hadd hmul]
+    evaluation. -/
+def denseSurvZeroCW (add mul : ZMod p → ZMod p → ZMod p) (ces : List (IExpr p))
+    (a : List (VarId × ZMod p)) : Bool :=
+  ces.all (fun ie => decide (denseIExprEvalWith add mul a ie = 0))
 
 /-- The surviving group values from a **precomputed** covered set: enumerated over the group's
-    domains, filtered by the covered constraints.
-
-    The enumerated points all share the key order of `doms` (`assignments_keys`), so the covered
-    constraints are compiled **once per target** to positional `IExpr`s (variable leaves → indices,
-    `compileEs`) and each box point is evaluated by index — no per-variable `envOf` scan — with the
-    ring ops hoisted out of the instances once (`survZeroCW`). This is the `domainBatch`
-    index-compile treatment, here shared by the re-encoder and `domainFold`. When a covered
-    constraint mentions a variable outside `doms`'s keys (`compileEs` returns `none`, not expected
-    for a covered set but handled for totality) it falls back to the direct `evalFast` filter. Both
-    compute the identical list (`groupSurvivorsE_eq`), so the output is unchanged. -/
-def groupSurvivorsE (es : List (Expression p))
-    (doms : List (Variable × List (ZMod p))) : List (List (Variable × ZMod p)) :=
-  match compileEs (doms.map Prod.fst) es with
+    domains, filtered by the covered constraints, compiled once per target to positional `IExpr`s. -/
+def denseGroupSurvivorsE (es : List (DenseExpr p)) (doms : List (VarId × List (ZMod p))) :
+    List (List (VarId × ZMod p)) :=
+  match denseCompileEs (doms.map Prod.fst) es with
   | some ces =>
-    -- `add`/`mul` extracted from the instances once, as args to the survivor test's partial
-    -- application (formed once per target, so the `CommRing` chain is not re-derived per point).
-    (assignments doms).filter
-      (survZeroCW (inferInstance : Add (ZMod p)).add (inferInstance : Mul (ZMod p)).mul ces)
+    (denseAssignments doms).filter
+      (denseSurvZeroCW (inferInstance : Add (ZMod p)).add (inferInstance : Mul (ZMod p)).mul ces)
   | none =>
-    (assignments doms).filter (fun a => es.all (fun c => decide (c.evalFast (envOf a) = 0)))
+    (denseAssignments doms).filter
+      (fun a => es.all (fun c => decide (c.evalFast (denseEnvOfFast a) = 0)))
 
-/-- `groupSurvivorsE` computes the identical list to the direct `evalFast`/`envOf` filter — the
-    index-compiled path is a pure speedup. Consumers that reason about the survivor set as a
-    `List.filter` rewrite through this. -/
-theorem groupSurvivorsE_eq (es : List (Expression p))
-    (doms : List (Variable × List (ZMod p))) :
-    groupSurvivorsE es doms =
-      (assignments doms).filter (fun a => es.all (fun c => decide (c.evalFast (envOf a) = 0))) := by
-  unfold groupSurvivorsE
-  split
-  · rename_i ces hce
-    refine List.filter_congr (fun a ha => ?_)
-    have hkeys : a.map Prod.fst = doms.map Prod.fst := assignments_keys doms a ha
-    have hfun : (fun e : Expression p => decide (e.eval (envOfFast a) = 0))
-        = (fun c : Expression p => decide (c.evalFast (envOf a) = 0)) := by
-      funext c; rw [envOfFast_eq, Expression.evalFast_eq]
-    rw [survZeroCW_eq (inferInstance : Add (ZMod p)).add (inferInstance : Mul (ZMod p)).mul
-        (fun _ _ => rfl) (fun _ _ => rfl) ces a,
-      compileEs_all (doms.map Prod.fst) es ces hce a hkeys, hfun]
-  · rfl
+/-! ## The checked re-encoding certificate -/
 
-/-- The surviving group values: enumerated over the group's domains, filtered by the covered
-    constraints. The covered set is bound outside the filter so it is computed **once**, not once
-    per enumerated assignment (the `let` zeta-reduces away in proofs, so this is transparent). -/
-def groupSurvivors (cs : ConstraintSystem p) (xs : List Variable)
-    (doms : List (Variable × List (ZMod p))) : List (List (Variable × ZMod p)) :=
-  groupSurvivorsE (coveredCsOf cs xs) doms
-
-/-- All checked side conditions for one re-encoding step. -/
-def checkReencode (cs : ConstraintSystem p) (xs bits : List Variable)
-    (hm : Std.HashMap Variable (Expression p)) : Bool :=
-  match groupDoms (coveredCsOf cs xs) xs with
+/-- All checked side conditions for one re-encoding step. Reuses the (locally re-derived)
+    `denseGroupDoms`/`denseCoveredCsOf` above, `denseAssignments`/`denseBitBox`,
+    `denseGroupSurvivorsE` above, `denseEnvOfFast`, and `DenseExpr.mentions`. The conjunct order
+    keeps the deliberately-last freshness conjunct (the only `O(bits × system)` one,
+    short-circuited to run only for the few already-cheaply-accepted groups). -/
+def denseCheckReencode (d : DenseConstraintSystem p) (xs bits : List VarId)
+    (hm : Std.HashMap VarId (DenseExpr p)) : Bool :=
+  match denseGroupDoms (denseCoveredCsOf d xs) xs with
   | none => false
   | some doms =>
-    -- Bind these once rather than recomputing them inside the checks below: `coveredCsOf` also
-    -- feeds the survivor filter (`groupSurvivorsE`), and `assignments (bitBox …)` appears twice.
-    -- The `let`s zeta-reduce away in `checkReencode_sound_D`, so this is transparent.
-    let es := coveredCsOf cs xs
-    let survs := groupSurvivorsE es doms
-    let patts := assignments (bitBox bits)
+    let es := denseCoveredCsOf d xs
+    let survs := denseGroupSurvivorsE es doms
+    let patts := denseAssignments (denseBitBox bits)
     decide ((doms.map (fun yd => yd.2.length)).prod ≤ 256) &&
     decide (2 ≤ survs.length) &&
     decide (bits.length < xs.length) &&
     decide (bits.Nodup) &&
     -- the substituted group variables only mention bits
     xs.all (fun x =>
-      ((Expression.var x).substF (groupSubst xs hm)).vars.all (fun v => bits.contains v)) &&
+      ((DenseExpr.var x).substF (denseGroupSubst xs hm)).vars.all (fun v => bits.contains v)) &&
     -- completeness: every surviving group value is hit by some bit pattern
     survs.all (fun s => patts.any (fun aβ =>
       xs.all (fun x =>
-        decide (((Expression.var x).substF (groupSubst xs hm)).evalFast (envOf aβ) = envOf s x)))) &&
+        decide (((DenseExpr.var x).substF (denseGroupSubst xs hm)).evalFast (denseEnvOfFast aβ)
+          = denseEnvOfFast s x)))) &&
     -- soundness: every bit pattern's image satisfies the covered constraints
     patts.all (fun aβ => es.all (fun c =>
-      decide ((c.substF (groupSubst xs hm)).evalFast (envOf aβ) = 0))) &&
-    -- freshness: no bit occurs anywhere in the system. Deliberately the **last** conjunct: it is
-    -- the only O(bits × system) one, and short-circuiting puts it after the cheap per-candidate
-    -- rejections, so it effectively runs only for accepted groups.
+      decide ((c.substF (denseGroupSubst xs hm)).evalFast (denseEnvOfFast aβ) = 0))) &&
+    -- freshness: no bit occurs anywhere in the system. Deliberately the **last** conjunct.
     bits.all (fun b =>
-      cs.algebraicConstraints.all (fun c => !c.mentionsF b) &&
-      cs.busInteractions.all (fun bi =>
-        !bi.multiplicity.mentionsF b && bi.payload.all (fun e => !e.mentionsF b)))
+      d.algebraicConstraints.all (fun c => !c.mentions b) &&
+      d.busInteractions.all (fun bi =>
+        !bi.multiplicity.mentions b && bi.payload.all (fun e => !e.mentions b)))
 
 /-! ## Derived-variable methods for the fresh bits
 
-Each bit is recovered from the group by a decision tree over the bit patterns: at the first pattern
-whose interpolation image equals the group's values, output that pattern's bit. This inverts
-`group = poly(bits)` for witness generation, and — crucially — the pattern the forward direction
-selects (`find?` below) is exactly this first match, so the method computes the witness's bit. -/
-
-/-- A computation method reads only its variables. -/
-theorem ComputationMethod.eval_congr (cm : ComputationMethod p) (e1 e2 : Variable → ZMod p) :
-    (∀ v ∈ cm.vars, e1 v = e2 v) → cm.eval e1 = cm.eval e2 := by
-  induction cm with
-  | const c => intro _; rfl
-  | quotientOrZero num den =>
-      intro h
-      have hn : num.eval e1 = num.eval e2 :=
-        Expression.eval_congr num _ _ (fun v hv => h v (List.mem_append_left _ hv))
-      have hd : den.eval e1 = den.eval e2 :=
-        Expression.eval_congr den _ _ (fun v hv => h v (List.mem_append_right _ hv))
-      show (if den.eval e1 = 0 then 0 else (den.eval e1)⁻¹ * num.eval e1)
-         = (if den.eval e2 = 0 then 0 else (den.eval e2)⁻¹ * num.eval e2)
-      rw [hn, hd]
-  | ifEqZero cond thenM elseM iht ihe =>
-      intro h
-      have hc : cond.eval e1 = cond.eval e2 :=
-        Expression.eval_congr cond _ _ (fun v hv =>
-          h v (List.mem_append_left _ (List.mem_append_left _ hv)))
-      have ht := iht (fun v hv => h v (List.mem_append_left _ (List.mem_append_right _ hv)))
-      have he := ihe (fun v hv => h v (List.mem_append_right _ hv))
-      show (if cond.eval e1 = 0 then thenM.eval e1 else elseM.eval e1)
-         = (if cond.eval e2 = 0 then thenM.eval e2 else elseM.eval e2)
-      rw [hc, ht, he]
+Each bit is recovered from the group by a decision tree over the bit patterns: at the first
+pattern whose interpolation image equals the group's values, output that pattern's bit. -/
 
 /-- The interpolation image of group variable `x` at pattern `aβ` (a field constant). -/
-def imgVal (xs : List Variable) (hm : Std.HashMap Variable (Expression p))
-    (aβ : List (Variable × ZMod p)) (x : Variable) : ZMod p :=
-  ((Expression.var x).substF (groupSubst xs hm)).evalFast (envOf aβ)
+def denseImgVal (xs : List VarId) (hm : Std.HashMap VarId (DenseExpr p))
+    (aβ : List (VarId × ZMod p)) (x : VarId) : ZMod p :=
+  ((DenseExpr.var x).substF (denseGroupSubst xs hm)).evalFast (denseEnvOfFast aβ)
 
 /-- `thenM` if every `x ∈ xs` has `imgFn x = env x`, else `elseM`, as nested `ifEqZero`. -/
-def matchCM (xs : List Variable) (imgFn : Variable → ZMod p)
-    (thenM elseM : ComputationMethod p) : ComputationMethod p :=
+def denseMatchCM (xs : List VarId) (imgFn : VarId → ZMod p)
+    (thenM elseM : DenseComputationMethod p) : DenseComputationMethod p :=
   match xs with
   | [] => thenM
   | x :: rest =>
-      .ifEqZero (.add (.var x) (.const (-(imgFn x)))) (matchCM rest imgFn thenM elseM) elseM
-
-theorem matchCM_eval (xs : List Variable) (imgFn : Variable → ZMod p)
-    (thenM elseM : ComputationMethod p) (env : Variable → ZMod p) :
-    (matchCM xs imgFn thenM elseM).eval env
-    = if xs.all (fun x => decide (imgFn x = env x)) then thenM.eval env else elseM.eval env := by
-  induction xs with
-  | nil => rfl
-  | cons x rest ih =>
-      show (ComputationMethod.ifEqZero _ (matchCM rest imgFn thenM elseM) elseM).eval env = _
-      rw [ComputationMethod.eval]
-      by_cases hx : imgFn x = env x
-      · rw [if_pos (show (Expression.add (.var x) (.const (-(imgFn x)))).eval env = 0 by
-              show env x + -(imgFn x) = 0; rw [hx]; ring), ih, List.all_cons]
-        simp [hx]
-      · rw [if_neg (show (Expression.add (.var x) (.const (-(imgFn x)))).eval env ≠ 0 by
-              show env x + -(imgFn x) ≠ 0; intro h; exact hx (by linear_combination -h)),
-            List.all_cons]
-        simp [hx]
-
-/-- Variables of `matchCM` lie in `xs` together with those of the branches. -/
-theorem matchCM_vars (xs : List Variable) (imgFn : Variable → ZMod p)
-    (thenM elseM : ComputationMethod p) :
-    ∀ v ∈ (matchCM xs imgFn thenM elseM).vars, v ∈ xs ∨ v ∈ thenM.vars ∨ v ∈ elseM.vars := by
-  induction xs with
-  | nil => intro v hv; exact Or.inr (Or.inl hv)
-  | cons x rest ih =>
-      intro v hv
-      simp only [matchCM, ComputationMethod.vars, Expression.vars, List.nil_append,
-        List.append_assoc, List.mem_append, List.mem_singleton] at hv
-      rcases hv with rfl | hv | hv
-      · exact Or.inl (List.mem_cons_self ..)
-      · rcases ih v hv with h | h | h
-        · exact Or.inl (List.mem_cons_of_mem _ h)
-        · exact Or.inr (Or.inl h)
-        · exact Or.inr (Or.inr h)
-      · exact Or.inr (Or.inr hv)
+      .ifEqZero (.add (.var x) (.const (-(imgFn x)))) (denseMatchCM rest imgFn thenM elseM) elseM
 
 /-- The derivation of bit `b`: scan the patterns, output the first matching pattern's `b`-bit. -/
-def bitCM (patts : List (List (Variable × ZMod p))) (xs : List Variable)
-    (hm : Std.HashMap Variable (Expression p)) (b : Variable) : ComputationMethod p :=
+def denseBitCM (patts : List (List (VarId × ZMod p))) (xs : List VarId)
+    (hm : Std.HashMap VarId (DenseExpr p)) (b : VarId) : DenseComputationMethod p :=
   match patts with
   | [] => .const 0
-  | aβ :: rest => matchCM xs (imgVal xs hm aβ) (.const (envOf aβ b)) (bitCM rest xs hm b)
+  | aβ :: rest =>
+      denseMatchCM xs (denseImgVal xs hm aβ) (.const (denseEnvOfFast aβ b)) (denseBitCM rest xs hm b)
 
-theorem bitCM_eval (patts : List (List (Variable × ZMod p))) (xs : List Variable)
-    (hm : Std.HashMap Variable (Expression p)) (b : Variable) (env : Variable → ZMod p) :
-    (bitCM patts xs hm b).eval env
-    = match patts.find? (fun aβ => xs.all (fun x => decide (imgVal xs hm aβ x = env x))) with
-      | some aβ => envOf aβ b
-      | none => 0 := by
-  induction patts with
-  | nil => rfl
-  | cons aβ rest ih =>
-      show (matchCM xs (imgVal xs hm aβ) (.const (envOf aβ b)) (bitCM rest xs hm b)).eval env = _
-      rw [matchCM_eval, List.find?_cons]
-      by_cases hmatch : xs.all (fun x => decide (imgVal xs hm aβ x = env x)) = true
-      · rw [if_pos hmatch, hmatch]; rfl
-      · rw [if_neg hmatch]
-        simp only [hmatch, ih]
+/-! ## Building the interpolation (proof-free) -/
 
-/-- The derivation of bit `b` reads only group variables. -/
-theorem bitCM_vars (patts : List (List (Variable × ZMod p))) (xs : List Variable)
-    (hm : Std.HashMap Variable (Expression p)) (b : Variable) :
-    ∀ v ∈ (bitCM patts xs hm b).vars, v ∈ xs := by
-  induction patts with
-  | nil => intro v hv; simp [bitCM, ComputationMethod.vars] at hv
-  | cons aβ rest ih =>
-      intro v hv
-      rcases matchCM_vars xs (imgVal xs hm aβ) (.const (envOf aβ b)) (bitCM rest xs hm b) v hv
-        with h | h | h
-      · exact h
-      · simp [ComputationMethod.vars] at h
-      · exact ih v h
-
-/-- Substituting a wholly-in-group expression (whose group variables `σfn` maps into the bits)
-    yields an expression over the bits only. -/
-theorem Expression.substF_varsIn_bits (xs bits : List Variable)
-    (σfn : Variable → Option (Expression p))
-    (hσ : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
-    (e : Expression p) (hin : e.varsIn xs = true) :
-    ∀ v ∈ (e.substF σfn).vars, v ∈ bits := by
-  induction e with
-  | const n => intro v hv; simp [Expression.substF, Expression.vars] at hv
-  | var y =>
-      intro v hv
-      exact hσ y (List.contains_iff_mem.mp (by simpa [Expression.varsIn] using hin)) v hv
-  | add a b iha ihb =>
-      rw [Expression.varsIn, Bool.and_eq_true] at hin
-      intro v hv
-      simp only [Expression.substF, Expression.vars, List.mem_append] at hv
-      rcases hv with hv | hv
-      · exact iha hin.1 v hv
-      · exact ihb hin.2 v hv
-  | mul a b iha ihb =>
-      rw [Expression.varsIn, Bool.and_eq_true] at hin
-      intro v hv
-      simp only [Expression.substF, Expression.vars, List.mem_append] at hv
-      rcases hv with hv | hv
-      · exact iha hin.1 v hv
-      · exact ihb hin.2 v hv
-
-/-- A rewritten wholly-in-group expression is over the bits only. -/
-theorem groupRewriteCand_vars (xs bits : List Variable)
-    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
-    (hσ : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
-    (e : Expression p) (hin : e.varsIn xs = true) :
-    ∀ v ∈ (groupRewriteCand bits σfn patts e).vars, v ∈ bits := by
-  intro v hv
-  simp only [groupRewriteCand] at hv
-  unfold candSelect at hv
-  split at hv
-  · next hchk =>
-      rw [Bool.and_eq_true] at hchk
-      exact Expression.varsIn_sound bits _ hchk.1 v hv
-  · exact Expression.substF_varsIn_bits xs bits σfn hσ e hin v hv
-
-/-- Every variable of a group-rewritten expression is either an original variable of `e` or a
-    fresh bit. -/
-theorem groupRewrite_vars (xs bits : List Variable)
-    (σfn : Variable → Option (Expression p)) (patts : List (List (Variable × ZMod p)))
-    (hσ : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF σfn).vars, v ∈ bits)
-    (e : Expression p) :
-    ∀ v ∈ (groupRewrite xs bits σfn patts e).vars, v ∈ e.vars ∨ v ∈ bits := by
-  induction e with
-  | const n => simp [groupRewrite, Expression.vars]
-  | var y =>
-      simp only [groupRewrite]
-      by_cases hyx : containsFast xs y = true
-      · rw [if_pos hyx]; intro v hv
-        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.var y)
-          (by
-            simp only [Expression.varsIn]
-            exact containsFast_eq xs y ▸ hyx) v hv)
-      · rw [if_neg hyx]; intro v hv; exact Or.inl hv
-  | add a b iha ihb =>
-      simp only [groupRewrite]
-      by_cases hin : (Expression.add a b).varsInF xs = true
-      · rw [if_pos hin]; intro v hv
-        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.add a b)
-          (Expression.varsInF_eq xs _ ▸ hin) v hv)
-      · rw [if_neg hin]; intro v hv
-        simp only [Expression.vars, List.mem_append] at hv ⊢
-        rcases hv with hv | hv
-        · rcases iha v hv with h | h
-          · exact Or.inl (Or.inl h)
-          · exact Or.inr h
-        · rcases ihb v hv with h | h
-          · exact Or.inl (Or.inr h)
-          · exact Or.inr h
-  | mul a b iha ihb =>
-      simp only [groupRewrite]
-      by_cases hin : (Expression.mul a b).varsInF xs = true
-      · rw [if_pos hin]; intro v hv
-        exact Or.inr (groupRewriteCand_vars xs bits σfn patts hσ (.mul a b)
-          (Expression.varsInF_eq xs _ ▸ hin) v hv)
-      · rw [if_neg hin]; intro v hv
-        simp only [Expression.vars, List.mem_append] at hv ⊢
-        rcases hv with hv | hv
-        · rcases iha v hv with h | h
-          · exact Or.inl (Or.inl h)
-          · exact Or.inr h
-        · rcases ihb v hv with h | h
-          · exact Or.inl (Or.inr h)
-          · exact Or.inr h
-
-/-- Every variable of the re-encoded system is either an original variable of `cs` or a fresh
-    bit — proven by construction from the certified substitution, so the pass needs no scan. -/
-theorem reencodeOut_vars_subset (cs : ConstraintSystem p) (xs bits : List Variable)
-    (hm : Std.HashMap Variable (Expression p))
-    (hσ : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF (groupSubst xs hm)).vars, v ∈ bits) :
-    ∀ v ∈ (reencodeOut cs xs bits hm).vars, v ∈ cs.vars ∨ v ∈ bits := by
-  intro v hv
-  have gr := groupRewrite_vars xs bits (groupSubst xs hm) (assignments (bitBox bits)) hσ
-  rcases ConstraintSystem.mem_vars.1 hv with ⟨c, hc, hcv⟩ | ⟨bi, hbi, hbiv⟩
-  · simp only [reencodeOut, List.mem_append] at hc
-    rcases hc with hc | hc
-    · rcases List.mem_map.1 hc with ⟨c0, hc0, rfl⟩
-      rcases gr c0 v hcv with h | h
-      · exact Or.inl (ConstraintSystem.mem_vars_of_constraint (List.mem_of_mem_filter hc0) h)
-      · exact Or.inr h
-    · rcases List.mem_map.1 hc with ⟨b, hb, rfl⟩
-      right
-      have hvb : v = b := by simpa [boolConstraint, Expression.vars] using hcv
-      exact hvb ▸ hb
-  · simp only [reencodeOut, List.mem_map] at hbi
-    rcases hbi with ⟨bi0, hbi0, rfl⟩
-    rcases hbiv with hmv | ⟨e, he, hev⟩
-    · simp only [BusInteraction.mapExpr] at hmv
-      rcases gr bi0.multiplicity v hmv with h | h
-      · exact Or.inl (ConstraintSystem.mem_vars_of_mult hbi0 h)
-      · exact Or.inr h
-    · simp only [BusInteraction.mapExpr] at he
-      rcases List.mem_map.1 he with ⟨e0, he0, rfl⟩
-      rcases gr e0 v hev with h | h
-      · exact Or.inl (ConstraintSystem.mem_vars_of_payload hbi0 he0 h)
-      · exact Or.inr h
-
-/-- Appending derivations: the later list `B` takes precedence, so a fresh variable's method there
-    overrides any earlier entry for it (this is what makes the reconstruction robust to duplicates). -/
-theorem Derivations.methodFor_append (A B : Derivations p) (v : Variable) :
-    Derivations.methodFor (A ++ B) v
-      = (Derivations.methodFor B v).orElse (fun _ => Derivations.methodFor A v) := by
-  induction A with
-  | nil => simp [Derivations.methodFor]
-  | cons pcm rest ih =>
-      obtain ⟨u, cm⟩ := pcm
-      simp only [List.cons_append, Derivations.methodFor, ih]
-      cases Derivations.methodFor B v <;> simp [Option.orElse]
-
-/-- The method list built for the fresh bits supplies `g w` for a bit `w`, nothing otherwise. -/
-theorem Derivations.methodFor_map (bits : List Variable) (g : Variable → ComputationMethod p)
-    (w : Variable) :
-    Derivations.methodFor (bits.map (fun b => (b, g b))) w
-      = if w ∈ bits then some (g w) else none := by
-  induction bits with
-  | nil => simp [Derivations.methodFor]
-  | cons b rest ih =>
-      simp only [List.map_cons, Derivations.methodFor, ih, List.mem_cons]
-      by_cases hw : w ∈ rest
-      · simp [hw]
-      · by_cases hbw : b = w
-        · subst hbw; simp [hw]
-        · have hwb : w ≠ b := fun h => hbw h.symm
-          simp [hw, hbw, hwb, Option.orElse]
-
-theorem checkReencode_sound_D [Fact p.Prime] (cs : ConstraintSystem p) (bsem : BusSemantics p)
-    (xs bits : List Variable) (hm : Std.HashMap Variable (Expression p))
-    (hxs : ∀ x ∈ xs, x.powdrId?.isSome) (hxsCs : ∀ x ∈ xs, x ∈ cs.vars)
-    (hxsB : ∀ x ∈ xs, x ∉ bits)
-    (hbn : ∀ b ∈ bits, b.powdrId? = none)
-    (hchk : checkReencode cs xs bits hm = true) :
-    PassCorrect cs (reencodeOut cs xs bits hm)
-      (bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b))) bsem := by
-  unfold checkReencode at hchk
-  split at hchk
-  · exact absurd hchk (by simp)
-  rename_i doms hdoms
-  simp only [Bool.and_eq_true] at hchk
-  obtain ⟨⟨⟨⟨⟨⟨⟨hbox, hm2⟩, hprofit⟩, hnodup⟩, hvarsB⟩, hC5⟩, hC6⟩, hfreshB⟩ := hchk
-  have hnodup' : bits.Nodup := of_decide_eq_true hnodup
-  have hkeys := groupDoms_fst (coveredCsOf cs xs) xs doms hdoms
-  have hbitKeys : (bitBox (p := p) bits).map Prod.fst = bits := by
-    unfold bitBox
-    rw [List.map_map]
-    simp [Function.comp_def]
-  -- per-expression freshness, unpacked
-  have hfreshC : ∀ b ∈ bits, ∀ c ∈ cs.algebraicConstraints, b ∉ c.vars := by
-    intro b hb c hc
-    have h1 := List.all_eq_true.mp hfreshB b hb
-    rw [Bool.and_eq_true] at h1
-    have := List.all_eq_true.mp h1.1 c hc
-    exact mentions_false_not_mem_vars b c
-      (by simpa [Expression.mentionsF_eq] using this)
-  have hfreshBi : ∀ b ∈ bits, ∀ bi ∈ cs.busInteractions, b ∉ bi.vars := by
-    intro b hb bi hbi
-    have h1 := List.all_eq_true.mp hfreshB b hb
-    rw [Bool.and_eq_true] at h1
-    have h2 := List.all_eq_true.mp h1.2 bi hbi
-    rw [Bool.and_eq_true] at h2
-    intro hmem
-    unfold BusInteraction.vars at hmem
-    rcases List.mem_append.1 hmem with hmem | hmem
-    · exact mentions_false_not_mem_vars b bi.multiplicity
-        (by simpa [Expression.mentionsF_eq] using h2.1) hmem
-    · obtain ⟨e, he, hbe⟩ := List.mem_flatMap.1 hmem
-      exact mentions_false_not_mem_vars b e
-        (by simpa [Expression.mentionsF_eq] using List.all_eq_true.mp h2.2 e he) hbe
-  -- the substituted group variables' expressions live over the bits
-  have hpolyVars : ∀ y ∈ xs, ∀ v ∈ ((Expression.var y).substF (groupSubst xs hm)).vars,
-      v ∈ bits := by
-    intro y hy v hv
-    exact List.contains_iff_mem.mp
-      (List.all_eq_true.mp (List.all_eq_true.mp hvarsB y hy) v hv)
-  -- output variables are original `cs` variables or fresh bits (by construction, no scan)
-  have hvars : ∀ v ∈ (reencodeOut cs xs bits hm).vars, v ∈ cs.vars ∨ v ∈ bits :=
-    reencodeOut_vars_subset cs xs bits hm hpolyVars
-  have hσnone : ∀ y, y ∉ xs → groupSubst xs hm y = none := by
-    intro y hy
-    simp [groupSubst, containsFast_eq, hy]
-  have hfreshCm : ∀ c ∈ cs.algebraicConstraints, ∀ b ∈ bits, c.mentions b = false := by
-    intro c hc b hb
-    have h1 := List.all_eq_true.mp hfreshB b hb
-    rw [Bool.and_eq_true] at h1
-    simpa [Expression.mentionsF_eq] using List.all_eq_true.mp h1.1 c hc
-  have hfreshMm : ∀ bi ∈ cs.busInteractions, ∀ b ∈ bits,
-      bi.multiplicity.mentions b = false := by
-    intro bi hbi b hb
-    have h1 := List.all_eq_true.mp hfreshB b hb
-    rw [Bool.and_eq_true] at h1
-    have h2 := List.all_eq_true.mp h1.2 bi hbi
-    rw [Bool.and_eq_true] at h2
-    simpa [Expression.mentionsF_eq] using h2.1
-  have hfreshPm : ∀ bi ∈ cs.busInteractions, ∀ e ∈ bi.payload, ∀ b ∈ bits,
-      e.mentions b = false := by
-    intro bi hbi e he b hb
-    have h1 := List.all_eq_true.mp hfreshB b hb
-    rw [Bool.and_eq_true] at h1
-    have h2 := List.all_eq_true.mp h1.2 bi hbi
-    rw [Bool.and_eq_true] at h2
-    simpa [Expression.mentionsF_eq] using List.all_eq_true.mp h2.2 e he
-  -- bits are fresh: none of them occurs in `cs`
-  have hbitsCs : ∀ b ∈ bits, b ∉ cs.vars := by
-    intro b hb hmem
-    rw [ConstraintSystem.mem_vars] at hmem
-    rcases hmem with ⟨c, hc, hcv⟩ | ⟨bi, hbi, hbiv⟩
-    · exact hfreshC b hb c hc hcv
-    · refine hfreshBi b hb bi hbi ?_
-      unfold BusInteraction.vars
-      rcases hbiv with h | ⟨e, he, hev⟩
-      · exact List.mem_append_left _ h
-      · exact List.mem_append_right _ (List.mem_flatMap.2 ⟨e, he, hev⟩)
-  -- FORWARD (with the frame and derived-variable reconstruction)
-  have hfwd_D : ∀ env, cs.satisfies bsem env → ∃ env',
-      (∀ c ∈ cs.algebraicConstraints,
-        ((groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits))) c).eval env' = c.eval env) ∧
-      (∀ bi ∈ cs.busInteractions,
-        (bi.mapExpr (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))).eval env' = bi.eval env) ∧
-      (∀ c ∈ bits.map boolConstraint, c.eval env' = 0) ∧
-      (∀ v : Variable, v.powdrId?.isSome → env' v = env v) ∧
-      (∀ inputVars, (∀ v ∈ cs.vars, v.powdrId?.isSome → v ∈ inputVars) →
-        ∀ dsIn : Derivations p, cs.reconstructs inputVars dsIn env →
-        (reencodeOut cs xs bits hm).reconstructs inputVars
-          (dsIn ++ bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b))) env') := by
-    intro env hsat
-    have hallES : ∀ c ∈ coveredCsOf cs xs, c.eval env = 0 := fun c hc =>
-      hsat.1 c (List.mem_of_mem_filter hc)
-    have hdsound := groupDoms_sound (coveredCsOf cs xs) xs doms hdoms env hallES
-    have hamem : (doms.map (fun yd => (yd.1, env yd.1))) ∈ assignments doms :=
-      mem_assignments doms env hdsound
-    have hasurv : (doms.map (fun yd => (yd.1, env yd.1))) ∈ groupSurvivors cs xs doms := by
-      simp only [groupSurvivors, groupSurvivorsE_eq]
-      refine List.mem_filter.2 ⟨hamem, ?_⟩
-      rw [List.all_eq_true]
-      intro c hc
-      rw [decide_eq_true_iff, Expression.evalFast_eq]
-      have hcov := List.of_mem_filter hc
-      rw [coveredBy, Bool.and_eq_true] at hcov
-      have hcvars : ∀ v ∈ c.vars, v ∈ doms.map Prod.fst := by
-        rw [hkeys]
-        exact Expression.varsIn_sound _ c (Expression.varsInF_eq _ c ▸ hcov.2)
-      have heq : c.eval (envOf (doms.map (fun yd => (yd.1, env yd.1)))) = c.eval env :=
-        Expression.eval_congr c _ _ (fun v hv => envOf_map doms env v (hcvars v hv))
-      rw [heq]
-      exact hallES c hc
-    -- select the first pattern whose interpolation image matches the group (deterministic, so it
-    -- coincides with what `bitCM` computes); it exists by the `hC5` completeness check
-    have hC5' : (assignments (bitBox bits)).any
-        (fun aβ => xs.all (fun x => decide (imgVal xs hm aβ x = env x))) = true := by
-      rw [List.any_eq_true]
-      obtain ⟨aβ, ha, hp⟩ := List.any_eq_true.1 (List.all_eq_true.mp hC5 _ hasurv)
-      refine ⟨aβ, ha, ?_⟩
-      rw [List.all_eq_true] at hp ⊢
-      intro x hx
-      have hsx : envOf (doms.map (fun yd => (yd.1, env yd.1))) x = env x :=
-        envOf_map doms env x (hkeys ▸ hx)
-      have := hp x hx
-      rwa [hsx] at this
-    cases hfindEnv : (assignments (bitBox bits)).find?
-        (fun aβ => xs.all (fun x => decide (imgVal xs hm aβ x = env x))) with
-    | none =>
-        exfalso
-        rw [List.find?_eq_none] at hfindEnv
-        obtain ⟨aβ0, ha0, hp0⟩ := List.any_eq_true.1 hC5'
-        exact absurd hp0 (by simpa using hfindEnv aβ0 ha0)
-    | some aβ =>
-      have haβ : aβ ∈ assignments (bitBox bits) := List.mem_of_find?_eq_some hfindEnv
-      have hβpred : xs.all (fun x => decide (imgVal xs hm aβ x = env x)) = true := by
-        simpa using List.find?_some hfindEnv
-      have hkeysβ : aβ.map Prod.fst = bits := by
-        rw [assignments_keys (bitBox bits) aβ haβ, hbitKeys]
-      have hxbits : ∀ x ∈ xs, x ∉ bits := hxsB
-      have henvxs : ∀ x ∈ xs, envExt aβ env x = env x := fun x hx =>
-        envExt_eq_env_of_notmem aβ env x (by rw [hkeysβ]; exact hxbits x hx)
-      -- pointwise agreement off the bits
-      have hpoint : ∀ y, y ∉ bits → envF (groupSubst xs hm) (envExt aβ env) y = env y := by
-        intro y hyb
-        by_cases hyx : y ∈ xs
-        · rw [envF_eq_varSubst]
-          have hagree : ((Expression.var y).substF (groupSubst xs hm)).eval (envExt aβ env)
-              = ((Expression.var y).substF (groupSubst xs hm)).eval (envOf aβ) := by
-            apply Expression.eval_congr
-            intro v hv
-            exact envExt_eq_envOf_of_mem aβ env v (hkeysβ ▸ hpolyVars y hyx v hv)
-          rw [hagree, ← Expression.evalFast_eq]
-          exact of_decide_eq_true (List.all_eq_true.mp hβpred y hyx)
-        · have hnone : groupSubst xs hm y = none := by
-            simp [groupSubst, containsFast_eq, hyx]
-          unfold envF
-          rw [hnone]
-          exact envExt_eq_env_of_notmem aβ env y (hkeysβ ▸ hyb)
-      have hbitsagree : ∀ b ∈ bits, envExt aβ env b = envOf aβ b := fun b hb =>
-        envExt_eq_envOf_of_mem aβ env b (hkeysβ ▸ hb)
-      refine ⟨envExt aβ env, ?_, ?_, ?_, ?_, ?_⟩
-      · intro c hc
-        exact groupRewrite_agree xs bits (groupSubst xs hm) (assignments (bitBox bits))
-          hσnone (envExt aβ env) env aβ haβ hbitsagree hpolyVars hpoint c (hfreshCm c hc)
-      · intro bi hbi
-        exact groupRewrite_bi_agree xs bits (groupSubst xs hm) (assignments (bitBox bits))
-          hσnone (envExt aβ env) env aβ haβ hbitsagree hpolyVars hpoint bi
-          (hfreshMm bi hbi) (hfreshPm bi hbi)
-      · intro c hc
-        obtain ⟨b, hb, rfl⟩ := List.mem_map.1 hc
-        apply boolConstraint_eval_of_bool
-        have hbk : b ∈ aβ.map Prod.fst := hkeysβ ▸ hb
-        rw [envExt_eq_envOf_of_mem aβ env b hbk]
-        have hmem := envOf_mem_of_assignments (bitBox bits)
-          (by rw [hbitKeys]; exact hnodup') aβ haβ
-          (b, ([0, 1] : List (ZMod p))) (List.mem_map.2 ⟨b, hb, rfl⟩)
-        simpa using hmem
-      · -- frame: input columns keep their value (only fresh bits change)
-        intro v hvpow
-        refine envExt_eq_env_of_notmem aβ env v ?_
-        rw [hkeysβ]
-        intro hvb
-        rw [hbn v hvb] at hvpow
-        simp at hvpow
-      · -- reconstruction (later derivations win, so a fresh bit's method overrides any dsIn entry)
-        intro inputVars hpowIn dsIn hdsIn w hwout hwnone
-        rcases hvars w hwout with hwcs | hwb
-        · -- a surviving input column of `cs`: not a fresh bit, so `dsIn`'s method is the one used
-          have hwnb : w ∉ bits := fun h => hbitsCs w h hwcs
-          obtain ⟨cm, hcm, hcmv, hcmin, hcmeval⟩ := hdsIn w hwcs hwnone
-          refine ⟨cm, ?_, hcmv, hcmin, ?_⟩
-          · simp [Derivations.methodFor_append, Derivations.methodFor_map, hwnb, hcm]
-          · rw [ComputationMethod.eval_congr cm (envExt aβ env) env (fun v hv => by
-              refine envExt_eq_env_of_notmem aβ env v ?_
-              rw [hkeysβ]
-              intro hvb
-              have hp := hcmv v hv
-              rw [hbn v hvb] at hp
-              simp at hp), hcmeval]
-            exact (envExt_eq_env_of_notmem aβ env w (by
-              rw [hkeysβ]; intro hwb; exact hbitsCs w hwb hwcs)).symm
-        · -- a fresh bit: its `bitCM` method (the last listed for `w`) computes it
-          refine ⟨bitCM (assignments (bitBox bits)) xs hm w, ?_,
-            fun v hv => hxs v (bitCM_vars _ xs hm w v hv),
-            fun v hv =>
-              hpowIn v (hxsCs v (bitCM_vars _ xs hm w v hv))
-                (hxs v (bitCM_vars _ xs hm w v hv)), ?_⟩
-          · simp [Derivations.methodFor_append, Derivations.methodFor_map, hwb]
-          · rw [ComputationMethod.eval_congr (bitCM (assignments (bitBox bits)) xs hm w)
-              (envExt aβ env) env (fun v hv => henvxs v (bitCM_vars _ xs hm w v hv)),
-              bitCM_eval, hfindEnv, envExt_eq_envOf_of_mem aβ env w (hkeysβ ▸ hwb)]
-  -- BACKWARD
-  have hbwd : ∀ env',
-      (ConstraintSystem.satisfies
-        { algebraicConstraints :=
-            ((cs.algebraicConstraints.filter (fun c => !coveredBy xs c)).map
-              (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))) ++ bits.map boolConstraint,
-          busInteractions := cs.busInteractions.map (·.mapExpr (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))) }
-        bsem env') → ∃ env,
-      (∀ c ∈ cs.algebraicConstraints,
-        ((groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits))) c).eval env' = c.eval env) ∧
-      (∀ bi ∈ cs.busInteractions,
-        (bi.mapExpr (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits)))).eval env' = bi.eval env) ∧
-      (∀ c ∈ cs.algebraicConstraints, (!coveredBy xs c) = false → c.eval env = 0) := by
-    intro env' hsat'
-    have hbool : ∀ b ∈ bits, env' b = 0 ∨ env' b = 1 := by
-      intro b hb
-      apply bool_of_boolConstraint_eval
-      exact hsat'.1 _ (List.mem_append_right _ (List.mem_map.2 ⟨b, hb, rfl⟩))
-    have haβmem : ((bitBox (p := p) bits).map (fun yd => (yd.1, env' yd.1)))
-        ∈ assignments (bitBox bits) := by
-      apply mem_assignments
-      intro yd hyd
-      obtain ⟨b, hb, rfl⟩ := List.mem_map.1 hyd
-      simpa using hbool b hb
-    have hβenv : ∀ b ∈ bits, envOf ((bitBox (p := p) bits).map (fun yd => (yd.1, env' yd.1))) b
-        = env' b := by
-      intro b hb
-      exact envOf_map (bitBox bits) env' b (by rw [hbitKeys]; exact hb)
-    -- the image environment
-    set env := envExt
-      (xs.map (fun x => (x, ((Expression.var x).substF (groupSubst xs hm)).eval env')))
-      env' with henv
-    have hkeysP : (xs.map (fun x =>
-        (x, ((Expression.var x).substF (groupSubst xs hm)).eval env'))).map Prod.fst = xs := by
-      rw [List.map_map]
-      simp [Function.comp_def]
-    have hpoint : ∀ y, envF (groupSubst xs hm) env' y = env y := by
-      intro y
-      by_cases hyx : y ∈ xs
-      · rw [envF_eq_varSubst, henv]
-        rw [envExt_eq_envOf_of_mem _ env' y (by rw [hkeysP]; exact hyx)]
-        rw [envOf_zipimg xs _ y hyx]
-      · have hnone : groupSubst xs hm y = none := by
-          simp [groupSubst, containsFast_eq, hyx]
-        unfold envF
-        rw [hnone, henv]
-        rw [envExt_eq_env_of_notmem _ env' y (by rw [hkeysP]; exact hyx)]
-    have hexpr : ∀ e : Expression p,
-        (e.substF (groupSubst xs hm)).eval env' = e.eval env :=
-      fun e => substF_eval_agree _ _ _ e (fun y _ => hpoint y)
-    have hkeysβ' : ((bitBox (p := p) bits).map (fun yd => (yd.1, env' yd.1))).map Prod.fst
-        = bits := by
-      unfold bitBox
-      rw [List.map_map, List.map_map]
-      simp [Function.comp_def]
-    have hbitsagree' : ∀ b ∈ bits,
-        env' b = envOf ((bitBox (p := p) bits).map (fun yd => (yd.1, env' yd.1))) b :=
-      fun b hb => (hβenv b hb).symm
-    refine ⟨env, ?_, ?_, ?_⟩
-    · intro c hc
-      exact groupRewrite_agree xs bits (groupSubst xs hm) (assignments (bitBox bits))
-        hσnone env' env _ haβmem hbitsagree' hpolyVars (fun y _ => hpoint y) c
-        (hfreshCm c hc)
-    · intro bi hbi
-      exact groupRewrite_bi_agree xs bits (groupSubst xs hm) (assignments (bitBox bits))
-        hσnone env' env _ haβmem hbitsagree' hpolyVars (fun y _ => hpoint y) bi
-        (hfreshMm bi hbi) (hfreshPm bi hbi)
-    · intro c hc hkc
-      have hcov : coveredBy xs c = true := by simpa using hkc
-      have hcmem : c ∈ coveredCsOf cs xs := List.mem_filter.2 ⟨hc, hcov⟩
-      have h6 := List.all_eq_true.mp (List.all_eq_true.mp hC6 _ haβmem) c hcmem
-      rw [decide_eq_true_iff, Expression.evalFast_eq] at h6
-      -- transport the pattern-image fact to env
-      have hcvars : ∀ v ∈ c.vars, v ∈ xs := by
-        rw [coveredBy, Bool.and_eq_true] at hcov
-        exact Expression.varsIn_sound _ c (Expression.varsInF_eq _ c ▸ hcov.2)
-      have hagree : (c.substF (groupSubst xs hm)).eval
-            (envOf ((bitBox (p := p) bits).map (fun yd => (yd.1, env' yd.1))))
-          = (c.substF (groupSubst xs hm)).eval env' := by
-        rw [Expression.eval_substF, Expression.eval_substF]
-        apply Expression.eval_congr
-        intro y hy
-        rw [envF_eq_varSubst, envF_eq_varSubst]
-        apply Expression.eval_congr
-        intro v hv
-        exact hβenv v (hpolyVars y (hcvars y hy) v hv)
-      rw [← hexpr c, ← hagree]
-      exact h6
-  -- no new powdr-ID column: every output variable is a `cs` variable or a (no-ID) bit
-  have hS : ∀ v ∈ (reencodeOut cs xs bits hm).vars, v.powdrId?.isSome → v ∈ cs.vars := by
-    intro v hv hvpow
-    rcases hvars v hv with h | h
-    · exact h
-    · rw [hbn v h] at hvpow; simp at hvpow
-  show PassCorrect cs (reencodeOut cs xs bits hm)
-    (bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b))) bsem
-  unfold reencodeOut
-  exact cs.reencode_correct_D bsem
-    (groupRewrite xs bits (groupSubst xs hm) (assignments (bitBox bits))) (fun c => !coveredBy xs c)
-    (bits.map boolConstraint) (bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b)))
-    hfwd_D hbwd hS
-
-/-! ## Building the interpolation (proof-free) and the pass -/
-
-/-- Interpolation polynomial for group variable `x` over pattern/survivor pairs. -/
-def interpPoly (pz : List (List (Variable × ZMod p) × List (Variable × ZMod p))) (x : Variable) :
-    Expression p :=
-  pz.foldl (fun acc az => .add acc (.mul (indicatorExpr az.1) (.const (envOf az.2 x))))
+/-- Interpolation polynomial for group variable `x` over pattern/survivor pairs — consumed by
+    `denseBuildReencode` below, which supplies `pz` from `denseGroupSurvivorsE`'s keyed output. -/
+def denseInterpPoly (pz : List (List (VarId × ZMod p) × List (VarId × ZMod p))) (x : VarId) :
+    DenseExpr p :=
+  pz.foldl (fun acc az => .add acc (.mul (denseIndicatorExpr az.1) (.const (denseEnvOfFast az.2 x))))
     (.const 0)
 
-/-- Construct the bits and the substitution map for a candidate group (proof-free — the
-    checked certificate re-verifies everything). The covered constraints come from a prebuilt
-    inverted index (`csIdx`/`arrCs`, built once per pass and rebuilt on each accepted rewrite)
-    instead of a full-system `filter` per candidate group — the dominant cost of this pass.
+/-! ## Sharing a variable with a group (the `foldRewrite`-gate test) -/
 
-    Hopeless-target prefilter: when every covered constraint is single-variable and there is
-    exactly one per group variable, the survivors are the *entire* domain box (each domain is
-    exactly its constraint's root set), so the group is re-encodable only if
-    `⌈log₂ box⌉ < |xs|` — decided without enumerating the box. This skips the enumeration for
-    the ubiquitous pure-boolean-flag groups (box `2^|xs|` can never win). -/
-def buildReencode (useIdx : Bool) (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p))
-    (xs : List Variable) (freshBase : String) :
-    Option (List Variable × Std.HashMap Variable (Expression p)) :=
-  -- The covered set: through the inverted index on large systems, by direct filter on small
-  -- ones — on small flag-heavy circuits the per-target bucket gather + sort of hyper-shared
-  -- variables costs more than the plain scan (same trade-off as `domainFoldIndexThreshold`).
-  -- Both produce `coveredCsOf` in its original order, which `checkReencode`'s certificate
-  -- recomputes exactly.
-  let es := if useIdx then CoveredIndex.coveredIdx csIdx arrCs (coveredBy xs) xs
-    else arrCs.foldr (fun c acc => if coveredBy xs c then c :: acc else acc) []
-  match groupDoms es xs with
-  | none => none
+/-- Does the expression share a variable with `xs`? (No allocation.) Reuses `denseContainsFast`.
+    The same computation as `DenseExpr.anyVarIn` (`DomainFold.lean`), defined again here as its own
+    local copy to avoid a cross-file dependency. -/
+def DenseExpr.sharesVarIn (xs : List VarId) : DenseExpr p → Bool
+  | .const _ => false
+  | .var y => denseContainsFast xs y
+  | .add a b => a.sharesVarIn xs || b.sharesVarIn xs
+  | .mul a b => a.sharesVarIn xs || b.sharesVarIn xs
+
+/-! ## The build/step/loop/pass layer (see the module header) -/
+
+/-! ### A local dense twin of `CoveredIndex.buildPruned` -/
+
+/-- `VarId`-keyed twin of `CoveredIndex.buildPruned` (`CoveredIndex.lean:59`): build the inverted
+    index, skipping items with more than `maxVars` distinct variables. Local to this file (see the
+    module header: no dense twin exists elsewhere; `denseBuildStep`/`DenseCovIndex` are reused
+    unchanged from `DomainBatch.lean`). -/
+def denseBuildPruned {α : Type} (varsOf : α → List VarId) (maxVars : Nat) (items : List α) :
+    DenseCovIndex :=
+  items.zipIdx.foldr (fun ai idx =>
+    if (HashedDedup.hashedEraseDups (hash ·) (varsOf ai.1)).length ≤ maxVars then
+      denseBuildStep varsOf ai idx
+    else idx) ⟨∅, []⟩
+
+/-! ### Minting the fresh bits -/
+
+/-- Register the `k` fresh bit variables `freshBase ++ "_0", …, freshBase ++ "_(k-1)"` into `reg`,
+    in order — the exact point `buildReencode` constructs them (see the module header: bit `VarId`s
+    do not exist before this call). -/
+def denseRegisterBits (reg : VarRegistry) (freshBase : String) (k : Nat) :
+    VarRegistry × List VarId :=
+  (List.range k).foldl
+    (fun (acc : VarRegistry × List VarId) (j : Nat) =>
+      let (r, bs) := acc
+      let (r', i) := r.register ({ name := freshBase ++ "_" ++ toString j } : Variable)
+      (r', bs ++ [i]))
+    (reg, [])
+
+/-! ### Building the candidate group's bits and substitution map -/
+
+/-- Construct the bits and the substitution map for a candidate group (proof-free — the checked
+    certificate re-verifies everything). Threads the registry through, registering only on the
+    single accepting path (see the module header). Reuses `denseCoveredIdx` (`DomainFold.lean:137`,
+    order-restoring) for the indexed branch and a plain `Array.foldr` filter for the direct
+    branch. -/
+def denseBuildReencode (reg : VarRegistry) (useIdx : Bool) (csIdx : DenseCovIndex)
+    (arrCs : Array (DenseExpr p)) (xs : List VarId) (freshBase : String) :
+    VarRegistry × Option (List VarId × Std.HashMap VarId (DenseExpr p)) :=
+  let es := if useIdx then denseCoveredIdx csIdx arrCs (denseCoveredBy xs) xs
+    else arrCs.foldr (fun c acc => if denseCoveredBy xs c then c :: acc else acc) []
+  match denseGroupDoms es xs with
+  | none => (reg, none)
   | some doms =>
     let boxSize := (doms.map (fun yd => yd.2.length)).prod
     if boxSize ≤ 256 then
       if es.length == xs.length && es.all (fun c => c.vars.eraseDups.length == 1)
           && xs.length ≤ Nat.clog 2 boxSize then
         -- single-var-only covered set (one per variable): survivors = box; unencodable
-        none
+        (reg, none)
       else
-      let survs := groupSurvivorsE es doms
+      let survs := denseGroupSurvivorsE es doms
       if 2 ≤ survs.length then
         let k := Nat.clog 2 survs.length
         if k < xs.length then
-          let bits := (List.range k).map (fun j => ({ name := freshBase ++ "_" ++ toString j } : Variable))
-          let patts := assignments (bitBox (p := p) bits)
+          let (reg1, bits) := denseRegisterBits reg freshBase k
+          let patts := denseAssignments (denseBitBox bits)
           let survsP := survs ++ List.replicate (patts.length - survs.length) (survs.headD [])
           let pz := patts.zip survsP
-          some (bits, Std.HashMap.ofList (xs.map (fun x => (x, (interpPoly pz x).fold))))
-        else none
-      else none
-    else none
+          (reg1, some (bits, Std.HashMap.ofList (xs.map (fun x => (x, (denseInterpPoly pz x).fold)))))
+        else (reg, none)
+      else (reg, none)
+    else (reg, none)
 
-/-- Does the expression share a variable with `xs`? (No allocation; the `foldRewrite`-gate test,
-    local to this file because `DomainFold` imports it.) -/
-def Expression.sharesVarIn (xs : List Variable) : Expression p → Bool
-  | .const _ => false
-  | .var y => containsFast xs y
-  | .add a b => a.sharesVarIn xs || b.sharesVarIn xs
-  | .mul a b => a.sharesVarIn xs || b.sharesVarIn xs
+/-! ### The degree pre-gate -/
 
-/-- **Degree pre-gate** (untrusted, necessary-condition — measured on keccak: *every one* of the
-    1276 `checkReencode`-passing groups per run was then rejected by the output degree check,
-    each after paying the whole-system freshness scan, the full `reencodeOut` rewrite, and a full
-    degree walk, re-tried every cycle). This walks the system once with an early-exit `any`,
-    rewriting **only** the items that share a variable with the group, and fires when such a
-    rewritten item already exceeds the bound. Firing is exact: a violating non-covered rewritten
-    constraint (or any rewritten interaction expression) appears verbatim in `reencodeOut`, so
-    the full `withinDegreeB` check would reject the same candidate — the pass's output is
-    unchanged; only the three whole-system walks are skipped. -/
-def degPreReject (b : DegreeBound) (cs : ConstraintSystem p)
-    (xs bits : List Variable) (hm : Std.HashMap Variable (Expression p)) : Bool :=
-  let σ := groupSubst xs hm
-  let patts := assignments (bitBox (p := p) bits)
-  cs.algebraicConstraints.any (fun c =>
-    c.sharesVarIn xs && !coveredBy xs c &&
-      decide (b.identities < (groupRewrite xs bits σ patts c).degree)) ||
-  cs.busInteractions.any (fun bi =>
+/-- **Degree pre-gate** (untrusted, necessary-condition): walk the system once with an early-exit
+    `any`, rewriting only the items sharing a variable with the group, and fire when a rewritten
+    item already exceeds the bound. -/
+def denseDegPreReject (b : DegreeBound) (d : DenseConstraintSystem p)
+    (xs bits : List VarId) (hm : Std.HashMap VarId (DenseExpr p)) : Bool :=
+  let σ := denseGroupSubst xs hm
+  let patts := denseAssignments (denseBitBox bits)
+  d.algebraicConstraints.any (fun c =>
+    c.sharesVarIn xs && !denseCoveredBy xs c &&
+      decide (b.identities < (denseGroupRewrite xs bits σ patts c).degree)) ||
+  d.busInteractions.any (fun bi =>
     (bi.multiplicity.sharesVarIn xs &&
-      decide (b.busInteractions < (groupRewrite xs bits σ patts bi.multiplicity).degree)) ||
+      decide (b.busInteractions < (denseGroupRewrite xs bits σ patts bi.multiplicity).degree)) ||
     bi.payload.any (fun e =>
       e.sharesVarIn xs &&
-        decide (b.busInteractions < (groupRewrite xs bits σ patts e).degree)))
+        decide (b.busInteractions < (denseGroupRewrite xs bits σ patts e).degree)))
 
-/-- One checked re-encoding step (identity if construction or certificate fails). The expensive
-    filter — `buildReencode` — runs first, so the remaining side conditions (all cheap: the group
-    is all input columns and disjoint from the fresh bits, the bits carry no powdr ID) are only
-    checked for the few groups that are actually re-encodable. The output-variable frame is proven
-    by construction (`reencodeOut_vars_subset`), so no per-variable scan is needed.
+/-! ### One checked re-encoding step -/
 
-    `varSet` is the threaded, proof-carrying set of `cs`'s variables — `contains` implies
-    membership in `cs.vars`, so the group-membership side condition is decided by |xs| hash
-    lookups instead of materializing and scanning the ~10⁴-entry occurrence list per candidate.
-    It also prefilters fresh-name collisions: a candidate whose first fresh bit already occurs
-    in the system is skipped before `buildReencode` — in the steady state the fresh-name
-    counters repeat the previous cycle's accepted names, and `checkReencode`'s freshness
-    conjunct would reject exactly these after a full scan. -/
-def reencodeStep [Fact p.Prime] (bsem : BusSemantics p) (b : DegreeBound) (useIdx : Bool)
-    (csIdx : CoveredIndex.CovIndex) (arrCs : Array (Expression p)) (cs : ConstraintSystem p)
-    (varSet : { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ cs.vars })
-    (xs : List Variable) (freshBase : String) :
-    Σ' (r : PassResult cs bsem), CoveredIndex.CovIndex × Array (Expression p) ×
-      { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ r.out.vars } :=
-  if hxs : xs.all (fun x => x.powdrId?.isSome) = true then
-  if varSet.val.contains { name := freshBase ++ "_0" } then
-    -- fresh-name collision: `checkReencode` would reject after the full freshness scan
-    ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
+/-- One checked re-encoding step (identity if construction or certificate fails), in gate order:
+    the input-column gate, the fresh-name collision prefilter (see the module header for the exact
+    mechanism), `denseBuildReencode`, the degree pre-gate, the group-membership/bits-disjointness/
+    no-powdr-ID gates, `denseCheckReencode`, then the final `withinDegreeB` gate. Returns a plain
+    6-tuple `(reg', d', derivs, csIdx', arrCs', varSet')` — no proof is carried (`varSet` is a plain
+    `Std.HashSet VarId`, see the module header). `bsem : BusSemantics p` has no runtime role in this
+    step and is dropped here (it is kept, necessarily, at `denseReencodeF`, whose signature
+    `ofExtending` fixes). -/
+def denseReencodeStep (b : DegreeBound) (useIdx : Bool)
+    (reg : VarRegistry) (d : DenseConstraintSystem p) (csIdx : DenseCovIndex)
+    (arrCs : Array (DenseExpr p)) (varSet : Std.HashSet VarId) (xs : List VarId)
+    (freshBase : String) :
+    VarRegistry × DenseConstraintSystem p × DenseDerivations p × DenseCovIndex ×
+      Array (DenseExpr p) × Std.HashSet VarId :=
+  if xs.all (fun x => reg.isInput x) then
+  if (match reg.idOf? ({ name := freshBase ++ "_0" } : Variable) with
+      | some i => varSet.contains i
+      | none => false) then
+    -- fresh-name collision: `denseCheckReencode` would reject after the full freshness scan
+    (reg, d, [], csIdx, arrCs, varSet)
   else
-  match hb : buildReencode useIdx csIdx arrCs xs freshBase with
-  | none => ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
-  | some (bits, hm) =>
+  match denseBuildReencode reg useIdx csIdx arrCs xs freshBase with
+  | (reg1, none) => (reg1, d, [], csIdx, arrCs, varSet)
+  | (reg1, some (bits, hm)) =>
     -- Degree pre-gate: reject (exactly the candidates the final `withinDegreeB` would reject)
     -- before the certificate's whole-system freshness scan and the output materialization.
-    if degPreReject b cs xs bits hm then ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
+    if denseDegPreReject b d xs bits hm then (reg1, d, [], csIdx, arrCs, varSet)
     else
-    if hxsCs : xs.all (fun x => varSet.val.contains x) = true then
-    if hxsB : xs.all (fun x => decide (x ∉ bits)) = true then
-    if hbn : bits.all (fun b => decide (b.powdrId? = none)) = true then
-    if hchk : checkReencode cs xs bits hm = true then
-      let ro := reencodeOut cs xs bits hm
+    if xs.all (fun x => varSet.contains x) then
+    if xs.all (fun x => decide (x ∉ bits)) then
+    if bits.all (fun b => decide ((reg1.resolve b).powdrId? = none)) then
+    if denseCheckReencode d xs bits hm then
+      let ro := denseReencodeOut d xs bits hm
       if ro.withinDegreeB b then
-        -- `cs` changed: rebuild the index and the variable set for `ro` (accepts are rare, so
-        -- this is cheap overall).
-        ⟨⟨ro,
-         bits.map (fun b => (b, bitCM (assignments (bitBox bits)) xs hm b)),
-         checkReencode_sound_D cs bsem xs bits hm
-           (fun x hx => by simpa using List.all_eq_true.mp hxs x hx)
-           (fun x hx => varSet.property x (List.all_eq_true.mp hxsCs x hx))
-           (fun x hx => of_decide_eq_true (List.all_eq_true.mp hxsB x hx))
-           (fun b hbm => of_decide_eq_true (List.all_eq_true.mp hbn b hbm))
-           hchk⟩,
-         (if useIdx then CoveredIndex.buildPruned Expression.vars 8 ro.algebraicConstraints
-          else ⟨∅, []⟩),
+        -- `d` changed: rebuild the index and the variable set for `ro` (accepts are rare, so this
+        -- is cheap overall).
+        (reg1, ro,
+         bits.map (fun b => (b, denseBitCM (denseAssignments (denseBitBox bits)) xs hm b)),
+         (if useIdx then denseBuildPruned DenseExpr.vars 8 ro.algebraicConstraints else ⟨∅, []⟩),
          ro.algebraicConstraints.toArray,
-         ⟨Std.HashSet.ofList ro.vars, fun x hx => by
-           rw [Std.HashSet.contains_ofList] at hx
-           exact List.contains_iff_mem.mp hx⟩⟩
-      else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
-    else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
-    else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
-    else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
-    else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
-  else ⟨⟨cs, [], PassCorrect.refl cs bsem⟩, csIdx, arrCs, varSet⟩
+         Std.HashSet.ofList ro.occ)
+      else (reg1, d, [], csIdx, arrCs, varSet)
+    else (reg1, d, [], csIdx, arrCs, varSet)
+    else (reg1, d, [], csIdx, arrCs, varSet)
+    else (reg1, d, [], csIdx, arrCs, varSet)
+    else (reg1, d, [], csIdx, arrCs, varSet)
+  else (reg, d, [], csIdx, arrCs, varSet)
 
-/-- Process the candidate groups sequentially (correctness composes; derivations concatenate). The
-    inverted index and the proof-carrying variable set (valid for the current `cs`) are threaded
-    through and rebuilt by `reencodeStep` whenever it rewrites `cs`. -/
-def reencodeLoop [Fact p.Prime] (bsem : BusSemantics p) (b : DegreeBound) (useIdx : Bool) :
-    List (List Variable) → Nat → (cs : ConstraintSystem p) →
-    CoveredIndex.CovIndex → Array (Expression p) →
-    { s : Std.HashSet Variable // ∀ x, s.contains x = true → x ∈ cs.vars } → PassResult cs bsem
-  | [], _, cs, _, _, _ => ⟨cs, [], PassCorrect.refl cs bsem⟩
-  | xs :: rest, idx, cs, csIdx, arrCs, varSet =>
-    let r1 := reencodeStep bsem b useIdx csIdx arrCs cs varSet xs
-      (s!"rnc{cs.algebraicConstraints.length}_{cs.busInteractions.length}_{idx}")
-    let r2 := reencodeLoop bsem b useIdx rest (idx + 1) r1.1.out r1.2.1 r1.2.2.1 r1.2.2.2
-    ⟨r2.out, r1.1.derivs ++ r2.derivs, r1.1.correct.andThen r2.correct⟩
+/-! ### The sequential driver -/
 
-/-- `List.dedup` computed in linear time via a hash set, with the **identical** result: an element
-    is kept at its last-occurrence position (exactly `List.dedup`'s order), so swapping this in is a
-    pure speedup — `reencodeLoop`'s correctness is independent of the target list, and its
-    (order-sensitive, greedy) behaviour is unchanged because the list itself is unchanged. -/
-def dedupHash {α : Type} [BEq α] [Hashable α] (l : List α) : List α :=
-  (l.reverse.foldl (fun (st : List α × Std.HashSet α) t =>
-    if st.2.contains t then st else (t :: st.1, st.2.insert t))
-    (([], ∅) : List α × Std.HashSet α)).1
+/-- Process the candidate groups sequentially (derivations concatenate; the registry, the inverted
+    index, and the variable set are threaded and rebuilt by `denseReencodeStep` whenever it rewrites
+    `d`). -/
+def denseReencodeLoop (b : DegreeBound) (useIdx : Bool) :
+    List (List VarId) → Nat → VarRegistry → DenseConstraintSystem p → DenseCovIndex →
+      Array (DenseExpr p) → Std.HashSet VarId →
+      VarRegistry × DenseConstraintSystem p × DenseDerivations p
+  | [], _, reg, d, _, _, _ => (reg, d, [])
+  | xs :: rest, idx, reg, d, csIdx, arrCs, varSet =>
+    let (reg1, d1, derivs1, csIdx1, arrCs1, varSet1) :=
+      denseReencodeStep b useIdx reg d csIdx arrCs varSet xs
+        (s!"rnc{d.algebraicConstraints.length}_{d.busInteractions.length}_{idx}")
+    let (reg2, d2, derivs2) :=
+      denseReencodeLoop b useIdx rest (idx + 1) reg1 d1 csIdx1 arrCs1 varSet1
+    (reg2, d2, derivs1 ++ derivs2)
 
-/-- The witness re-encoding pass: for every constraint's (small) all-input-column variable group
-    whose covered constraints allow only a few joint values, re-encode the group with `⌈log₂ m⌉`
-    fresh booleans and ship each bit's derived-variable method. Prime `p` only; identity otherwise. -/
-def reencodePass (b : DegreeBound) : VerifiedPass p := fun cs bsem =>
-  if hpr : p.Prime then
-    haveI : Fact p.Prime := ⟨hpr⟩
-    -- `dedupHash` replaces the quadratic `List.dedup` over the (up to thousands of) target
-    -- variable-sets, producing the identical list in linear time.
-    -- Same single-variable-constraint prefilter as `domainFoldPass`: a group variable without
-    -- one can never obtain a domain, so `buildReencode`'s `groupDoms` would reject the target
-    -- after paying its covered-set lookup.
-    -- Each constraint's deduped variable list is computed once (`hashedDedup_eq` keeps it the
-    -- exact `List.dedup` value) and shared between the single-variable set and the target list.
-    let csVs := cs.algebraicConstraints.map (fun c => HashedDedup.hashedDedup (hash ·) c.vars)
-    let svSet : Std.HashSet Variable := csVs.foldl (init := ∅) fun s vs =>
+/-! ### The pass, as a plain registry-extending transform -/
+
+/-- The witness re-encoding transform, shaped exactly for `DenseVerifiedPassW.ofExtending`
+    (the prover wires it with `DenseVerifiedPassW.ofExtending (denseReencodeF pw b) …`): construct
+    the candidate target groups (see the module header for the ordering comparator and the
+    shared-`csVs` hoist), then dispatch. `facts` is unused: reencode is fact-free (its signature
+    takes only `bsem`); the parameter exists solely to match `ofExtending`'s uniform transform
+    shape. -/
+def denseReencodeF (pw : PrimeWitness p) (b : DegreeBound) (reg : VarRegistry)
+    (bsem : BusSemantics p) (_facts : BusFacts p bsem) (d : DenseConstraintSystem p) :
+    VarRegistry × DenseConstraintSystem p × DenseDerivations p :=
+  if pw.isPrime = true then
+    -- Each constraint's deduped variable list is computed once and shared between the single-
+    -- variable set and the target list.
+    let csVs := d.algebraicConstraints.map (fun c => HashedDedup.hashedDedup (hash ·) c.vars)
+    let svSet : Std.HashSet VarId := csVs.foldl (init := ∅) fun s vs =>
       match vs with
       | [x] => s.insert x
       | _ => s
     let targets := dedupHash (csVs.filterMap (fun vs =>
       if 2 ≤ vs.length && vs.length ≤ 8 && vs.all (svSet.contains ·) then
-        some (vs.mergeSort (fun a b => compare a b != .gt))
+        -- Ordering (deliberate divergence exception, see the module header): sort by the
+        -- resolved `Variable`'s order.
+        some (vs.mergeSort (fun a b => compare (reg.resolve a) (reg.resolve b) != .gt))
       else none))
-    -- The raw-count gate is back after CI showed the always-indexed form losing ~19% on the
-    -- dense openvm-eth blocks (reencode 1.19x) with no keccak gain: below the threshold the
-    -- direct per-target scan wins. The indexed side keeps the pruned build — identical covered
-    -- sets (a >8-distinct-var item can never be covered by a <=8-var target), smaller buckets.
-    let useIdx := 8192 <= cs.algebraicConstraints.length
-    reencodeLoop bsem b useIdx targets 0 cs
-      (if useIdx then CoveredIndex.buildPruned Expression.vars 8 cs.algebraicConstraints
-       else ⟨∅, []⟩)
-      cs.algebraicConstraints.toArray
-      ⟨Std.HashSet.ofList cs.vars, fun x hx => by
-        rw [Std.HashSet.contains_ofList] at hx
-        exact List.contains_iff_mem.mp hx⟩
-  else ⟨cs, [], PassCorrect.refl cs bsem⟩
+    let useIdx := 8192 ≤ d.algebraicConstraints.length
+    denseReencodeLoop b useIdx targets 0 reg d
+      (if useIdx then denseBuildPruned DenseExpr.vars 8 d.algebraicConstraints else ⟨∅, []⟩)
+      d.algebraicConstraints.toArray
+      (Std.HashSet.ofList d.occ)
+  else (reg, d, [])
+
+end ApcOptimizer.Dense

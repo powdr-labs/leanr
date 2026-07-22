@@ -1,144 +1,122 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Affine
-import ApcOptimizer.Implementation.OptimizerPasses.Rewrite
+import ApcOptimizer.Implementation.OptimizerPasses.ExprOps
+import ApcOptimizer.Implementation.OptimizerPasses.Adapter
 
 set_option autoImplicit false
 
-/-! # Affine normalization (collect like terms)
+/-! # Dense affine normalization
 
-An eval-preserving rewrite that replaces every maximal *affine* subexpression by its **merged**
-normal form: `linearize`, then combine coefficients of equal variables and drop zeros, then rebuild.
-Correct for free via `mapExpr_correct` (it never changes a value).
+`DenseExpr.normalize` replaces every maximal affine subexpression by its **merged** normal form
+(`denseLinearize`, combine coefficients of equal `VarId`s, drop zeros, rebuild via
+`DenseLinExpr.toExpr`).
 
-Its purpose is as a cascade *enabler*. `linearize` only concatenates terms, so cancelling terms
-(e.g. a selector's `add + sub + xor + or + and` after some flags are inlined) survive as
-`x + (-1)·x`. Merging collapses them: the sum becomes the literal constant it equals, a product
-`1 * X` folds to `X`, and a constraint `selector * X = 0` that was non-linear is exposed as the
-affine constraint `X = 0` — which the affine pass then solves, eliminating a further variable.
-Field-free (works over any commutative ring). -/
+The pass (`denseNormalizePass`) computes through the fused walk `denseNormalizeFused` — one bottom-up
+traversal returning both the normalized expression and the node's linear form, avoiding
+`DenseExpr.normalize`'s own O(size × depth) `denseLinearize` re-walks along non-affine paths. Its
+correctness is proved as a `DensePassCorrect` over `VarId → ZMod p` environments (the walk is
+eval-preserving and introduces no variables) and lifted to the spec `PassCorrect` once, at the
+pipeline edge, by `DenseVerifiedPassW.of`. Same shape as `denseConstantFoldPass`
+(`Dense/ExprOps.lean`). -/
+
+namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Merging a linear form's terms -/
+/-! ## Merging a dense linear form's terms -/
 
-/-- Add coefficient `c` to variable `v` in a term list, merging into an existing entry. -/
-def addCoeff (v : Variable) (c : ZMod p) : List (Variable × ZMod p) → List (Variable × ZMod p)
+/-- Add coefficient `c` to `VarId` `v` in a dense term list, merging into an existing entry. -/
+def denseAddCoeff (v : VarId) (c : ZMod p) :
+    List (VarId × ZMod p) → List (VarId × ZMod p)
   | [] => [(v, c)]
-  | (v', c') :: rest => if v' = v then (v', c' + c) :: rest else (v', c') :: addCoeff v c rest
+  | (v', c') :: rest => if v' = v then (v', c' + c) :: rest else (v', c') :: denseAddCoeff v c rest
 
-theorem addCoeff_eval (v : Variable) (c : ZMod p) (ts : List (Variable × ZMod p))
-    (env : Variable → ZMod p) :
-    ((addCoeff v c ts).map (fun t => t.2 * env t.1)).sum
-    = c * env v + (ts.map (fun t => t.2 * env t.1)).sum := by
-  induction ts with
-  | nil => simp [addCoeff]
-  | cons t rest ih =>
-      simp only [addCoeff]
-      split
-      · next h => subst h; simp only [List.map_cons, List.sum_cons]; ring
-      · simp only [List.map_cons, List.sum_cons, ih]; ring
+/-- Merge a dense term list, combining coefficients of equal `VarId`s (`foldl`, first-occurrence
+    order preserved). -/
+def denseMergeTerms (ts : List (VarId × ZMod p)) : List (VarId × ZMod p) :=
+  ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) []
 
-/-- Merge a term list, combining coefficients of equal variables. `foldl` (with `addCoeff`
-    appending unseen variables at the tail) preserves first-occurrence order, making the merge
-    *idempotent* — a `foldr` here would reverse the term order on every application, so
-    normalization would oscillate with period 2 instead of reaching a fixpoint. -/
-def mergeTerms (ts : List (Variable × ZMod p)) : List (Variable × ZMod p) :=
-  ts.foldl (fun acc t => addCoeff t.1 t.2 acc) []
+/-! ## Linear like-term merge (runtime `@[csimp]` replacement for `denseMergeTerms`)
 
-theorem foldl_addCoeff_eval (env : Variable → ZMod p) (ts acc : List (Variable × ZMod p)) :
-    ((ts.foldl (fun acc t => addCoeff t.1 t.2 acc) acc).map (fun t => t.2 * env t.1)).sum
-    = (acc.map (fun t => t.2 * env t.1)).sum + (ts.map (fun t => t.2 * env t.1)).sum := by
-  induction ts generalizing acc with
-  | nil => simp
-  | cons t rest ih =>
-      simp only [List.foldl_cons, List.map_cons, List.sum_cons, ih, addCoeff_eval]
-      ring
-
-theorem mergeTerms_eval (ts : List (Variable × ZMod p)) (env : Variable → ZMod p) :
-    ((mergeTerms ts).map (fun t => t.2 * env t.1)).sum
-    = (ts.map (fun t => t.2 * env t.1)).sum := by
-  simp [mergeTerms, foldl_addCoeff_eval]
-
-/-! ## Linear like-term merge (runtime `@[csimp]` replacement for `mergeTerms`)
-
-`mergeTerms`/`addCoeff` are O(terms²): every input term linearly scans the accumulated deduped
-list. For long affine forms (post-substitution reduced constraints; large blocks such as the sha256
-APC) this is the dominant cost. `mergeTermsFast` accumulates each variable's coefficient in a
-`Std.HashMap` while recording first-occurrence order in an `Array`, then rebuilds by walking the
-recorded order — O(terms) expected. Below a small constant threshold the list fold is faster (no
-hash setup), so a hybrid keeps the tiny-form path (asymptotically still linear: the bounded branch
-is O(1)). Proven `= mergeTerms` and installed via `@[csimp]`, so every call site (`LinExpr.norm`,
-hence `normalize`) uses it at runtime with **no proof churn** and the byte-identical result. -/
+`denseMergeTerms`/`denseAddCoeff` are O(terms²): every input term linearly scans the accumulated
+deduped list. For long affine forms (post-substitution reduced constraints; large blocks such as the
+sha256 APC) this is the dominant cost. `denseMergeTermsFast` accumulates each `VarId`'s coefficient
+in a `Std.HashMap` while recording first-occurrence order in an `Array`, then rebuilds by walking the
+recorded order — O(terms) expected. Below a small constant threshold the list fold is faster (no hash
+setup), so a hybrid keeps the tiny-form path (asymptotically still linear: the bounded branch is
+O(1)). Proven `= denseMergeTerms` and installed via `@[csimp]`, so every call site
+(`DenseLinExpr.norm`, hence the fused normalize walk and gauss's per-constraint reduce) uses it at
+runtime with no further proof obligation. -/
 
 /-- The coefficient the first-occurrence-ordered accumulator holds for `v` after merging (the
-    coefficient of the unique accumulator entry for `v`, if any). Mirrors `addCoeff`'s structure so
-    its update lemmas are one-line inductions. -/
-def assocCoeff : List (Variable × ZMod p) → Variable → Option (ZMod p)
+    coefficient of the unique accumulator entry for `v`, if any). Follows `denseAddCoeff`'s
+    structure so its update lemmas are one-line inductions. -/
+def denseAssocCoeff : List (VarId × ZMod p) → VarId → Option (ZMod p)
   | [], _ => none
-  | (v', c') :: rest, v => if v' = v then some c' else assocCoeff rest v
+  | (v', c') :: rest, v => if v' = v then some c' else denseAssocCoeff rest v
 
-theorem not_mem_of_assocCoeff_none (acc : List (Variable × ZMod p)) (v : Variable)
-    (h : assocCoeff acc v = none) : v ∉ acc.map Prod.fst := by
+theorem denseNotMem_of_assocCoeff_none (acc : List (VarId × ZMod p)) (v : VarId)
+    (h : denseAssocCoeff acc v = none) : v ∉ acc.map Prod.fst := by
   induction acc with
   | nil => simp
   | cons t rest ih =>
       obtain ⟨v', c'⟩ := t
-      simp only [assocCoeff] at h
+      simp only [denseAssocCoeff] at h
       split at h
       · exact absurd h (by simp)
       · next hne =>
           simp only [List.map_cons, List.mem_cons, not_or]
           exact ⟨fun hh => hne hh.symm, ih h⟩
 
-theorem mem_of_assocCoeff_some (acc : List (Variable × ZMod p)) (v : Variable) (c : ZMod p)
-    (h : assocCoeff acc v = some c) : v ∈ acc.map Prod.fst := by
+theorem denseMem_of_assocCoeff_some (acc : List (VarId × ZMod p)) (v : VarId) (c : ZMod p)
+    (h : denseAssocCoeff acc v = some c) : v ∈ acc.map Prod.fst := by
   induction acc with
-  | nil => simp [assocCoeff] at h
+  | nil => simp [denseAssocCoeff] at h
   | cons t rest ih =>
       obtain ⟨v', c'⟩ := t
-      simp only [assocCoeff] at h
+      simp only [denseAssocCoeff] at h
       simp only [List.map_cons, List.mem_cons]
       split at h
       · next he => exact Or.inl he.symm
       · next hne => exact Or.inr (ih h)
 
-/-- The effect of one `addCoeff` on `assocCoeff`: bump `v`'s coefficient (0 if absent), leave every
-    other variable untouched. -/
-theorem assocCoeff_addCoeff (v : Variable) (c : ZMod p) (acc : List (Variable × ZMod p))
-    (w : Variable) :
-    assocCoeff (addCoeff v c acc) w
-      = if w = v then some ((assocCoeff acc v).getD 0 + c) else assocCoeff acc w := by
+/-- The effect of one `denseAddCoeff` on `denseAssocCoeff`: bump `v`'s coefficient (0 if absent),
+    leave every other variable untouched. -/
+theorem denseAssocCoeff_addCoeff (v : VarId) (c : ZMod p) (acc : List (VarId × ZMod p))
+    (w : VarId) :
+    denseAssocCoeff (denseAddCoeff v c acc) w
+      = if w = v then some ((denseAssocCoeff acc v).getD 0 + c) else denseAssocCoeff acc w := by
   induction acc with
   | nil =>
-      simp only [addCoeff, assocCoeff, Option.getD_none, zero_add]
+      simp only [denseAddCoeff, denseAssocCoeff, Option.getD_none, zero_add]
       by_cases hwv : w = v
       · subst hwv; simp
       · rw [if_neg hwv, if_neg (fun he => hwv he.symm)]
   | cons t rest ih =>
       obtain ⟨v', c'⟩ := t
-      simp only [addCoeff]
+      simp only [denseAddCoeff]
       by_cases hv' : v' = v
       · rw [if_pos hv']
         subst hv'
-        simp only [assocCoeff]
+        simp only [denseAssocCoeff]
         by_cases hwv : w = v'
         · subst hwv; simp
         · have hwv' : ¬ v' = w := fun he => hwv he.symm
           simp only [if_neg hwv, if_neg hwv']
       · rw [if_neg hv']
-        simp only [assocCoeff, ih]
+        simp only [denseAssocCoeff, ih]
         rw [if_neg hv']
         by_cases hv'w : v' = w
         · have hwv : ¬ w = v := fun he => hv' (hv'w.trans he)
           rw [if_pos hv'w, if_neg hwv, if_pos hv'w]
         · rw [if_neg hv'w, if_neg hv'w]
 
-theorem addCoeff_map_fst_of_mem (v : Variable) (c : ZMod p) (acc : List (Variable × ZMod p))
-    (h : v ∈ acc.map Prod.fst) : (addCoeff v c acc).map Prod.fst = acc.map Prod.fst := by
+theorem denseAddCoeff_map_fst_of_mem (v : VarId) (c : ZMod p) (acc : List (VarId × ZMod p))
+    (h : v ∈ acc.map Prod.fst) : (denseAddCoeff v c acc).map Prod.fst = acc.map Prod.fst := by
   induction acc with
   | nil => simp at h
   | cons t rest ih =>
       obtain ⟨v', c'⟩ := t
-      simp only [addCoeff]
+      simp only [denseAddCoeff]
       split
       · next he => simp
       · next hne =>
@@ -149,89 +127,90 @@ theorem addCoeff_map_fst_of_mem (v : Variable) (c : ZMod p) (acc : List (Variabl
             · exact h
           simp [ih hmem]
 
-theorem addCoeff_append_of_not_mem (v : Variable) (c : ZMod p) (acc : List (Variable × ZMod p))
-    (h : v ∉ acc.map Prod.fst) : addCoeff v c acc = acc ++ [(v, c)] := by
+theorem denseAddCoeff_append_of_not_mem (v : VarId) (c : ZMod p) (acc : List (VarId × ZMod p))
+    (h : v ∉ acc.map Prod.fst) : denseAddCoeff v c acc = acc ++ [(v, c)] := by
   induction acc with
-  | nil => simp [addCoeff]
+  | nil => simp [denseAddCoeff]
   | cons t rest ih =>
       obtain ⟨v', c'⟩ := t
       simp only [List.map_cons, List.mem_cons, not_or] at h
       obtain ⟨hne, hrest⟩ := h
-      simp only [addCoeff]
+      simp only [denseAddCoeff]
       rw [if_neg (fun he => hne he.symm)]
       simp [ih hrest]
 
 /-- One step of the fast merge: bump `t.1`'s coefficient in the map, appending `t.1` to the order
     array on first occurrence. -/
-def mtStep (st : Array Variable × Std.HashMap Variable (ZMod p)) (t : Variable × ZMod p) :
-    Array Variable × Std.HashMap Variable (ZMod p) :=
+def denseMtStep (st : Array VarId × Std.HashMap VarId (ZMod p)) (t : VarId × ZMod p) :
+    Array VarId × Std.HashMap VarId (ZMod p) :=
   match st.2[t.1]? with
   | some c0 => (st.1, st.2.insert t.1 (c0 + t.2))
   | none => (st.1.push t.1, st.2.insert t.1 t.2)
 
-/-- Correspondence invariant tying the fast `(order, map)` state to the `addCoeff`-fold list. -/
-def MergeCorr (acc : List (Variable × ZMod p)) (order : Array Variable)
-    (m : Std.HashMap Variable (ZMod p)) : Prop :=
-  order.toList = acc.map Prod.fst ∧ (acc.map Prod.fst).Nodup ∧ ∀ v, m[v]? = assocCoeff acc v
+/-- Correspondence invariant tying the fast `(order, map)` state to the `denseAddCoeff`-fold list. -/
+def DenseMergeCorr (acc : List (VarId × ZMod p)) (order : Array VarId)
+    (m : Std.HashMap VarId (ZMod p)) : Prop :=
+  order.toList = acc.map Prod.fst ∧ (acc.map Prod.fst).Nodup ∧ ∀ v, m[v]? = denseAssocCoeff acc v
 
-theorem mtStep_corr (acc : List (Variable × ZMod p)) (order : Array Variable)
-    (m : Std.HashMap Variable (ZMod p)) (t : Variable × ZMod p) (h : MergeCorr acc order m) :
-    MergeCorr (addCoeff t.1 t.2 acc) (mtStep (order, m) t).1 (mtStep (order, m) t).2 := by
+theorem denseMtStep_corr (acc : List (VarId × ZMod p)) (order : Array VarId)
+    (m : Std.HashMap VarId (ZMod p)) (t : VarId × ZMod p) (h : DenseMergeCorr acc order m) :
+    DenseMergeCorr (denseAddCoeff t.1 t.2 acc) (denseMtStep (order, m) t).1
+      (denseMtStep (order, m) t).2 := by
   obtain ⟨hord, hnod, hm⟩ := h
   obtain ⟨tv, tc⟩ := t
   have hmtv := hm tv
   rcases hcase : (m[tv]? : Option (ZMod p)) with _ | c0
-  · have habs : assocCoeff acc tv = none := by rw [← hmtv, hcase]
-    have hnmem : tv ∉ acc.map Prod.fst := not_mem_of_assocCoeff_none acc tv habs
-    have hstep : mtStep (order, m) (tv, tc) = (order.push tv, m.insert tv tc) := by
-      simp only [mtStep, hcase]
-    have hfst : (addCoeff tv tc acc).map Prod.fst = acc.map Prod.fst ++ [tv] := by
-      rw [addCoeff_append_of_not_mem tv tc acc hnmem]; simp
+  · have habs : denseAssocCoeff acc tv = none := by rw [← hmtv, hcase]
+    have hnmem : tv ∉ acc.map Prod.fst := denseNotMem_of_assocCoeff_none acc tv habs
+    have hstep : denseMtStep (order, m) (tv, tc) = (order.push tv, m.insert tv tc) := by
+      simp only [denseMtStep, hcase]
+    have hfst : (denseAddCoeff tv tc acc).map Prod.fst = acc.map Prod.fst ++ [tv] := by
+      rw [denseAddCoeff_append_of_not_mem tv tc acc hnmem]; simp
     rw [hstep]
     refine ⟨?_, ?_, ?_⟩
     · rw [hfst, Array.toList_push, hord]
     · rw [hfst]
       exact hnod.append (List.nodup_singleton tv) (List.disjoint_singleton.2 hnmem)
     · intro w
-      rw [Std.HashMap.getElem?_insert, assocCoeff_addCoeff, habs]
+      rw [Std.HashMap.getElem?_insert, denseAssocCoeff_addCoeff, habs]
       simp only [beq_iff_eq, Option.getD_none, zero_add]
       by_cases hwv : tv = w
       · subst hwv; simp
       · rw [if_neg hwv, if_neg (fun he => hwv he.symm)]
         exact hm w
-  · have hpres : assocCoeff acc tv = some c0 := by rw [← hmtv, hcase]
-    have hmem : tv ∈ acc.map Prod.fst := mem_of_assocCoeff_some acc tv c0 hpres
-    have hstep : mtStep (order, m) (tv, tc) = (order, m.insert tv (c0 + tc)) := by
-      simp only [mtStep, hcase]
-    have hfst : (addCoeff tv tc acc).map Prod.fst = acc.map Prod.fst :=
-      addCoeff_map_fst_of_mem tv tc acc hmem
+  · have hpres : denseAssocCoeff acc tv = some c0 := by rw [← hmtv, hcase]
+    have hmem : tv ∈ acc.map Prod.fst := denseMem_of_assocCoeff_some acc tv c0 hpres
+    have hstep : denseMtStep (order, m) (tv, tc) = (order, m.insert tv (c0 + tc)) := by
+      simp only [denseMtStep, hcase]
+    have hfst : (denseAddCoeff tv tc acc).map Prod.fst = acc.map Prod.fst :=
+      denseAddCoeff_map_fst_of_mem tv tc acc hmem
     rw [hstep]
     refine ⟨?_, ?_, ?_⟩
     · rw [hfst]; exact hord
     · rw [hfst]; exact hnod
     · intro w
-      rw [Std.HashMap.getElem?_insert, assocCoeff_addCoeff, hpres]
+      rw [Std.HashMap.getElem?_insert, denseAssocCoeff_addCoeff, hpres]
       simp only [beq_iff_eq, Option.getD_some]
       by_cases hwv : tv = w
       · subst hwv; simp
       · rw [if_neg hwv, if_neg (fun he => hwv he.symm)]
         exact hm w
 
-theorem mtFold_corr (ts : List (Variable × ZMod p)) :
-    ∀ (acc : List (Variable × ZMod p)) (order : Array Variable)
-      (m : Std.HashMap Variable (ZMod p)), MergeCorr acc order m →
-      MergeCorr (ts.foldl (fun a t => addCoeff t.1 t.2 a) acc)
-        (ts.foldl mtStep (order, m)).1 (ts.foldl mtStep (order, m)).2 := by
+theorem denseMtFold_corr (ts : List (VarId × ZMod p)) :
+    ∀ (acc : List (VarId × ZMod p)) (order : Array VarId)
+      (m : Std.HashMap VarId (ZMod p)), DenseMergeCorr acc order m →
+      DenseMergeCorr (ts.foldl (fun a t => denseAddCoeff t.1 t.2 a) acc)
+        (ts.foldl denseMtStep (order, m)).1 (ts.foldl denseMtStep (order, m)).2 := by
   induction ts with
   | nil => intro acc order m h; simpa using h
   | cons t rest ih =>
       intro acc order m h
       simp only [List.foldl_cons]
-      exact ih (addCoeff t.1 t.2 acc) (mtStep (order, m) t).1 (mtStep (order, m) t).2
-        (mtStep_corr acc order m t h)
+      exact ih (denseAddCoeff t.1 t.2 acc) (denseMtStep (order, m) t).1
+        (denseMtStep (order, m) t).2 (denseMtStep_corr acc order m t h)
 
-theorem recon_assoc (acc : List (Variable × ZMod p)) (hnod : (acc.map Prod.fst).Nodup) :
-    (acc.map Prod.fst).map (fun v => (v, (assocCoeff acc v).getD 0)) = acc := by
+theorem denseReconAssoc (acc : List (VarId × ZMod p)) (hnod : (acc.map Prod.fst).Nodup) :
+    (acc.map Prod.fst).map (fun v => (v, (denseAssocCoeff acc v).getD 0)) = acc := by
   induction acc with
   | nil => simp
   | cons t rest ih =>
@@ -239,48 +218,101 @@ theorem recon_assoc (acc : List (Variable × ZMod p)) (hnod : (acc.map Prod.fst)
       simp only [List.map_cons] at hnod ⊢
       rw [List.nodup_cons] at hnod
       obtain ⟨hnotin, hnod'⟩ := hnod
-      have hhead : (assocCoeff ((v', c') :: rest) v').getD 0 = c' := by simp [assocCoeff]
+      have hhead : (denseAssocCoeff ((v', c') :: rest) v').getD 0 = c' := by simp [denseAssocCoeff]
       have htail : (rest.map Prod.fst).map
-          (fun v => (v, (assocCoeff ((v', c') :: rest) v).getD 0))
-          = (rest.map Prod.fst).map (fun v => (v, (assocCoeff rest v).getD 0)) := by
+          (fun v => (v, (denseAssocCoeff ((v', c') :: rest) v).getD 0))
+          = (rest.map Prod.fst).map (fun v => (v, (denseAssocCoeff rest v).getD 0)) := by
         apply List.map_congr_left
         intro v hv
         have hvne : ¬ v' = v := fun he => hnotin (he ▸ hv)
-        simp [assocCoeff, if_neg hvne]
+        simp [denseAssocCoeff, if_neg hvne]
       rw [hhead, htail, ih hnod']
 
-theorem recon (acc : List (Variable × ZMod p)) (order : Array Variable)
-    (m : Std.HashMap Variable (ZMod p)) (h : MergeCorr acc order m) :
+theorem denseRecon (acc : List (VarId × ZMod p)) (order : Array VarId)
+    (m : Std.HashMap VarId (ZMod p)) (h : DenseMergeCorr acc order m) :
     order.toList.map (fun v => (v, (m[v]?).getD 0)) = acc := by
   obtain ⟨hord, hnod, hm⟩ := h
   rw [hord]
-  rw [show (fun v => (v, (m[v]?).getD 0)) = (fun v => (v, (assocCoeff acc v).getD 0)) from
+  rw [show (fun v => (v, (m[v]?).getD 0)) = (fun v => (v, (denseAssocCoeff acc v).getD 0)) from
     funext (fun v => by rw [hm v])]
-  exact recon_assoc acc hnod
+  exact denseReconAssoc acc hnod
 
-/-- The linear like-term merge. Proven `= mergeTerms` and installed via `@[csimp]`. -/
-def mergeTermsFast (ts : List (Variable × ZMod p)) : List (Variable × ZMod p) :=
+/-- The dense linear like-term merge. Proven `= denseMergeTerms` and installed via `@[csimp]`. -/
+def denseMergeTermsFast (ts : List (VarId × ZMod p)) : List (VarId × ZMod p) :=
   if ts.length ≤ 32 then
-    ts.foldl (fun acc t => addCoeff t.1 t.2 acc) []
+    ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) []
   else
-    let st := ts.foldl mtStep (#[], ∅)
+    let st := ts.foldl denseMtStep (#[], ∅)
     st.1.toList.map (fun v => (v, (st.2[v]?).getD 0))
 
-@[csimp] theorem mergeTerms_eq_fast : @mergeTerms = @mergeTermsFast := by
+@[csimp] theorem denseMergeTerms_eq_fast : @denseMergeTerms = @denseMergeTermsFast := by
   funext p ts
-  show mergeTerms ts = mergeTermsFast ts
-  unfold mergeTermsFast
+  show denseMergeTerms ts = denseMergeTermsFast ts
+  unfold denseMergeTermsFast
   split
   · rfl
-  · have hbase : MergeCorr ([] : List (Variable × ZMod p)) (#[] : Array Variable)
-        (∅ : Std.HashMap Variable (ZMod p)) :=
-      ⟨by simp, by simp, fun v => by simp [assocCoeff]⟩
-    have hcorr := mtFold_corr ts [] #[] ∅ hbase
-    exact (recon _ _ _ hcorr).symm
+  · have hbase : DenseMergeCorr ([] : List (VarId × ZMod p)) (#[] : Array VarId)
+        (∅ : Std.HashMap VarId (ZMod p)) :=
+      ⟨by simp, by simp, fun v => by simp [denseAssocCoeff]⟩
+    have hcorr := denseMtFold_corr ts [] #[] ∅ hbase
+    exact (denseRecon _ _ _ hcorr).symm
 
-theorem dropZero_eval (ts : List (Variable × ZMod p)) (env : Variable → ZMod p) :
-    ((ts.filter (fun t => t.2 ≠ 0)).map (fun t => t.2 * env t.1)).sum
-    = (ts.map (fun t => t.2 * env t.1)).sum := by
+/-- The fully-merged normal form of a dense linear form: combine like terms, drop zeros. -/
+def DenseLinExpr.norm (l : DenseLinExpr p) : DenseLinExpr p :=
+  ⟨l.const, (denseMergeTerms l.terms).filter (fun t => t.2 ≠ 0)⟩
+
+/-! ## The dense normalization traversal -/
+
+/-- Recursively collect like terms: replace each maximal affine subexpression by its merged linear
+    form; recurse into genuine variable×variable products. -/
+def DenseExpr.normalize : DenseExpr p → DenseExpr p
+  | .const n => .const n
+  | .var x => .var x
+  | .add a b =>
+      match denseLinearize (DenseExpr.add a b) with
+      | some l => l.norm.toExpr
+      | none => .add a.normalize b.normalize
+  | .mul a b =>
+      match denseLinearize (DenseExpr.mul a b) with
+      | some l => l.norm.toExpr
+      | none => .mul a.normalize b.normalize
+
+/-! ## Eval-preservation of the merge / normal form
+
+Proved over `VarId → ZMod p` environments (no prime hypothesis needed). Consolidated here at their
+definitions' home so every downstream proof shares one copy; the affine-form eval lemmas
+(`denseLinearize_eval`, `DenseLinExpr.norm_eval`'s `add`/`scale`/`toExpr` pieces) live in
+`Dense/Affine.lean`. -/
+
+theorem denseAddCoeff_eval (v : VarId) (c : ZMod p) (ts : List (VarId × ZMod p))
+    (denv : VarId → ZMod p) :
+    ((denseAddCoeff v c ts).map (fun t => t.2 * denv t.1)).sum
+      = c * denv v + (ts.map (fun t => t.2 * denv t.1)).sum := by
+  induction ts with
+  | nil => simp [denseAddCoeff]
+  | cons t rest ih =>
+      simp only [denseAddCoeff]
+      split
+      · next h => subst h; simp only [List.map_cons, List.sum_cons]; ring
+      · simp only [List.map_cons, List.sum_cons, ih]; ring
+
+theorem denseFoldAddCoeff_eval (denv : VarId → ZMod p) (ts acc : List (VarId × ZMod p)) :
+    ((ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) acc).map (fun t => t.2 * denv t.1)).sum
+      = (acc.map (fun t => t.2 * denv t.1)).sum + (ts.map (fun t => t.2 * denv t.1)).sum := by
+  induction ts generalizing acc with
+  | nil => simp
+  | cons t rest ih =>
+      simp only [List.foldl_cons, List.map_cons, List.sum_cons, ih, denseAddCoeff_eval]
+      ring
+
+theorem denseMergeTerms_eval (ts : List (VarId × ZMod p)) (denv : VarId → ZMod p) :
+    ((denseMergeTerms ts).map (fun t => t.2 * denv t.1)).sum
+      = (ts.map (fun t => t.2 * denv t.1)).sum := by
+  simp [denseMergeTerms, denseFoldAddCoeff_eval]
+
+theorem denseDropZero_eval (ts : List (VarId × ZMod p)) (denv : VarId → ZMod p) :
+    ((ts.filter (fun t => t.2 ≠ 0)).map (fun t => t.2 * denv t.1)).sum
+      = (ts.map (fun t => t.2 * denv t.1)).sum := by
   induction ts with
   | nil => rfl
   | cons t rest ih =>
@@ -290,56 +322,44 @@ theorem dropZero_eval (ts : List (Variable × ZMod p)) (env : Variable → ZMod 
       · rw [List.filter_cons_of_pos (by simpa using h), List.map_cons, List.sum_cons, ih,
             List.map_cons, List.sum_cons]
 
-/-- The fully-merged normal form of a linear form: combine like terms, drop zeros. A linear form
-    that is really a constant thus normalizes to `⟨c, []⟩`, whose `toExpr` is the literal `c`. -/
-def LinExpr.norm (l : LinExpr p) : LinExpr p :=
-  ⟨l.const, (mergeTerms l.terms).filter (fun t => t.2 ≠ 0)⟩
+/-- **The dense normal form is eval-preserving.** -/
+theorem DenseLinExpr.norm_eval (l : DenseLinExpr p) (denv : VarId → ZMod p) :
+    l.norm.eval denv = l.eval denv := by
+  simp only [DenseLinExpr.norm, DenseLinExpr.eval, denseDropZero_eval, denseMergeTerms_eval]
 
-theorem LinExpr.norm_eval (l : LinExpr p) (env : Variable → ZMod p) :
-    l.norm.eval env = l.eval env := by
-  simp only [LinExpr.norm, LinExpr.eval, dropZero_eval, mergeTerms_eval]
-
-/-! ## The normalization pass -/
-
-/-- Recursively collect like terms: replace each maximal affine subexpression by its merged linear
-    form. Non-affine nodes (a genuine variable×variable product) are recursed into. -/
-def Expression.normalize : Expression p → Expression p
-  | .const n => .const n
-  | .var x => .var x
-  | .add a b =>
-      match linearize (Expression.add a b) with
-      | some l => l.norm.toExpr
-      | none => .add a.normalize b.normalize
-  | .mul a b =>
-      match linearize (Expression.mul a b) with
-      | some l => l.norm.toExpr
-      | none => .mul a.normalize b.normalize
-
-theorem Expression.normalize_eval (e : Expression p) (env : Variable → ZMod p) :
-    e.normalize.eval env = e.eval env := by
+/-- **`DenseExpr.normalize` is eval-preserving.** No prime hypothesis needed. -/
+theorem DenseExpr.normalize_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
+    e.normalize.eval denv = e.eval denv := by
   induction e with
   | const n => rfl
   | var x => rfl
   | add a b iha ihb =>
-      simp only [Expression.normalize]
-      split
-      · next l hl => rw [LinExpr.toExpr_eval, LinExpr.norm_eval, ← linearize_eval _ l hl]
-      · rw [Expression.eval, iha, ihb, Expression.eval]
+      rw [DenseExpr.normalize]
+      cases hl : denseLinearize (DenseExpr.add a b) with
+      | some l =>
+          rw [DenseLinExpr.toExpr_eval, DenseLinExpr.norm_eval, ← denseLinearize_eval _ l hl]
+      | none =>
+          simp only [DenseExpr.eval, iha, ihb]
   | mul a b iha ihb =>
-      simp only [Expression.normalize]
-      split
-      · next l hl => rw [LinExpr.toExpr_eval, LinExpr.norm_eval, ← linearize_eval _ l hl]
-      · rw [Expression.eval, iha, ihb, Expression.eval]
+      rw [DenseExpr.normalize]
+      cases hl : denseLinearize (DenseExpr.mul a b) with
+      | some l =>
+          rw [DenseLinExpr.toExpr_eval, DenseLinExpr.norm_eval, ← denseLinearize_eval _ l hl]
+      | none =>
+          simp only [DenseExpr.eval, iha, ihb]
 
-/-! ## Variable bounds -/
+/-! ## Variable bounds (`normalize` introduces no new variable) -/
 
-theorem addCoeff_fst (v : Variable) (c : ZMod p) (ts : List (Variable × ZMod p)) (x : Variable)
-    (h : x ∈ (addCoeff v c ts).map Prod.fst) : x = v ∨ x ∈ ts.map Prod.fst := by
+/-- Every variable of `denseAddCoeff v c ts` is `v` or one of `ts`'s. -/
+theorem denseAddCoeff_fst (v : VarId) (c : ZMod p) (ts : List (VarId × ZMod p)) (x : VarId)
+    (h : x ∈ (denseAddCoeff v c ts).map Prod.fst) : x = v ∨ x ∈ ts.map Prod.fst := by
   induction ts with
-  | nil => simp only [addCoeff, List.map_cons, List.map_nil, List.mem_singleton] at h; exact Or.inl h
+  | nil =>
+      simp only [denseAddCoeff, List.map_cons, List.map_nil, List.mem_singleton] at h
+      exact Or.inl h
   | cons t rest ih =>
       obtain ⟨v', c'⟩ := t
-      simp only [addCoeff] at h
+      simp only [denseAddCoeff] at h
       split at h
       · rename_i hv
         simp only [List.map_cons, List.mem_cons] at h ⊢
@@ -349,9 +369,9 @@ theorem addCoeff_fst (v : Variable) (c : ZMod p) (ts : List (Variable × ZMod p)
         · exact Or.inr (Or.inl h)
         · exact (ih h).imp id (Or.inr ·)
 
-theorem foldl_addCoeff_fst (ts : List (Variable × ZMod p)) :
-    ∀ (init : List (Variable × ZMod p)) (x : Variable),
-      x ∈ (ts.foldl (fun acc t => addCoeff t.1 t.2 acc) init).map Prod.fst →
+theorem denseFoldAddCoeff_fst (ts : List (VarId × ZMod p)) :
+    ∀ (init : List (VarId × ZMod p)) (x : VarId),
+      x ∈ (ts.foldl (fun acc t => denseAddCoeff t.1 t.2 acc) init).map Prod.fst →
       x ∈ init.map Prod.fst ∨ x ∈ ts.map Prod.fst := by
   induction ts with
   | nil => intro init x hx; exact Or.inl hx
@@ -359,64 +379,136 @@ theorem foldl_addCoeff_fst (ts : List (Variable × ZMod p)) :
       intro init x hx
       simp only [List.foldl_cons] at hx
       rcases ih _ x hx with h | h
-      · rcases addCoeff_fst t.1 t.2 init x h with h | h
+      · rcases denseAddCoeff_fst t.1 t.2 init x h with h | h
         · exact Or.inr (by simp [h])
         · exact Or.inl h
       · exact Or.inr (List.mem_cons_of_mem _ h)
 
-theorem mergeTerms_fst (ts : List (Variable × ZMod p)) (x : Variable)
-    (h : x ∈ (mergeTerms ts).map Prod.fst) : x ∈ ts.map Prod.fst := by
-  rcases foldl_addCoeff_fst ts [] x h with h | h
+theorem denseMergeTerms_fst (ts : List (VarId × ZMod p)) (x : VarId)
+    (h : x ∈ (denseMergeTerms ts).map Prod.fst) : x ∈ ts.map Prod.fst := by
+  rcases denseFoldAddCoeff_fst ts [] x h with h | h
   · simp at h
   · exact h
 
-theorem LinExpr.norm_terms_fst (l : LinExpr p) (x : Variable)
+theorem DenseLinExpr.norm_terms_fst (l : DenseLinExpr p) (x : VarId)
     (h : x ∈ l.norm.terms.map Prod.fst) : x ∈ l.terms.map Prod.fst := by
-  simp only [LinExpr.norm, List.mem_map] at h
+  simp only [DenseLinExpr.norm, List.mem_map] at h
   obtain ⟨t, ht, rfl⟩ := h
-  exact mergeTerms_fst l.terms t.1 (List.mem_map.2 ⟨t, List.mem_of_mem_filter ht, rfl⟩)
+  exact denseMergeTerms_fst l.terms t.1 (List.mem_map.2 ⟨t, List.mem_of_mem_filter ht, rfl⟩)
 
-theorem Expression.normalize_vars (e : Expression p) : ∀ x ∈ e.normalize.vars, x ∈ e.vars := by
-  induction e with
-  | const n => intro x hx; simpa [Expression.normalize] using hx
-  | var y => intro x hx; simpa [Expression.normalize] using hx
+theorem denseToExpr_foldl_vars (terms : List (VarId × ZMod p)) :
+    ∀ (init : DenseExpr p) (x : VarId),
+      x ∈ (terms.foldl
+          (fun acc t => DenseExpr.add acc (DenseExpr.mul (.const t.2) (.var t.1))) init).vars →
+      x ∈ init.vars ∨ x ∈ terms.map Prod.fst := by
+  induction terms with
+  | nil => intro init x hx; exact Or.inl hx
+  | cons t rest ih =>
+      intro init x hx
+      simp only [List.foldl_cons] at hx
+      rcases ih _ x hx with h | h
+      · simp only [DenseExpr.vars, List.mem_append, List.nil_append, List.mem_singleton] at h
+        rcases h with h | h
+        · exact Or.inl h
+        · exact Or.inr (by subst h; exact List.mem_cons_self ..)
+      · exact Or.inr (List.mem_cons_of_mem _ h)
+
+theorem DenseLinExpr.toExpr_vars (l : DenseLinExpr p) :
+    ∀ x ∈ l.toExpr.vars, x ∈ l.terms.map Prod.fst := by
+  intro x hx
+  rcases denseToExpr_foldl_vars l.terms _ x hx with h | h
+  · simp [DenseExpr.vars] at h
+  · exact h
+
+theorem DenseLinExpr.scale_terms_fst (k : ZMod p) (l : DenseLinExpr p) :
+    (l.scale k).terms.map Prod.fst = l.terms.map Prod.fst := by
+  simp [DenseLinExpr.scale, List.map_map, Function.comp_def]
+
+/-- `denseLinearize` introduces no variable outside the expression. -/
+theorem denseLinearize_vars (e : DenseExpr p) (l : DenseLinExpr p) (h : denseLinearize e = some l) :
+    ∀ i ∈ l.terms.map Prod.fst, i ∈ e.vars := by
+  induction e generalizing l with
+  | const n => simp only [denseLinearize, Option.some.injEq] at h; subst h; simp
+  | var y =>
+      simp only [denseLinearize, Option.some.injEq] at h; subst h
+      intro x hx; simpa [DenseExpr.vars] using hx
   | add a b iha ihb =>
-      intro x hx
-      simp only [Expression.normalize] at hx
-      split at hx
-      · rename_i l hl
-        exact linearize_vars _ l hl x (l.norm_terms_fst x (LinExpr.toExpr_vars _ x hx))
-      · simp only [Expression.vars, List.mem_append] at hx ⊢
-        exact hx.imp (iha x) (ihb x)
+      cases hla : denseLinearize a with
+      | none => simp [denseLinearize, hla] at h
+      | some la => cases hlb : denseLinearize b with
+        | none => simp [denseLinearize, hla, hlb] at h
+        | some lb =>
+          simp only [denseLinearize, hla, hlb, Option.some.injEq] at h
+          subst h
+          intro x hx
+          simp only [DenseLinExpr.add, List.map_append, List.mem_append] at hx
+          simp only [DenseExpr.vars, List.mem_append]
+          exact hx.imp (iha la hla x) (ihb lb hlb x)
   | mul a b iha ihb =>
-      intro x hx
-      simp only [Expression.normalize] at hx
-      split at hx
-      · rename_i l hl
-        exact linearize_vars _ l hl x (l.norm_terms_fst x (LinExpr.toExpr_vars _ x hx))
-      · simp only [Expression.vars, List.mem_append] at hx ⊢
-        exact hx.imp (iha x) (ihb x)
+      cases hla : denseLinearize a with
+      | none => simp [denseLinearize, hla] at h
+      | some la => cases hlb : denseLinearize b with
+        | none => simp [denseLinearize, hla, hlb] at h
+        | some lb =>
+          by_cases h1 : la.terms.isEmpty = true
+          · simp only [denseLinearize, hla, hlb, if_pos h1, Option.some.injEq] at h
+            subst h
+            intro x hx
+            rw [DenseLinExpr.scale_terms_fst] at hx
+            exact List.mem_append.2 (Or.inr (ihb lb hlb x hx))
+          · by_cases h2 : lb.terms.isEmpty = true
+            · simp only [denseLinearize, hla, hlb, if_neg h1, if_pos h2, Option.some.injEq] at h
+              subst h
+              intro x hx
+              rw [DenseLinExpr.scale_terms_fst] at hx
+              exact List.mem_append.2 (Or.inl (iha la hla x hx))
+            · simp only [denseLinearize, hla, hlb] at h
+              rw [if_neg h1, if_neg h2] at h
+              exact absurd h (by simp)
 
-/-- Fused normalization: one bottom-up pass returning the normalized expression *and* the node's
-    linear form (`linearize`'s value). `Expression.normalize` re-runs `linearize` — a full
-    subtree walk — at every `add`/`mul` node along non-affine paths (O(size × depth) on the deep
-    sum spines circuits are full of); threading the linear form up removes the re-walks.
-    `normalizeFused_eq` pins both components to the original functions, so consumers are provably
-    unchanged. -/
-def normalizeFused : Expression p → Expression p × Option (LinExpr p)
+/-- `DenseExpr.normalize` introduces no new variable. -/
+theorem DenseExpr.normalize_vars (e : DenseExpr p) : ∀ i ∈ e.normalize.vars, i ∈ e.vars := by
+  induction e with
+  | const n => intro i hi; simpa [DenseExpr.normalize] using hi
+  | var y => intro i hi; simpa [DenseExpr.normalize] using hi
+  | add a b iha ihb =>
+      intro i hi
+      simp only [DenseExpr.normalize] at hi
+      split at hi
+      · rename_i l hl
+        exact denseLinearize_vars _ l hl i (l.norm_terms_fst i (DenseLinExpr.toExpr_vars _ i hi))
+      · simp only [DenseExpr.vars, List.mem_append] at hi ⊢
+        exact hi.imp (iha i) (ihb i)
+  | mul a b iha ihb =>
+      intro i hi
+      simp only [DenseExpr.normalize] at hi
+      split at hi
+      · rename_i l hl
+        exact denseLinearize_vars _ l hl i (l.norm_terms_fst i (DenseLinExpr.toExpr_vars _ i hi))
+      · simp only [DenseExpr.vars, List.mem_append] at hi ⊢
+        exact hi.imp (iha i) (ihb i)
+
+/-! ## Fused normalization walk
+
+One bottom-up pass returning the normalized expression *and* the node's dense linear form
+(`denseLinearize`'s value). `DenseExpr.normalize` re-runs `denseLinearize` — a full subtree walk — at
+every `add`/`mul` node along non-affine paths (O(size × depth)); threading the linear form up removes
+the re-walks. `denseNormalizeFused_eq` pins both components to the original functions. -/
+
+def denseNormalizeFused : DenseExpr p → DenseExpr p × Option (DenseLinExpr p)
   | .const n => (.const n, some ⟨n, []⟩)
   | .var x => (.var x, some ⟨0, [(x, 1)]⟩)
   | .add a b =>
-      let ra := normalizeFused a
-      let rb := normalizeFused b
+      let ra := denseNormalizeFused a
+      let rb := denseNormalizeFused b
       match ra.2, rb.2 with
       | some la, some lb =>
           let l := la.add lb
           (l.norm.toExpr, some l)
       | _, _ => (.add ra.1 rb.1, none)
   | .mul a b =>
-      let ra := normalizeFused a
-      let rb := normalizeFused b
+      let ra := denseNormalizeFused a
+      let rb := denseNormalizeFused b
       match ra.2, rb.2 with
       | some la, some lb =>
           if la.terms.isEmpty then
@@ -428,47 +520,84 @@ def normalizeFused : Expression p → Expression p × Option (LinExpr p)
           else (.mul ra.1 rb.1, none)
       | _, _ => (.mul ra.1 rb.1, none)
 
-/-- The fused pass computes exactly (`normalize`, `linearize`). -/
-theorem normalizeFused_eq (e : Expression p) :
-    normalizeFused e = (e.normalize, linearize e) := by
+/-- The fused pass computes exactly (`normalize`, `denseLinearize`). -/
+theorem denseNormalizeFused_eq (e : DenseExpr p) :
+    denseNormalizeFused e = (e.normalize, denseLinearize e) := by
   induction e with
   | const n => rfl
   | var x => rfl
   | add a b iha ihb =>
-      simp only [normalizeFused, iha, ihb]
-      cases hla : linearize a with
-      | none => simp [Expression.normalize, linearize, hla]
+      simp only [denseNormalizeFused, iha, ihb]
+      cases hla : denseLinearize a with
+      | none => simp [DenseExpr.normalize, denseLinearize, hla]
       | some la =>
-        cases hlb : linearize b with
-        | none => simp [Expression.normalize, linearize, hla, hlb]
-        | some lb => simp [Expression.normalize, linearize, hla, hlb]
+        cases hlb : denseLinearize b with
+        | none => simp [DenseExpr.normalize, denseLinearize, hla, hlb]
+        | some lb => simp [DenseExpr.normalize, denseLinearize, hla, hlb]
   | mul a b iha ihb =>
-      simp only [normalizeFused, iha, ihb]
-      cases hla : linearize a with
-      | none => simp [Expression.normalize, linearize, hla]
+      simp only [denseNormalizeFused, iha, ihb]
+      cases hla : denseLinearize a with
+      | none => simp [DenseExpr.normalize, denseLinearize, hla]
       | some la =>
-        cases hlb : linearize b with
-        | none => simp [Expression.normalize, linearize, hla, hlb]
+        cases hlb : denseLinearize b with
+        | none => simp [DenseExpr.normalize, denseLinearize, hla, hlb]
         | some lb =>
           by_cases h1 : la.terms.isEmpty
-          · simp [Expression.normalize, linearize, hla, hlb, h1]
+          · simp [DenseExpr.normalize, denseLinearize, hla, hlb, h1]
           · by_cases h2 : lb.terms.isEmpty
-            · simp [Expression.normalize, linearize, hla, hlb, h1, h2]
-            · simp [Expression.normalize, linearize, hla, hlb, h1, h2]
+            · simp [DenseExpr.normalize, denseLinearize, hla, hlb, h1, h2]
+            · simp [DenseExpr.normalize, denseLinearize, hla, hlb, h1, h2]
 
-theorem normalizeFused_fst (e : Expression p) : (normalizeFused e).1 = e.normalize := by
-  rw [normalizeFused_eq]
+theorem denseNormalizeFused_fst (e : DenseExpr p) : (denseNormalizeFused e).1 = e.normalize := by
+  rw [denseNormalizeFused_eq]
 
-/-- The affine-normalization pass, computing through the fused walk (provably the same output).
-    Correct via `mapExpr_correct` (only `normalize_eval`, transported along
-    `normalizeFused_fst`). -/
-def normalizePass : VerifiedPass p := fun cs bs =>
-  ⟨cs.mapExpr (fun e => (normalizeFused e).1), [],
-   ConstraintSystem.mapExpr_correct (g := fun e => (normalizeFused e).1)
-     (fun e env => by
-       show ((normalizeFused e).1).eval env = e.eval env
-       rw [normalizeFused_fst]
-       exact Expression.normalize_eval e env) cs bs
-     (fun e x hx => Expression.normalize_vars e x (by
-       have hx' : x ∈ ((normalizeFused e).1).vars := hx
-       rwa [normalizeFused_fst] at hx'))⟩
+/-- The fused walk is eval-preserving (transported from `DenseExpr.normalize_eval`). -/
+theorem denseNormalizeFused_fst_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
+    ((denseNormalizeFused e).1).eval denv = e.eval denv := by
+  rw [denseNormalizeFused_fst]; exact DenseExpr.normalize_eval e denv
+
+/-- The fused walk introduces no new variables (transported from `DenseExpr.normalize_vars`). -/
+theorem denseNormalizeFused_fst_vars (e : DenseExpr p) :
+    ∀ i ∈ ((denseNormalizeFused e).1).vars, i ∈ e.vars := by
+  rw [denseNormalizeFused_fst]; exact DenseExpr.normalize_vars e
+
+/-! ## The dense normalization pass
+
+The affine-normalization pass, computing through the fused walk. Its correctness is proved
+as a `DensePassCorrect` (the fused walk is eval-preserving and introduces no variables)
+and lifted to the spec `PassCorrect` by `DenseVerifiedPassW.of`. Same shape as
+`denseConstantFoldPass` (`Dense/ExprOps.lean`). -/
+
+/-- The dense affine-normalization pass (wired into `normalize1`/`normalize2`). -/
+def denseNormalizePass : DenseVerifiedPassW p :=
+  DenseVerifiedPassW.of
+    (fun _ _ d => d.mapExpr (fun e => (denseNormalizeFused e).1))
+    (fun _ _ _ => [])
+    (fun _ _ _ _ hcov =>
+      DenseConstraintSystem.mapExpr_covered denseNormalizeFused_fst_vars hcov)
+    (fun _ _ _ _ _ => by intro x hx; simp at hx)
+    (fun reg bs _ d _ => by
+      have hfe : ∀ (e : DenseExpr p) (denv : VarId → ZMod p),
+          ((denseNormalizeFused e).1).eval denv = e.eval denv :=
+        fun e denv => denseNormalizeFused_fst_eval e denv
+      refine ⟨?_, ?_, ?_, ?_⟩
+      · -- soundness: `(mapExpr fused).implies d`
+        intro denv hsat
+        refine ⟨denv, (DenseConstraintSystem.mapExpr_satisfies hfe d bs denv).mp hsat, ?_⟩
+        rw [DenseConstraintSystem.mapExpr_sideEffects hfe]
+        exact BusState.equiv_refl _
+      · -- invariants
+        exact fun h => DenseConstraintSystem.mapExpr_guaranteesInvariants hfe h
+      · -- no new powdr column
+        exact fun i hi _ =>
+          DenseConstraintSystem.mapExpr_occ_subset denseNormalizeFused_fst_vars d i hi
+      · -- completeness (witness = input env; no derivations)
+        intro denv hadm hsat
+        refine ⟨denv, (DenseConstraintSystem.mapExpr_satisfies hfe d bs denv).mpr hsat,
+          (DenseConstraintSystem.mapExpr_admissible hfe d bs denv).mpr hadm, ?_, fun _ _ => rfl, ?_⟩
+        · rw [DenseConstraintSystem.mapExpr_sideEffects hfe]
+          exact BusState.equiv_refl _
+        · intro _ _ i hi _
+          exact ⟨DenseConstraintSystem.mapExpr_occ_subset denseNormalizeFused_fst_vars d i hi, rfl⟩)
+
+end ApcOptimizer.Dense

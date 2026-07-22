@@ -1,284 +1,66 @@
-import ApcOptimizer.Implementation.OptimizerPasses.BytePack
+import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelCheck
 
 set_option autoImplicit false
-set_option linter.unusedSimpArgs false
 
-/-! # Byte-check pair splitting (`splitBytePairPass`)
+/-! # Dense byte-check pair splitting
 
-The inverse of `bytePackPass` (`BytePack.lean`): explode every packed pair byte check (recognized
-VM-neutrally through `BusFacts.byteXorSpec` as `mkBytePair`) back into the two single-value checks
-`mkByteCheck`. Because the pair and the two singles impose the *identical* obligation ("both
-operands are bytes") — the proven `mkBytePair_iff_singles` law — the split is satisfaction-preserving, and
-because these lookups are stateless it leaves every stateful side effect and the memory discipline
-untouched. It is variable- and constraint-neutral; it *increases* the bus-interaction count on its
-own, so it is never run to a fixpoint.
+Explodes every packed pair byte check into its two single-value checks (`denseAsBytePair`,
+`denseSplitOne`, and the pass's computed output `denseSplitBytePairF`). This file is **impl-only**:
+it carries no `DensePassCorrect`/`DenseVerifiedPassW` wrapper here. The runtime transform
+`denseSplitBytePairF` is shaped like `denseByteCheckPackF` (`ByteCheckPack.lean`): unconditional in
+`p` (gated only by a `(1 : ZMod p) ≠ 0` self-check), consuming `facts` directly with no fresh
+variables, so it can be wrapped directly with `DenseVerifiedPassW.of`.
 
-Its purpose is to unblock two downstream cleanups that a packed pair traps:
+## Notes
 
-* **Duplicate byte-value elimination.** The same value is often byte-checked in several *different*
-  pairs (a constant `0`, or a limb reused across rows). As `[0, b, 0, 0]` and `[0, c, 0, 0]` these
-  are not syntactic duplicates, so `Dedup` cannot collapse them; as singles `[0, 0, 0, 1]` they are,
-  and `Dedup` keeps one.
-* **Operand-granular redundant-byte drop.** `RedundantByteDrop` drops a pair only when *both*
-  operands are byte-justified elsewhere (memory-read words, constants). A pair mixing a
-  memory-guaranteed byte with a freshly computed ALU result is kept, trapping the redundant half.
-  Split into singles, the justified half is dropped and the other kept.
+* `denseMkByteCheck` (`BusPairCancelCheck.lean`) is reused unchanged as the emitter for each of the
+  two split singles.
+* `ByteXorSpec`/`BusFacts.byteXorSpec`/`spec.decode` are representation-independent (their
+  signatures only mention `Nat`/`ZMod p`/payload lists, never `Variable`/`Expression`), so
+  `denseAsBytePair` consults them unqualified.
 
-The intended pipeline placement is the coda: `… → busPairCancelLate → splitBytePair → dedupLate →
-redundantByteDrop → bytePackLate → …`. `bytePackLate` re-packs the surviving singles, so a pair
-with no redundant/duplicate operand is reconstructed unchanged (net zero), while trapped redundancy
-is shed. The split transiently *increases* the bus count, so it must never run inside the
-size-decreasing cleanup fixpoint.
+## Ordering
 
-The table equivalence is the same proven `BusFacts` fact (`byteXorSpec`) `bytePackPass` uses; with
-`BusFacts.trivial` (`byteXorSpec = none`) this pass is a no-op. -/
+`denseSplitOne` emits the split pair in the order `[denseMkByteCheck spec busId a,
+denseMkByteCheck spec busId b]` — operand order `a` then `b` (the pair's own decode order).
+`denseSplitBytePairF` `flatMap`s `denseSplitOne` over `d.busInteractions` in original list order:
+every untouched interaction keeps its position and every split pair is emitted in place of the one
+packed interaction it replaces, singles in decode order. -/
 
-namespace SplitBytePair
+namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
 /-- Recognize a packed pair byte check (decoded op `= pairOp`, result `0`, multiplicity `1`) on a
     `byteXorSpec` bus, returning `(busId, spec, a, b)`. -/
-def asBytePair {bs : BusSemantics p} (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) :
-    Option (Nat × ByteXorSpec p × Expression p × Expression p) :=
+def denseAsBytePair (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (DenseExpr p)) :
+    Option (Nat × ByteXorSpec p × DenseExpr p × DenseExpr p) :=
   match facts.byteXorSpec bi.busId with
   | none => none
   | some spec =>
     match spec.decode bi.payload with
     | some (op, o1, o2, r) =>
-        if bi.multiplicity = Expression.const 1 ∧ op = Expression.const spec.pairOp
-            ∧ r = Expression.const 0 then some (bi.busId, spec, o1, o2) else none
+        if bi.multiplicity = DenseExpr.const 1 ∧ op = DenseExpr.const spec.pairOp
+            ∧ r = DenseExpr.const 0 then some (bi.busId, spec, o1, o2) else none
     | none => none
 
-/-- A recognizer hit pins the whole interaction: `bi` is exactly `mkBytePair spec busId a b`, on a
-    `byteXorSpec` bus. -/
-theorem asBytePair_eq {bs : BusSemantics p} (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) (busId : Nat) (spec : ByteXorSpec p) (a b : Expression p)
-    (h : asBytePair facts bi = some (busId, spec, a, b)) :
-    bi = mkBytePair spec busId a b ∧ facts.byteXorSpec busId = some spec := by
-  obtain ⟨biBus, biMul, biPay⟩ := bi
-  unfold asBytePair at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i spec' hspec
-    split at h
-    · rename_i op o1 o2 r hdec
-      split_ifs at h with hc
-      obtain ⟨hm, hop, hr⟩ := hc
-      simp only [Option.some.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl, rfl, rfl⟩ := h
-      have hpay : biPay = spec'.encode (Expression.const spec'.pairOp) o1 o2 (Expression.const 0) := by
-        have he := spec'.decode_eq_encode biPay op o1 o2 r hdec
-        rw [hop, hr] at he; exact he
-      refine ⟨?_, hspec⟩
-      have hm' : biMul = Expression.const 1 := hm
-      show ({ busId := biBus, multiplicity := biMul, payload := biPay } : BusInteraction (Expression p))
-        = mkBytePair spec' biBus o1 o2
-      rw [hm', hpay]; rfl
-    · exact absurd h (by simp)
-
-/-- The two shapes of `splitOne`, unfolded via the recognizer. -/
-def splitOne {bs : BusSemantics p} (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) : List (BusInteraction (Expression p)) :=
-  match asBytePair facts bi with
-  | some (busId, spec, a, b) => [mkByteCheck spec busId a, mkByteCheck spec busId b]
+/-- Split one interaction: a recognized packed pair becomes its two single-value checks (in
+    decode order `a` then `b`); anything else passes through unchanged. -/
+def denseSplitOne (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (DenseExpr p)) : List (BusInteraction (DenseExpr p)) :=
+  match denseAsBytePair bs facts bi with
+  | some (busId, spec, a, b) => [denseMkByteCheck spec busId a, denseMkByteCheck spec busId b]
   | none => [bi]
 
-/-- `[x].filter p ++ ys.filter p = (x :: ys).filter p`. -/
-private theorem filter_cons_append {α : Type} (q : α → Bool) (x : α) (ys : List α) :
-    ([x].filter q) ++ ys.filter q = (x :: ys).filter q := by
-  cases h : q x <;> simp [List.filter_cons, h]
+/-- The runtime transform: explode every packed pair byte check into its two single-value checks,
+    in place, preserving the order of every other interaction. VM-neutral: with a trivial
+    `BusFacts`, `byteXorSpec` is `none` everywhere, so `denseAsBytePair` never fires and the
+    `flatMap` is the identity up to `[bi]`-singleton unwrapping. -/
+def denseSplitBytePairF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
+    DenseConstraintSystem p :=
+  if (1 : ZMod p) ≠ 0 then
+    { d with busInteractions := d.busInteractions.flatMap (denseSplitOne bs facts) }
+  else d
 
-/-- The obligation predicate that appears in `satisfies`. -/
-private def P {bs : BusSemantics p} (env : Variable → ZMod p)
-    (bi : BusInteraction (Expression p)) : Prop :=
-  (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false
-
-/-- Per-interaction obligation equivalence: the split list carries the same obligation as `bi`. -/
-private theorem splitOne_P (bs : BusSemantics p) (facts : BusFacts p bs) (hp1 : (1 : ZMod p) ≠ 0)
-    (bi : BusInteraction (Expression p)) (env : Variable → ZMod p) :
-    (∀ b ∈ splitOne facts bi, P (bs := bs) env b) ↔ P (bs := bs) env bi := by
-  unfold splitOne
-  cases hab : asBytePair facts bi with
-  | none => simp
-  | some t =>
-    obtain ⟨busId, spec, a, b⟩ := t
-    obtain ⟨rfl, hspec⟩ := asBytePair_eq facts bi busId spec a b hab
-    simp only [List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq]
-    have hsaP : P (bs := bs) env (mkByteCheck spec busId a) ↔
-        bs.violatesConstraint ((mkByteCheck spec busId a).eval env) = false := by
-      unfold P; rw [mkByteCheck_eval]; exact ⟨fun h => h (by simpa using hp1), fun h _ => h⟩
-    have hsbP : P (bs := bs) env (mkByteCheck spec busId b) ↔
-        bs.violatesConstraint ((mkByteCheck spec busId b).eval env) = false := by
-      unfold P; rw [mkByteCheck_eval]; exact ⟨fun h => h (by simpa using hp1), fun h _ => h⟩
-    have hpairP : P (bs := bs) env (mkBytePair spec busId a b) ↔
-        bs.violatesConstraint ((mkBytePair spec busId a b).eval env) = false := by
-      unfold P; rw [mkBytePair_eval]; exact ⟨fun h => h (by simpa using hp1), fun h _ => h⟩
-    rw [hsaP, hsbP, hpairP]
-    exact (mkBytePair_iff_singles bs facts spec busId hspec a b env).symm
-
-/-- The bus-list-level obligation equivalence. -/
-private theorem forall_P_flatMap (bs : BusSemantics p) (facts : BusFacts p bs)
-    (hp1 : (1 : ZMod p) ≠ 0) (l : List (BusInteraction (Expression p)))
-    (env : Variable → ZMod p) :
-    (∀ b ∈ l.flatMap (splitOne facts), P (bs := bs) env b) ↔ (∀ b ∈ l, P (bs := bs) env b) := by
-  induction l with
-  | nil => simp
-  | cons a rest ih =>
-    rw [List.flatMap_cons]
-    simp only [List.mem_append, List.mem_cons, forall_eq_or_imp]
-    constructor
-    · intro h
-      exact ⟨(splitOne_P bs facts hp1 a env).1 (fun b hb => h b (Or.inl hb)),
-        ih.1 (fun b hb => h b (Or.inr hb))⟩
-    · rintro ⟨ha, hrest⟩ b (hb | hb)
-      · exact (splitOne_P bs facts hp1 a env).2 ha b hb
-      · exact ih.2 hrest b hb
-
-/-- Splitting a stateless byte-pair check yields only stateless interactions, so the
-    stateful-filtered bus list is unchanged (per interaction). -/
-private theorem splitOne_filter_stateful (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) :
-    (splitOne facts bi).filter (fun b => bs.isStateful b.busId)
-      = [bi].filter (fun b => bs.isStateful b.busId) := by
-  unfold splitOne
-  cases hab : asBytePair facts bi with
-  | none => rfl
-  | some t =>
-    obtain ⟨busId, spec, a, b⟩ := t
-    obtain ⟨rfl, hspec⟩ := asBytePair_eq facts bi busId spec a b hab
-    have hst : bs.isStateful busId = false := (facts.byteXorSpec_sound busId spec hspec).1
-    simp only [mkByteCheck, mkBytePair, List.filter_cons, List.filter_nil, hst,
-      Bool.false_eq_true, if_false]
-
-/-- The stateful-filtered bus list is invariant under the whole split. -/
-private theorem filter_stateful_flatMap (bs : BusSemantics p) (facts : BusFacts p bs)
-    (l : List (BusInteraction (Expression p))) :
-    (l.flatMap (splitOne facts)).filter (fun b => bs.isStateful b.busId)
-      = l.filter (fun b => bs.isStateful b.busId) := by
-  induction l with
-  | nil => rfl
-  | cons a rest ih =>
-    rw [List.flatMap_cons, List.filter_append, splitOne_filter_stateful bs facts a, ih]
-    exact filter_cons_append _ a rest
-
-/-- The active∧stateful evaluated messages are invariant under the split (per interaction). -/
-private theorem splitOne_map_filter (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi : BusInteraction (Expression p)) (env : Variable → ZMod p) :
-    ((splitOne facts bi).map (fun b => b.eval env)).filter
-        (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId)
-      = ([bi].map (fun b => b.eval env)).filter
-        (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId) := by
-  unfold splitOne
-  cases hab : asBytePair facts bi with
-  | none => rfl
-  | some t =>
-    obtain ⟨busId, spec, a, b⟩ := t
-    obtain ⟨rfl, hspec⟩ := asBytePair_eq facts bi busId spec a b hab
-    have hst : bs.isStateful busId = false := (facts.byteXorSpec_sound busId spec hspec).1
-    simp only [mkByteCheck, mkBytePair, List.map_cons, List.map_nil, BusInteraction.eval,
-      List.filter_cons, List.filter_nil, hst, Bool.and_false, Bool.false_eq_true, if_false]
-
-/-- The active∧stateful evaluated-message list is invariant under the whole split. -/
-private theorem map_filter_flatMap (bs : BusSemantics p) (facts : BusFacts p bs)
-    (l : List (BusInteraction (Expression p))) (env : Variable → ZMod p) :
-    ((l.flatMap (splitOne facts)).map (fun b => b.eval env)).filter
-        (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId)
-      = (l.map (fun b => b.eval env)).filter
-        (fun m => decide (m.multiplicity ≠ 0) && bs.isStateful m.busId) := by
-  induction l with
-  | nil => rfl
-  | cons a rest ih =>
-    rw [List.flatMap_cons, List.map_append, List.filter_append, splitOne_map_filter bs facts a env,
-      ih]
-    simp only [List.map_cons, List.map_nil]
-    exact filter_cons_append _ (a.eval env) (rest.map (fun b => b.eval env))
-
-/-- Variables of a split interaction come from the original. -/
-private theorem splitOne_vars (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi b : BusInteraction (Expression p)) (hb : b ∈ splitOne facts bi)
-    (v : Variable) (hv : v ∈ b.multiplicity.vars ∨ ∃ e ∈ b.payload, v ∈ e.vars) :
-    v ∈ bi.multiplicity.vars ∨ ∃ e ∈ bi.payload, v ∈ e.vars := by
-  cases hab : asBytePair facts bi with
-  | none => simp only [splitOne, hab, List.mem_singleton] at hb; subst hb; exact hv
-  | some t =>
-    obtain ⟨busId, spec, a, b'⟩ := t
-    simp only [splitOne, hab] at hb
-    obtain ⟨rfl, hspec⟩ := asBytePair_eq facts bi busId spec a b' hab
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
-    obtain ⟨hma, hmb⟩ := mkBytePair_operand_mem spec busId a b'
-    rcases hb with rfl | rfl
-    · rcases hv with hm | ⟨pe, hpe, hx⟩
-      · simp only [mkByteCheck, Expression.vars, List.not_mem_nil] at hm
-      · exact Or.inr ⟨a, hma, mkByteCheck_payload_vars spec busId a pe hpe hx⟩
-    · rcases hv with hm | ⟨pe, hpe, hx⟩
-      · simp only [mkByteCheck, Expression.vars, List.not_mem_nil] at hm
-      · exact Or.inr ⟨b', hmb, mkByteCheck_payload_vars spec busId b' pe hpe hx⟩
-
-/-- Every split interaction is either `bi` itself, or never breaks an invariant (a byte self-check). -/
-private theorem splitOne_breaksInvariant (bs : BusSemantics p) (facts : BusFacts p bs)
-    (bi b : BusInteraction (Expression p)) (hb : b ∈ splitOne facts bi)
-    (env : Variable → ZMod p) :
-    (b = bi) ∨ bs.breaksInvariant (b.eval env) = false := by
-  cases hab : asBytePair facts bi with
-  | none => simp only [splitOne, hab, List.mem_singleton] at hb; exact Or.inl hb
-  | some t =>
-    obtain ⟨busId, spec, a, b'⟩ := t
-    simp only [splitOne, hab] at hb
-    obtain ⟨rfl, hspec⟩ := asBytePair_eq facts bi busId spec a b' hab
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
-    refine Or.inr ?_
-    rcases hb with rfl | rfl
-    · exact mkByteCheck_breaks bs facts spec busId hspec a env
-    · exact mkByteCheck_breaks bs facts spec busId hspec b' env
-
-/-! ## The pass -/
-
-/-- Split every packed pair byte check into two single-value checks. Correct by the `byteXorSpec`
-    fact (`mkBytePair_iff_singles`, obligation-equivalent) and stateless (side effects, memory
-    discipline, admissibility untouched). -/
-def splitBytePairPass : VerifiedPassW p := fun cs bs facts =>
-  if hp1 : (1 : ZMod p) ≠ 0 then
-    let out : ConstraintSystem p :=
-      { cs with busInteractions := cs.busInteractions.flatMap (splitOne facts) }
-    have hbus : out.busInteractions = cs.busInteractions.flatMap (splitOne facts) := rfl
-    ⟨out, [], by
-      have hsatiff : ∀ env, cs.satisfies bs env ↔ out.satisfies bs env := by
-        intro env
-        simp only [ConstraintSystem.satisfies, hbus]
-        constructor
-        · rintro ⟨hc, hb⟩
-          exact ⟨hc, (forall_P_flatMap bs facts hp1 cs.busInteractions env).2 hb⟩
-        · rintro ⟨hc, hb⟩
-          exact ⟨hc, (forall_P_flatMap bs facts hp1 cs.busInteractions env).1 hb⟩
-      have hside : ∀ env, cs.sideEffects bs env = out.sideEffects bs env := by
-        intro env
-        simp only [ConstraintSystem.sideEffects, hbus, filter_stateful_flatMap bs facts]
-      have hadm : ∀ env, cs.admissible bs env ↔ out.admissible bs env := by
-        intro env
-        simp only [ConstraintSystem.admissible, hbus, map_filter_flatMap bs facts]
-      have hsub : ∀ v ∈ out.vars, v ∈ cs.vars := by
-        intro v hv
-        rw [ConstraintSystem.mem_vars] at hv ⊢
-        rcases hv with ⟨c, hc, hvc⟩ | ⟨bi, hbi, hvbi⟩
-        · exact Or.inl ⟨c, hc, hvc⟩
-        · rw [hbus, List.mem_flatMap] at hbi
-          obtain ⟨orig, horig, hbimem⟩ := hbi
-          exact Or.inr ⟨orig, horig, splitOne_vars bs facts orig bi hbimem v hvbi⟩
-      refine PassCorrect.ofEnvEq ?_ ?_ hsub ?_
-      · intro env hsat
-        exact ⟨env, (hsatiff env).2 hsat, by rw [← hside]; exact BusState.equiv_refl _⟩
-      · intro hinv env hsat bi hbi
-        rw [hbus, List.mem_flatMap] at hbi
-        obtain ⟨orig, horig, hbimem⟩ := hbi
-        show (bi.eval env).multiplicity ≠ 0 → bs.breaksInvariant (bi.eval env) = false
-        intro hne
-        rcases splitOne_breaksInvariant bs facts orig bi hbimem env with heq | hbrk
-        · rw [heq]; exact hinv env ((hsatiff env).2 hsat) orig horig (heq ▸ hne)
-        · exact hbrk
-      · intro env hadmE hsat
-        exact ⟨(hsatiff env).1 hsat, (hadm env).1 hadmE, by rw [← hside]; exact BusState.equiv_refl _⟩⟩
-  else ⟨cs, [], PassCorrect.refl cs bs⟩
-
-end SplitBytePair
+end ApcOptimizer.Dense

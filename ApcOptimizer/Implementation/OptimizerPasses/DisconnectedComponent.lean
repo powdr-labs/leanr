@@ -1,301 +1,242 @@
-import ApcOptimizer.Implementation.OptimizerPasses.Basic
-import ApcOptimizer.Implementation.OptimizerPasses.Rewrite
-import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
-import ApcOptimizer.Utils.Size
+import ApcOptimizer.Implementation.OptimizerPasses.Bridge
 
 set_option autoImplicit false
 
 /-! # Disconnected-component removal
 
-A *disconnected component* is a set of algebraic constraints and (stateless) bus interactions whose
-variables never touch any **stateful** bus interaction — a self-contained subcircuit that produces
-no observable side effect. Dropping it changes nothing observable *provided the subcircuit is
-satisfiable*: soundness has to reconstruct a full satisfying assignment of the input from one of the
-output, and that needs a witness for the dropped variables.
+A *disconnected component* is a set of algebraic constraints and stateless bus interactions whose
+variables never touch any **stateful** bus interaction. The pass finds such a component by
+connectivity from the stateful buses, tries the all-zero witness, and drops the component only if
+the witness provably certifies it (the same run-time re-check `guardDegree` uses).
 
-This pass finds such a component (by connectivity from the stateful buses), tries a concrete witness
-(all variables `0`), and drops the component **only if** that witness provably satisfies every
-dropped constraint (`c.eval w = 0`) and makes every dropped interaction non-violating
-(`violatesConstraint (bi.eval w) = false`, checked against the given semantics at run time — the
-same trick `guardDegree` uses, so it needs no extra audited knowledge). If the witness fails, the
-pass is the identity.
+The correctness argument (`dropComponent_correct`) and the run-time re-check that discharges it are
+proved in `DisconnectedComponentProof.lean`. Nothing here states or proves anything beyond the
+runtime computation.
 
-Correctness is `dropComponent_correct`, which is fully VM-agnostic: it takes the partition
-(`keepCon`/`keepBi`), a witness `w`, and the (checkable) facts that the removed part is satisfied by
-`w`, is stateless, and shares no variable with the kept part. Soundness extends an output
-assignment by `w` on the removed variables (they occur nowhere else); completeness and side-effect
-preservation follow because the removed interactions are stateless. Field-free. -/
+## A terminating closure
+
+New `partial def`s are forbidden on this branch (correctness never depends on the closure's
+result — the pass re-checks the partition it induces), so `denseBfsClosure` runs its worklist
+algorithm — one visited `HashSet`, one worklist stack, one group-processed `HashSet`, and per-step
+work of one `v2g` lookup, one `filter`, and two `foldl`s — as a **well-founded** recursion on a
+genuine decreasing measure, with no step counter.
+
+**The measure.** Each step pops one stack element, so the recursion decreases the lexicographic pair
+`(unprocessed-groups-in-range, stack.length)`, where the first component is the number of group
+indices `g < groups.size` not yet in `procGroups`. On a *productive* step (`x` unvisited) the
+frontier either marks a fresh in-range group processed — strictly shrinking the first component,
+however many variables that group pushes — or it triggers only out-of-range group indices, whose
+`groups.getD g []` are all empty, so nothing is pushed and `stack.length` strictly shrinks with the
+first component fixed. A step that skips an already-visited `x`, and the terminal empty stack, also
+shrink `stack.length`. Every recursive call therefore decreases the pair: the search terminates with
+no fuel argument. Correctness never depends on the result. -/
+
+namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
-/-! ## Side effects are unchanged when dropping stateless interactions
+/-! ## The co-occurrence graph -/
 
-The evaluated stateful interactions of the filtered system (under `e1`) equal those of the original
-(under `e2`), given that every dropped interaction is stateless and every *stateful* interaction
-evaluates the same under `e1` and `e2`. -/
-theorem sideEffects_drop_eq (bs : BusSemantics p) (keepBi : BusInteraction (Expression p) → Bool)
-    (e1 e2 : Variable → ZMod p) (L : List (BusInteraction (Expression p)))
-    (hst : ∀ bi ∈ L, keepBi bi = false → bs.isStateful bi.busId = false)
-    (heq : ∀ bi ∈ L, bs.isStateful bi.busId = true → bi.eval e2 = bi.eval e1) :
-    ((L.filter keepBi).filter (fun bi => bs.isStateful bi.busId)).map
-        (fun bi => let m := bi.eval e1; ((m.busId, m.payload), m.multiplicity))
-      = (L.filter (fun bi => bs.isStateful bi.busId)).map
-        (fun bi => let m := bi.eval e2; ((m.busId, m.payload), m.multiplicity)) := by
-  induction L with
-  | nil => rfl
-  | cons bi rest ih =>
-    have ihr := ih (fun b hb => hst b (List.mem_cons_of_mem _ hb))
-                   (fun b hb => heq b (List.mem_cons_of_mem _ hb))
-    by_cases hstate : bs.isStateful bi.busId = true
-    · have hkeep : keepBi bi = true := by
-        by_contra hk
-        have hkf : keepBi bi = false := by simpa using hk
-        rw [hst bi (List.mem_cons_self ..) hkf] at hstate
-        exact absurd hstate (by simp)
-      rw [List.filter_cons_of_pos hkeep,
-          List.filter_cons_of_pos (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) hstate,
-          List.filter_cons_of_pos (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) hstate]
-      simp only [List.map_cons]
-      rw [heq bi (List.mem_cons_self ..) hstate, ihr]
-    · have hns : bs.isStateful bi.busId = false := by simpa using hstate
-      rw [List.filter_cons_of_neg (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) (by simp [hns])]
-      by_cases hkeep : keepBi bi = true
-      · rw [List.filter_cons_of_pos hkeep,
-            List.filter_cons_of_neg (p := fun b : BusInteraction (Expression p) => bs.isStateful b.busId) (by simp [hns])]
-        exact ihr
-      · rw [List.filter_cons_of_neg hkeep]
-        exact ihr
-
-/-! ## The general correctness lemma -/
-
-/-- Dropping a disconnected, witness-satisfiable component preserves correctness.
-
-`keepCon`/`keepBi` mark the *kept* constraints/interactions; the rest are removed. The hypotheses
-say: every removed item's variables are all "removed" variables (`remV`), the witness `w` satisfies
-every removed constraint and makes every removed interaction non-violating, every removed
-interaction is stateless, and every kept item uses only kept variables. -/
-theorem dropComponent_correct (cs : ConstraintSystem p) (bs : BusSemantics p)
-    (w : Variable → ZMod p) (remV : Variable → Bool)
-    (keepCon : Expression p → Bool) (keepBi : BusInteraction (Expression p) → Bool)
-    (hCrem : ∀ c ∈ cs.algebraicConstraints, keepCon c = false → ∀ x ∈ c.vars, remV x = true)
-    (hCsat : ∀ c ∈ cs.algebraicConstraints, keepCon c = false → c.eval w = 0)
-    (hCkeep : ∀ c ∈ cs.algebraicConstraints, keepCon c = true → ∀ x ∈ c.vars, remV x = false)
-    (hBrem : ∀ bi ∈ cs.busInteractions, keepBi bi = false → ∀ x ∈ bi.vars, remV x = true)
-    (hBsat : ∀ bi ∈ cs.busInteractions, keepBi bi = false →
-        bs.violatesConstraint (bi.eval w) = false)
-    (hBstateless : ∀ bi ∈ cs.busInteractions, keepBi bi = false → bs.isStateful bi.busId = false)
-    (hBkeep : ∀ bi ∈ cs.busInteractions, keepBi bi = true → ∀ x ∈ bi.vars, remV x = false) :
-    PassCorrect cs { algebraicConstraints := cs.algebraicConstraints.filter keepCon,
-                     busInteractions := cs.busInteractions.filter keepBi } [] bs := by
-  -- the merge: keep `env` on kept variables, use the witness on removed ones
-  set m : (Variable → ZMod p) → (Variable → ZMod p) :=
-    fun env x => if remV x = true then w x else env x with hm
-  -- evaluation of a "removed" expression / interaction under the merge is the witness value
-  have hmwC : ∀ env (e : Expression p), (∀ x ∈ e.vars, remV x = true) →
-      e.eval (m env) = e.eval w := by
-    intro env e he
-    exact Expression.eval_congr e _ _ (fun x hx => by simp [hm, he x hx])
-  have hmeC : ∀ env (e : Expression p), (∀ x ∈ e.vars, remV x = false) →
-      e.eval (m env) = e.eval env := by
-    intro env e he
-    exact Expression.eval_congr e _ _ (fun x hx => by simp [hm, he x hx])
-  have hmwB : ∀ env (bi : BusInteraction (Expression p)), (∀ x ∈ bi.vars, remV x = true) →
-      bi.eval (m env) = bi.eval w := by
-    intro env bi hbi
-    exact BusInteraction.eval_congr bi _ _ (fun x hx => by simp [hm, hbi x hx])
-  have hmeB : ∀ env (bi : BusInteraction (Expression p)), (∀ x ∈ bi.vars, remV x = false) →
-      bi.eval (m env) = bi.eval env := by
-    intro env bi hbi
-    exact BusInteraction.eval_congr bi _ _ (fun x hx => by simp [hm, hbi x hx])
-  -- a stateful interaction is always kept
-  have hstKeep : ∀ bi ∈ cs.busInteractions, bs.isStateful bi.busId = true → keepBi bi = true := by
-    intro bi hbi hstate
-    by_contra hk
-    rw [hBstateless bi hbi (by simpa using hk)] at hstate
-    exact absurd hstate (by simp)
-  -- extending a satisfying assignment of the output by the witness satisfies the input
-  have keySat : ∀ env,
-      (∀ c ∈ cs.algebraicConstraints.filter keepCon, c.eval env = 0) →
-      (∀ bi ∈ cs.busInteractions.filter keepBi,
-        (bi.eval env).multiplicity ≠ 0 → bs.violatesConstraint (bi.eval env) = false) →
-      cs.satisfies bs (m env) := by
-    intro env hsc hsb
-    refine ⟨fun c hc => ?_, fun bi hbi hne => ?_⟩
-    · by_cases hk : keepCon c = true
-      · rw [hmeC env c (hCkeep c hc hk)]
-        exact hsc c (List.mem_filter.2 ⟨hc, hk⟩)
-      · rw [hmwC env c (hCrem c hc (by simpa using hk))]
-        exact hCsat c hc (by simpa using hk)
-    · by_cases hk : keepBi bi = true
-      · rw [hmeB env bi (hBkeep bi hbi hk)] at hne ⊢
-        exact hsb bi (List.mem_filter.2 ⟨hbi, hk⟩) hne
-      · rw [hmwB env bi (hBrem bi hbi (by simpa using hk))]
-        exact hBsat bi hbi (by simpa using hk)
-  refine PassCorrect.ofEnvEq ?_ ?_ ?_ ?_
-  · -- soundness: out.implies cs
-    intro env hsat
-    refine ⟨m env, keySat env hsat.1 hsat.2, ?_⟩
-    -- side effects: out under env = cs under (m env)
-    have hse : ({ algebraicConstraints := cs.algebraicConstraints.filter keepCon,
-                  busInteractions := cs.busInteractions.filter keepBi } :
-                  ConstraintSystem p).sideEffects bs env = cs.sideEffects bs (m env) :=
-      sideEffects_drop_eq bs keepBi env (m env) cs.busInteractions
-        (fun bi hbi hkf => hBstateless bi hbi hkf)
-        (fun bi hbi hstate => hmeB env bi (hBkeep bi hbi (hstKeep bi hbi hstate)))
-    rw [hse]; exact BusState.equiv_refl _
-  · -- invariant preservation
-    intro hinv env hsat bi hbi
-    have hbimem : bi ∈ cs.busInteractions := (List.mem_filter.1 hbi).1
-    have hbikeep : keepBi bi = true := (List.mem_filter.1 hbi).2
-    have hsatm : cs.satisfies bs (m env) := keySat env hsat.1 hsat.2
-    have heval : bi.eval (m env) = bi.eval env := hmeB env bi (hBkeep bi hbimem hbikeep)
-    have key := hinv (m env) hsatm bi hbimem
-    simp only [heval] at key
-    exact key
-  · -- introduces no new variable (both lists are filtered)
-    intro z hz
-    rw [ConstraintSystem.mem_vars] at hz
-    rcases hz with ⟨c, hc, hzc⟩ | ⟨bi, hbi, hzbi⟩
-    · exact ConstraintSystem.mem_vars_of_constraint (List.mem_of_mem_filter hc) hzc
-    · rcases hzbi with hmm | ⟨e, he, hze⟩
-      · exact ConstraintSystem.mem_vars_of_mult (List.mem_of_mem_filter hbi) hmm
-      · exact ConstraintSystem.mem_vars_of_payload (List.mem_of_mem_filter hbi) he hze
-  · -- completeness: witness `env`
-    intro env hadm hsat
-    refine ⟨⟨fun c hc => hsat.1 c (List.mem_filter.1 hc).1,
-             fun bi hbi => hsat.2 bi (List.mem_filter.1 hbi).1⟩, ?_, ?_⟩
-    · -- admissibility carries over (dropped interactions are stateless)
-      exact (cs.admissible_filterBus bs keepBi env
-        (fun bi hbi hkf => Or.inr (hBstateless bi hbi hkf))).2 hadm
-    · -- side effects: cs under env = out under env
-      have hse : ({ algebraicConstraints := cs.algebraicConstraints.filter keepCon,
-                    busInteractions := cs.busInteractions.filter keepBi } :
-                    ConstraintSystem p).sideEffects bs env = cs.sideEffects bs env :=
-        sideEffects_drop_eq bs keepBi env env cs.busInteractions
-          (fun bi hbi hkf => hBstateless bi hbi hkf) (fun _ _ _ => rfl)
-      rw [hse]; exact BusState.equiv_refl _
-
-/-! ## Finding a component: connectivity from the stateful buses -/
-
-/-- Variables reachable from a stateful-bus variable via co-occurrence in a constraint or bus
-    interaction (`groups` = the variable lists; `v2g` = variable → group indices). This only *finds*
-    a candidate component — correctness never depends on it, since the pass re-checks the partition
-    the result induces. -/
-partial def bfsClosure (groups : Array (List Variable)) (v2g : Std.HashMap Variable (List Nat))
-    (visited : Std.HashSet Variable) (procGroups : Std.HashSet Nat) (stack : List Variable) :
-    Std.HashSet Variable :=
-  match stack with
-  | [] => visited
-  | x :: rest =>
-    if visited.contains x then bfsClosure groups v2g visited procGroups rest
-    else
-      let gids := (v2g.getD x []).filter (fun g => !procGroups.contains g)
-      let procGroups := gids.foldl (fun s g => s.insert g) procGroups
-      let newVars := gids.foldl (fun acc g => groups.getD g [] ++ acc) rest
-      bfsClosure groups v2g (visited.insert x) procGroups newVars
-
-/-- The co-occurrence graph of the system: for each item (constraint, then interaction) its list of
-    variables (`groups`), and a map from each variable to the indices of the items it occurs in
-    (`v2g`). Both `bfsClosure` seeds run over this graph. -/
-def buildGraph (cs : ConstraintSystem p) :
-    Array (List Variable) × Std.HashMap Variable (List Nat) :=
-  let groups : Array (List Variable) :=
-    (cs.algebraicConstraints.map Expression.vars ++
-      cs.busInteractions.map BusInteraction.vars).toArray
-  let v2g : Std.HashMap Variable (List Nat) :=
+/-- The co-occurrence graph of the dense system: for each item (constraint, then interaction) its
+    list of `VarId`s (`groups`), and a map from each `VarId` to the indices of the items it occurs in
+    (`v2g`). -/
+def denseBuildGraph (d : DenseConstraintSystem p) :
+    Array (List VarId) × Std.HashMap VarId (List Nat) :=
+  let groups : Array (List VarId) :=
+    (d.algebraicConstraints.map DenseExpr.vars ++
+      d.busInteractions.map denseBIVars).toArray
+  let v2g : Std.HashMap VarId (List Nat) :=
     (List.range groups.size).foldl
       (fun mp i => (groups.getD i []).foldl (fun mp x => mp.insert x (i :: mp.getD x [])) mp) ∅
   (groups, v2g)
 
+/-! ## The terminating closure -/
+
+/-- Membership in a left-fold of `insert`s over a `Std.HashSet Nat`: an index is present iff it was
+    already present or it is one of the folded elements. Supports the closure's termination measure. -/
+private theorem denseProcMem (l : List Nat) (s : Std.HashSet Nat) (i : Nat) :
+    i ∈ l.foldl (fun s g => s.insert g) s ↔ i ∈ s ∨ i ∈ l := by
+  induction l generalizing s with
+  | nil => simp
+  | cons a rest ih =>
+    rw [List.foldl_cons, ih (s.insert a), Std.HashSet.mem_insert, List.mem_cons]
+    simp only [beq_iff_eq]
+    constructor
+    · rintro ((rfl | h) | h)
+      · exact Or.inr (Or.inl rfl)
+      · exact Or.inl h
+      · exact Or.inr (Or.inr h)
+    · rintro (h | rfl | h)
+      · exact Or.inl (Or.inr h)
+      · exact Or.inl (Or.inl rfl)
+      · exact Or.inr h
+
+/-- Folding a list of *out-of-range* group indices leaves the stack unchanged: each `groups.getD g []`
+    is the default empty list. The push-nothing case of the closure's measure. -/
+private theorem denseFoldOutOfRange (groups : Array (List VarId)) :
+    ∀ (l : List Nat), (∀ g ∈ l, groups.size ≤ g) → ∀ (acc : List VarId),
+      l.foldl (fun acc g => groups.getD g [] ++ acc) acc = acc := by
+  intro l
+  induction l with
+  | nil => intro _ acc; rfl
+  | cons a t ih =>
+    intro hl acc
+    rw [List.foldl_cons]
+    have ha : groups.getD a ([] : List VarId) = [] := by
+      rw [Array.getD_eq_getD_getElem?, Array.getElem?_eq_none (hl a (List.mem_cons_self ..)),
+        Option.getD_none]
+    rw [ha, List.nil_append]
+    exact ih (fun g hg => hl g (List.mem_cons_of_mem _ hg)) acc
+
+/-- The lexicographic measure `(unprocessed-groups-in-range, stack.length)` strictly decreases on a
+    productive closure step. If some triggered group index is in range it is newly processed, so the
+    first component drops; otherwise every push is empty and the stack shrinks with the first
+    component fixed (see the module header). -/
+private theorem denseBfsMeasureDecreasing (groups : Array (List VarId))
+    (procGroups : Std.HashSet Nat) (gids : List Nat) (rest : List VarId)
+    (hg : ∀ g ∈ gids, procGroups.contains g = false) :
+    (toLex (((Finset.range groups.size).filter
+                (fun g => (gids.foldl (fun s g => s.insert g) procGroups).contains g = false)).card,
+              (gids.foldl (fun acc g => groups.getD g [] ++ acc) rest).length) : Nat ×ₗ Nat)
+      < toLex (((Finset.range groups.size).filter (fun g => procGroups.contains g = false)).card,
+               rest.length + 1) := by
+  set P' := gids.foldl (fun s g => s.insert g) procGroups with hP'
+  have hmem : ∀ g, g ∈ P' ↔ g ∈ procGroups ∨ g ∈ gids := fun g => denseProcMem gids procGroups g
+  have himpl : ∀ a, P'.contains a = false → procGroups.contains a = false := by
+    intro a ha
+    rw [Std.HashSet.contains_eq_false_iff_not_mem] at ha ⊢
+    exact fun hm => ha ((hmem a).2 (Or.inl hm))
+  rw [Prod.Lex.toLex_lt_toLex]
+  by_cases hcase : ∃ g ∈ gids, g < groups.size
+  · left
+    obtain ⟨g0, hg0, hg0lt⟩ := hcase
+    show ((Finset.range groups.size).filter (fun g => P'.contains g = false)).card
+       < ((Finset.range groups.size).filter (fun g => procGroups.contains g = false)).card
+    apply Finset.card_lt_card
+    rw [Finset.ssubset_iff_of_subset (Finset.monotone_filter_right _ (fun a _ => himpl a))]
+    refine ⟨g0, ?_, ?_⟩
+    · rw [Finset.mem_filter, Finset.mem_range]; exact ⟨hg0lt, hg g0 hg0⟩
+    · rw [Finset.mem_filter]
+      rintro ⟨-, hc⟩
+      rw [Std.HashSet.contains_eq_false_iff_not_mem] at hc
+      exact hc ((hmem g0).2 (Or.inr hg0))
+  · right
+    have hcase' : ∀ g ∈ gids, groups.size ≤ g := by
+      intro g hgin; by_contra hlt; exact hcase ⟨g, hgin, by omega⟩
+    refine ⟨?_, ?_⟩
+    · show ((Finset.range groups.size).filter (fun g => P'.contains g = false)).card
+         = ((Finset.range groups.size).filter (fun g => procGroups.contains g = false)).card
+      refine congrArg Finset.card (Finset.filter_congr fun g hg' => ?_)
+      rw [Finset.mem_range] at hg'
+      have hgni : g ∉ gids := fun hgin => absurd (hcase' g hgin) (by omega)
+      constructor
+      · exact fun h => himpl g h
+      · intro h
+        rw [Std.HashSet.contains_eq_false_iff_not_mem] at h ⊢
+        exact fun hm => h (((hmem g).1 hm).resolve_right hgni)
+    · show (gids.foldl (fun acc g => groups.getD g [] ++ acc) rest).length < rest.length + 1
+      rw [denseFoldOutOfRange groups gids hcase' rest]; omega
+
+/-- Variables reachable from a seed via co-occurrence in a constraint or interaction, computed by a
+    well-founded recursion (see the module header for the termination measure). Correctness never
+    depends on this result — the pass re-checks the partition it induces. -/
+def denseBfsClosure (groups : Array (List VarId)) (v2g : Std.HashMap VarId (List Nat))
+    (visited : Std.HashSet VarId) (procGroups : Std.HashSet Nat) (stack : List VarId) :
+    Std.HashSet VarId :=
+  match stack with
+  | [] => visited
+  | x :: rest =>
+    if visited.contains x then denseBfsClosure groups v2g visited procGroups rest
+    else
+      let gids := (v2g.getD x []).filter (fun g => !procGroups.contains g)
+      let procGroups' := gids.foldl (fun s g => s.insert g) procGroups
+      let newVars := gids.foldl (fun acc g => groups.getD g [] ++ acc) rest
+      denseBfsClosure groups v2g (visited.insert x) procGroups' newVars
+  termination_by toLex (((Finset.range groups.size).filter
+      (fun g => procGroups.contains g = false)).card, stack.length)
+  decreasing_by
+    · exact Prod.Lex.toLex_lt_toLex.2 (Or.inr ⟨rfl, by simp⟩)
+    · simp only [List.length_cons]
+      exact denseBfsMeasureDecreasing groups procGroups
+        ((v2g.getD x []).filter (fun g => !procGroups.contains g)) rest
+        (fun g hg => by simpa using (List.mem_filter.1 hg).2)
+
+/-! ## Keep predicates -/
+
 /-- Keep a constraint unless *all* of its variables are removable (and it has at least one). -/
-def keepConWith (remV : Variable → Bool) (c : Expression p) : Bool :=
+def denseKeepConWith (remV : VarId → Bool) (c : DenseExpr p) : Bool :=
   c.vars.isEmpty || !(c.vars.all remV)
 
 /-- Keep an interaction if it is stateful or has a non-removable variable (or no variables). -/
-def keepBiWith (bs : BusSemantics p) (remV : Variable → Bool)
-    (bi : BusInteraction (Expression p)) : Bool :=
-  bs.isStateful bi.busId || bi.vars.isEmpty || !(bi.vars.all remV)
+def denseKeepBiWith (bs : BusSemantics p) (remV : VarId → Bool)
+    (bi : BusInteraction (DenseExpr p)) : Bool :=
+  bs.isStateful bi.busId || (denseBIVars bi).isEmpty || !((denseBIVars bi).all remV)
 
-/-! ## The pass -/
+/-! ## Computing the removable set
 
-/-- Remove every disconnected component that the all-zero witness certifies satisfiable.
+`denseConnBad` returns the two reachable sets as **data** (a pair), not a `VarId → Bool` predicate:
+a def whose result type is a function is eta-expanded to maximal arity, which would re-run the
+graph build and both closures on *every* `remV x` application (the `lean-arity-expansion-trap`). The
+`remV` predicate is instead built once, at the single use site in `denseDisconnectedF`, capturing
+the already-computed sets. -/
 
-    A variable is *removable* when it is (a) not connected to any stateful bus interaction and (b)
-    not in the co-occurrence closure of any disconnected item the witness fails to satisfy — so a
-    component is dropped only if **all** of its constraints evaluate to `0` and **all** of its
-    (stateless) interactions are non-violating under the witness. This is per-component: an
-    uncertifiable component is kept without blocking the others. The final partition is re-checked
-    (`hchk`) so correctness never depends on the connectivity search; if a check fails the pass is
-    the identity. -/
-def disconnectedComponentPass : VerifiedPass p := fun cs bs =>
-  let (groups, v2g) := buildGraph cs
+/-- The two reachable sets the pass computes: `conn` (variables connected to a stateful bus
+    interaction) and `bad` (the co-occurrence closure of any disconnected item the all-zero witness
+    fails on). Returns data — the `remV` predicate is derived at the use site. Treated **opaquely**
+    by the correctness proof (which re-checks the partition the derived `remV` induces). -/
+def denseConnBad (bs : BusSemantics p) (d : DenseConstraintSystem p) :
+    Std.HashSet VarId × Std.HashSet VarId :=
+  let (groups, v2g) := denseBuildGraph d
   -- variables connected to a stateful bus interaction
-  let conn := bfsClosure groups v2g ∅ ∅
-    (cs.busInteractions.foldl (fun acc bi =>
-      if bs.isStateful bi.busId then bi.vars ++ acc else acc) [])
-  let disc : Variable → Bool := fun x => !conn.contains x
+  let connSeed : List VarId :=
+    d.busInteractions.foldl (fun acc bi =>
+      if bs.isStateful bi.busId then denseBIVars bi ++ acc else acc) []
+  let conn := denseBfsClosure groups v2g ∅ ∅ connSeed
+  let disc : VarId → Bool := fun x => !conn.contains x
   -- variables of a disconnected item the all-zero witness fails on: keep its whole component
-  let badSeeds : List Variable :=
-    cs.algebraicConstraints.foldl (fun acc c =>
+  let badSeeds : List VarId :=
+    d.algebraicConstraints.foldl (fun acc c =>
         if !c.vars.isEmpty && c.vars.all disc && !decide (c.eval (fun _ => 0) = 0)
         then c.vars ++ acc else acc)
-      (cs.busInteractions.foldl (fun acc bi =>
-        if !bs.isStateful bi.busId && !bi.vars.isEmpty && bi.vars.all disc
-            && bs.violatesConstraint (bi.eval (fun _ => 0))
-        then bi.vars ++ acc else acc) [])
-  let bad := bfsClosure groups v2g ∅ ∅ badSeeds
-  let remV : Variable → Bool := fun x => !conn.contains x && !bad.contains x
-  if hchk : (
-      (cs.algebraicConstraints.any (fun c => !keepConWith remV c) ||
-        cs.busInteractions.any (fun bi => !keepBiWith bs remV bi)) &&
-      cs.algebraicConstraints.all (fun c => keepConWith remV c || decide (c.eval (fun _ => 0) = 0)) &&
-      cs.busInteractions.all (fun bi =>
-        keepBiWith bs remV bi || !bs.violatesConstraint (bi.eval (fun _ => 0))) &&
-      cs.algebraicConstraints.all (fun c =>
-        !keepConWith remV c || c.vars.all (fun x => !remV x)) &&
-      cs.busInteractions.all (fun bi =>
-        !keepBiWith bs remV bi || bi.vars.all (fun x => !remV x))
-    ) = true then
-    ⟨{ algebraicConstraints := cs.algebraicConstraints.filter (keepConWith remV),
-       busInteractions := cs.busInteractions.filter (keepBiWith bs remV) }, [],
-     by
-       simp only [Bool.and_eq_true, and_assoc] at hchk
-       obtain ⟨_hne, hcz, hbz, hck, hbk⟩ := hchk
-       refine dropComponent_correct cs bs (fun _ => 0) remV
-         (keepConWith remV) (keepBiWith bs remV) ?_ ?_ ?_ ?_ ?_ ?_ ?_
-       · -- hCrem: a removed constraint has all-removable variables
-         intro c _ hkf x hx
-         simp only [keepConWith, Bool.or_eq_false_iff] at hkf
-         exact (List.all_eq_true.1 (by simpa using hkf.2)) x hx
-       · -- hCsat: the witness zeroes every removed constraint
-         intro c hc hkf
-         have h1 := (List.all_eq_true.1 hcz) c hc
-         rw [hkf, Bool.false_or] at h1
-         exact of_decide_eq_true h1
-       · -- hCkeep: a kept constraint uses only connected variables
-         intro c hc hkt x hx
-         have h1 := (List.all_eq_true.1 hck) c hc
-         rw [hkt] at h1
-         simp only [Bool.not_true, Bool.false_or] at h1
-         simpa using (List.all_eq_true.1 h1) x hx
-       · -- hBrem
-         intro bi _ hkf x hx
-         simp only [keepBiWith, Bool.or_eq_false_iff] at hkf
-         exact (List.all_eq_true.1 (by simpa using hkf.2)) x hx
-       · -- hBsat: the witness makes every removed interaction non-violating
-         intro bi hbi hkf
-         have h1 := (List.all_eq_true.1 hbz) bi hbi
-         rw [hkf, Bool.false_or] at h1
-         simpa using h1
-       · -- hBstateless: removed interactions are stateless
-         intro bi _ hkf
-         simp only [keepBiWith, Bool.or_eq_false_iff] at hkf
-         exact hkf.1.1
-       · -- hBkeep: a kept interaction uses only connected variables
-         intro bi hbi hkt x hx
-         have h1 := (List.all_eq_true.1 hbk) bi hbi
-         rw [hkt] at h1
-         simp only [Bool.not_true, Bool.false_or] at h1
-         simpa using (List.all_eq_true.1 h1) x hx⟩
-  else
-    ⟨cs, [], PassCorrect.refl cs bs⟩
+      (d.busInteractions.foldl (fun acc bi =>
+        if !bs.isStateful bi.busId && !(denseBIVars bi).isEmpty && (denseBIVars bi).all disc
+            && bs.violatesConstraint (denseBIEval bi (fun _ => 0))
+        then denseBIVars bi ++ acc else acc) [])
+  let bad := denseBfsClosure groups v2g ∅ ∅ badSeeds
+  (conn, bad)
+
+/-! ## The guarded drop -/
+
+/-- The run-time re-check: the induced partition is a genuine drop, the all-zero witness satisfies
+    every removed constraint and non-violates every removed interaction, and every kept item uses
+    only non-removable variables. Stated for an arbitrary `remV`. -/
+def denseDropCheck (bs : BusSemantics p) (d : DenseConstraintSystem p) (remV : VarId → Bool) : Bool :=
+  (d.algebraicConstraints.any (fun c => !denseKeepConWith remV c) ||
+    d.busInteractions.any (fun bi => !denseKeepBiWith bs remV bi)) &&
+  d.algebraicConstraints.all (fun c => denseKeepConWith remV c || decide (c.eval (fun _ => 0) = 0)) &&
+  d.busInteractions.all (fun bi =>
+    denseKeepBiWith bs remV bi || !bs.violatesConstraint (denseBIEval bi (fun _ => 0))) &&
+  d.algebraicConstraints.all (fun c =>
+    !denseKeepConWith remV c || c.vars.all (fun x => !remV x)) &&
+  d.busInteractions.all (fun bi =>
+    !denseKeepBiWith bs remV bi || (denseBIVars bi).all (fun x => !remV x))
+
+/-- Drop the removable component if the re-check passes; otherwise the identity. Stated for an
+    arbitrary `remV` so the correctness proof is generic in the connectivity search. -/
+def denseDropGuarded (bs : BusSemantics p) (d : DenseConstraintSystem p) (remV : VarId → Bool) :
+    DenseConstraintSystem p :=
+  if denseDropCheck bs d remV then
+    { algebraicConstraints := d.algebraicConstraints.filter (denseKeepConWith remV),
+      busInteractions := d.busInteractions.filter (denseKeepBiWith bs remV) }
+  else d
+
+/-- The dense disconnected-component transform: compute the reachable sets once, derive the
+    removable predicate as a closure over them, then run the guarded drop. Returns data (a
+    `DenseConstraintSystem`), so the `let cb` runs once per invocation — the `remV` closure captures
+    it, never recomputes it. -/
+def denseDisconnectedF (bs : BusSemantics p) (d : DenseConstraintSystem p) :
+    DenseConstraintSystem p :=
+  let cb := denseConnBad bs d
+  denseDropGuarded bs d (fun x => !cb.1.contains x && !cb.2.contains x)
+
+end ApcOptimizer.Dense

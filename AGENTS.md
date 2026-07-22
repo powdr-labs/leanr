@@ -52,12 +52,16 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
 
 ## Adding an optimization
 
-Write a `VerifiedPass` in a new `ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
-`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass.….guardDegree)` entry to the
-`cleanupPasses` list. That is the only edit needed; the profiler picks up the new pass for free. Do
-not touch the audited surface (`Spec.lean`, `OpenVmSemantics.lean`, `Sp1Semantics.lean`, `MemoryBus.lean`,
-`ApcOptimizer/Optimizer.lean`) or the glue in `Basic.lean`; correctness follows from the pass's own
-`PassCorrect`. Build and verify with `lake build`.
+Write a dense pass — a `DenseVerifiedPassW`, which bundles its own `DensePassCorrect` proof — in
+a new `ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
+`ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass.guardDegree b)` entry to
+the `cleanupPasses` list. Build the pass with `DenseVerifiedPassW.of` (registry unchanged) or, for
+passes that mint fresh variables, `DenseVerifiedPassW.ofExtending`; see the worked examples
+`GaussProof.lean`, `DropPassesProof.lean`, `CarryBranchProof.lean` / `RangeBoolProof.lean` and
+`ReencodeProof.lean`. That one list entry is the only edit needed; the profiler picks up the new
+pass for free. Do not touch the audited surface (`Spec.lean`, `OpenVmSemantics.lean`,
+`Sp1Semantics.lean`, `MemoryBus.lean`, `ApcOptimizer/Optimizer.lean`) or the glue in `Basic.lean`;
+correctness follows from the pass's own bundled proof. Build and verify with `lake build`.
 
 Effectiveness is measured along three axes (`ApcOptimizer/Utils/Size.lean`, reported by the CLI and the
 benchmark), in priority order: **variable effectiveness > bus-interaction effectiveness >

@@ -1,562 +1,229 @@
-import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
+import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.MemoryBus
 
 set_option autoImplicit false
 
-/-! # Two-root address disequality (symbolic-timestamp forwarding enabler)
+/-! # Dense two-root address disequality
 
-`addrConstsNeq` (`BusUnify.lean`) can only refute an in-window memory message as a
-*different-address* one when both address slots are literal constants. On keccak's heap the
-address slot is a pointer *expression* `mem_ptr_limbs__0 + 2¹⁶·mem_ptr_limbs__1`, so no two
-distinct heap pointers are ever refuted, and `busUnifyPass`'s consumer scan aborts on the first
-interleaved other-pointer access — the whole "forward the read/`prev_data` limbs across the
-symbolic-timestamp access, pin the decomp" chain never fires.
+The shared certificate library `busUnifyPass`/`busPairCancelPass` consult to refute a
+memory-address match. This module is a **library**: it exports no pass, only the
+certificate-building and certificate-checking functions the dense `busUnify` (and
+`busPairCancel`) passes consume.
 
-This module provides the missing certificate. Each pointer limb is pinned by a **two-root**
-decomposition constraint `(A + k·x)(A + δ + k·x) = 0` (the address-wraparound branch, recognised
-by `twoRootOf?`). Substituting the high limb's two roots into the address expression
-`limb₀ + 2¹⁶·limb₁` **cancels the low limb algebraically** — over BabyBear `1 + 2¹⁶·30720 ≡ 0`,
-so the `limb₀` coefficient vanishes — leaving an affine form in the base register plus a constant,
-in each of the two branches. For two accesses off the *same* base register the branch forms differ
-only in their constant (the immediate), so every one of the four branch-pair differences is a
-nonzero field constant and the addresses provably differ — with **no bounds reasoning at all**,
-purely the two-root disjunction and linear arithmetic.
+The dense structures (`DenseTwoRootMap`, `DenseNonzeroWits`) keep only their data fields, with no
+`Prop` field: correctness is established downstream, in the proof files. Primality/unit gating
+that is **behaviorally** relevant (the map comes out empty on composite `p`; an entry is only
+inserted when its coefficient is a unit) is preserved exactly, since it changes which candidates
+end up in the map.
 
-Everything is a decidable, re-checkable certificate consumed by `busUnifyPass` / `busPairCancel`
-via `addrTwoRootNeq`; the field-membership step (`twoRootOf?_sound`) needs an integral domain, so
-the top-level certificate self-gates on `decide (Nat.Prime p)` and needs no change to the passes'
-own primality handling. -/
+`denseTwoRootOf?` (recognizing a two-root decomposition) is placed here rather than in
+`Dense/RootPairUnify.lean`, because `AddrDiseq`'s two-root map is its only consumer here;
+`Dense/RootPairUnify.lean` imports and reuses this definition directly rather than re-deriving
+it. -/
+
+namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
+
+/-! ## Recognizing a two-root constraint (dense)
+
+Placed here rather than in `Dense/RootPairUnify.lean`, since `AddrDiseq`'s two-root map is a
+consumer here; `RootPairUnify.lean` reuses this definition (does not re-derive it). -/
+
+/-- The two-root decomposition of a dense constraint relative to `x`: `some (k, A, δ)` when the
+    constraint is a product of two affine factors, both linear in `x` with the same nonzero
+    coefficient `k`, whose `x`-free parts differ by the constant `δ`. -/
+def denseTwoRootOf? (c : DenseExpr p) (x : VarId) : Option (ZMod p × DenseLinExpr p × ZMod p) :=
+  match c with
+  | .mul f1 f2 =>
+    match denseLinearize f1, denseLinearize f2 with
+    | some l1, some l2 =>
+      let k := l1.coeff x
+      let A := (l1.others x).norm
+      let A2 := (l2.others x).norm
+      if k ≠ 0 ∧ l2.coeff x = k ∧ A2.terms = A.terms then some (k, A, A2.const - A.const)
+      else none
+    | _, _ => none
+  | _ => none
 
 /-! ## Substituting a two-root branch into a linear form -/
 
 /-- The two affine forms obtained by replacing the variable with coefficient `cx` in `rest + cx·x`
-    by the two roots `x = -(k⁻¹·A)` and `x = -(k⁻¹·A) - k⁻¹·δ` of a `twoRootOf?` decomposition
-    `(k, A, δ)`. Returned normalized (so a cancelled limb drops out). -/
-def ptrBranchesOf (k : ZMod p) (A : LinExpr p) (δ cx : ZMod p) (rest : LinExpr p) :
-    LinExpr p × LinExpr p :=
+    by the two roots `x = -(k⁻¹·A)` and `x = -(k⁻¹·A) - k⁻¹·δ` of a `denseTwoRootOf?` decomposition
+    `(k, A, δ)`. -/
+def densePtrBranchesOf (k : ZMod p) (A : DenseLinExpr p) (δ cx : ZMod p) (rest : DenseLinExpr p) :
+    DenseLinExpr p × DenseLinExpr p :=
   let r1 := A.scale (-(k⁻¹))
   let r2 := r1.add ⟨-(k⁻¹ * δ), []⟩
   ((rest.add (r1.scale cx)).norm, (rest.add (r2.scale cx)).norm)
 
-theorem ptrBranchesOf_eval (k : ZMod p) (A : LinExpr p) (δ cx : ZMod p) (rest : LinExpr p)
-    (env : Variable → ZMod p) :
-    ((ptrBranchesOf k A δ cx rest).1).eval env = rest.eval env + cx * (-(k⁻¹) * A.eval env) ∧
-    ((ptrBranchesOf k A δ cx rest).2).eval env
-      = rest.eval env + cx * (-(k⁻¹) * A.eval env - k⁻¹ * δ) := by
-  have hc0 : (⟨-(k⁻¹ * δ), []⟩ : LinExpr p).eval env = -(k⁻¹ * δ) := by simp [LinExpr.eval]
-  refine ⟨?_, ?_⟩
-  · simp only [ptrBranchesOf, LinExpr.norm_eval, LinExpr.add_eval, LinExpr.scale_eval]
-  · simp only [ptrBranchesOf, LinExpr.norm_eval, LinExpr.add_eval, LinExpr.scale_eval, hc0]
-    ring
-
 /-! ## Reducing a pointer expression through its limb decompositions -/
 
-/-! ### A proof-carrying two-root map (memoized `twoRootOf?`)
+/-! ### A dense two-root map (memoized `denseTwoRootOf?`, no proof carried)
 
-Scanning every constraint per variable per candidate pair is quadratic on
-keccak's interleaved window. The two-root data `(k, A, δ)` for each variable is instead precomputed
-once per pass into a hash map bundled with its soundness. Each entry also carries `Nat.Prime p`
-(needed for the field-membership step) — the map is built empty on composite `p` — so the
-downstream certificate needs no per-call primality `decide`. -/
+Scanning every constraint per variable per candidate pair is quadratic on keccak's interleaved
+window, so the two-root data `(k, A, δ)` for each variable is precomputed once per pass into a
+hash map. -/
 
-variable {constraints : List (Expression p)}
+/-- Per-variable two-root decomposition data (data only). -/
+structure DenseTwoRootMap (p : ℕ) where
+  map : Std.HashMap VarId (ZMod p × DenseLinExpr p × ZMod p)
 
-/-- Per-variable two-root decomposition data, each entry sound and witnessed by an actual
-    constraint (and `p` prime, needed for the root-membership step). -/
-structure TwoRootMap (p : ℕ) (constraints : List (Expression p)) where
-  map : Std.HashMap Variable (ZMod p × LinExpr p × ZMod p)
-  sound : ∀ v k A δ, map[v]? = some (k, A, δ) →
-    Nat.Prime p ∧ k * k⁻¹ = 1 ∧ ∃ c ∈ constraints, twoRootOf? c v = some (k, A, δ)
+namespace DenseTwoRootMap
 
-namespace TwoRootMap
-
-def empty : TwoRootMap p constraints where
+def empty : DenseTwoRootMap p where
   map := ∅
-  sound := by
-    intro v k A δ h
-    rw [Std.HashMap.getElem?_empty] at h
-    exact absurd h (by simp)
 
-/-- Insert a sound entry (last write wins). -/
-def insertEntry (T : TwoRootMap p constraints) (v : Variable) (k : ZMod p) (A : LinExpr p)
-    (δ : ZMod p) (h : Nat.Prime p ∧ k * k⁻¹ = 1 ∧ ∃ c ∈ constraints, twoRootOf? c v = some (k, A, δ)) :
-    TwoRootMap p constraints where
+/-- Insert an entry (last write wins). -/
+def insertEntry (T : DenseTwoRootMap p) (v : VarId) (k : ZMod p) (A : DenseLinExpr p) (δ : ZMod p) :
+    DenseTwoRootMap p where
   map := T.map.insert v (k, A, δ)
-  sound := by
-    intro w k' A' δ' hw
-    rw [Std.HashMap.getElem?_insert] at hw
-    by_cases hvw : (v == w) = true
-    · rw [if_pos hvw] at hw
-      have hvw' : v = w := by simpa using hvw
-      have heq : (k, A, δ) = (k', A', δ') := by simpa using hw
-      simp only [Prod.mk.injEq] at heq
-      obtain ⟨rfl, rfl, rfl⟩ := heq
-      subst hvw'
-      exact h
-    · rw [if_neg hvw] at hw
-      exact T.sound w k' A' δ' hw
 
-/-- Insert the two-root entry (if any, with a unit coefficient) for each of `c`'s variables. -/
-def addVars (hp : Nat.Prime p) (c : Expression p) (hc : c ∈ constraints) :
-    TwoRootMap p constraints → List Variable → TwoRootMap p constraints
+/-- Insert the two-root entry (if any, with a unit coefficient) for each of `c`'s variables. The
+    unit-coefficient condition gates behavior (an entry is only inserted when the coefficient is a
+    unit) and is checked with a plain `if`. -/
+def addVars (c : DenseExpr p) : DenseTwoRootMap p → List VarId → DenseTwoRootMap p
   | T, [] => T
   | T, v :: vs =>
-    match htr : twoRootOf? c v with
+    match denseTwoRootOf? c v with
     | some (k, A, δ) =>
-      if hu : k * k⁻¹ = 1 then
-        addVars hp c hc (T.insertEntry v k A δ ⟨hp, hu, c, hc, htr⟩) vs
-      else addVars hp c hc T vs
-    | none => addVars hp c hc T vs
+      if k * k⁻¹ = 1 then addVars c (T.insertEntry v k A δ) vs
+      else addVars c T vs
+    | none => addVars c T vs
 
 /-- Fold `addVars` over a constraint list. -/
-def addAll (hp : Nat.Prime p) :
-    TwoRootMap p constraints → (pending : List (Expression p)) →
-    (∀ c ∈ pending, c ∈ constraints) → TwoRootMap p constraints
-  | T, [], _ => T
-  | T, c :: rest, hmem =>
-    addAll hp (addVars hp c (hmem c (List.mem_cons_self ..)) T c.vars.eraseDups) rest
-      (fun c' h => hmem c' (List.mem_cons_of_mem _ h))
+def addAll : DenseTwoRootMap p → (pending : List (DenseExpr p)) → DenseTwoRootMap p
+  | T, [] => T
+  | T, c :: rest => addAll (addVars c T c.vars.eraseDups) rest
 
-/-- Build the map for a constraint list (empty on composite `p`). -/
-def build (constraints : List (Expression p)) : TwoRootMap p constraints :=
-  if hp : Nat.Prime p then addAll hp empty constraints (fun _ h => h)
-  else empty
+/-- Build the map for a constraint list (empty on composite `p`; this primality gate is
+    behaviorally relevant, so it is a plain `if` on the decidable condition). -/
+def build (constraints : List (DenseExpr p)) : DenseTwoRootMap p :=
+  if Nat.Prime p then addAll empty constraints else empty
 
-end TwoRootMap
+end DenseTwoRootMap
 
-/-- All affine two-root reductions of an expression `E`: for each variable of the linearized form
-    that carries a two-root entry, the pair of branch forms `ptrBranchesOf`. Every returned pair
-    `(b₁, b₂)` satisfies `E.eval ∈ {b₁.eval, b₂.eval}` under the constraints
-    (`ptrReductions_sound`). -/
-def ptrReductions (T : TwoRootMap p constraints) (E : Expression p) :
-    List (LinExpr p × LinExpr p) :=
-  match linearize E with
+/-- All affine two-root reductions of a dense expression `E`: for each variable of the linearized
+    form that carries a two-root entry, the pair of branch forms `densePtrBranchesOf`. -/
+def densePtrReductions (T : DenseTwoRootMap p) (E : DenseExpr p) :
+    List (DenseLinExpr p × DenseLinExpr p) :=
+  match denseLinearize E with
   | none => []
   | some L =>
     (L.terms.map Prod.fst).eraseDups.filterMap (fun v =>
       match T.map[v]? with
-      | some (k, A, δ) => some (ptrBranchesOf k A δ (L.coeff v) (L.others v))
+      | some (k, A, δ) => some (densePtrBranchesOf k A δ (L.coeff v) (L.others v))
       | none => none)
-
-theorem ptrReductions_sound (T : TwoRootMap p constraints) (E : Expression p)
-    (b1 b2 : LinExpr p) (hmem : (b1, b2) ∈ ptrReductions T E)
-    (env : Variable → ZMod p) (hcon : ∀ c ∈ constraints, c.eval env = 0) :
-    E.eval env = b1.eval env ∨ E.eval env = b2.eval env := by
-  unfold ptrReductions at hmem
-  cases hL : linearize E with
-  | none => rw [hL] at hmem; simp at hmem
-  | some L =>
-    rw [hL] at hmem
-    rw [List.mem_filterMap] at hmem
-    obtain ⟨v, _hv, hmatch⟩ := hmem
-    cases htm : T.map[v]? with
-    | none => rw [htm] at hmatch; simp at hmatch
-    | some kAδ =>
-      obtain ⟨k, A, δ⟩ := kAδ
-      rw [htm] at hmatch
-      dsimp only at hmatch
-      simp only [Option.some.injEq] at hmatch
-      obtain ⟨hp, hunit, c, hc, htr⟩ := T.sound v k A δ htm
-      haveI : Fact p.Prime := ⟨hp⟩
-      have hroot := twoRootOf?_sound c v k A δ htr hunit env (hcon c hc)
-      have hEL : E.eval env = L.eval env := linearize_eval E L hL env
-      have hsplit : L.eval env = L.coeff v * env v + (L.others v).eval env := L.eval_split v env
-      obtain ⟨he1, he2⟩ := ptrBranchesOf_eval k A δ (L.coeff v) (L.others v) env
-      have hb1 : b1 = (ptrBranchesOf k A δ (L.coeff v) (L.others v)).1 :=
-        (congrArg Prod.fst hmatch).symm
-      have hb2 : b2 = (ptrBranchesOf k A δ (L.coeff v) (L.others v)).2 :=
-        (congrArg Prod.snd hmatch).symm
-      rcases hroot with hr | hr
-      · left; rw [hEL, hsplit, hr, hb1, he1]; ring
-      · right; rw [hEL, hsplit, hr, hb2, he2]; ring
 
 /-! ## Nonzero-constant differences -/
 
 /-- The two forms differ by a nonzero field constant (checked structurally after normalization). -/
-def constDiffNZ (a b : LinExpr p) : Bool :=
+def denseConstDiffNZ (a b : DenseLinExpr p) : Bool :=
   let d := (a.add (b.scale (-1))).norm
   d.terms.isEmpty && decide (d.const ≠ 0)
 
-theorem constDiffNZ_sound (a b : LinExpr p) (h : constDiffNZ a b = true)
-    (env : Variable → ZMod p) : a.eval env ≠ b.eval env := by
-  unfold constDiffNZ at h
-  simp only [Bool.and_eq_true] at h
-  obtain ⟨hterms, hconst⟩ := h
-  have hd : ((a.add (b.scale (-1))).norm).eval env = a.eval env - b.eval env := by
-    rw [LinExpr.norm_eval, LinExpr.add_eval, LinExpr.scale_eval]; ring
-  have hd2 : ((a.add (b.scale (-1))).norm).eval env = ((a.add (b.scale (-1))).norm).const := by
-    simp only [LinExpr.eval, List.isEmpty_iff.1 hterms, List.map_nil, List.sum_nil, add_zero]
-  intro heq
-  have hz : ((a.add (b.scale (-1))).norm).const = 0 := by rw [← hd2, hd, heq, sub_self]
-  exact (of_decide_eq_true hconst) hz
-
 /-! ## The expression- and address-level certificates -/
 
-/-- Two expressions provably evaluate differently: some two-root reduction of each yields four
-    branch-pair differences that are all nonzero field constants. -/
-def exprTwoRootNeq (T : TwoRootMap p constraints) (e e' : Expression p) : Bool :=
-  (ptrReductions T e).any (fun red =>
-    (ptrReductions T e').any (fun red' =>
-      constDiffNZ red.1 red'.1 && constDiffNZ red.1 red'.2 &&
-      constDiffNZ red.2 red'.1 && constDiffNZ red.2 red'.2))
-
-theorem exprTwoRootNeq_sound (T : TwoRootMap p constraints)
-    (e e' : Expression p) (h : exprTwoRootNeq T e e' = true) (env : Variable → ZMod p)
-    (hcon : ∀ c ∈ constraints, c.eval env = 0) : e.eval env ≠ e'.eval env := by
-  unfold exprTwoRootNeq at h
-  rw [List.any_eq_true] at h
-  obtain ⟨⟨a1, a2⟩, hred, hinner⟩ := h
-  rw [List.any_eq_true] at hinner
-  obtain ⟨⟨b1, b2⟩, hred', hchk⟩ := hinner
-  simp only [Bool.and_eq_true] at hchk
-  obtain ⟨⟨⟨h11, h12⟩, h21⟩, h22⟩ := hchk
-  have he := ptrReductions_sound T e a1 a2 hred env hcon
-  have he' := ptrReductions_sound T e' b1 b2 hred' env hcon
-  rcases he with ha | ha <;> rcases he' with hb | hb <;> rw [ha, hb]
-  · exact constDiffNZ_sound a1 b1 h11 env
-  · exact constDiffNZ_sound a1 b2 h12 env
-  · exact constDiffNZ_sound a2 b1 h21 env
-  · exact constDiffNZ_sound a2 b2 h22 env
+/-- Two dense expressions provably evaluate differently: some two-root reduction of each yields
+    four branch-pair differences that are all nonzero field constants. -/
+def denseExprTwoRootNeq (T : DenseTwoRootMap p) (e e' : DenseExpr p) : Bool :=
+  (densePtrReductions T e).any (fun red =>
+    (densePtrReductions T e').any (fun red' =>
+      denseConstDiffNZ red.1 red'.1 && denseConstDiffNZ red.1 red'.2 &&
+      denseConstDiffNZ red.2 red'.1 && denseConstDiffNZ red.2 red'.2))
 
 /-- Some address slot of `S` and `bi` provably evaluates differently: the two interactions have
-    different addresses. Primality (needed for the two-root membership) is carried by the map's
-    entries, so this is a total `Bool` predicate composable with `addrConstsNeq`. -/
-def addrTwoRootNeq (shape : MemoryBusShape) (T : TwoRootMap p constraints)
-    (S bi : BusInteraction (Expression p)) : Bool :=
+    different addresses. -/
+def denseAddrTwoRootNeq (shape : MemoryBusShape) (T : DenseTwoRootMap p)
+    (S bi : BusInteraction (DenseExpr p)) : Bool :=
   shape.addressFields.any (fun slot =>
     match S.payload[slot]?, bi.payload[slot]? with
-    | some e, some e' => exprTwoRootNeq T e e'
+    | some e, some e' => denseExprTwoRootNeq T e e'
     | _, _ => false)
 
-theorem addrTwoRootNeq_sound (shape : MemoryBusShape) (T : TwoRootMap p constraints)
-    (S bi : BusInteraction (Expression p))
-    (h : addrTwoRootNeq shape T S bi = true) (env : Variable → ZMod p)
-    (hcon : ∀ c ∈ constraints, c.eval env = 0) :
-    shape.address (S.eval env) ≠ shape.address (bi.eval env) := by
-  unfold addrTwoRootNeq at h
-  obtain ⟨slot, hslot, hcond⟩ := List.any_eq_true.1 h
-  intro heq
-  obtain ⟨j, hj⟩ : ∃ j, shape.addressFields[j]? = some slot := List.getElem?_of_mem hslot
-  -- the address projections agree at `slot`'s position
-  have key : (S.eval env).payload[slot]? = (bi.eval env).payload[slot]? := by
-    have e1 : (shape.address (S.eval env))[j]? = some ((S.eval env).payload[slot]?) := by
-      simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
-    have e2 : (shape.address (bi.eval env))[j]? = some ((bi.eval env).payload[slot]?) := by
-      simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
-    rw [heq, e2] at e1; exact (Option.some.inj e1).symm
-  have keyS : (S.eval env).payload[slot]? = (S.payload[slot]?).map (fun e => e.eval env) := by
-    show (S.payload.map (fun e => e.eval env))[slot]? = _; rw [List.getElem?_map]
-  have keyB : (bi.eval env).payload[slot]? = (bi.payload[slot]?).map (fun e => e.eval env) := by
-    show (bi.payload.map (fun e => e.eval env))[slot]? = _; rw [List.getElem?_map]
-  rw [keyS, keyB] at key
-  cases hSp : S.payload[slot]? with
-  | none => rw [hSp] at hcond; simp at hcond
-  | some e =>
-    cases hbp : bi.payload[slot]? with
-    | none => rw [hSp, hbp] at hcond; simp at hcond
-    | some e' =>
-      rw [hSp, hbp] at hcond key
-      simp only [Option.map_some, Option.some.injEq] at key
-      exact exprTwoRootNeq_sound T e e' hcond env hcon key
-
-/-! ## The affine (same-base) address-disequality certificate
-
-The two-root certificate above needs the limb-decomposition constraints and primality. A far more
-common shape — a wasm frame-pointer-relative stack pointer `c + fp`, or any two accesses off a
-*common base* with different immediates — needs neither: linearizing both address slots and
-subtracting yields a **nonzero field constant** (`(c₁ + fp) − (c₂ + fp) = c₁ − c₂`), so the
-addresses provably differ with pure linear arithmetic — no bounds, no primality, no `TwoRootMap`.
-This strictly generalizes `addrConstsNeq` (`const − const` is a constant difference too) and,
-unlike the two-root path, consults no constraints, so it is a total `Bool` predicate composable
-with the other two certificates. -/
+/-! ## The affine (same-base) address-disequality certificate -/
 
 /-- Some address slot of `S` and `bi` linearizes to two affine forms differing by a nonzero field
-    constant: the two interactions provably have different addresses. Corpus-agnostic; any
-    common-base addressing (a shared symbolic base with distinct immediates) benefits. -/
-def addrAffineNeq (shape : MemoryBusShape) (S bi : BusInteraction (Expression p)) : Bool :=
+    constant: the two interactions provably have different addresses. -/
+def denseAddrAffineNeq (shape : MemoryBusShape) (S bi : BusInteraction (DenseExpr p)) : Bool :=
   shape.addressFields.any (fun slot =>
     match S.payload[slot]?, bi.payload[slot]? with
     | some e, some e' =>
-      (match linearize e, linearize e' with
-       | some L, some L' => constDiffNZ L L'
+      (match denseLinearize e, denseLinearize e' with
+       | some L, some L' => denseConstDiffNZ L L'
        | _, _ => false)
     | _, _ => false)
 
-theorem addrAffineNeq_sound (shape : MemoryBusShape) (S bi : BusInteraction (Expression p))
-    (h : addrAffineNeq shape S bi = true) (env : Variable → ZMod p) :
-    shape.address (S.eval env) ≠ shape.address (bi.eval env) := by
-  unfold addrAffineNeq at h
-  obtain ⟨slot, hslot, hcond⟩ := List.any_eq_true.1 h
-  intro heq
-  obtain ⟨j, hj⟩ : ∃ j, shape.addressFields[j]? = some slot := List.getElem?_of_mem hslot
-  have key : (S.eval env).payload[slot]? = (bi.eval env).payload[slot]? := by
-    have e1 : (shape.address (S.eval env))[j]? = some ((S.eval env).payload[slot]?) := by
-      simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
-    have e2 : (shape.address (bi.eval env))[j]? = some ((bi.eval env).payload[slot]?) := by
-      simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
-    rw [heq, e2] at e1; exact (Option.some.inj e1).symm
-  have keyS : (S.eval env).payload[slot]? = (S.payload[slot]?).map (fun e => e.eval env) := by
-    show (S.payload.map (fun e => e.eval env))[slot]? = _; rw [List.getElem?_map]
-  have keyB : (bi.eval env).payload[slot]? = (bi.payload[slot]?).map (fun e => e.eval env) := by
-    show (bi.payload.map (fun e => e.eval env))[slot]? = _; rw [List.getElem?_map]
-  rw [keyS, keyB] at key
-  cases hSp : S.payload[slot]? with
-  | none => rw [hSp] at hcond; simp at hcond
-  | some e =>
-    cases hbp : bi.payload[slot]? with
-    | none => rw [hSp, hbp] at hcond; simp at hcond
-    | some e' =>
-      rw [hSp, hbp] at key
-      simp only [Option.map_some, Option.some.injEq] at key
-      simp only [hSp, hbp] at hcond
-      cases hL : linearize e with
-      | none => simp [hL] at hcond
-      | some L =>
-        cases hL' : linearize e' with
-        | none => simp [hL, hL'] at hcond
-        | some L' =>
-          simp only [hL, hL'] at hcond
-          exact constDiffNZ_sound L L' hcond env
-            (by rw [← linearize_eval e L hL env, ← linearize_eval e' L' hL' env]; exact key)
+/-! ## The nonzero-witness (register-vs-RAM) address-disequality certificate -/
 
-/-! ## The nonzero-witness (register-vs-RAM) address-disequality certificate
-
-The `addrAffineNeq`/`addrTwoRootNeq` certificates refute an address match only when *some single*
-address slot differs by a provable constant (or two-root gap). But SP1 (and any VM with a flat
-multi-limb address space) distinguishes a **register** access — a small constant address `(c, 0, 0)`
-whose high limbs are literally `0` — from a **RAM** access `(e₂, e₃, e₄)` by a *reciprocal*
-constraint `inv · (e₃ + e₄) − 1 = 0`, which pins the high-limb *sum* nonzero (`e₃ + e₄ ≠ 0`). No
-single slot is provably nonzero (`e₃` or `e₄` alone may be `0`), so neither existing certificate
-fires, and register accesses never telescope across the interleaved RAM ones.
-
-This certificate closes that. It reads reciprocal constraints `a · b + k = 0` (`k ≠ 0`) as
-**nonzero witnesses** — each factor `a`, `b` is nonzero, since `a·b = −k ≠ 0` — and refutes an
-address match when some *subset* `T` of the address slots has its limb-difference sum
-`Σ_{i∈T}(mᵢ − Sᵢ)` equal (up to sign) to a nonzero witness `g`: were the addresses equal, that sum
-would be `0`, contradicting `g ≠ 0`. Purely linear arithmetic plus one reciprocal constraint — no
-bounds, and (unlike two-root) no primality. It strictly extends `addrAffineNeq` (a nonzero *constant*
-difference is the `T`-singleton, witness-free case, still handled there) to nonzero *symbolic*
-differences. Corpus-agnostic: any flat address space that pins "not a register" (or any two accesses
-separated by a proved-nonzero limb combination) benefits. -/
-
-/-- A linear form is identically zero (empty terms and zero constant after normalization). -/
-def isZeroLin (l : LinExpr p) : Bool :=
+/-- A dense linear form is identically zero (empty terms and zero constant after normalization). -/
+def denseIsZeroLin (l : DenseLinExpr p) : Bool :=
   l.norm.terms.isEmpty && decide (l.norm.const = 0)
-
-theorem isZeroLin_sound (l : LinExpr p) (h : isZeroLin l = true) (env : Variable → ZMod p) :
-    l.eval env = 0 := by
-  unfold isZeroLin at h
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨hterms, hconst⟩ := h
-  have hz : l.norm.eval env = l.norm.const := by
-    simp only [LinExpr.eval, List.isEmpty_iff.1 hterms, List.map_nil, List.sum_nil, add_zero]
-  rw [← LinExpr.norm_eval, hz, hconst]
 
 /-- Nonzero linear factors of a single reciprocal product `a * b + r` with `r` a nonzero constant:
     `a·b = −r ≠ 0`, so each factor that linearizes is a nonzero witness. -/
-def reciprocalWitsProd (a b r : Expression p) : List (LinExpr p) :=
-  match linearize r with
+def denseReciprocalWitsProd (a b r : DenseExpr p) : List (DenseLinExpr p) :=
+  match denseLinearize r with
   | some lr =>
     if lr.terms.isEmpty && decide (lr.const ≠ 0) then
-      (match linearize a with | some la => [la] | none => []) ++
-      (match linearize b with | some lb => [lb] | none => [])
+      (match denseLinearize a with | some la => [la] | none => []) ++
+      (match denseLinearize b with | some lb => [lb] | none => [])
     else []
   | none => []
 
-theorem reciprocalWitsProd_sound (a b r : Expression p) (g : LinExpr p)
-    (h : g ∈ reciprocalWitsProd a b r) (env : Variable → ZMod p)
-    (hc : a.eval env * b.eval env + r.eval env = 0) : g.eval env ≠ 0 := by
-  unfold reciprocalWitsProd at h
-  cases hr : linearize r with
-  | none => simp [hr] at h
-  | some lr =>
-    simp only [hr] at h
-    split_ifs at h with hcond
-    · simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
-      obtain ⟨hterms, hne⟩ := hcond
-      have hrconst : r.eval env = lr.const := by
-        rw [linearize_eval r lr hr env]
-        simp only [LinExpr.eval, List.isEmpty_iff.1 hterms, List.map_nil, List.sum_nil, add_zero]
-      have hrne : r.eval env ≠ 0 := by rw [hrconst]; exact hne
-      have hprodne : a.eval env * b.eval env ≠ 0 := by
-        intro hp0; rw [hp0] at hc; exact hrne (by linear_combination hc)
-      have hane : a.eval env ≠ 0 := fun ha => hprodne (by rw [ha, zero_mul])
-      have hbne : b.eval env ≠ 0 := fun hb => hprodne (by rw [hb, mul_zero])
-      rw [List.mem_append] at h
-      rcases h with hla | hlb
-      · cases ha : linearize a with
-        | none => rw [ha] at hla; simp at hla
-        | some la =>
-          rw [ha] at hla; simp only [List.mem_singleton] at hla
-          rw [hla, ← linearize_eval a la ha env]; exact hane
-      · cases hb : linearize b with
-        | none => rw [hb] at hlb; simp at hlb
-        | some lb =>
-          rw [hb] at hlb; simp only [List.mem_singleton] at hlb
-          rw [hlb, ← linearize_eval b lb hb env]; exact hbne
-    · simp at h
-
 /-- Nonzero linear witnesses recognized from a constraint of the form `a·b + r = 0` (in either
     additive order), with `r` a nonzero constant. -/
-def reciprocalWits? (c : Expression p) : List (LinExpr p) :=
+def denseReciprocalWits? (c : DenseExpr p) : List (DenseLinExpr p) :=
   match c with
   | .add e1 e2 =>
     match e1 with
-    | .mul a b => reciprocalWitsProd a b e2
+    | .mul a b => denseReciprocalWitsProd a b e2
     | _ => match e2 with
-           | .mul a b => reciprocalWitsProd a b e1
+           | .mul a b => denseReciprocalWitsProd a b e1
            | _ => []
   | _ => []
 
-theorem reciprocalWits?_sound (c : Expression p) (g : LinExpr p) (h : g ∈ reciprocalWits? c)
-    (env : Variable → ZMod p) (hc : c.eval env = 0) : g.eval env ≠ 0 := by
-  unfold reciprocalWits? at h
-  split at h
-  · rename_i e1 e2
-    split at h
-    · rename_i a b
-      exact reciprocalWitsProd_sound a b e2 g h env (by rw [← hc]; simp [Expression.eval])
-    · split at h
-      · rename_i a b
-        exact reciprocalWitsProd_sound a b e1 g h env
-          (by rw [← hc]; simp only [Expression.eval]; ring)
-      · simp at h
-  · simp at h
-
-/-- Linear forms provably nonzero under `constraints` (each backed by a reciprocal constraint). -/
-structure NonzeroWits (p : ℕ) (constraints : List (Expression p)) where
-  wits : List (LinExpr p)
-  sound : ∀ g ∈ wits, ∀ env : Variable → ZMod p,
-    (∀ c ∈ constraints, c.eval env = 0) → g.eval env ≠ 0
+/-- Linear forms provably nonzero under a constraint list (data only). -/
+structure DenseNonzeroWits (p : ℕ) where
+  wits : List (DenseLinExpr p)
 
 /-- Collect every reciprocal-witness linear form from the constraint list. -/
-def NonzeroWits.build (constraints : List (Expression p)) : NonzeroWits p constraints where
-  wits := constraints.flatMap reciprocalWits?
-  sound := by
-    intro g hg env hcon
-    rw [List.mem_flatMap] at hg
-    obtain ⟨c, hc, hgc⟩ := hg
-    exact reciprocalWits?_sound c g hgc env (hcon c hc)
+def DenseNonzeroWits.build (constraints : List (DenseExpr p)) : DenseNonzeroWits p where
+  wits := constraints.flatMap denseReciprocalWits?
 
-/-- Equal addresses agree at every declared address slot (the per-slot half of `addrAffineNeq`). -/
-theorem addr_eq_slot (shape : MemoryBusShape) (S m : BusInteraction (Expression p))
-    (env : Variable → ZMod p) (heq : shape.address (S.eval env) = shape.address (m.eval env))
-    (f : Nat) (hf : f ∈ shape.addressFields) :
-    (S.eval env).payload[f]? = (m.eval env).payload[f]? := by
-  obtain ⟨j, hj⟩ : ∃ j, shape.addressFields[j]? = some f := List.getElem?_of_mem hf
-  have e1 : (shape.address (S.eval env))[j]? = some ((S.eval env).payload[f]?) := by
-    simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
-  have e2 : (shape.address (m.eval env))[j]? = some ((m.eval env).payload[f]?) := by
-    simp only [MemoryBusShape.address, List.getElem?_map, hj, Option.map_some]
-  rw [heq, e2] at e1
-  exact (Option.some.inj e1).symm
-
-/-- `Σ_{f ∈ fields} (m.payload[f] − S.payload[f])` as a linear form; `none` if any listed slot is
-    absent from either payload or is nonlinear. -/
-def diffSumOver (S m : BusInteraction (Expression p)) : List Nat → Option (LinExpr p)
+/-- `Σ_{f ∈ fields} (m.payload[f] − S.payload[f])` as a dense linear form; `none` if any listed
+    slot is absent from either payload or is nonlinear. -/
+def denseDiffSumOver (S m : BusInteraction (DenseExpr p)) : List Nat → Option (DenseLinExpr p)
   | [] => some ⟨0, []⟩
   | f :: fs =>
-    match diffSumOver S m fs with
+    match denseDiffSumOver S m fs with
     | none => none
     | some acc =>
       match S.payload[f]?, m.payload[f]? with
       | some eS, some eM =>
-        match linearize eS, linearize eM with
+        match denseLinearize eS, denseLinearize eM with
         | some lS, some lM => some ((lM.add (lS.scale (-1))).add acc)
         | _, _ => none
       | _, _ => none
 
-/-- If the two interactions agree at every listed slot (under `env`), the difference sum is `0`. -/
-theorem diffSumOver_eval_zero (S m : BusInteraction (Expression p)) (fields : List Nat)
-    (D : LinExpr p) (h : diffSumOver S m fields = some D) (env : Variable → ZMod p)
-    (hslots : ∀ f ∈ fields, (S.eval env).payload[f]? = (m.eval env).payload[f]?) :
-    D.eval env = 0 := by
-  induction fields generalizing D with
-  | nil =>
-    simp only [diffSumOver, Option.some.injEq] at h; subst h
-    simp [LinExpr.eval]
-  | cons f fs ih =>
-    simp only [diffSumOver] at h
-    cases hacc : diffSumOver S m fs with
-    | none => simp [hacc] at h
-    | some acc =>
-      cases hSp : S.payload[f]? with
-      | none => simp [hacc, hSp] at h
-      | some eS =>
-        cases hmp : m.payload[f]? with
-        | none => simp [hacc, hSp, hmp] at h
-        | some eM =>
-          cases hlS : linearize eS with
-          | none => simp [hacc, hSp, hmp, hlS] at h
-          | some lS =>
-            cases hlM : linearize eM with
-            | none => simp [hacc, hSp, hmp, hlS, hlM] at h
-            | some lM =>
-              simp only [hacc, hSp, hmp, hlS, hlM, Option.some.injEq] at h
-              subst h
-              have haccz : acc.eval env = 0 :=
-                ih acc hacc (fun f' hf' => hslots f' (List.mem_cons_of_mem _ hf'))
-              have hkey : (S.eval env).payload[f]? = (m.eval env).payload[f]? :=
-                hslots f (List.mem_cons_self ..)
-              have hSev : (S.eval env).payload[f]? = some (eS.eval env) := by
-                show (S.payload.map (fun e => e.eval env))[f]? = _
-                rw [List.getElem?_map, hSp]; rfl
-              have hMev : (m.eval env).payload[f]? = some (eM.eval env) := by
-                show (m.payload.map (fun e => e.eval env))[f]? = _
-                rw [List.getElem?_map, hmp]; rfl
-              rw [hSev, hMev] at hkey
-              have hval : eS.eval env = eM.eval env := (Option.some.inj hkey)
-              have hlMe := linearize_eval eM lM hlM env
-              have hlSe := linearize_eval eS lS hlS env
-              rw [LinExpr.add_eval, LinExpr.add_eval, LinExpr.scale_eval]
-              linear_combination -hlMe + hlSe - hval + haccz
-
-/-- The address slots of `S` and `m` provably differ: some subset `T` of the shape's address fields
-    has limb-difference sum `Σ_{i∈T}(mᵢ − Sᵢ)` equal (up to sign) to a nonzero witness `g`.  Were
-    the addresses equal every difference would vanish, contradicting `g ≠ 0`. -/
-def addrNonzeroNeq (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (nw : NonzeroWits p constraints) (S m : BusInteraction (Expression p)) : Bool :=
+/-- The address slots of `S` and `m` provably differ: some subset `T` of the shape's address
+    fields has limb-difference sum `Σ_{i∈T}(mᵢ − Sᵢ)` equal (up to sign) to a nonzero witness `g`. -/
+def denseAddrNonzeroNeq (shape : MemoryBusShape) (nw : DenseNonzeroWits p)
+    (S m : BusInteraction (DenseExpr p)) : Bool :=
   shape.addressFields.sublists.any (fun T =>
-    match diffSumOver S m T with
-    | some D => nw.wits.any (fun g => isZeroLin (D.add (g.scale (-1))) || isZeroLin (D.add g))
+    match denseDiffSumOver S m T with
+    | some D => nw.wits.any (fun g => denseIsZeroLin (D.add (g.scale (-1))) || denseIsZeroLin (D.add g))
     | none => false)
 
-theorem addrNonzeroNeq_sound (shape : MemoryBusShape) {constraints : List (Expression p)}
-    (nw : NonzeroWits p constraints) (S m : BusInteraction (Expression p))
-    (h : addrNonzeroNeq shape nw S m = true) (env : Variable → ZMod p)
-    (hcon : ∀ c ∈ constraints, c.eval env = 0) :
-    shape.address (S.eval env) ≠ shape.address (m.eval env) := by
-  intro heq
-  unfold addrNonzeroNeq at h
-  rw [List.any_eq_true] at h
-  obtain ⟨T, hT, hcond⟩ := h
-  have hTsub : List.Sublist T shape.addressFields := List.mem_sublists.mp hT
-  cases hD : diffSumOver S m T with
-  | none => rw [hD] at hcond; simp at hcond
-  | some D =>
-    rw [hD] at hcond
-    rw [List.any_eq_true] at hcond
-    obtain ⟨g, hg, hzero⟩ := hcond
-    have hDzero : D.eval env = 0 :=
-      diffSumOver_eval_zero S m T D hD env (fun f hf =>
-        addr_eq_slot shape S m env heq f (hTsub.subset hf))
-    have hgne : g.eval env ≠ 0 := nw.sound g hg env hcon
-    rcases (Bool.or_eq_true _ _).mp hzero with hz | hz
-    · have hzz := isZeroLin_sound _ hz env
-      rw [LinExpr.add_eval, LinExpr.scale_eval, hDzero] at hzz
-      exact hgne (by linear_combination -hzz)
-    · have hzz := isZeroLin_sound _ hz env
-      rw [LinExpr.add_eval, hDzero] at hzz
-      exact hgne (by linear_combination hzz)
-
 /-- The address-disequality certificates a memory-telescoping pass consults, bundled so both the
-    two-root and the reciprocal-nonzero data thread through the pass as one memoized value. -/
-structure AddrCerts (p : ℕ) (constraints : List (Expression p)) where
-  tworoot : TwoRootMap p constraints
-  nonzero : NonzeroWits p constraints
+    two-root and the reciprocal-nonzero data thread through the pass as one memoized value
+    (plain 2-field struct). -/
+structure DenseAddrCerts (p : ℕ) where
+  tworoot : DenseTwoRootMap p
+  nonzero : DenseNonzeroWits p
 
 /-- Build both certificate tables from the constraint list. -/
-def AddrCerts.build (constraints : List (Expression p)) : AddrCerts p constraints :=
-  ⟨TwoRootMap.build constraints, NonzeroWits.build constraints⟩
+def DenseAddrCerts.build (constraints : List (DenseExpr p)) : DenseAddrCerts p :=
+  ⟨DenseTwoRootMap.build constraints, DenseNonzeroWits.build constraints⟩
+
+end ApcOptimizer.Dense

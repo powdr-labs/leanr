@@ -1,47 +1,35 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Basic
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
-import ApcOptimizer.Implementation.OptimizerPasses.Identity
-import ApcOptimizer.Implementation.OptimizerPasses.ConstantFold
-import ApcOptimizer.Implementation.OptimizerPasses.TrivialConstraint
-import ApcOptimizer.Implementation.OptimizerPasses.ZeroMultBus
-import ApcOptimizer.Implementation.OptimizerPasses.Affine
-import ApcOptimizer.Implementation.OptimizerPasses.Gauss
-import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
-import ApcOptimizer.Implementation.OptimizerPasses.DomainBatch
-import ApcOptimizer.Implementation.OptimizerPasses.TautoBus
 import ApcOptimizer.Implementation.OptimizerPasses.MonicScale
-import ApcOptimizer.Implementation.OptimizerPasses.MemoryUnify
-import ApcOptimizer.Implementation.OptimizerPasses.BusUnify
-import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancel
-import ApcOptimizer.Implementation.OptimizerPasses.BytePack
+import ApcOptimizer.Implementation.OptimizerPasses.MonicScaleProof
 import ApcOptimizer.Implementation.OptimizerPasses.TupleRange
+import ApcOptimizer.Implementation.OptimizerPasses.TupleRangeProof
 import ApcOptimizer.Implementation.OptimizerPasses.DisconnectedComponent
 import ApcOptimizer.Implementation.OptimizerPasses.Reencode
-import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
-import ApcOptimizer.Implementation.OptimizerPasses.ZeroRegister
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
-import ApcOptimizer.Implementation.OptimizerPasses.CarryBranch
-import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
-import ApcOptimizer.Implementation.OptimizerPasses.Dedup
-import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
-import ApcOptimizer.Implementation.OptimizerPasses.BoxRewrite
 import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
-import ApcOptimizer.Implementation.OptimizerPasses.ZeroWidthRange
+import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDropProof
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRange
+import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRangeProof
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedCheck
+import ApcOptimizer.Implementation.OptimizerPasses.SubsumedCheckProof
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePair
-import ApcOptimizer.Implementation.OptimizerPasses.OneHotAnnihilate
-import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
+import ApcOptimizer.Implementation.OptimizerPasses.SplitBytePairProof
 import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapse
+import ApcOptimizer.Implementation.OptimizerPasses.SeqzCollapseProof
 import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 import ApcOptimizer.Implementation.OptimizerPasses.RangeForceZero
 import ApcOptimizer.Implementation.OptimizerPasses.RangeBool
 import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubst
+import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubstProof
+import ApcOptimizer.Implementation.OptimizerPasses.DenseUmbrella
 
 set_option autoImplicit false
+
+open ApcOptimizer.Dense
 
 variable {p : ℕ}
 
@@ -58,156 +46,188 @@ This file is *implementation* — it needs no audit. The user-facing optimizer d
 surface live in `ApcOptimizer/Optimizer.lean`; each theorem is a projection of the per-instance
 `optimizerWithBusFacts_correct` / `optimizerWithBusFacts_respectsDegree` proved here.
 
-**To add an optimization:** write a `VerifiedPass` (or fact-aware `VerifiedPassW`) in a new file
-under `ApcOptimizer/Implementation/OptimizerPasses/`, import it here, and add one `(name, pass)`
-entry to the `cleanupPasses` list below. That is the only edit needed here; the correctness proof
-follows automatically from the pass's own `PassCorrect`. -/
+**To add an optimization:** write a dense pass bundling its own `DensePassCorrect` proof in a new
+file under `ApcOptimizer/Implementation/OptimizerPasses/`, import it here, and add one entry
+`(name, pass.guardDegree b)` to the `cleanupPasses` list below. That is the only edit needed here;
+correctness follows from the pass's own bundled `DensePassCorrect`. See the worked examples
+`GaussProof.lean` / `DropPassesProof.lean` / `CarryBranchProof.lean` / `RangeBoolProof.lean`
+(`DenseVerifiedPassW.of`) and `ReencodeProof.lean` (`DenseVerifiedPassW.ofExtending`, for passes
+that mint fresh variables). -/
 
 /-- The optimizer runs in three stages: a **prelude** (this list) once, then the `cleanupPasses`
-    cycle iterated to a fixpoint, then a **coda** (`codaPasses`) once. These three lists are the
-    single source of truth for the pass sequence — `pipeline` folds them and the `profile` CLI
-    command (`Main.lean`) times the same lists — so the optimizer and the profiler cannot drift
-    apart. The prelude is a single constant-fold that canonicalizes the freshly-parsed system. The
-    `String` labels name each pass in the profiler's timing report (irrelevant to behaviour). -/
-def preludePasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
-  [ ("constFold0", constantFoldPass.withFacts.guardDegree b) ]
+    cycle iterated to a fixpoint, then a **coda** (`codaPasses`) once. All three lists are dense —
+    each entry is a `DenseVerifiedPassW` over the `VarId` representation — and together are the single
+    source of truth for the pass sequence: `pipeline` runs them between one encode at entry and one
+    decode at output, and the `profile` CLI command (`Main.lean`) steps the same lists, so the
+    optimizer and the profiler cannot drift apart. The prelude is a single constant-fold that
+    canonicalizes the freshly-parsed system. The `String` labels name each pass in the profiler's
+    timing report (irrelevant to behaviour). -/
+def preludePasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
+  [ ("constFold0", DenseVerifiedPassW.guardDegree b denseConstantFoldPass) ]
 
-/-- The cleanup-cycle passes as a **labelled list** (one of the three stages; see `preludePasses`).
+/-- The canonical labelled **dense** cleanup schedule (one of the three stages; see `preludePasses`)
+    — the **single source of truth** for both the optimizer and the profiler: `pipeline` iterates the
+    dense fixpoint (`denseIterateToFixpoint`) over the chain of this list, and the `profile` CLI
+    command (`Main.lean`) steps this same list, so the two cannot drift apart.
 
-    Iterate this cycle to a fixpoint (`iterateToFixpoint`, no budget): batch-eliminate every
-    variable solvable from a linear constraint with a unit-coefficient pivot (`gaussElimPass` — one
-    simultaneous substitution per cycle), normalize and fold, substitute one variable forced by
-    finite-domain enumeration (boolean/one-hot case analysis, bus-fact domains, probed bus
-    obligations; prime `p` only), re-normalize and re-fold, drop trivially-true constraints, drop
-    zero-multiplicity bus interactions, drop stateless interactions whose constant message satisfies
-    the bus table, and add the receive-equals-send equations entailed by the memory discipline.
+    Iterate this cycle to a fixpoint (`denseIterateToFixpoint`, no budget) over the dense `VarId`
+    representation: batch-eliminate every variable solvable from a linear constraint with a
+    unit-coefficient pivot (`denseGaussElimPass` — one simultaneous substitution per cycle),
+    normalize and fold, substitute one variable forced by finite-domain enumeration
+    (boolean/one-hot case analysis, bus-fact domains, probed bus obligations; prime `p` only),
+    re-normalize and re-fold, drop trivially-true constraints, drop zero-multiplicity bus
+    interactions, drop stateless interactions whose constant message satisfies the bus table, and add
+    the receive-equals-send equations entailed by the memory discipline.
 
-    **To add an optimization:** write a `VerifiedPass` (or fact-aware `VerifiedPassW`) in a new file
-    under `ApcOptimizer/Implementation/OptimizerPasses/`, import it above, and add one
-    `(name, pass.….guardDegree)` entry to this list. That is the only edit needed here; the
-    correctness proof follows automatically from the pass's own `PassCorrect`, and the profiler
-    picks up the new label for free (it consumes this same list). -/
-def cleanupPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
+    **To add an optimization:** write a dense pass bundling its own `DensePassCorrect` proof in a new
+    file under `ApcOptimizer/Implementation/OptimizerPasses/`, import it above, and add one
+    `(name, pass.guardDegree b)` entry to this list. That is the only edit needed here; correctness
+    follows from the pass's own bundled proof, and the profiler picks up the new label for free (it
+    steps this same list). Templates: `GaussProof.lean` / `DropPassesProof.lean` /
+    `CarryBranchProof.lean` (`DenseVerifiedPassW.of`) and `ReencodeProof.lean`
+    (`DenseVerifiedPassW.ofExtending`, for passes that mint fresh variables). -/
+def cleanupPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
   -- One primality decision per optimizer run, threaded to every prime-gated pass below (they read
   -- the `Bool` in O(1) instead of re-running `decide (Nat.Prime p)` per invocation per iteration).
   let pw := PrimeWitness.of p
-  [ ("zeroWidthRange", (ZeroWidthRange.zeroWidthRangePass pw).guardDegree b),
-    ("rangeForceZero", RangeForceZero.rangeForceZeroPass.guardDegree b),
-    ("rangeBool", (RangeBool.rangeBoolPass pw).guardDegree b),
-    ("xorEqExtract", XorEqExtract.xorEqExtractPass.guardDegree b),
-    ("carryBranch", (carryBranchPass pw).guardDegree b),
-    ("gauss", gaussElimPass.withFacts.guardDegree b),
-    ("normalize1", normalizePass.withFacts.guardDegree b),
-    ("constFold1", constantFoldPass.withFacts.guardDegree b),
-    ("domainBatch", (domainBatchPass pw).guardDegree b),
-    ("normalize2", normalizePass.withFacts.guardDegree b),
-    ("constFold2", constantFoldPass.withFacts.guardDegree b),
-    ("zeroRegister", zeroRegisterPass.guardDegree b),
-    ("intervalForce", IntervalForce.intervalForcePass.guardDegree b),
-    ("digitFold", DigitFold.digitFoldPass.guardDegree b),
-    ("oneHotAnnihilate", OneHotAnnihilate.oneHotAnnihilatePass.guardDegree b),
-    ("hintCollapse", (hintCollapsePass pw).guardDegree b),
-    ("rootPairUnify", (rootPairUnifyPass pw).guardDegree b),
-    ("flagUnify", (flagUnifyPass pw).guardDegree b),
-    ("flagFold", (flagFoldPass' pw b).guardDegree b),
-    ("dedup", dedupPass.withFacts.guardDegree b),
-    ("trivialConstr", trivialConstraintDropPass.withFacts.guardDegree b),
-    ("zeroMultBus", zeroMultBusDropPass.withFacts.guardDegree b),
-    ("tautoBus", tautoBusDropPass.withFacts.guardDegree b),
-    ("domainFold", (domainFoldPass pw).withFacts.guardDegree b),
-    ("busUnify", busUnifyPass.guardDegree b),
-    ("busPairCancel", VerifiedPassW.guardDegree b (busPairCancelPass pw false)),
-    ("bytePack", VerifiedPassW.guardDegree b (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
-    ("disconnected", disconnectedComponentPass.withFacts.guardDegree b),
-    ("reencode", (reencodePass b).withFacts.guardDegree b) ]
+  [ ("zeroWidthRange", DenseVerifiedPassW.guardDegree b (denseZeroWidthRangePass pw)),
+    ("rangeForceZero", DenseVerifiedPassW.guardDegree b denseRangeForceZeroPass),
+    ("rangeBool", DenseVerifiedPassW.guardDegree b (denseRangeBoolPass pw)),
+    ("xorEqExtract", DenseVerifiedPassW.guardDegree b denseXorEqExtractPass),
+    ("carryBranch", DenseVerifiedPassW.guardDegree b (denseCarryBranchPass pw)),
+    ("gauss", DenseVerifiedPassW.guardDegree b denseGaussElimPass),
+    ("normalize1", DenseVerifiedPassW.guardDegree b denseNormalizePass),
+    ("constFold1", DenseVerifiedPassW.guardDegree b denseConstantFoldPass),
+    ("domainBatch", DenseVerifiedPassW.guardDegree b (denseDomainBatchPassV pw)),
+    ("normalize2", DenseVerifiedPassW.guardDegree b denseNormalizePass),
+    ("constFold2", DenseVerifiedPassW.guardDegree b denseConstantFoldPass),
+    ("zeroRegister", DenseVerifiedPassW.guardDegree b denseZeroRegisterPass),
+    ("intervalForce", DenseVerifiedPassW.guardDegree b denseIntervalForcePass),
+    ("digitFold", DenseVerifiedPassW.guardDegree b denseDigitFoldPass),
+    ("oneHotAnnihilate", DenseVerifiedPassW.guardDegree b denseOneHotAnnihilatePass),
+    ("hintCollapse", DenseVerifiedPassW.guardDegree b (denseHintCollapsePass pw)),
+    ("rootPairUnify", DenseVerifiedPassW.guardDegree b (denseRootPairUnifyPass pw)),
+    ("flagUnify", DenseVerifiedPassW.guardDegree b (denseFlagUnifyPass pw)),
+    ("flagFold", DenseVerifiedPassW.guardDegree b (denseFlagFoldPass' pw b)),
+    ("dedup", DenseVerifiedPassW.guardDegree b denseDedupPass),
+    ("trivialConstr", DenseVerifiedPassW.guardDegree b denseTrivialConstraintDropPass),
+    ("zeroMultBus", DenseVerifiedPassW.guardDegree b denseZeroMultBusDropPass),
+    ("tautoBus", DenseVerifiedPassW.guardDegree b denseTautoBusDropPass),
+    ("domainFold", DenseVerifiedPassW.guardDegree b (denseDomainFoldPassV pw)),
+    ("busUnify", DenseVerifiedPassW.guardDegree b denseBusUnifyPass),
+    ("busPairCancel", DenseVerifiedPassW.guardDegree b (denseBusPairCancelPass pw false)),
+    ("bytePack", DenseVerifiedPassW.guardDegree b denseByteCheckPackPass),
+    ("disconnected", DenseVerifiedPassW.guardDegree b denseDisconnectedPass),
+    ("reencode", DenseVerifiedPassW.guardDegree b (denseReencodePass pw b)) ]
 
 /-- The coda passes (one of the three stages; see `preludePasses`): run once after the cleanup loop
     reaches its fixpoint — drop bytes made redundant by the cleaned-up system, rescale carries to
     monic form, and one final constant-fold. -/
-def codaPasses (b : DegreeBound) : List (String × VerifiedPassW p) :=
+def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
   -- One primality decision per optimizer run (see `cleanupPasses`), for the prime-gated coda passes.
   let pw := PrimeWitness.of p
-  [ ("busPairCancelLate", VerifiedPassW.guardDegree b (busPairCancelPass pw true)),
+  [ ("busPairCancelLate", DenseVerifiedPassW.guardDegree b (denseBusPairCancelPass pw true)),
     -- Explode packed pair byte checks into singles so `dedupLate` collapses the same value
     -- byte-checked in several pairs and `redundantByteDrop` becomes operand-granular; the
     -- survivors are re-packed by `bytePackLate` below (a pair with nothing to shed round-trips).
-    ("splitBytePair", SplitBytePair.splitBytePairPass.guardDegree b),
+    ("splitBytePair", DenseVerifiedPassW.guardDegree b denseSplitBytePairPass),
     -- Rename each OR-identity result to its operand *before* the drop/pack stages: the renamed
     -- interactions become degenerate byte checks (`[or, x, x, 0]`, exactly "x is a byte") that
     -- `dedupLate` collapses, `redundantByteDrop` drops when justified elsewhere, and
     -- `bytePackLate` packs pairwise. (In the cleanup cycle the rename instead explodes the
     -- re-encoding; the coda has no reencode, so here it only exposes the degenerate checks.)
-    ("identitySubst", IdentitySubst.identitySubstPass.guardDegree b),
-    ("dedupLate", dedupPass.withFacts.guardDegree b),
-    ("redundantByteDrop", (RedundantByteDrop.redundantByteDropPass pw).guardDegree b),
-    ("subsumedRange", SubsumedRange.subsumedRangeDropPass.guardDegree b),
-    ("subsumedCheck", SubsumedCheck.subsumedCheckDropPass.guardDegree b),
+    ("identitySubst", DenseVerifiedPassW.guardDegree b denseIdentitySubstPass),
+    ("dedupLate", DenseVerifiedPassW.guardDegree b denseDedupPass),
+    ("redundantByteDrop", DenseVerifiedPassW.guardDegree b (denseRedundantByteDropPass pw)),
+    ("subsumedRange", DenseVerifiedPassW.guardDegree b denseSubsumedRangeDropPass),
+    ("subsumedCheck", DenseVerifiedPassW.guardDegree b denseSubsumedCheckDropPass),
     -- Tuple/range packing is layout-only and does not unblock other optimizations (powdr likewise
     -- runs global range packing once at the end), so it runs once here, out of the cleanup
     -- fixpoint, after `redundantByteDrop` has dropped droppable byte checks operand-granularly
     -- (packing a byte check early would hide it from the drop, leaving more bus interactions).
     -- The pass drains every packable pair internally, so it needs no fixpoint wrapper.
-    ("tupleRange", tupleRangePass.guardDegree b),
-    ("bytePackLate", VerifiedPassW.guardDegree b (iterateToFixpoint ByteCheckPack.byteCheckPackPass)),
-    ("monicScale", monicScalePass.withFacts.guardDegree b),
-    ("constFoldEnd", constantFoldPass.withFacts.guardDegree b),
+    ("tupleRange", DenseVerifiedPassW.guardDegree b denseTupleRangePass),
+    ("bytePackLate", DenseVerifiedPassW.guardDegree b denseByteCheckPackPass),
+    ("monicScale", DenseVerifiedPassW.guardDegree b denseMonicScalePass),
+    ("constFoldEnd", DenseVerifiedPassW.guardDegree b denseConstantFoldPass),
     -- Collapse recognised `sltu x, 1` (seqz) LessThan gadgets to the two-line is-zero gadget,
     -- dropping the four `diff_marker`s + `diff_val`. Runs after `monicScale`, where the cluster
     -- has reached the recognised form.
-    ("seqzCollapse", VerifiedPassW.guardDegree b (iterateToFixpoint SeqzCollapse.seqzCollapsePass)) ]
+    ("seqzCollapse", DenseVerifiedPassW.guardDegree b denseSeqzCollapsePass) ]
 
-/-- Fold a list of passes into one sequential pass (`andThen` left to right; identity on `[]`). -/
-def chainPasses (l : List (VerifiedPassW p)) : VerifiedPassW p :=
-  l.foldl VerifiedPassW.andThen (fun cs bs _ => ⟨cs, [], PassCorrect.refl cs bs⟩)
+/-! ## The dense pipeline
 
-/-- The optimizer's cleanup cycle: the `cleanupPasses` folded together in order. See `cleanupPasses`
-    for what each pass does and how to extend the cycle. -/
-def cleanupCycle (b : DegreeBound) : VerifiedPassW p :=
-  chainPasses ((cleanupPasses b).map (·.2))
+The whole pipeline runs over the dense `VarId` representation: the prelude chain, then the cleanup
+cycle iterated to a fixpoint, then the coda chain. `pipeline` wraps that dense body between a single
+encode at the optimizer entry and a single decode at its output; no decode runs between passes. The
+profiler (`Main.lean`) steps the same three lists between the same single encode and decode. -/
 
-/-- Folding degree-respecting passes with `andThen` yields a degree-respecting pass. -/
-theorem foldl_andThen_respectsDeg {b : DegreeBound} :
-    ∀ (l : List (VerifiedPassW p)) (init : VerifiedPassW p),
-      RespectsDeg b init → (∀ f ∈ l, RespectsDeg b f) →
-      RespectsDeg b (l.foldl VerifiedPassW.andThen init)
-  | [], _, hinit, _ => by simpa using hinit
-  | g :: rest, init, hinit, hall => by
-      rw [List.foldl_cons]
-      exact foldl_andThen_respectsDeg rest (init.andThen g)
-        (VerifiedPassW.andThen_respectsDeg hinit (hall g (List.mem_cons_self ..)))
-        (fun f hf => hall f (List.mem_cons_of_mem _ hf))
-
-/-- Any list of degree-respecting passes folds (`chainPasses`) to a degree-respecting pass. -/
-theorem chainPasses_respectsDeg {b : DegreeBound} {l : List (VerifiedPassW p)}
-    (h : ∀ f ∈ l, RespectsDeg b f) : RespectsDeg b (chainPasses l) := by
-  unfold chainPasses
-  exact foldl_andThen_respectsDeg _ _ (fun _ _ _ h => h) h
-
-theorem cleanupCycle_respectsDeg (b : DegreeBound) : RespectsDeg b (cleanupCycle (p := p) b) := by
-  unfold cleanupCycle
-  refine chainPasses_respectsDeg (fun f hf => ?_)
+/-- The dense cleanup cycle respects the degree bound (every scheduled entry is literally a
+    `DenseVerifiedPassW.guardDegree`-wrapped dense pass). -/
+theorem denseCleanupChain_respectsDeg (b : DegreeBound) :
+    DenseRespectsDeg b (denseChain ((cleanupPasses (p := p) b).map (·.2))) := by
+  apply denseChain_respectsDeg
+  intro f hf
   simp only [cleanupPasses, List.map_cons, List.map_nil] at hf
-  fin_cases hf <;> exact VerifiedPassW.guardDegree_respectsDeg _
+  fin_cases hf <;> exact DenseVerifiedPassW.guardDegree_respectsDeg _
 
-/-- The circuit optimizer: fold the prelude, iterate the cleanup cycle to a fixpoint
-    (`iterateToFixpoint`, no budget), then fold the coda. `pipeline` and the profiler both consume
-    `preludePasses` / `cleanupPasses` / `codaPasses`, so they stay in lockstep. -/
-def pipeline (b : DegreeBound) : VerifiedPassW p :=
-  chainPasses ((preludePasses b).map (·.2))
-    |>.andThen (iterateToFixpoint (cleanupCycle b))
-    |>.andThen (chainPasses ((codaPasses b).map (·.2)))
+/-- The dense prelude chain respects the degree bound (its single entry is a
+    `guardDegree`-wrapped dense pass). -/
+theorem densePreludeChain_respectsDeg (b : DegreeBound) :
+    DenseRespectsDeg b (denseChain ((preludePasses (p := p) b).map (·.2))) := by
+  apply denseChain_respectsDeg
+  intro f hf
+  simp only [preludePasses, List.map_cons, List.map_nil] at hf
+  fin_cases hf
+  exact DenseVerifiedPassW.guardDegree_respectsDeg _
+
+/-- The dense coda chain respects the degree bound (each entry is a `guardDegree`-wrapped dense
+    pass). -/
+theorem denseCodaChain_respectsDeg (b : DegreeBound) :
+    DenseRespectsDeg b (denseChain ((codaPasses (p := p) b).map (·.2))) := by
+  apply denseChain_respectsDeg
+  intro f hf
+  simp only [codaPasses, List.map_cons, List.map_nil] at hf
+  fin_cases hf <;> exact DenseVerifiedPassW.guardDegree_respectsDeg _
+
+/-- The all-dense pipeline body over the `VarId` representation: fold the prelude chain, iterate the
+    cleanup cycle to a fixpoint (`denseIterateToFixpoint`, no budget — it runs until the lexicographic
+    dense size key stops strictly shrinking), then fold the coda chain. Slotted into `pipeline`
+    between a single encode at entry and a single decode at output. -/
+def densePipeline (b : DegreeBound) : DenseVerifiedPassW p :=
+  DenseVerifiedPassW.andThen (denseChain ((preludePasses b).map (·.2)))
+    (DenseVerifiedPassW.andThen
+      (denseIterateToFixpoint (denseChain ((cleanupPasses b).map (·.2))))
+      (denseChain ((codaPasses b).map (·.2))))
+
+theorem densePipeline_respectsDeg (b : DegreeBound) :
+    DenseRespectsDeg b (densePipeline (p := p) b) := by
+  unfold densePipeline
+  exact DenseVerifiedPassW.andThen_respectsDeg (densePreludeChain_respectsDeg b)
+    (DenseVerifiedPassW.andThen_respectsDeg
+      (denseIterateToFixpoint_respectsDeg (denseCleanupChain_respectsDeg b))
+      (denseCodaChain_respectsDeg b))
+
+/-- The circuit optimizer: encode the freshly-parsed system into the dense `VarId` representation
+    once, run the all-dense `densePipeline` (prelude chain, cleanup fixpoint, coda chain), then decode
+    the result and its derivations once. The round trip `decode ∘ encode = id` turns the dense
+    pipeline's `PassCorrect` into one against the original system. The profiler (`Main.lean`) steps
+    the same three lists between the same single encode and decode, so it times exactly the passes
+    the optimizer runs. -/
+def pipeline (b : DegreeBound) : VerifiedPassW p := fun cs bs facts =>
+  -- Encode the input exactly once (bind the pair; `e.1`/`e.2` project the shared value).
+  let e := VarRegistry.empty.encodeCS cs
+  let r := densePipeline b e.1 e.2 (VarRegistry.empty.encodeCS_covered cs) bs facts
+  ⟨r.reg'.decodeCS r.out, r.reg'.decodeDerivs r.derivs, by
+    have hc := r.correct
+    rw [(VarRegistry.empty.decodeCS_encodeCS cs : e.1.decodeCS e.2 = cs)] at hc
+    exact hc⟩
 
 theorem pipeline_respectsDeg (b : DegreeBound) : RespectsDeg b (pipeline (p := p) b) := by
-  unfold pipeline
-  refine VerifiedPassW.andThen_respectsDeg (VerifiedPassW.andThen_respectsDeg
-    (chainPasses_respectsDeg (fun f hf => ?_))
-    (iterateToFixpoint_respectsDeg (cleanupCycle_respectsDeg b)))
-    (chainPasses_respectsDeg (fun f hf => ?_))
-  · simp only [preludePasses, List.map_cons, List.map_nil] at hf
-    fin_cases hf
-    exact VerifiedPassW.guardDegree_respectsDeg _
-  · simp only [codaPasses, List.map_cons, List.map_nil] at hf
-    fin_cases hf <;> exact VerifiedPassW.guardDegree_respectsDeg _
+  intro cs bs facts hin
+  exact densePipeline_respectsDeg b (VarRegistry.empty.encodeCS cs).1
+    (VarRegistry.empty.encodeCS cs).2 (VarRegistry.empty.encodeCS_covered cs) bs facts
+    (by rw [VarRegistry.empty.decodeCS_encodeCS cs]; exact hin)
 
 /-- The fact-aware circuit optimizer: given proven `BusFacts` about a bus semantics (which fixes the
     implicit `bs`), run the pipeline and return the resulting constraint system together with the
