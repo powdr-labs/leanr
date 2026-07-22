@@ -32,15 +32,7 @@ theorem denseMonicScaleAffine_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
 /-- The affine scaling's certificate is a genuine unit. -/
 theorem denseMonicScaleAffine_unit (e : DenseExpr p) :
     (denseMonicScaleAffine e).2.1 * (denseMonicScaleAffine e).2.2 = 1 := by
-  unfold denseMonicScaleAffine
-  split
-  · simp
-  · split
-    · rename_i y k rest ht
-      split_ifs with hk
-      · simpa [mul_comm] using hk.1
-      · simp
-    · simp
+  grind [denseMonicScaleAffine, mul_comm]
 
 /-- Monic scaling of an affine expression introduces no new variable. -/
 theorem denseMonicScaleAffine_vars (e : DenseExpr p) :

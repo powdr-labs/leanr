@@ -209,22 +209,12 @@ def denseXorEqExtractNew (bs : BusSemantics p) (facts : BusFacts p bs) (d : Dens
 theorem denseXorEqExtractNew_vars (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     ∀ c ∈ denseXorEqExtractNew bs facts d, ∀ z ∈ c.vars, z ∈ d.occ := by
-  intro c hc z hz
-  rcases List.mem_append.1 hc with hc | hc
-  · obtain ⟨bi, hbi, hbc⟩ := List.mem_filterMap.1 hc
-    exact denseXorEq?_vars bs facts d bi c hbc hbi z hz
-  · obtain ⟨bi, hbi, hbc⟩ := List.mem_filterMap.1 hc
-    exact denseBoolEq?_vars bs facts d bi c hbc hbi z hz
+  grind [denseXorEqExtractNew, denseXorEq?_vars, denseBoolEq?_vars]
 
 theorem denseXorEqExtractNew_sound (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (h1ne : (1 : ZMod p) ≠ 0) (denv : VarId → ZMod p)
     (hsat : d.satisfies bs denv) : ∀ c ∈ denseXorEqExtractNew bs facts d, c.eval denv = 0 := by
-  intro c hc
-  rcases List.mem_append.1 hc with hc | hc
-  · obtain ⟨bi, hbi, hbc⟩ := List.mem_filterMap.1 hc
-    exact denseXorEq?_eval bs facts d bi c denv h1ne hbc hbi hsat
-  · obtain ⟨bi, hbi, hbc⟩ := List.mem_filterMap.1 hc
-    exact denseBoolEq?_eval bs facts d bi c denv h1ne hbc hbi hsat
+  grind [denseXorEqExtractNew, denseXorEq?_eval, denseBoolEq?_eval]
 
 theorem denseXorEqExtractF_covered (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :

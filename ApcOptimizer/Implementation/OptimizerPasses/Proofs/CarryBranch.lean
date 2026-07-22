@@ -81,13 +81,7 @@ theorem denseIntervalCert_sound (hp : 0 < p) (B : Std.HashMap VarId Nat) (l : De
     (h : denseIntervalCert B l = true) (denv : VarId → ZMod p)
     (hB : ∀ v bound, B[v]? = some bound → (denv v).val < bound) :
     l.eval denv ≠ 0 := by
-  unfold denseIntervalCert at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i acc hacc
-    obtain ⟨mp, mn⟩ := acc
-    rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at h
-    exact denseLinNeverZeroSplit B l mp mn hp hacc h.1 h.2 denv hB
+  grind [denseIntervalCert, denseLinNeverZeroSplit]
 
 /-- Checked never-zero certificate for an expression (over the candidate rescalings). -/
 theorem denseNeverZeroB_sound (hp : 0 < p) (B : Std.HashMap VarId Nat) (e : DenseExpr p)

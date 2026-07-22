@@ -299,16 +299,7 @@ theorem denseInteractionDomainF_sound [NeZero p] (bs : BusSemantics p) (facts : 
     (hob : (denseBIEval bi denv).multiplicity ≠ 0 →
       bs.violatesConstraint (denseBIEval bi denv) = false) :
     denv i ∈ dm.toList := by
-  unfold denseInteractionDomainF at h
-  split at h
-  · exact absurd h (by simp)
-  · rename_i bound hB
-    split_ifs at h with hcap
-    simp only [Option.some.injEq] at h
-    subst h
-    show denv i ∈ (List.range bound).map (Nat.cast : Nat → ZMod p)
-    exact mem_range_cast (denv i) bound
-      (denseInteractionBound_sound bs facts bi i bound hB denv hob)
+  grind [denseInteractionDomainF, FiniteDomain.toList, denseInteractionBound_sound, mem_range_cast]
 
 /-! ## Domain-table soundness -/
 

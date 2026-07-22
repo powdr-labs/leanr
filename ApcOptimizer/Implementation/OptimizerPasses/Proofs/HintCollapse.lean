@@ -399,13 +399,7 @@ theorem denseSqCoeffsOK_sound (reg : VarRegistry) (B : Std.HashMap VarId Nat) (D
 theorem denseOccursOnlyInTarget_constr {d : DenseConstraintSystem p} {E : DenseExpr p} {v : VarId}
     (h : denseOccursOnlyInTarget d E v = true) :
     ∀ c ∈ d.algebraicConstraints, v ∈ c.vars → c = E := by
-  intro c hc hvc
-  simp only [denseOccursOnlyInTarget, Bool.and_eq_true, List.all_eq_true] at h
-  have hc' := h.1 c hc
-  simp only [Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc'
-  rcases hc' with h1 | h2
-  · exact h1
-  · exact absurd hvc (denseMentions_false_not_mem v c h2)
+  grind [denseOccursOnlyInTarget, denseMentions_false_not_mem]
 
 theorem denseOccursOnlyInTarget_bus {d : DenseConstraintSystem p} {E : DenseExpr p} {v : VarId}
     (h : denseOccursOnlyInTarget d E v = true) : ∀ bi ∈ d.busInteractions,
@@ -434,11 +428,7 @@ theorem register_snd_eq_of_idOf {reg : VarRegistry} {v : Variable} {i : VarId}
 /-- For an unregistered variable, `register` allocates the trailing (fresh) `VarId`. -/
 theorem register_snd_eq_of_none {reg : VarRegistry} {v : Variable}
     (h : reg.idOf? v = none) : (reg.register v).2 = ⟨reg.byId.size⟩ := by
-  unfold VarRegistry.register
-  split
-  · rename_i i hlook
-    rw [show reg.idOf? v = some i from hlook] at h; exact absurd h (by simp)
-  · rfl
+  grind [VarRegistry.register, VarRegistry.idOf?]
 
 /-- Registering a `powdrId? = none` variable preserves `isInput` pointwise. -/
 theorem hcRegisterIsInputEq (reg : VarRegistry) (v : Variable) (hv : v.powdrId? = none)
@@ -687,12 +677,8 @@ theorem dense_collapse_correct [Fact p.Prime] (isInput : VarId → Bool)
 /-- Occurrence-validity gives coverage. -/
 theorem hcCoveredByOfOcc {r : VarRegistry} {d : DenseConstraintSystem p}
     (h : ∀ i ∈ d.occ, r.Valid i) : d.CoveredBy r := by
-  refine ⟨fun e he i hi => h i ?_, fun bi hbi => ⟨fun i hi => h i ?_, fun e he i hi => h i ?_⟩⟩
-  · exact DenseConstraintSystem.mem_occ_of_constraint he hi
-  · refine DenseConstraintSystem.mem_occ_of_bi hbi ?_
-    simp only [denseBIVars, List.mem_append]; exact Or.inl hi
-  · refine DenseConstraintSystem.mem_occ_of_bi hbi ?_
-    simp only [denseBIVars, List.mem_append, List.mem_flatMap]; exact Or.inr ⟨e, he, hi⟩
+  grind [DenseConstraintSystem.CoveredBy, DenseExpr.CoveredBy, denseBICovered, denseBIVars,
+    DenseConstraintSystem.mem_occ_of_constraint, DenseConstraintSystem.mem_occ_of_bi]
 
 /-- An occurrence of the collapse output is either a variable of the replacement `E'` or an
     occurrence of the input system. -/

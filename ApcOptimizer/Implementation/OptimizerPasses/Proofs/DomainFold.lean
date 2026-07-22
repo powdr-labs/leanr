@@ -107,30 +107,7 @@ theorem mem_denseGroupSurvivorsEV (es : List (DenseExpr p)) (xs : List VarId)
 theorem denseConstOnSurvsV_sound (xs : List VarId) (survsV : List (List (ZMod p)))
     (e : DenseExpr p) (c : ZMod p) (h : denseConstOnSurvsV xs survsV e = some c) :
     ∀ s ∈ survsV, e.eval (denseEnvOfKeysV xs s) = c := by
-  intro s hs
-  cases survsV with
-  | nil => simp at hs
-  | cons s₀ rest =>
-      cases hce : denseCompileE xs e with
-      | some ie =>
-          simp only [denseConstOnSurvsV, hce] at h
-          split at h
-          · rename_i hall
-            simp only [Option.some.injEq] at h
-            have hthis := List.all_eq_true.mp hall s hs
-            rw [decide_eq_true_eq] at hthis
-            have hev := denseCompileE_evalV denseZModOps xs s e ie hce
-            rw [← hev, hthis]; exact h
-          · exact absurd h (by simp)
-      | none =>
-          simp only [denseConstOnSurvsV, hce] at h
-          split at h
-          · rename_i hall
-            simp only [Option.some.injEq] at h
-            have hthis := List.all_eq_true.mp hall s hs
-            rw [decide_eq_true_eq] at hthis
-            rw [hthis]; exact h
-          · exact absurd h (by simp)
+  rcases survsV with _ | ⟨s₀, rest⟩ <;> grind [denseConstOnSurvsV, denseCompileE_evalV]
 
 /-! ## The fold rewrite: agreement and variable containment (value-only) -/
 
@@ -871,12 +848,7 @@ theorem denseMapExpr_vars_subset (g : DenseExpr p → DenseExpr p)
     (bi : BusInteraction (DenseExpr p)) :
     ∀ i ∈ denseBIVars { bi with multiplicity := g bi.multiplicity, payload := bi.payload.map g },
       i ∈ denseBIVars bi := by
-  intro i hi
-  simp only [denseBIVars, List.mem_append, List.mem_flatMap] at hi ⊢
-  rcases hi with hi | ⟨e, he, hi⟩
-  · exact Or.inl (hg _ i hi)
-  · obtain ⟨e0, he0, rfl⟩ := List.mem_map.1 he
-    exact Or.inr ⟨e0, he0, hg e0 i hi⟩
+  grind [denseBIVars]
 
 /-- The sparse fold is the in-place fold: every non-candidate position holds an item sharing no
     variable with `xs` (bucket completeness, contraposed), on which `denseFoldRewriteIdxV` is the

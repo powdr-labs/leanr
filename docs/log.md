@@ -4344,3 +4344,21 @@ productive branch preserve the previous circuit result, so variable, bus-interac
 constraint effectiveness are unchanged. The full build and proof-integrity checks pass; runtime
 A/B and export comparison are deferred to the draft PR's CI matrix. **Worked: implementation/proofs
 yes; runtime result pending CI.**
+### 121. Structure: finish the `grind` sweep across the proof corpus
+
+Follow-up to entry 119's grind adoption: swept the remaining recognizer-spec / structural
+destructuring proofs. 24 lemmas across 15 `Proofs/` files collapse to `grind [<def>]` one-liners
+(net −190 lines): `AddrDiseq`, `BusPairCancelIndex`, `ByteCheckPack`, `CarryBranch`,
+`DomainBatch`, `DomainFold`, `Gauss`, `HintCollapse`, `MonicScale`, `OneHotAnnihilate`,
+`RangeBool`, `Reencode`, `SplitBytePair`, `XorEqExtract`, `ZeroWidthRange`.
+
+Proof-body-only edits (no statement / def / import touched), so the optimizer is unchanged by
+construction — `lake build` green, proof integrity passes, and the 6-case OpenVM/SP1 output
+snapshot is byte-identical. Left alone (grind does not close them): the hypothesis-heavy semantic
+soundness lemmas that dispatch to another `_sound` lemma (`denseSolveOperand_sound` and the
+`BusPairCancelCheck`/`ZeroRegister` family), `_covered`/`_vars` lemmas built on `filterBus_covered`
+/ structural recursion, and `linear_combination` / `induction` proofs. Two quirks worth recording:
+deeply nested matches can hit grind's `maximum term generation` gate (leave those), and boolean
+recognizers want an existing `_iff` lemma in the bracket rather than the raw `def`.
+
+**Worked: yes (net −190 lines, effectiveness and runtime unchanged by construction).**

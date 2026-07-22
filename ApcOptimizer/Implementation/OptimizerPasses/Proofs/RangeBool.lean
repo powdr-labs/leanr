@@ -28,22 +28,7 @@ theorem denseBoolCheck?_spec {bs : BusSemantics p} (facts : BusFacts p bs)
     ∃ valSlot x, facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?)
         = some (valSlot, 2) ∧ bi.multiplicity = DenseExpr.const 1 ∧
         bi.payload[valSlot]? = some (DenseExpr.var x) ∧ c = denseBoolC (DenseExpr.var x) := by
-  unfold denseBoolCheck? at h
-  split at h
-  · rename_i vs bd hrc
-    split_ifs at h with hcond
-    obtain ⟨hmc, rfl⟩ := hcond
-    cases hp : bi.payload[vs]? with
-    | none => simp only [hp] at h; simp at h
-    | some ex =>
-      cases ex with
-      | var x =>
-        simp only [hp] at h; simp only [Option.some.injEq] at h
-        exact ⟨vs, x, hrc, hmc, hp, h.symm⟩
-      | const _ => simp only [hp] at h; simp at h
-      | add _ _ => simp only [hp] at h; simp at h
-      | mul _ _ => simp only [hp] at h; simp at h
-  · exact absurd h (by simp)
+  grind [denseBoolCheck?]
 
 /-- A recognised width-1 check lives on a stateless bus. -/
 theorem denseBoolCheck?_stateless {bs : BusSemantics p} (facts : BusFacts p bs)
@@ -105,12 +90,8 @@ theorem denseRangeBoolNew_vars {bs : BusSemantics p} (facts : BusFacts p bs)
 theorem denseRangeBoolAddF_covered (reg : VarRegistry) {bs : BusSemantics p} (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
     (denseRangeBoolAddF facts d).CoveredBy reg := by
-  unfold denseRangeBoolAddF
-  refine ⟨fun e he => ?_, hcov.2⟩
-  rcases List.mem_append.1 he with h' | h'
-  · exact hcov.1 e h'
-  · intro i hi
-    exact DenseConstraintSystem.occ_valid hcov i (denseRangeBoolNew_vars facts d e h' i hi)
+  grind [denseRangeBoolAddF, denseRangeBoolNew_vars, DenseConstraintSystem.occ_valid,
+    DenseConstraintSystem.CoveredBy, DenseExpr.CoveredBy]
 
 theorem denseRangeBoolF_covered (pw : PrimeWitness p) (reg : VarRegistry) (bs : BusSemantics p)
     (facts : BusFacts p bs) (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
