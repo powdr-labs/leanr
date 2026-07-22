@@ -36,17 +36,22 @@ variable {p : ℕ}
 
 /-! ## Scaling with a unit certificate -/
 
+/-- The core of `denseMonicScaleAffine`, over the already-normalized linear form `n` (taking it
+    as an argument evaluates the normalization once for both its uses below). -/
+def denseMonicScaleNormed (e : DenseExpr p) (n : DenseLinExpr p) :
+    DenseExpr p × ZMod p × ZMod p :=
+  match n.terms with
+  | (_, k) :: _ =>
+      if k * k⁻¹ = 1 ∧ k ≠ 1 then ((n.scale k⁻¹).toExpr, k⁻¹, k)
+      else (e, 1, 1)
+  | [] => (e, 1, 1)
+
 /-- Scale an affine dense expression to monic form. Returns `(e', u, v)` with the intended
     invariants `e'.eval denv = u * e.eval denv` and `u * v = 1`; `(e, 1, 1)` when not applicable. -/
 def denseMonicScaleAffine (e : DenseExpr p) : DenseExpr p × ZMod p × ZMod p :=
   match denseLinearize e with
   | none => (e, 1, 1)
-  | some l =>
-    match l.norm.terms with
-    | (_, k) :: _ =>
-        if k * k⁻¹ = 1 ∧ k ≠ 1 then ((l.norm.scale k⁻¹).toExpr, k⁻¹, k)
-        else (e, 1, 1)
-    | [] => (e, 1, 1)
+  | some l => denseMonicScaleNormed e l.norm
 
 /-- Scale the affine factors of a product tree to monic form, with the accumulated unit
     certificate. -/

@@ -28,7 +28,7 @@ variable {p : ℕ}
 /-- The monic-scaled affine expression evaluates to its unit multiplier times the original. -/
 theorem denseMonicScaleAffine_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
     (denseMonicScaleAffine e).1.eval denv = (denseMonicScaleAffine e).2.1 * e.eval denv := by
-  unfold denseMonicScaleAffine
+  unfold denseMonicScaleAffine denseMonicScaleNormed
   split
   · simp
   · rename_i l hlin
@@ -44,7 +44,7 @@ theorem denseMonicScaleAffine_eval (e : DenseExpr p) (denv : VarId → ZMod p) :
 /-- The affine scaling's certificate is a genuine unit. -/
 theorem denseMonicScaleAffine_unit (e : DenseExpr p) :
     (denseMonicScaleAffine e).2.1 * (denseMonicScaleAffine e).2.2 = 1 := by
-  unfold denseMonicScaleAffine
+  unfold denseMonicScaleAffine denseMonicScaleNormed
   split
   · simp
   · split
@@ -58,7 +58,7 @@ theorem denseMonicScaleAffine_unit (e : DenseExpr p) :
 theorem denseMonicScaleAffine_vars (e : DenseExpr p) :
     ∀ z ∈ (denseMonicScaleAffine e).1.vars, z ∈ e.vars := by
   intro z hz
-  unfold denseMonicScaleAffine at hz
+  unfold denseMonicScaleAffine denseMonicScaleNormed at hz
   split at hz
   · exact hz
   · rename_i l hlin
