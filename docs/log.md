@@ -4344,3 +4344,20 @@ productive branch preserve the previous circuit result, so variable, bus-interac
 constraint effectiveness are unchanged. The full build and proof-integrity checks pass; runtime
 A/B and export comparison are deferred to the draft PR's CI matrix. **Worked: implementation/proofs
 yes; runtime result pending CI.**
+
+### 121. Runtime: compile `DenseExpr.vars` through an accumulator
+
+The proof-facing `DenseExpr.vars` remains the simple left-to-right definition with
+`a.vars ++ b.vars`, but compiled execution now uses `DenseExpr.varsFast`. Its `varsAcc` traversal
+threads the suffix through the expression tree and allocates only the final variable list, avoiding
+`List.appendTR` at every binary node. `varsAcc_eq` proves the stronger accumulator invariant
+`e.varsAcc acc = e.vars ++ acc`; the `@[csimp]` theorem derives exact list equality at `acc = []`,
+so all existing proofs and every order-sensitive consumer retain precisely the same value.
+
+The full build and proof-integrity checks pass. Generated C shows current consumers use
+`DenseExpr.varsFast`; the accumulator loop contains no list append, including the domain,
+reencode, flag-fold, disconnected-component, hint-collapse, and bus-cancellation call sites.
+The output is provably unchanged through the compiler rewrite, so variable,
+bus-interaction, and constraint effectiveness are unchanged. Runtime A/B and export comparison are
+deferred to the draft PR's CI matrix. **Worked: implementation/proof/codegen yes; runtime result
+pending CI.**

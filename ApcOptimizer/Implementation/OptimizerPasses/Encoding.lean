@@ -88,6 +88,26 @@ def DenseExpr.vars : DenseExpr p → List VarId
   | .add a b => a.vars ++ b.vars
   | .mul a b => a.vars ++ b.vars
 
+def DenseExpr.varsAcc : DenseExpr p → List VarId → List VarId
+  | .const _, acc => acc
+  | .var i, acc => i :: acc
+  | .add a b, acc => a.varsAcc (b.varsAcc acc)
+  | .mul a b, acc => a.varsAcc (b.varsAcc acc)
+
+def DenseExpr.varsFast (e : DenseExpr p) : List VarId := e.varsAcc []
+
+theorem DenseExpr.varsAcc_eq (e : DenseExpr p) (acc : List VarId) :
+    e.varsAcc acc = e.vars ++ acc := by
+  induction e generalizing acc with
+  | const => rfl
+  | var => rfl
+  | add a b iha ihb => simp only [varsAcc, iha, ihb, vars, List.append_assoc]
+  | mul a b iha ihb => simp only [varsAcc, iha, ihb, vars, List.append_assoc]
+
+@[csimp] theorem DenseExpr.vars_eq_fast : @DenseExpr.vars = @DenseExpr.varsFast := by
+  funext p e
+  simp only [varsFast, varsAcc_eq, List.append_nil]
+
 /-- All `VarId`s of a dense bus interaction (multiplicity then payload). -/
 def denseBIVars (bi : BusInteraction (DenseExpr p)) : List VarId :=
   bi.multiplicity.vars ++ bi.payload.flatMap DenseExpr.vars

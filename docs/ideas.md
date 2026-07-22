@@ -219,6 +219,9 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
      empty first solution map returns immediately, while productive runs retain both sweeps;
      occurrence and reverse-dependency construction fold expression leaves directly without
      building `DenseExpr.vars` and its append chains.
+   - ~~shared `DenseExpr.vars` append traversal~~ **done (entry 121)**: the proof-facing
+     left-to-right list definition stays unchanged, while a proved `@[csimp]` twin compiles every
+     remaining runtime consumer through `varsAcc`, eliminating per-node list appends.
 
 **R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
 *medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs
