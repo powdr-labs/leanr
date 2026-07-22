@@ -98,7 +98,7 @@ tasks:
   (`rangeCheckAt` empty there) and `subsumedRange` is a no-op on SP1 (no `varRangeBus`), so the
   corpus-wide CI run is the real check for the respective other side.
 
-## Task 2 — Exact ID-set key in domainBatch (intentional behavior repair)
+## Task 2 — Exact ID-set key in domainBatch (intentional behavior repair) — DONE
 
 `varSetKey` (the dedup key for candidate variable sets in domainBatch's finite-domain
 enumeration) concatenates variable NAME strings, so two distinct variables with equal names and
@@ -370,3 +370,70 @@ exhaustive list — apply the principle, not just the list.
 - Identifier names are OUT of scope for the sweep (no API churn). The one exception flagged for
   Task 4 is resolved: `ofSpec` is deleted and `ofNative`/`ofNativeExtending` are renamed to
   `DenseVerifiedPassW.of`/`ofExtending`.
+
+Ordering note: run Task 6 (below) first — its deletions remove whole files of stale comments,
+shrinking this sweep.
+
+## Task 6 — Delete the orphaned Variable-side layer (unused-declaration sweep findings)
+
+Found by an untracked local reachability script (`Scripts/FindUnusedDecls.lean`, not committed;
+recreate as: a `lake env lean`-run meta-script computing environment reachability from `main`,
+every constant of the audited modules, and the `CheckAxioms` theorems, closed over each
+constant's type/value references — including `._unsafe_rec` bodies, without which every
+`partial def`'s dependencies vanish from the closure — with auto-generated names filtered). At HEAD `52ec606`: 7,467 project constants, 4,429
+reachable, 279 reported, triaged to **219 genuine orphan candidates**. Roughly 180 of them are
+one event: Task 4's native-only decision (legacy tree + `ofSpec` deleted) orphaned the whole
+`Variable`-side spec-support layer — including two files Task 3's own re-homes had just
+created (`SubstCore.lean`, `LinExprCore.lean`), whose only would-be consumers died with it.
+
+**Keep-lists established by the triage (do NOT delete; the sweep tool over-reports these by
+design):**
+- the `@[csimp]` fast-merge cluster in `Normalize.lean` (14 decls around
+  `denseMergeTermsFast`/`denseMergeTerms_eq_fast`) — compiler-consumed;
+- the `@[export]` FFI cluster (6 decls: `apcOptimizerOptimizeJson` in `Ffi.lean`, `KnownVm` +
+  helpers, `Serialize.serializeResult`) — rooted by the C shim, not `main`;
+- the 6 `#guard`-anchored DSL decls in `Utils/Dsl.lean`;
+- 32 deliberate-API decls (Bridge/BridgeSteps builder lemmas and the `DenseNativeStep`
+  toolkit, `Measure`/`Registry`/`Encoding` helpers, `denseIterateToFixpoint_monotone`,
+  `Utils/Size.lean`'s documented effectiveness metrics, `matchesSnapshot`).
+- Borderline, decide at execution: `instDecidableEqKnownVm`/`instReprKnownVm` (deriving
+  artifacts unused even by the FFI path).
+
+**Deletion worklist (verify each against the build — reachability is the tool's judgment, the
+compiler's is final; re-point or drop imports as files empty out):**
+1. Whole files dead: `SubstCore.lean` (12 decls), `LinExprCore.lean` (37), `BytePack.lean`
+   (16 — dense twins live in `BusPairCancelCheck.lean`), `MemoryUnify.lean` (27).
+2. Nearly whole files: `CoveredIndex.lean` (28 of 31 — re-home the 3 surviving generic list
+   lemmas `filterMap_congr'`/`filterMap_if_some`/`mem_foldl_insert` first);
+   `DomainProp.lean` (56 of 65 — the complete `Variable`-based `domainPropPass` and its
+   soundness chain; keep/re-home the 9 shared survivors: the `eval_congr` family, `capBound`,
+   `maxDomainBound`, `maxEnumSize`, `probeMax`); `FactPass.lean` (17 of 21 — the spec-side
+   pass driver `iterateToFixpoint`/`andThen`/`guardDegree`/`withFacts`/`sizeKey` family and
+   two `DecidableEq` instances, orphaned with `ofSpec`; the `VerifiedPassW` type itself stays).
+3. Clusters: the 13 dense↔spec decode-correspondence lemmas in `DomainBatch.lean`
+   (`denseCovBuild_corr` etc. — the last decode transports, and `CoveredIndex`'s only
+   would-be consumer); `ListSplit.lean`'s 4 split-equation lemmas (`list_split_two*`,
+   `split_of_extracts`, `foldlStop_all`); the superseded bytePack prototype in
+   `ByteCheckPack.lean` (`denseDrainBytePacks`, `denseByteCheckPackF` — the shipped pass is
+   `denseByteCheckPackPass` in `ByteCheckPackProof.lean`).
+4. Singletons (medium confidence): `denseInteractionBoundPat_eq` (`BusPairCancelWits.lean`),
+   `get_spawn` (`DomainBatchProof.lean`), `denseCoveredIdx_eq_filter` (`DomainFold.lean`),
+   `denseFoldOutInPlaceV_covered` (`DomainFoldProof.lean`), `FiniteDomain.size_eq`
+   (`EnumEngine.lean`), `VarRegistry.decodeExpr_isVar` (`Gauss.lean`),
+   `denseTwoRootVarsOk` (`RootPairUnify.lean`).
+5. Unused imports (corroborated by `lake exe shake`; apply only the clearly-dead ones, NOT
+   wholesale `--fix`, and never touch the audited `Basic.lean`): `Implementation/Optimizer.lean`
+   → `BytePack`, `CoveredIndex.lean` → `DomainProp`, `Encoding.lean` → `Utils.Size`,
+   `OpenVmFacts.lean`/`Sp1Facts.lean` → `MemoryBusDrop`, `LinExprCore` → `Mathlib.Tactic.Ring`
+   (moot if the file dies), `Utils/Size.lean` → `Mathlib.Data.Rat.Defs`.
+6. Stale-doc repairs surfaced by the sweep: `LinExprCore.lean`/`DomainProp.lean` headers call
+   themselves permanently-consumed `Variable`-side files (false since Task 4 — moot where the
+   file dies); Task 4's note above that `Adapter.lean`'s `CoveredBy.mono` is still consumed
+   (re-verify — `Bridge.lean:878` carries its own private copy); `Main.lean:90` duplicates
+   `Utils/Size.lean`'s metric computation (`distinctVarCount`) instead of consuming it —
+   unify or note deliberately.
+
+Verification per commit: the standard gates (build warning-free, proof integrity, six-case
+`cmp` byte-identity — everything here is never-executed code, so byte-identity is expected
+throughout), then re-run `Scripts/FindUnusedDecls.lean` and confirm only the keep-lists
+remain, and let the draft-PR CI confirm corpus-wide.
