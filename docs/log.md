@@ -4473,3 +4473,28 @@ future pass: `denseXorEq?`/`denseBoolEq?` (XorEqExtract) and `denseIdentityPairA
 (IdentitySubst) could share the classifier's shape dispatch but keep bespoke conclusions
 (entailed equality / var-equality); the seqz build-and-compare path shares only the encode
 layout and should stay put.
+
+### 128. Runtime: anchor-indexed domainBatch planning and fused gathers
+
+domainBatch now builds one reusable plan per constraint and bus interaction. Each plan caches its
+deduplicated variable scope and the active/stateless/informative decisions that were previously
+recomputed or represented by separate indices. Constraints and interactions are indexed under one
+anchor variable: any item covered by a target necessarily has that anchor in the target, so the
+per-target candidate stream needs neither duplicate bucket entries nor a position `HashSet`.
+
+Two direct tail-recursive gathers replace the three generic `denseCoveredIdxUnord` traversals. The
+constraint gather computes the full covered count and active expression list together; the bus
+gather computes the covered count, informative bit, and interaction list together. A direct scope
+predicate also avoids allocating a `List.all` closure for each candidate. The soundness proof traces
+every gathered item through its plan-array position to an original constraint or interaction and
+proves that its cached deduplicated scope contains every actual variable. The planner remains plain
+untrusted data.
+
+On `SP1/keccak/apc_001_pc0x78007bbc`, two runs averaged 34.079 s in domainBatch versus a same-session
+`origin/main` average of 52.345 s: **34.90% lower runtime (1.536x speedup)**. Whole-optimizer time
+averaged 127.568 s versus 145.092 s: **12.08% lower (1.137x speedup)**. Every run used five cleanup
+iterations and finished at the same 2773 variables, 2370 bus interactions, and 313 constraints.
+`lake build` is warning-free, generated C uses direct gather loops without per-candidate scope
+closures, and the proof-integrity and unused-theorem checks pass.
+
+**Worked: yes (effectiveness unchanged on the measured case; large domainBatch runtime win).**

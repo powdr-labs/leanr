@@ -224,9 +224,9 @@ def DenseExpr.varsInF (xs : List VarId) : DenseExpr p → Bool
   | .add a b => a.varsInF xs && b.varsInF xs
   | .mul a b => a.varsInF xs && b.varsInF xs
 
-/-- Whether every variable of the bus interaction's multiplicity and payload lies in `xs`. -/
-def denseBIVarsInF (xs : List VarId) (bi : BusInteraction (DenseExpr p)) : Bool :=
-  bi.multiplicity.varsInF xs && bi.payload.all (fun e => e.varsInF xs)
+def denseVarsInListF (xs : List VarId) : List VarId → Bool
+  | [] => true
+  | v :: vs => denseContainsFast xs v && denseVarsInListF xs vs
 
 /-! ## Dense `biInformative` -/
 
@@ -257,15 +257,19 @@ def denseBuildStep {α : Type} (varsOf : α → List VarId) (ai : α × Nat) (id
 def denseCovBuild {α : Type} (varsOf : α → List VarId) (items : List α) : DenseCovIndex :=
   items.zipIdx.foldr (denseBuildStep varsOf) ⟨∅, []⟩
 
+/-- Build an index with each non-variable-less item stored under one anchor variable. -/
+def denseAnchorBuildStep {α : Type} (varsOf : α → List VarId) (ai : α × Nat)
+    (idx : DenseCovIndex) : DenseCovIndex :=
+  match varsOf ai.1 with
+  | [] => ⟨idx.buckets, ai.2 :: idx.varless⟩
+  | v :: _ => ⟨idx.buckets.insert v (ai.2 :: idx.buckets.getD v []), idx.varless⟩
+
+def denseAnchorCovBuild {α : Type} (varsOf : α → List VarId) (items : List α) : DenseCovIndex :=
+  items.zipIdx.foldr (denseAnchorBuildStep varsOf) ⟨∅, []⟩
+
 /-- The dense candidate positions for target `xs`. -/
 def denseCandidates (idx : DenseCovIndex) (xs : List VarId) : List Nat :=
   (xs.flatMap (fun v => idx.buckets.getD v [])) ++ idx.varless
-
-/-- The dense covered items for target `xs`, unordered. -/
-def denseCoveredIdxUnord {α : Type} (idx : DenseCovIndex) (arr : Array α) (Q : α → Bool)
-    (xs : List VarId) : List α :=
-  (((denseCandidates idx xs).foldl (·.insert ·) (∅ : Std.HashSet Nat)).toList).filterMap
-    (fun i => if h : i < arr.size then (if Q arr[i] then some arr[i] else none) else none)
 
 /-! ### `buildStep` bucket projection helpers -/
 
@@ -281,14 +285,25 @@ theorem denseBuildStep_buckets_cons {α : Type} (varsOf : α → List VarId) (ai
 
 /-! ### Dense `ForcedIdx` and its correspondence -/
 
+/-- A constraint and the target-planning data reused by every enumeration. -/
+structure DenseConstraintPlan (p : ℕ) where
+  expr : DenseExpr p
+  vars : List VarId
+  active : Bool
+
+/-- A bus interaction and the target-planning data reused by every enumeration. -/
+structure DenseBusPlan (p : ℕ) where
+  interaction : BusInteraction (DenseExpr p)
+  vars : List VarId
+  usable : Bool
+  informative : Bool
+
 /-- The per-target index bundle (plain data; correctness via correspondence). -/
 structure DenseForcedIdx (p : ℕ) where
   csIdx : DenseCovIndex
-  arrCs : Array (DenseExpr p)
+  arrCs : Array (DenseConstraintPlan p)
   bisIdx : DenseCovIndex
-  arrBis : Array (BusInteraction (DenseExpr p))
-  activeIdx : DenseCovIndex
-  arrActive : Array (DenseExpr p)
+  arrBis : Array (DenseBusPlan p)
 
 /-- The dense domain-table `doms` list has keys `xs`. -/
 theorem DenseDomainTable.doms_fst (T : DenseDomainTable p) :
@@ -310,31 +325,6 @@ theorem DenseDomainTable.doms_fst (T : DenseDomainTable p) :
               simp only [Option.some.injEq] at h
               subst h
               simp [ih ds' hr]
-
-/-! ### Dense covered-index soundness (membership of an enumerated item is a real covered item) -/
-
-theorem denseCoveredIdxUnord_mem {α : Type} (idx : DenseCovIndex) (arr : Array α) (Q : α → Bool)
-    (xs : List VarId) {e : α} (he : e ∈ denseCoveredIdxUnord idx arr Q xs) :
-    ∃ i, ∃ _h : i < arr.size, arr[i] = e ∧ Q e = true := by
-  rw [denseCoveredIdxUnord, List.mem_filterMap] at he
-  obtain ⟨i, _hi, hfe⟩ := he
-  by_cases h : i < arr.size
-  · rw [dif_pos h] at hfe
-    by_cases hq : Q arr[i]
-    · rw [if_pos hq] at hfe
-      have hei : arr[i] = e := Option.some.inj hfe
-      exact ⟨i, h, hei, by rw [← hei]; exact hq⟩
-    · rw [if_neg hq] at hfe; exact absurd hfe (by simp)
-  · rw [dif_neg h] at hfe; exact absurd hfe (by simp)
-
-theorem denseCoveredIdxUnord_mem_of_eq {α : Type} (idx : DenseCovIndex) (l : List α) (arr : Array α)
-    (harr : arr = l.toArray) (Q : α → Bool) (xs : List VarId)
-    {e : α} (he : e ∈ denseCoveredIdxUnord idx arr Q xs) : e ∈ l ∧ Q e = true := by
-  subst harr
-  obtain ⟨i, hi, hei, hq⟩ := denseCoveredIdxUnord_mem idx l.toArray Q xs he
-  subst hei
-  have hi' : i < l.length := by simpa using hi
-  exact ⟨by simp [l.getElem_mem hi'], hq⟩
 
 /-- Canonical dedup key of a variable set: the sorted, duplicate-free `List VarId`, so the key is
     invariant under the order and multiplicity of `xs` and distinct variables never collide. -/
