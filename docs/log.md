@@ -4498,3 +4498,21 @@ iterations and finished at the same 2773 variables, 2370 bus interactions, and 3
 closures, and the proof-integrity and unused-theorem checks pass.
 
 **Worked: yes (effectiveness unchanged on the measured case; large domainBatch runtime win).**
+
+### 129. Runtime: reverse Gauss sweeps to avoid transient fill-in
+
+Gauss now visits algebraic constraints in reverse order during both elimination sweeps. Sweep order
+does not affect soundness: `denseGaussLoop_sound` only requires every pending constraint to belong
+to the input system, which follows directly through `List.reverse`. It does affect the elimination
+path and therefore the size of intermediate solution expressions.
+
+On `OpenVM/wasm-eth/apc_036_pc0x224240`, forward order built 111,005 live solution terms before a
+late 500-pivot block rewrote 60,976 older rows over 14.35 million input terms. Reverse order reaches
+the bridge variables first and avoids that transient fill-in. Two local full-pipeline profiles took
+46.944 s and 46.727 s, with Gauss at 3.748 s and 3.760 s, versus a representative `origin/main`
+profile of 84.826 s total and 42.064 s in Gauss: about **91% less Gauss time (11.2x)** and **45%
+less whole-optimizer time (1.81x)**. All runs used eight cleanup iterations, every reported cycle
+size matched, and the final size remained 1954 variables / 1201 bus interactions / 1895
+constraints. Full-set CI will determine whether the reverse-order heuristic generalizes.
+
+**Worked locally: yes (effectiveness unchanged on the measured case; corpus evaluation pending).**

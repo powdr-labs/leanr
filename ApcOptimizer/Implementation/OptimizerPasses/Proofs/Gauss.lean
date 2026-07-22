@@ -201,24 +201,24 @@ theorem denseGaussLoop_sound (bs : BusSemantics p) (d : DenseConstraintSystem p)
 theorem denseGaussElim_loop_invariant (bs : BusSemantics p) (d : DenseConstraintSystem p) :
     (∀ denv, d.satisfies bs denv → ∀ i t,
         (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-          d.algebraicConstraints
+          d.algebraicConstraints.reverse
           (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-            d.algebraicConstraints DenseSolved.empty)).fn i = some t →
+            d.algebraicConstraints.reverse DenseSolved.empty)).fn i = some t →
           denv i = t.eval denv) ∧
     (∀ i t, (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-        d.algebraicConstraints
+        d.algebraicConstraints.reverse
         (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-          d.algebraicConstraints DenseSolved.empty)).fn i = some t →
+          d.algebraicConstraints.reverse DenseSolved.empty)).fn i = some t →
         ∀ z ∈ t.vars, z ∈ d.occ) := by
   have hfirst := denseGaussLoop_sound bs d (denseOccurrenceMap d) (denseProtectedVars d bs)
-    d.algebraicConstraints DenseSolved.empty (fun _c hc => hc)
+    d.algebraicConstraints.reverse DenseSolved.empty (fun _c hc => by simpa using hc)
     (fun _ _ _ _ hti => absurd hti (by simp [DenseSolved.fn, DenseSolved.empty]))
     (fun _ _ hti => absurd hti (by simp [DenseSolved.fn, DenseSolved.empty]))
   exact denseGaussLoop_sound bs d (denseOccurrenceMap d) (denseProtectedVars d bs)
-    d.algebraicConstraints
+    d.algebraicConstraints.reverse
     (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-      d.algebraicConstraints DenseSolved.empty)
-    (fun _c hc => hc) hfirst.1 hfirst.2
+      d.algebraicConstraints.reverse DenseSolved.empty)
+    (fun _c hc => by simpa using hc) hfirst.1 hfirst.2
 
 /-- `denseGaussElim` preserves coverage: on the non-trivial branch it substitutes an
     occurrence-closed solution map, whose solutions are covered because their variables occur in a

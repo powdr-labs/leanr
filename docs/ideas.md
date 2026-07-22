@@ -245,6 +245,9 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
      empty first solution map returns immediately, while productive runs retain both sweeps;
      occurrence and reverse-dependency construction fold expression leaves directly without
      building `DenseExpr.vars` and its append chains.
+   - ~~gauss constraint ordering~~ **done locally (entry 129)**: both sweeps visit constraints in
+     reverse source order, avoiding a large transient fill-in cascade on wasm-eth apc_036. Corpus
+     CI must still determine whether a fixed reverse order is a robust heuristic.
 
 **R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
 *medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs

@@ -509,25 +509,26 @@ theorem denseTrySolveUnit_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarI
 
 /-- Batch linear (Gauss) elimination. From a constraint like `x - 2*y - 3 = 0` it derives the
     assignment `x := 2*y + 3` and substitutes it everywhere, dropping `x`. The cheapest solvable
-    pivot is chosen per constraint over two sweeps, then the whole solution map is substituted
-    through the system in one pass. -/
+    pivot is chosen per constraint over two reverse-order sweeps, then the whole solution map is
+    substituted through the system in one pass. -/
 def denseGaussElim (bs : BusSemantics p) (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   let occ := denseOccurrenceMap d
   let prot := denseProtectedVars d bs
-  let first := denseGaussLoop occ prot d.algebraicConstraints DenseSolved.empty
+  let pending := d.algebraicConstraints.reverse
+  let first := denseGaussLoop occ prot pending DenseSolved.empty
   if first.map.isEmpty then d
-  else d.substF (denseGaussLoop occ prot d.algebraicConstraints first).fn
+  else d.substF (denseGaussLoop occ prot pending first).fn
 
 /-- `denseGaussElim` as an explicit `if` (the `let` zeta-reduces). -/
 theorem denseGaussElim_eq (bs : BusSemantics p) (d : DenseConstraintSystem p) :
     denseGaussElim bs d =
       if (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-          d.algebraicConstraints DenseSolved.empty).map.isEmpty
+          d.algebraicConstraints.reverse DenseSolved.empty).map.isEmpty
       then d
       else d.substF (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-          d.algebraicConstraints
+          d.algebraicConstraints.reverse
           (denseGaussLoop (denseOccurrenceMap d) (denseProtectedVars d bs)
-            d.algebraicConstraints DenseSolved.empty)).fn := rfl
+            d.algebraicConstraints.reverse DenseSolved.empty)).fn := rfl
 
 /-! `denseGaussElimPass` (the wired pass) is built and proved in `Proofs/Gauss.lean`. -/
 
