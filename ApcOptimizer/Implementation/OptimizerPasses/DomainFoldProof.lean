@@ -938,7 +938,7 @@ theorem denseFoldOutInPlaceV_correct [Fact p.Prime] (bs : BusSemantics p) (d : D
     `touchedSet_contains_iff`, `DomainFold.lean:891`). -/
 theorem denseTouchedSet_contains_iff (idx : DenseCovIndex) (xs : List VarId) (i : Nat) :
     (denseTouchedSet idx xs).contains i = true ↔ ∃ v ∈ xs, i ∈ idx.buckets.getD v [] := by
-  rw [← Std.HashSet.mem_iff_contains, denseTouchedSet, CoveredIndex.mem_foldl_insert,
+  rw [← Std.HashSet.mem_iff_contains, denseTouchedSet, mem_foldl_insert,
     List.mem_flatMap]
   simp [Std.HashSet.not_mem_empty]
 

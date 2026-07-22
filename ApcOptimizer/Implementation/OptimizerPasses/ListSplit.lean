@@ -81,6 +81,46 @@ theorem map_filterMap {α β γ : Type*} (f : α → Option β) (g : β → γ) 
       | none => simpa using ih
       | some b => simp [ih]
 
+/-- `filterMap` respects pointwise equality of its function on the list. -/
+theorem filterMap_congr' {β γ : Type _} {f g : β → Option γ} (l : List β)
+    (h : ∀ x ∈ l, f x = g x) : l.filterMap f = l.filterMap g := by
+  induction l with
+  | nil => rfl
+  | cons a rest ih =>
+    have ha := h a (List.mem_cons_self)
+    have hr := ih (fun x hx => h x (List.mem_cons_of_mem _ hx))
+    cases hfa : f a with
+    | none => rw [List.filterMap_cons_none hfa, List.filterMap_cons_none (ha ▸ hfa), hr]
+    | some b => rw [List.filterMap_cons_some hfa, List.filterMap_cons_some (ha ▸ hfa), hr]
+
+/-- `filterMap` of a guarded `some` is the plain filter-then-map. -/
+theorem filterMap_if_some {β γ : Type _} (P : β → Bool) (f : β → γ) (l : List β) :
+    l.filterMap (fun x => if P x then some (f x) else none) = (l.filter P).map f := by
+  induction l with
+  | nil => rfl
+  | cons a rest ih =>
+    by_cases h : P a
+    · rw [List.filterMap_cons_some (by rw [if_pos h]), List.filter_cons_of_pos h, List.map_cons, ih]
+    · rw [List.filterMap_cons_none (by rw [if_neg h]), List.filter_cons_of_neg (by simpa using h), ih]
+
+/-- Membership in the fold of a list into a `Std.HashSet` (used for candidate-position dedup). -/
+theorem mem_foldl_insert (l : List Nat) (s : Std.HashSet Nat) (i : Nat) :
+    i ∈ l.foldl (·.insert ·) s ↔ i ∈ s ∨ i ∈ l := by
+  induction l generalizing s with
+  | nil => simp
+  | cons a rest ih =>
+    rw [List.foldl_cons, ih (s.insert a), Std.HashSet.mem_insert, List.mem_cons]
+    simp only [beq_iff_eq]
+    constructor
+    · rintro ((rfl | h) | h)
+      · exact Or.inr (Or.inl rfl)
+      · exact Or.inl h
+      · exact Or.inr (Or.inr h)
+    · rintro (h | rfl | h)
+      · exact Or.inl (Or.inr h)
+      · exact (Or.inl (Or.inl rfl))
+      · exact Or.inr h
+
 /-! ### Linear-time dedup
 
 Generic list machinery, originally in the reference `Reencode` pass. -/

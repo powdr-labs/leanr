@@ -225,7 +225,7 @@ theorem denseCoveredIdx_eq_filter_of_complete (idx : DenseCovIndex) (items : Lis
     with hsortedL
   have F1 : ∀ i, i ∈ sortedL ↔ i ∈ cand := by
     intro i
-    rw [hsortedL, List.mem_mergeSort, Std.HashSet.mem_toList, CoveredIndex.mem_foldl_insert]
+    rw [hsortedL, List.mem_mergeSort, Std.HashSet.mem_toList, mem_foldl_insert]
     simp [Std.HashSet.not_mem_empty]
   have hnodupUniq : ((cand.foldl (·.insert ·) (∅ : Std.HashSet Nat)).toList).Nodup :=
     Std.HashSet.distinct_toList.imp (fun {a b} h => by simpa using h)
@@ -265,7 +265,7 @@ theorem denseCoveredIdx_eq_filter_of_complete (idx : DenseCovIndex) (items : Lis
     have hrange : List.range items.length = items.zipIdx.map Prod.snd := by
       rw [List.zipIdx_map_snd, List.range_eq_range']
     rw [hrange, List.filterMap_map]
-    rw [CoveredIndex.filterMap_congr' items.zipIdx
+    rw [filterMap_congr' items.zipIdx
       (f := gI ∘ Prod.snd) (g := fun q => if Q q.1 then some q.1 else none)
       (by
         rintro ⟨a, j⟩ hp
@@ -273,7 +273,7 @@ theorem denseCoveredIdx_eq_filter_of_complete (idx : DenseCovIndex) (items : Lis
         have hlt' : j < items.length := by simpa using hlt
         have heq' : items[j]'hlt' = a := by simpa using heq.symm
         simp only [Function.comp_apply, hgI, dif_pos hlt', heq'])]
-    rw [CoveredIndex.filterMap_if_some]
+    rw [filterMap_if_some]
     show ((items.zipIdx.filter (Q ∘ Prod.fst)).map Prod.fst) = items.filter Q
     rw [← List.filter_map, List.zipIdx_map_fst]
   have L2 : sortedL.filter keepB = (List.range items.length).filter keepB := by

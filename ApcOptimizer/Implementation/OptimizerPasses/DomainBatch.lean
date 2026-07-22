@@ -1,5 +1,4 @@
 import ApcOptimizer.Implementation.OptimizerPasses.EnumEngine
-import ApcOptimizer.Implementation.OptimizerPasses.CoveredIndex
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
 import ApcOptimizer.Implementation.OptimizerPasses.SearchBudgets
 import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
@@ -196,22 +195,6 @@ def denseIExprEvalWith (add mul : ZMod p → ZMod p → ZMod p) (pt : List (VarI
   | .add a b => add (denseIExprEvalWith add mul pt a) (denseIExprEvalWith add mul pt b)
   | .mul a b => mul (denseIExprEvalWith add mul pt a) (denseIExprEvalWith add mul pt b)
 
-/-- `CBi.evalWith` over a dense point (mirrors `CBi.evalWith`). -/
-def denseCBiEvalWith (add mul : ZMod p → ZMod p → ZMod p) (cbi : CBi p)
-    (pt : List (VarId × ZMod p)) : BusInteraction (ZMod p) :=
-  { busId := cbi.busId,
-    multiplicity := denseIExprEvalWith add mul pt cbi.mult,
-    payload := cbi.payload.map (fun ie => denseIExprEvalWith add mul pt ie) }
-
-/-- `survivesAllCW` over a dense point (mirrors `survivesAllCW`). -/
-def denseSurvivesAllCW (add mul : ZMod p → ZMod p → ZMod p) (isZero : ZMod p → Bool)
-    (bs : BusSemantics p) (ces : List (IExpr p)) (cbis : List (CBi p))
-    (pt : List (VarId × ZMod p)) : Bool :=
-  ces.all (fun ie => isZero (denseIExprEvalWith add mul pt ie)) &&
-    cbis.all (fun cbi =>
-      let v := denseCBiEvalWith add mul cbi pt
-      isZero v.multiplicity || !bs.violatesConstraint v)
-
 /-! ### Compiling dense items to `IExpr`/`CBi`
 
 The compiled term is *identical* to the spec's on the decoded item, provided the keys are valid: the
@@ -343,7 +326,7 @@ def denseCoveredIdxUnord {α : Type} (idx : DenseCovIndex) (arr : Array α) (Q :
   (((denseCandidates idx xs).foldl (·.insert ·) (∅ : Std.HashSet Nat)).toList).filterMap
     (fun i => if h : i < arr.size then (if Q arr[i] then some arr[i] else none) else none)
 
-/-! ### `buildStep` projection helpers (dense + spec varless) -/
+/-! ### `buildStep` bucket projection helpers -/
 
 theorem denseBuildStep_buckets_nil {α : Type} (varsOf : α → List VarId) (ai : α × Nat)
     (idx : DenseCovIndex) (h : varsOf ai.1 = []) : (denseBuildStep varsOf ai idx).buckets = idx.buckets := by
@@ -354,180 +337,6 @@ theorem denseBuildStep_buckets_cons {α : Type} (varsOf : α → List VarId) (ai
     (denseBuildStep varsOf ai idx).buckets
       = (w0 :: ws).foldl (fun m v => m.insert v (ai.2 :: m.getD v [])) idx.buckets := by
   simp only [denseBuildStep, h]
-
-theorem denseBuildStep_varless_nil {α : Type} (varsOf : α → List VarId) (ai : α × Nat)
-    (idx : DenseCovIndex) (h : varsOf ai.1 = []) :
-    (denseBuildStep varsOf ai idx).varless = ai.2 :: idx.varless := by
-  simp only [denseBuildStep, h]
-
-theorem denseBuildStep_varless_cons {α : Type} (varsOf : α → List VarId) (ai : α × Nat)
-    (idx : DenseCovIndex) (w0 : VarId) (ws : List VarId) (h : varsOf ai.1 = w0 :: ws) :
-    (denseBuildStep varsOf ai idx).varless = idx.varless := by
-  simp only [denseBuildStep, h]
-
-theorem specBuildStep_varless_nil {α : Type} (varsOf : α → List Variable) (ai : α × Nat)
-    (idx : CoveredIndex.CovIndex) (h : varsOf ai.1 = []) :
-    (CoveredIndex.buildStep varsOf ai idx).varless = ai.2 :: idx.varless := by
-  simp only [CoveredIndex.buildStep, h]
-
-theorem specBuildStep_varless_cons {α : Type} (varsOf : α → List Variable) (ai : α × Nat)
-    (idx : CoveredIndex.CovIndex) (w0 : Variable) (ws : List Variable) (h : varsOf ai.1 = w0 :: ws) :
-    (CoveredIndex.buildStep varsOf ai idx).varless = idx.varless := by
-  simp only [CoveredIndex.buildStep, h]
-
-/-! ### The build correspondence -/
-
-/-- `List.zipIdx` commutes with `List.map` on the elements (positions unchanged). -/
-theorem map_zipIdx_dec {α β : Type} (f : α → β) : ∀ (l : List α) (n : Nat),
-    (l.map f).zipIdx n = (l.zipIdx n).map (fun ai => (f ai.1, ai.2)) := by
-  intro l
-  induction l with
-  | nil => intro n; rfl
-  | cons a rest ih => intro n; simp only [List.map_cons, List.zipIdx_cons, ih]
-
-/-- Folding the dense bucket-insert over `vs` and the spec bucket-insert over `vs.map resolve`
-    preserves the bucket correspondence (`resolve` injective on valid ids). -/
-theorem denseBucketFold_corr (reg : VarRegistry) (pos : Nat) :
-    ∀ (vs : List VarId), (∀ v ∈ vs, reg.Valid v) →
-      ∀ (md : Std.HashMap VarId (List Nat)) (ms : Std.HashMap Variable (List Nat)),
-      (∀ i, reg.Valid i → md.getD i [] = ms.getD (reg.resolve i) []) →
-      ∀ i, reg.Valid i →
-        (vs.foldl (fun m v => m.insert v (pos :: m.getD v [])) md).getD i []
-          = ((vs.map reg.resolve).foldl (fun m v => m.insert v (pos :: m.getD v [])) ms).getD (reg.resolve i) [] := by
-  intro vs
-  induction vs with
-  | nil => intro _ md ms hinv i hi; exact hinv i hi
-  | cons v rest ih =>
-      intro hvv md ms hinv i hi
-      have hvvh : reg.Valid v := hvv v (List.mem_cons_self ..)
-      have hrv : ∀ v' ∈ rest, reg.Valid v' := fun v' h => hvv v' (List.mem_cons_of_mem _ h)
-      simp only [List.map_cons, List.foldl_cons]
-      refine ih hrv _ _ ?_ i hi
-      intro i' hi'
-      rw [Std.HashMap.getD_insert, Std.HashMap.getD_insert]
-      by_cases hvi : v = i'
-      · subst hvi
-        simp only [beq_self_eq_true, if_true]
-        rw [hinv v hvvh]
-      · have hvi' : ¬ reg.resolve v = reg.resolve i' := fun he => hvi (reg.resolve_inj hvvh hi' he)
-        rw [if_neg (by simpa using hvi), if_neg (by simpa using hvi')]
-        exact hinv i' hi'
-
-/-- The dense/spec build folds over a shared zipIdx list agree on `varless` (equal lists) and on
-    every bucket (equal `List Nat`) under `resolve`. -/
-theorem denseBuildStep_fold_corr {α β : Type} (reg : VarRegistry) (dec : α → β)
-    (varsOf_d : α → List VarId) (varsOf_s : β → List Variable)
-    (hvo : ∀ a, varsOf_s (dec a) = (varsOf_d a).map reg.resolve) :
-    ∀ (l : List (α × Nat)), (∀ ai ∈ l, ∀ v ∈ varsOf_d ai.1, reg.Valid v) →
-      (l.foldr (denseBuildStep varsOf_d) ⟨∅, []⟩).varless
-          = ((l.map (fun ai => (dec ai.1, ai.2))).foldr (CoveredIndex.buildStep varsOf_s) ⟨∅, []⟩).varless
-        ∧ (∀ i, reg.Valid i →
-            (l.foldr (denseBuildStep varsOf_d) ⟨∅, []⟩).buckets.getD i []
-              = ((l.map (fun ai => (dec ai.1, ai.2))).foldr (CoveredIndex.buildStep varsOf_s) ⟨∅, []⟩).buckets.getD (reg.resolve i) []) := by
-  intro l
-  induction l with
-  | nil =>
-      intro _
-      exact ⟨rfl, fun i _ => by simp only [List.foldr_nil, List.map_nil, Std.HashMap.getD_empty]⟩
-  | cons ai0 rest ih =>
-      intro hv
-      have hvrest : ∀ ai ∈ rest, ∀ v ∈ varsOf_d ai.1, reg.Valid v :=
-        fun ai h => hv ai (List.mem_cons_of_mem _ h)
-      have hv0 : ∀ v ∈ varsOf_d ai0.1, reg.Valid v := hv ai0 (List.mem_cons_self ..)
-      obtain ⟨ihvarless, ihbuckets⟩ := ih hvrest
-      have hvo0 : varsOf_s (dec ai0.1) = (varsOf_d ai0.1).map reg.resolve := hvo ai0.1
-      simp only [List.foldr_cons, List.map_cons]
-      cases hvs : varsOf_d ai0.1 with
-      | nil =>
-          have hvs' : varsOf_s (dec ai0.1) = [] := by rw [hvo0, hvs]; rfl
-          refine ⟨?_, ?_⟩
-          · rw [denseBuildStep_varless_nil varsOf_d ai0 _ hvs,
-                specBuildStep_varless_nil varsOf_s (dec ai0.1, ai0.2) _ hvs', ihvarless]
-          · intro i hi
-            rw [denseBuildStep_buckets_nil varsOf_d ai0 _ hvs,
-                CoveredIndex.buildStep_buckets_nil varsOf_s (dec ai0.1, ai0.2) _ hvs']
-            exact ihbuckets i hi
-      | cons w0 ws =>
-          have hvs' : varsOf_s (dec ai0.1) = reg.resolve w0 :: ws.map reg.resolve := by
-            rw [hvo0, hvs]; rfl
-          refine ⟨?_, ?_⟩
-          · rw [denseBuildStep_varless_cons varsOf_d ai0 _ w0 ws hvs,
-                specBuildStep_varless_cons varsOf_s (dec ai0.1, ai0.2) _ (reg.resolve w0) (ws.map reg.resolve) hvs']
-            exact ihvarless
-          · intro i hi
-            rw [denseBuildStep_buckets_cons varsOf_d ai0 _ w0 ws hvs,
-                CoveredIndex.buildStep_buckets_cons varsOf_s (dec ai0.1, ai0.2) _ (reg.resolve w0) (ws.map reg.resolve) hvs']
-            exact denseBucketFold_corr reg ai0.2 (w0 :: ws) (by rw [← hvs]; exact hv0) _ _ ihbuckets i hi
-
-/-- **The dense inverted index decodes to `CoveredIndex.build`**: `varless` equal, and every bucket
-    equal (as `List Nat`) under `resolve`, given the item vars decode and are valid. -/
-theorem denseCovBuild_corr {α β : Type} (reg : VarRegistry) (dec : α → β)
-    (varsOf_d : α → List VarId) (varsOf_s : β → List Variable)
-    (hvo : ∀ a, varsOf_s (dec a) = (varsOf_d a).map reg.resolve)
-    (items_d : List α) (hitems : ∀ a ∈ items_d, ∀ v ∈ varsOf_d a, reg.Valid v) :
-    (denseCovBuild varsOf_d items_d).varless = (CoveredIndex.build varsOf_s (items_d.map dec)).varless
-      ∧ (∀ i, reg.Valid i → (denseCovBuild varsOf_d items_d).buckets.getD i []
-          = (CoveredIndex.build varsOf_s (items_d.map dec)).buckets.getD (reg.resolve i) []) := by
-  unfold denseCovBuild CoveredIndex.build
-  rw [map_zipIdx_dec dec items_d 0]
-  refine denseBuildStep_fold_corr reg dec varsOf_d varsOf_s hvo items_d.zipIdx ?_
-  intro ai hai v hv
-  have hmem : ai.1 ∈ items_d := by
-    have h1 : ai.1 ∈ (items_d.zipIdx).map Prod.fst := List.mem_map.2 ⟨ai, hai, rfl⟩
-    rwa [List.zipIdx_map_fst] at h1
-  exact hitems ai.1 hmem v hv
-
-/-- The dense candidate list is the *same* `List Nat` as the spec candidate list on the resolved
-    target (varless + buckets equal). -/
-theorem denseFlatMapGetD (reg : VarRegistry) (idx_d : DenseCovIndex) (idx_s : CoveredIndex.CovIndex)
-    (hbuckets : ∀ i, reg.Valid i → idx_d.buckets.getD i [] = idx_s.buckets.getD (reg.resolve i) []) :
-    ∀ (xs : List VarId), (∀ x ∈ xs, reg.Valid x) →
-      xs.flatMap (fun v => idx_d.buckets.getD v [])
-        = (xs.map reg.resolve).flatMap (fun v => idx_s.buckets.getD v []) := by
-  intro xs
-  induction xs with
-  | nil => intro _; rfl
-  | cons x rest ih =>
-      intro hxv
-      have hxvh : reg.Valid x := hxv x (List.mem_cons_self ..)
-      have hrv : ∀ x' ∈ rest, reg.Valid x' := fun x' h => hxv x' (List.mem_cons_of_mem _ h)
-      rw [List.map_cons, List.flatMap_cons, List.flatMap_cons, hbuckets x hxvh, ih hrv]
-
-theorem denseCandidates_corr (reg : VarRegistry) (idx_d : DenseCovIndex)
-    (idx_s : CoveredIndex.CovIndex) (xs : List VarId) (hxv : ∀ x ∈ xs, reg.Valid x)
-    (hvarless : idx_d.varless = idx_s.varless)
-    (hbuckets : ∀ i, reg.Valid i → idx_d.buckets.getD i [] = idx_s.buckets.getD (reg.resolve i) []) :
-    denseCandidates idx_d xs = CoveredIndex.candidates idx_s (xs.map reg.resolve) := by
-  unfold denseCandidates CoveredIndex.candidates
-  rw [hvarless]
-  congr 1
-  exact denseFlatMapGetD reg idx_d idx_s hbuckets xs hxv
-
-/-- **`denseCoveredIdxUnord` decodes to `CoveredIndex.coveredIdxUnord`.** Given identical candidate
-    lists (`hcand`) and a decode-corresponding predicate on the items, the dense covered list maps
-    element-for-element to the spec covered list. -/
-theorem denseCoveredIdxUnord_corr {α β : Type} (reg : VarRegistry) (dec : α → β)
-    (idx_d : DenseCovIndex) (idx_s : CoveredIndex.CovIndex) (items_d : List α)
-    (Q_d : α → Bool) (Q_s : β → Bool) (xs : List VarId)
-    (hcand : denseCandidates idx_d xs = CoveredIndex.candidates idx_s (xs.map reg.resolve))
-    (hQ : ∀ a ∈ items_d, Q_d a = Q_s (dec a)) :
-    (denseCoveredIdxUnord idx_d items_d.toArray Q_d xs).map dec
-      = CoveredIndex.coveredIdxUnord idx_s (items_d.map dec).toArray Q_s (xs.map reg.resolve) := by
-  unfold denseCoveredIdxUnord
-  simp only [CoveredIndex.coveredIdxUnord]
-  rw [hcand, List.map_filterMap]
-  refine CoveredIndex.filterMap_congr' _ (fun i _ => ?_)
-  by_cases hlt : i < items_d.length
-  · rw [dif_pos (show i < items_d.toArray.size by simpa using hlt),
-        dif_pos (show i < (items_d.map dec).toArray.size by
-          simp only [List.size_toArray, List.length_map]; exact hlt)]
-    simp only [List.getElem_toArray, List.getElem_map]
-    have hqeq : Q_s (dec items_d[i]) = Q_d items_d[i] := (hQ items_d[i] (items_d.getElem_mem hlt)).symm
-    by_cases hq : Q_d items_d[i] = true
-    · rw [if_pos hq, if_pos (hqeq.trans hq), Option.map_some]
-    · rw [if_neg hq, if_neg (by rw [hqeq]; exact hq), Option.map_none]
-  · rw [dif_neg (by simpa using hlt),
-        dif_neg (by simp only [List.size_toArray, List.length_map]; exact hlt), Option.map_none]
 
 /-! ### Dense `ForcedIdx` and its correspondence -/
 
