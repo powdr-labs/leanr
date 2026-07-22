@@ -21,6 +21,28 @@ def denseEqExpr (e2 e1 : DenseExpr p) : DenseExpr p := .add e2 (.mul (.const (-1
 def denseMultConst (bi : BusInteraction (DenseExpr p)) : Option (ZMod p) :=
   bi.multiplicity.constValue?
 
+def denseSetNewMult (ops : DenseZModOps p) (shape : MemoryBusShape) : ZMod p :=
+  match shape.direction with
+  | .receiveThenSend => ops.one
+  | .sendThenReceive => ops.negOne
+
+def denseGetPreviousMult (ops : DenseZModOps p) (shape : MemoryBusShape) : ZMod p :=
+  match shape.direction with
+  | .receiveThenSend => ops.negOne
+  | .sendThenReceive => ops.one
+
+theorem denseSetNewMult_eq (ops : DenseZModOps p) (shape : MemoryBusShape) :
+    denseSetNewMult ops shape = shape.setNewMult := by
+  cases shape with
+  | mk addressFields direction => cases direction <;> simp [denseSetNewMult,
+      MemoryBusShape.setNewMult, ops.one_eq, ops.negOne_eq]
+
+theorem denseGetPreviousMult_eq (ops : DenseZModOps p) (shape : MemoryBusShape) :
+    denseGetPreviousMult ops shape = -shape.setNewMult := by
+  cases shape with
+  | mk addressFields direction => cases direction <;> simp [denseGetPreviousMult,
+      MemoryBusShape.setNewMult, ops.one_eq, ops.negOne_eq]
+
 /-- Do the two sends carry equal constant address entries? -/
 def denseAddrConstsEq (shape : MemoryBusShape) (S S' : BusInteraction (DenseExpr p)) : Bool :=
   shape.addressFields.all (fun slot =>
@@ -90,12 +112,14 @@ inductive DenseStepRes
 /-- Classify message `m` against an open send window `S` (consumer / excluded / blocker). The
     certificate tables are `Thunk`s, forced only if a pair reaches the two-root / nonzero-witness
     arms, and call the same certificates `denseCheckPair`'s `mid` arms re-verify. -/
-def denseStepTest (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p))
+def denseStepTest (ops : DenseZModOps p) (shape : MemoryBusShape)
+    (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p))
     (S m : BusInteraction (DenseExpr p)) : DenseStepRes :=
-  if decide (denseMultConst m = some (-shape.setNewMult)) && denseAddrConstsEq shape S m then .consumer
+  if decide (denseMultConst m = some (denseGetPreviousMult ops shape)) &&
+      denseAddrConstsEq shape S m then .consumer
   else if denseAddrConstsNeq shape S m || denseAddrAffineNeq shape S m
       || denseAddrTwoRootNeq shape T.get S m || denseAddrNonzeroNeq shape nw.get S m
-      || decide (denseMultConst m = some 0) then .excluded
+      || decide (denseMultConst m = some ops.zero) then .excluded
   else .blocker
 
 /-- A canonical address key. -/
@@ -140,7 +164,8 @@ def denseEmitCand (w : DenseOpenRec p) (j : Nat) (R : BusInteraction (DenseExpr 
 
 /-- The sweep: one pass over the interaction list. `acc` collects `(sendPosition, candidate)` pairs,
     order restored by the caller's sort. -/
-def denseSweepGo (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p)) :
+def denseSweepGo (ops : DenseZModOps p) (shape : MemoryBusShape)
+    (T : Thunk (DenseTwoRootMap p)) (nw : Thunk (DenseNonzeroWits p)) :
     (revSeen rest : List (BusInteraction (DenseExpr p))) → (j : Nat) →
     (constOpen : Std.HashMap (DenseAddrKey p) (DenseOpenRec p)) →
     (symOpen : List (DenseOpenRec p)) →
@@ -160,7 +185,7 @@ def denseSweepGo (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : 
         | some k =>
           match constOpen[k]? with
           | some w =>
-            match denseStepTest shape T nw w.S m with
+            match denseStepTest ops shape T nw w.S m with
             | .consumer =>
               (constOpen.erase k,
                match denseEmitCand w j m rest' with
@@ -173,7 +198,7 @@ def denseSweepGo (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : 
       else
         let (drops, acc) := constOpen.toList.foldl (init := (([] : List (DenseAddrKey p)), acc))
           fun (ds, a) kw =>
-            match denseStepTest shape T nw kw.2.S m with
+            match denseStepTest ops shape T nw kw.2.S m with
             | .consumer =>
               (kw.1 :: ds,
                match denseEmitCand kw.2 j m rest' with
@@ -186,7 +211,7 @@ def denseSweepGo (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : 
     let (symOpen, acc) :=
       if symOpen.isEmpty then (symOpen, acc) else
       symOpen.foldr (init := (([] : List (DenseOpenRec p)), acc)) fun w (so, a) =>
-        match denseStepTest shape T nw w.S m with
+        match denseStepTest ops shape T nw w.S m with
         | .consumer =>
           (so,
            match denseEmitCand w j m rest' with
@@ -197,7 +222,7 @@ def denseSweepGo (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : 
     -- (3) a send opens its window; a same-key window that survived (1) as excluded moves to the
     --     literally-tested `symOpen` list.
     let (constOpen, symOpen) :=
-      if decide (denseMultConst m = some shape.setNewMult) then
+      if decide (denseMultConst m = some (denseSetNewMult ops shape)) then
         match mKey? with
         | some k =>
           let w : DenseOpenRec p := ⟨revSeen, m, rest', j⟩
@@ -208,13 +233,14 @@ def denseSweepGo (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p)) (nw : 
           else (constOpen, w :: symOpen)
         | none => (constOpen, symOpen)
       else (constOpen, symOpen)
-    denseSweepGo shape T nw (m :: revSeen) rest' (j + 1) constOpen symOpen acc
+    denseSweepGo ops shape T nw (m :: revSeen) rest' (j + 1) constOpen symOpen acc
 
 /-- All consumer candidates of one bus, in send-position order. -/
 def denseCandidateSplitsSweep (shape : MemoryBusShape) (T : Thunk (DenseTwoRootMap p))
     (nw : Thunk (DenseNonzeroWits p)) (L : List (BusInteraction (DenseExpr p))) :
     List (DenseSplitCand p) :=
-  ((denseSweepGo shape T nw [] L 0 ∅ [] []).mergeSort
+  let ops : DenseZModOps p := denseZModOps
+  ((denseSweepGo ops shape T nw [] L 0 ∅ [] []).mergeSort
     (fun a b => decide (a.1 ≤ b.1))).map (·.2)
 
 /-- Collect the entailed equalities for one bus: for each candidate, `denseCheckPair` and, when it

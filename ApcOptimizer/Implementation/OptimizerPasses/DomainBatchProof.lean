@@ -670,7 +670,7 @@ theorem denseEnvOfKeysV_map (denv : VarId → ZMod p) :
 /-- Positional lookup on a value-only point matches the keyed environment lookup. -/
 theorem denseVarIx_lookupV_env (keys : List VarId) (pt : List (ZMod p)) (y : VarId) (idx : Nat)
     (h : denseVarIx keys y = some idx) :
-    denseLookupIxV pt idx = denseEnvOfKeysV keys pt y := by
+    denseLookupIxV 0 pt idx = denseEnvOfKeysV keys pt y := by
   induction keys generalizing pt idx with
   | nil => simp [denseVarIx] at h
   | cons x rest ih =>
@@ -680,20 +680,18 @@ theorem denseVarIx_lookupV_env (keys : List VarId) (pt : List (ZMod p)) (y : Var
     | cons v vs =>
       split_ifs at h with hyx
       · simp only [Option.some.injEq] at h; subst h
-        show denseLookupIxV (v :: vs) 0 = denseEnvOfKeysV (x :: rest) (v :: vs) y
+        show denseLookupIxV 0 (v :: vs) 0 = denseEnvOfKeysV (x :: rest) (v :: vs) y
         rw [denseLookupIxV, denseEnvOfKeysV, if_pos hyx]
       · rw [Option.map_eq_some_iff] at h
         obtain ⟨j, hj, rfl⟩ := h
-        show denseLookupIxV (v :: vs) (j + 1) = denseEnvOfKeysV (x :: rest) (v :: vs) y
+        show denseLookupIxV 0 (v :: vs) (j + 1) = denseEnvOfKeysV (x :: rest) (v :: vs) y
         rw [denseLookupIxV, denseEnvOfKeysV, if_neg hyx]
         exact ih vs j hj
 
 /-- Compiled value-only evaluation agrees with the keyed-environment evaluation of the source. -/
-theorem denseCompileE_evalV (add mul : ZMod p → ZMod p → ZMod p)
-    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
-    (keys : List VarId) (pt : List (ZMod p)) :
+theorem denseCompileE_evalV (ops : DenseZModOps p) (keys : List VarId) (pt : List (ZMod p)) :
     ∀ (e : DenseExpr p) (ic : IExpr p), denseCompileE keys e = some ic →
-      denseIExprEvalWithV add mul pt ic = e.eval (denseEnvOfKeysV keys pt) := by
+      denseIExprEvalWithV ops pt ic = e.eval (denseEnvOfKeysV keys pt) := by
   intro e
   induction e with
   | const n => intro ic h; simp only [denseCompileE, Option.some.injEq] at h; subst h; rfl
@@ -701,8 +699,9 @@ theorem denseCompileE_evalV (add mul : ZMod p → ZMod p → ZMod p)
       intro ic h
       rw [denseCompileE, Option.map_eq_some_iff] at h
       obtain ⟨idx, hidx, rfl⟩ := h
-      show denseIExprEvalWithV add mul pt (.ix idx) = denseEnvOfKeysV keys pt y
+      show denseIExprEvalWithV ops pt (.ix idx) = denseEnvOfKeysV keys pt y
       rw [denseIExprEvalWithV]
+      rw [ops.zero_eq]
       exact denseVarIx_lookupV_env keys pt y idx hidx
   | add a b iha ihb =>
       intro ic h
@@ -713,8 +712,8 @@ theorem denseCompileE_evalV (add mul : ZMod p → ZMod p → ZMod p)
         | none => rw [denseCompileE, ha, hb] at h; simp at h
         | some ib =>
           rw [denseCompileE, ha, hb] at h; simp only [Option.some.injEq] at h; subst h
-          show denseIExprEvalWithV add mul pt (.add ia ib) = (a.add b).eval (denseEnvOfKeysV keys pt)
-          rw [denseIExprEvalWithV, DenseExpr.eval, hadd, iha ia ha, ihb ib hb]
+          show denseIExprEvalWithV ops pt (.add ia ib) = (a.add b).eval (denseEnvOfKeysV keys pt)
+          rw [denseIExprEvalWithV, DenseExpr.eval, ops.add_eq, iha ia ha, ihb ib hb]
   | mul a b iha ihb =>
       intro ic h
       cases ha : denseCompileE keys a with
@@ -724,15 +723,14 @@ theorem denseCompileE_evalV (add mul : ZMod p → ZMod p → ZMod p)
         | none => rw [denseCompileE, ha, hb] at h; simp at h
         | some ib =>
           rw [denseCompileE, ha, hb] at h; simp only [Option.some.injEq] at h; subst h
-          show denseIExprEvalWithV add mul pt (.mul ia ib) = (a.mul b).eval (denseEnvOfKeysV keys pt)
-          rw [denseIExprEvalWithV, DenseExpr.eval, hmul, iha ia ha, ihb ib hb]
+          show denseIExprEvalWithV ops pt (.mul ia ib) = (a.mul b).eval (denseEnvOfKeysV keys pt)
+          rw [denseIExprEvalWithV, DenseExpr.eval, ops.mul_eq, iha ia ha, ihb ib hb]
 
 /-- Compiled-list zero-check agrees with the source list's (value-only). -/
-theorem denseCompileEs_allV (add mul : ZMod p → ZMod p → ZMod p)
-    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b) (isZero : ZMod p → Bool)
+theorem denseCompileEs_allV (ops : DenseZModOps p) (isZero : ZMod p → Bool)
     (hz : ∀ v, isZero v = decide (v = 0)) (keys : List VarId) (pt : List (ZMod p)) :
     ∀ (es : List (DenseExpr p)) (ces : List (IExpr p)), denseCompileEs keys es = some ces →
-      ces.all (fun ie => isZero (denseIExprEvalWithV add mul pt ie))
+      ces.all (fun ie => isZero (denseIExprEvalWithV ops pt ie))
         = es.all (fun e => decide (e.eval (denseEnvOfKeysV keys pt) = 0)) := by
   intro es
   induction es with
@@ -747,14 +745,12 @@ theorem denseCompileEs_allV (add mul : ZMod p → ZMod p → ZMod p)
       | some irest =>
         rw [denseCompileEs, he, hr] at h; simp only [Option.some.injEq] at h; subst h
         rw [List.all_cons, List.all_cons, ih irest hr,
-          denseCompileE_evalV add mul hadd hmul keys pt e ie he, hz]
+          denseCompileE_evalV ops keys pt e ie he, hz]
 
 /-- Compiled payload evaluation agrees with the fallback payload (value-only). -/
-theorem denseCompileEs_mapV (add mul : ZMod p → ZMod p → ZMod p)
-    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
-    (keys : List VarId) (pt : List (ZMod p)) :
+theorem denseCompileEs_mapV (ops : DenseZModOps p) (keys : List VarId) (pt : List (ZMod p)) :
     ∀ (es : List (DenseExpr p)) (ces : List (IExpr p)), denseCompileEs keys es = some ces →
-      ces.map (fun ie => denseIExprEvalWithV add mul pt ie)
+      ces.map (fun ie => denseIExprEvalWithV ops pt ie)
         = es.map (fun e => e.eval (denseEnvOfKeysV keys pt)) := by
   intro es
   induction es with
@@ -769,14 +765,13 @@ theorem denseCompileEs_mapV (add mul : ZMod p → ZMod p → ZMod p)
       | some irest =>
         rw [denseCompileEs, he, hr] at h; simp only [Option.some.injEq] at h; subst h
         rw [List.map_cons, List.map_cons, ih irest hr,
-          denseCompileE_evalV add mul hadd hmul keys pt e ie he]
+          denseCompileE_evalV ops keys pt e ie he]
 
 /-- Compiled interaction evaluation agrees with the fallback message (value-only). -/
-theorem denseCompileBi_evalWithV (add mul : ZMod p → ZMod p → ZMod p)
-    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b)
-    (keys : List VarId) (pt : List (ZMod p)) (bi : BusInteraction (DenseExpr p)) (cbi : CBi p)
+theorem denseCompileBi_evalWithV (ops : DenseZModOps p) (keys : List VarId)
+    (pt : List (ZMod p)) (bi : BusInteraction (DenseExpr p)) (cbi : CBi p)
     (h : denseCompileBi keys bi = some cbi) :
-    denseCBiEvalWithV add mul cbi pt
+    denseCBiEvalWithV ops cbi pt
       = { busId := bi.busId,
           multiplicity := bi.multiplicity.eval (denseEnvOfKeysV keys pt),
           payload := bi.payload.map (fun e => e.eval (denseEnvOfKeysV keys pt)) } := by
@@ -789,17 +784,16 @@ theorem denseCompileBi_evalWithV (add mul : ZMod p → ZMod p → ZMod p)
       rw [denseCompileBi, hm, hpl] at h; simp only [Option.some.injEq] at h; subst h
       unfold denseCBiEvalWithV
       dsimp only
-      rw [denseCompileE_evalV add mul hadd hmul keys pt bi.multiplicity m hm,
-        denseCompileEs_mapV add mul hadd hmul keys pt bi.payload pl hpl]
+      rw [denseCompileE_evalV ops keys pt bi.multiplicity m hm,
+        denseCompileEs_mapV ops keys pt bi.payload pl hpl]
 
 /-- Compiled-list obligation check agrees with the source list's (value-only). -/
-theorem denseCompileBis_allV (add mul : ZMod p → ZMod p → ZMod p)
-    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b) (isZero : ZMod p → Bool)
+theorem denseCompileBis_allV (ops : DenseZModOps p) (isZero : ZMod p → Bool)
     (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p) (keys : List VarId)
     (pt : List (ZMod p)) :
     ∀ (bis : List (BusInteraction (DenseExpr p))) (cbis : List (CBi p)),
       denseCompileBis keys bis = some cbis →
-      cbis.all (fun cbi => let v := denseCBiEvalWithV add mul cbi pt;
+      cbis.all (fun cbi => let v := denseCBiEvalWithV ops cbi pt;
           isZero v.multiplicity || !bs.violatesConstraint v)
         = bis.all (fun bi =>
           let v : BusInteraction (ZMod p) :=
@@ -820,20 +814,19 @@ theorem denseCompileBis_allV (add mul : ZMod p → ZMod p → ZMod p)
       | some crest =>
         rw [denseCompileBis, hb, hr] at h; simp only [Option.some.injEq] at h; subst h
         rw [List.all_cons, List.all_cons, ih crest hr]
-        simp only [denseCompileBi_evalWithV add mul hadd hmul keys pt bi cbi hb, hz]
+        simp only [denseCompileBi_evalWithV ops keys pt bi cbi hb, hz]
 
 /-- The value-only compiled survivor predicate under compile success agrees with the uncompiled one. -/
-theorem denseSurvivesAllCWV_eq (add mul : ZMod p → ZMod p → ZMod p)
-    (hadd : ∀ a b, add a b = a + b) (hmul : ∀ a b, mul a b = a * b) (isZero : ZMod p → Bool)
+theorem denseSurvivesAllCWV_eq (ops : DenseZModOps p) (isZero : ZMod p → Bool)
     (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p) (es : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId) (ces : List (IExpr p))
     (cbis : List (CBi p)) (pt : List (ZMod p))
     (hce : denseCompileEs keys es = some ces) (hcb : denseCompileBis keys bis = some cbis) :
-    denseSurvivesAllCWV add mul isZero bs ces cbis pt = denseSurvivesAllMV bs es bis keys pt := by
+    denseSurvivesAllCWV ops isZero bs ces cbis pt = denseSurvivesAllMV bs es bis keys pt := by
   unfold denseSurvivesAllCWV denseSurvivesAllMV
   congr 1
-  · exact denseCompileEs_allV add mul hadd hmul isZero hz keys pt es ces hce
-  · exact denseCompileBis_allV add mul hadd hmul isZero hz bs keys pt bis cbis hcb
+  · exact denseCompileEs_allV ops isZero hz keys pt es ces hce
+  · exact denseCompileBis_allV ops isZero hz bs keys pt bis cbis hcb
 
 /-- The value-only compiled survivor predicate agrees with the uncompiled one on every point. -/
 theorem denseCompiledSurvV_eq (bs : BusSemantics p) (es : List (DenseExpr p))
@@ -846,7 +839,9 @@ theorem denseCompiledSurvV_eq (bs : BusSemantics p) (es : List (DenseExpr p))
     cases hcb : denseCompileBis keys bis with
     | none => rfl
     | some cbis =>
-      exact denseSurvivesAllCWV_eq _ _ (fun _ _ => rfl) (fun _ _ => rfl) _ (fun _ => rfl)
+      change denseSurvivesAllCWV denseZModOps (fun v => decide (v = denseZModOps.zero))
+          bs ces cbis pt = denseSurvivesAllMV bs es bis keys pt
+      exact denseSurvivesAllCWV_eq denseZModOps _ (fun _ => rfl)
         bs es bis keys ces cbis pt hce hcb
 
 /-- The restriction of a satisfying `denv` survives the covered-item predicate (value-only). -/

@@ -248,6 +248,89 @@ theorem densePivotDescs_eq (c : DenseExpr p) (l : DenseLinExpr p) (hlin : denseL
   · exact List.filterMap_congr (fun v _ => densePm1Desc_eq l occ prot v)
   · exact List.filterMap_congr (fun v _ => denseUnitDesc_eq l occ prot v)
 
+/-! ## Boxed runtime twins -/
+
+def denseIdxStepWith (ops : DenseZModOps p) (m : Std.HashMap VarId (ZMod p × Nat))
+    (t : VarId × ZMod p) : Std.HashMap VarId (ZMod p × Nat) :=
+  let old := (m[t.1]?).getD (ops.zero, 0)
+  m.insert t.1 (ops.add old.1 t.2, old.2 + 1)
+
+def denseCoeffIdxWith (ops : DenseZModOps p) :
+    List (VarId × ZMod p) → Std.HashMap VarId (ZMod p × Nat) →
+      Std.HashMap VarId (ZMod p × Nat)
+  | [], m => m
+  | t :: rest, m => denseCoeffIdxWith ops rest (denseIdxStepWith ops m t)
+
+def denseCoeffIdxFast (terms : List (VarId × ZMod p)) : Std.HashMap VarId (ZMod p × Nat) :=
+  let ops : DenseZModOps p := denseZModOps
+  denseCoeffIdxWith ops terms ∅
+
+theorem denseIdxStepWith_eq (ops : DenseZModOps p) (m : Std.HashMap VarId (ZMod p × Nat))
+    (t : VarId × ZMod p) : denseIdxStepWith ops m t = denseIdxStep m t := by
+  simp only [denseIdxStepWith, denseIdxStep, ops.zero_eq, ops.add_eq]
+
+theorem denseCoeffIdxWith_eq (ops : DenseZModOps p) (terms : List (VarId × ZMod p))
+    (m : Std.HashMap VarId (ZMod p × Nat)) :
+    denseCoeffIdxWith ops terms m = terms.foldl denseIdxStep m := by
+  induction terms generalizing m with
+  | nil => rfl
+  | cons t rest ih =>
+    rw [denseCoeffIdxWith, denseIdxStepWith_eq, List.foldl_cons, ih]
+
+@[csimp] theorem denseCoeffIdx_eq_fast : @denseCoeffIdx = @denseCoeffIdxFast := by
+  funext p terms
+  simp only [denseCoeffIdx, denseCoeffIdxFast, denseCoeffIdxWith_eq]
+
+def densePm1DescWith (ops : DenseZModOps p) (idx : Std.HashMap VarId (ZMod p × Nat))
+    (total : Nat) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) (v : VarId) :
+    Option (VarId × Nat) :=
+  if ((idx[v]?).getD (ops.zero, 0)).1 = ops.one ∨
+      ((idx[v]?).getD (ops.zero, 0)).1 = ops.negOne then
+    some (v, denseGaussScore occ prot v (total - ((idx[v]?).getD (ops.zero, 0)).2))
+  else none
+
+def denseUnitDescWith (ops : DenseZModOps p) (idx : Std.HashMap VarId (ZMod p × Nat))
+    (total : Nat) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) (v : VarId) :
+    Option (VarId × Nat) :=
+  if ¬(((idx[v]?).getD (ops.zero, 0)).1 = ops.one ∨
+      ((idx[v]?).getD (ops.zero, 0)).1 = ops.negOne) ∧
+      ops.mul ((idx[v]?).getD (ops.zero, 0)).1 (((idx[v]?).getD (ops.zero, 0)).1)⁻¹ = ops.one then
+    some (v, denseGaussScore occ prot v (total - ((idx[v]?).getD (ops.zero, 0)).2))
+  else none
+
+def densePivotDescsWith (ops : DenseZModOps p) (l : DenseLinExpr p)
+    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) : List (VarId × Nat) :=
+  let idx := denseCoeffIdxWith ops l.terms ∅
+  let total := l.terms.length
+  (l.terms.map Prod.fst).filterMap (densePm1DescWith ops idx total occ prot) ++
+    (l.terms.map Prod.fst).filterMap (denseUnitDescWith ops idx total occ prot)
+
+def densePivotDescsFast (l : DenseLinExpr p) (occ : Std.HashMap VarId Nat)
+    (prot : Std.HashSet VarId) : List (VarId × Nat) :=
+  let ops : DenseZModOps p := denseZModOps
+  densePivotDescsWith ops l occ prot
+
+theorem densePm1DescWith_eq (ops : DenseZModOps p) (idx : Std.HashMap VarId (ZMod p × Nat))
+    (total : Nat) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) (v : VarId) :
+    densePm1DescWith ops idx total occ prot v = densePm1Desc idx total occ prot v := by
+  simp only [densePm1DescWith, densePm1Desc, ops.zero_eq, ops.one_eq, ops.negOne_eq]
+
+theorem denseUnitDescWith_eq (ops : DenseZModOps p) (idx : Std.HashMap VarId (ZMod p × Nat))
+    (total : Nat) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) (v : VarId) :
+    denseUnitDescWith ops idx total occ prot v = denseUnitDesc idx total occ prot v := by
+  simp only [denseUnitDescWith, denseUnitDesc, ops.zero_eq, ops.one_eq, ops.negOne_eq, ops.mul_eq]
+
+theorem densePivotDescsWith_eq (ops : DenseZModOps p) (l : DenseLinExpr p)
+    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
+    densePivotDescsWith ops l occ prot = densePivotDescs l occ prot := by
+  unfold densePivotDescsWith densePivotDescs denseCoeffIdx
+  rw [denseCoeffIdxWith_eq]
+  simp only [densePm1DescWith_eq, denseUnitDescWith_eq]
+
+@[csimp] theorem densePivotDescs_eq_fast : @densePivotDescs = @densePivotDescsFast := by
+  funext p l occ prot
+  exact (densePivotDescsWith_eq denseZModOps l occ prot).symm
+
 /-! ## Fast pivot selection -/
 
 /-- The cheapest solvable dense pivot of a constraint, building the solution only for the winner. -/

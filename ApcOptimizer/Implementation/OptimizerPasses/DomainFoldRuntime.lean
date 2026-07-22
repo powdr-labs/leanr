@@ -25,11 +25,10 @@ def denseAssignmentsV : List (List (ZMod p)) → List (List (ZMod p))
 
 /-! ## The group's survivor filter, compiled once per target -/
 
-/-- Whether every compiled covered constraint `ces` zeroes at point `pt`; `add`/`mul` are the ring
-    ops hoisted out of the `ZMod p` instances once by the caller. -/
-def denseSurvZeroCWV (add mul : ZMod p → ZMod p → ZMod p) (ces : List (IExpr p))
+/-- Whether every compiled covered constraint `ces` zeroes at point `pt`. -/
+def denseSurvZeroCWV (ops : DenseZModOps p) (isZero : ZMod p → Bool) (ces : List (IExpr p))
     (pt : List (ZMod p)) : Bool :=
-  ces.all (fun ie => decide (denseIExprEvalWithV add mul pt ie = 0))
+  ces.all (fun ie => isZero (denseIExprEvalWithV ops pt ie))
 
 /-- The surviving group values, value-only: covered constraints `es` compiled once over key list
     `xs`, every enumerated point checked by index. Falls back to the uncompiled filter only if
@@ -38,9 +37,11 @@ def denseGroupSurvivorsEV (es : List (DenseExpr p)) (xs : List VarId)
     (domVals : List (List (ZMod p))) : List (List (ZMod p)) :=
   match denseCompileEs xs es with
   | some ces =>
-    let addI : Add (ZMod p) := inferInstance
-    let mulI : Mul (ZMod p) := inferInstance
-    (denseAssignmentsV domVals).filter (denseSurvZeroCWV addI.add mulI.mul ces)
+    let ops : DenseZModOps p := denseZModOps
+    let dec : DecidableEq (ZMod p) := inferInstance
+    let isZero : ZMod p → Bool := fun v => @decide (v = ops.zero) (dec v ops.zero)
+    let surv : DenseSurvV p := ⟨fun pt => denseSurvZeroCWV ops isZero ces pt⟩
+    (denseAssignmentsV domVals).filter surv.run
   | none =>
     (denseAssignmentsV domVals).filter
       (fun a => es.all (fun c => decide (c.eval (denseEnvOfKeysV xs a) = 0)))
@@ -57,10 +58,9 @@ def denseConstOnSurvsV (xs : List VarId) (survsV : List (List (ZMod p))) (e : De
   | s₀ :: rest =>
     match denseCompileE xs e with
     | some ie =>
-      let addI : Add (ZMod p) := inferInstance
-      let mulI : Mul (ZMod p) := inferInstance
-      let v₀ := denseIExprEvalWithV addI.add mulI.mul s₀ ie
-      if (s₀ :: rest).all (fun s => decide (denseIExprEvalWithV addI.add mulI.mul s ie = v₀))
+      let ops : DenseZModOps p := denseZModOps
+      let v₀ := denseIExprEvalWithV ops s₀ ie
+      if (s₀ :: rest).all (fun s => decide (denseIExprEvalWithV ops s ie = v₀))
       then some v₀ else none
     | none =>
       let v₀ := e.eval (denseEnvOfKeysV xs s₀)

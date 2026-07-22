@@ -40,6 +40,31 @@ structure DenseConstraintSystem (p : ℕ) where
   algebraicConstraints : List (DenseExpr p)
   busInteractions : List (BusInteraction (DenseExpr p))
 
+/-- Boxed field operations and constants, built once outside hot recursive traversals. -/
+structure DenseZModOps (p : ℕ) where
+  add : ZMod p → ZMod p → ZMod p
+  mul : ZMod p → ZMod p → ZMod p
+  zero : ZMod p
+  one : ZMod p
+  negOne : ZMod p
+  add_eq : ∀ a b, add a b = a + b
+  mul_eq : ∀ a b, mul a b = a * b
+  zero_eq : zero = 0
+  one_eq : one = 1
+  negOne_eq : negOne = -1
+
+def denseZModOps : DenseZModOps p where
+  add := (inferInstance : Add (ZMod p)).add
+  mul := (inferInstance : Mul (ZMod p)).mul
+  zero := 0
+  one := 1
+  negOne := -1
+  add_eq := fun _ _ => rfl
+  mul_eq := fun _ _ => rfl
+  zero_eq := rfl
+  one_eq := rfl
+  negOne_eq := rfl
+
 /-! ## Dense expression operations (runtime; specified against decode below) -/
 
 /-- Multiplicative degree, mirroring `Expression.degree`. -/
