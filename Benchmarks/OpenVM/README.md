@@ -38,8 +38,7 @@ start program counter(s) — or a descriptive label (the keccak set uses `pckecc
 
 `manifest.json` records the ranking (per-entry cost, frequency, width, stats, provenance);
 `apc_candidates.json` is powdr's candidate dump, the source of each block's assembly in the
-`--report` HTML. Both are optional. A set may also ship an `apc_<rank>_pc<pc>.apc_opt.json.gz`
-snapshot of apc-optimizer's own output for diffing; `benchmark.py` skips it when collecting cases.
+`--report` HTML. Both are optional.
 
 ## openvm-eth
 
@@ -54,5 +53,4 @@ This set was built from Ethereum mainnet [block 24171377](https://etherscan.io/b
 A single-case stress set, in [`keccak/`](./keccak/): one large APC — the keccak precompile
 (~28k constraints / ~27k columns), with its powdr pair from powdr's native `optimize()`
 (`autoprecompiles/tests/optimizer.rs::test_optimize`, powdr commit `b072302`). One run takes minutes.
-`benchmark.py keccak` runs it, and CI benches it on every PR alongside `openvm-eth`. The set also
-ships an `apc_opt` snapshot for gap analysis (see [Layout](#layout)).
+`benchmark.py keccak` runs it, and CI benches it on every PR alongside `openvm-eth`.

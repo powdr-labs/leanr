@@ -109,7 +109,7 @@ def bench(args):
         sys.exit(f"error: {binary} missing (build first, or pass --binary/--no-build correctly)")
 
     cases = sorted(f for f in bench_dir.glob("apc_*_pc*.json.gz")
-                   if not f.name.endswith((".powdr_opt.json.gz", ".apc_opt.json.gz")))
+                   if not f.name.endswith(".powdr_opt.json.gz"))
     if not cases:
         sys.exit(f"no benchmark cases in {bench_dir}")
     if args.n is not None:

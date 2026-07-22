@@ -10,8 +10,7 @@
       "rank": 1,
       "files": {
         "unopt": "apc_001_pckeccak.json.gz",
-        "powdr_opt": "apc_001_pckeccak.powdr_opt.json.gz",
-        "apc_opt": "apc_001_pckeccak.apc_opt.json.gz"
+        "powdr_opt": "apc_001_pckeccak.powdr_opt.json.gz"
       },
       "stats": {
         "before": {
@@ -24,13 +23,6 @@
         "main_columns": 2021,
         "constraints": 186,
         "bus_interactions": 1734
-      },
-      "apc_opt_stats": {
-        "note": "apc-optimizer output snapshot; regenerate with `apc-optimizer opt-export` as the optimizer improves",
-        "commit": "claude/keccak-effectiveness-gap-nb5j56 (finite-domain byte justification + shielded pair cancellation; on main 9844184)",
-        "main_columns": 3056,
-        "constraints": 120,
-        "bus_interactions": 2690
       }
     }
   ]
