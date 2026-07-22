@@ -118,6 +118,40 @@ touching these files anyway):
   redundantByteDrop, subsumedRange, subsumedCheck, tupleRange, monicScale, busPairCancelLate
   (oneHotAnnihilate's probe was interrupted).
 
+## powdr's range-constraint solver vs. digitFold's enumeration (evaluated 2026-07-22)
+
+Question: powdr pins the same base-256 limbs digitFold does, but *without* enumeration — could
+its approach replace digitFold and/or fold intervalForce/carryBranch into one engine?
+
+How powdr does it (`powdr/constraint-solver/src`): a `RangeConstraint = {mask, min, max}` abstract
+domain — a bit-mask ∧ a possibly-wrapping interval (`range_constraint.rs`). Byte lookups give a
+limb `mask = 0xff`; `multiple(2^k)` shifts the mask into a disjoint bit window; `combine_sum` ORs
+disjoint masks; `conjunction` intersects. A base-256 sum forced to a known constant is then solved
+by peeling digits (`solve_affine`/`transfer_constraints`, `algebraic_constraint/solve.rs`) — no
+enumeration. A genuine add contributes a boolean carry, handled by `boolean_extractor` (rewrites
+`left·right = 0` into affine + a fresh boolean) and a *bounded* `exhaustive_search`
+(`MAX_VAR_RANGE_WIDTH = 5`, `MAX_SEARCH_WIDTH = 1024` — only ≤5-value vars, i.e. carries, never
+256-wide limbs). So powdr's "two cases (carry / no carry)" is a 2-way boolean split, and the limbs
+themselves fall out by masking.
+
+Verdict: **more general and (in principle) faster, but not worth porting here.** Measured:
+- **No effectiveness upside.** apc-optimizer already ties powdr on the digit cases (apc_094: both
+  51 vars, both delete every PC limb). The 6 openvm-eth cases where we still lose to powdr
+  (apc_018 +5, _042 +4, _051 +2, _050/_080/_091 +1) are timestamp / seqz-comparison / structural
+  routes, **not** base-256 decomposition — a known-bits domain would not close them.
+- **No meaningful speed upside.** digitFold is ~6 ms / ~2 % of a case (apc_094 `profile`); the
+  enumeration hog is domainBatch (~206 ms). If propagation-over-enumeration is ever pursued for
+  *runtime*, domainBatch is the target, not digitFold.
+- **Proof cost is the decider.** digitFold's soundness is enumerate-and-check — one retraction
+  lemma (`solutions_complete`) plus ~367 proof lines. A *verified* `{mask, min, max}` domain needs
+  mask-arithmetic validity under `+`, `·2^k`, negation/wrap, and conjunction, plus boolean-split
+  soundness — easily 2–3× that proof surface (powdr's unverified `range_constraint.rs` alone is
+  ~875 LOC) to replace a pass that ties powdr and costs 2 % runtime.
+
+Enumerate-and-check is thus the right *local* choice in a verified, effectiveness-driven repo:
+proof simplicity dominates and generality buys nothing on this benchmark. Revisit only if a future
+gap is genuinely a known-bits/decomposition case that neither digitFold nor domainBatch reaches.
+
 ## Runtime
 
 Rewritten 2026-07-18 from a fresh profiling session (per-pass `profile`, per-cycle timing, gdb
