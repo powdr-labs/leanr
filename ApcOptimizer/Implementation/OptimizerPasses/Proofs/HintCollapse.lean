@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
-import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DigitFold
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.FactBounds
 
 set_option autoImplicit false
 
@@ -9,7 +9,7 @@ set_option autoImplicit false
 `VarId → ZMod p`, via `Bridge.lean`. Substituting the once-occurring witnesses `D` to a common value
 collapses target `E` to `denom·inv + rest`, with `inv = QuotientOrZero(−rest, denom)` a fresh
 `powdrId? = none` witness (so `isInput` is preserved pointwise). Field-sum lemmas come from
-`HintCollapse.lean`; the bounds map through `denseBuild_sound` (`Proofs/DigitFold.lean`). -/
+`HintCollapse.lean`; the bounds map through `denseBuild_sound` (`Proofs/FactBounds.lean`). -/
 
 namespace ApcOptimizer.Dense
 

@@ -1,10 +1,10 @@
 import ApcOptimizer.Implementation.OptimizerPasses.CarryBranch
-import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DigitFold
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.FactBounds
 
 set_option autoImplicit false
 
 /-! # Correctness for the dense carry-branch resolution (`CarryBranch.lean`). Value bounds are
-consumed through `denseBuild_sound` (`Proofs/DigitFold.lean`). -/
+consumed through `denseBuild_sound` (`Proofs/FactBounds.lean`). -/
 
 namespace ApcOptimizer.Dense
 

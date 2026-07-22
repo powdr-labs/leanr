@@ -13,8 +13,8 @@ import ApcOptimizer.Implementation.OptimizerPasses.DropPasses
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
 import ApcOptimizer.Implementation.OptimizerPasses.Dedup
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.Dedup
-import ApcOptimizer.Implementation.OptimizerPasses.DigitFold
-import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DigitFold
+import ApcOptimizer.Implementation.OptimizerPasses.FactBounds
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.FactBounds
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.Gauss
 import ApcOptimizer.Implementation.OptimizerPasses.DomainBatch
