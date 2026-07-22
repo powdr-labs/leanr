@@ -116,11 +116,16 @@ survivor disagreed. Ruling a candidate out is a positional `List.zipWith` turnin
 /-- The scan's tracked candidates: a fixed-length mask aligned with `keys`. -/
 abbrev DenseCandsV (p : ℕ) := List (Option (ZMod p))
 
-/-- One scan step: `none` while hunting the first survivor (initializes the mask from its point);
+/-- One scan step: `none` hunts the first survivor and initializes tracked positions from its point;
     `some cands` intersects the mask against a surviving point, unchanged otherwise. -/
-def denseScanStepV (surv : List (ZMod p) → Bool) :
+def denseCandsOfPointV : List Bool → List (ZMod p) → DenseCandsV p
+  | track :: tracks, v :: vs =>
+      (if track then some v else none) :: denseCandsOfPointV tracks vs
+  | _, _ => []
+
+def denseScanStepV (track : List Bool) (surv : List (ZMod p) → Bool) :
     Option (DenseCandsV p) → List (ZMod p) → Option (DenseCandsV p)
-  | none, pt => if surv pt = true then some (pt.map some) else none
+  | none, pt => if surv pt = true then some (denseCandsOfPointV track pt) else none
   | some cands, pt =>
     if surv pt = true then
       some (cands.zipWith
@@ -132,11 +137,12 @@ def denseScanStopV : Option (DenseCandsV p) → Bool
   | none => false
   | some cands => cands.all Option.isNone
 
-/-- The value-only box scan, streamed lazily over the symbolic domains; the caller
-    (`denseForcedOverV`) zips the final mask with `keys` once, after the scan finishes. -/
-def denseScanBoxV (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p)) :
+/-- The value-only box scan, streamed lazily over the symbolic domains; false `track` positions
+    remain absent from the candidate mask. -/
+def denseScanBoxV (track : List Bool) (surv : List (ZMod p) → Bool)
+    (doms : List (FiniteDomain p)) :
     Option (DenseCandsV p) :=
-  denseBoxFoldV (denseScanStepV surv) denseScanStopV doms none
+  denseBoxFoldV (denseScanStepV track surv) denseScanStopV doms none
 
 /-! ## Redundancy check, value-only -/
 
@@ -203,13 +209,30 @@ def denseGatherBusesLoopV (arr : Array (DenseBusPlan p)) (xs : List VarId) :
 def denseGatherBusesV (fidx : DenseForcedIdx p) (xs : List VarId) : DenseBusGatherV p :=
   denseGatherBusesLoopV fidx.arrBis xs (denseCandidates fidx.bisIdx xs) ⟨0, false, []⟩
 
+def denseRestrictDomainV (dσ : DenseSolved p) (xd : VarId × FiniteDomain p) :
+    VarId × FiniteDomain p :=
+  match dσ.map[xd.1]? with
+  | some (.const c) => (xd.1, .explicit [c])
+  | _ => xd
+
+def denseRestrictDomsV (dσ : DenseSolved p) (doms : List (VarId × FiniteDomain p)) :
+    List (VarId × FiniteDomain p) :=
+  doms.map (denseRestrictDomainV dσ)
+
+def denseTrackDomsV (dσ : DenseSolved p) (doms : List (VarId × FiniteDomain p)) : List Bool :=
+  doms.map fun xd =>
+    match dσ.map[xd.1]? with
+    | some (.const _) => false
+    | _ => true
+
 /-- All checked forced constants over the variable set `xs`. `keys` drives the compiler and the
     final zip; the unkeyed `doms` drives the value-only scan. -/
 def denseForcedOverV (bs : BusSemantics p) (_facts : BusFacts p bs) (T : DenseDomainTable p)
-    (fidx : DenseForcedIdx p) (xs : List VarId) : List (VarId × ZMod p) :=
+    (fidx : DenseForcedIdx p) (dσ : DenseSolved p) (xs : List VarId) : List (VarId × ZMod p) :=
   match T.doms xs with
   | none => []
-  | some fdoms =>
+  | some baseDoms =>
+    let fdoms := denseRestrictDomsV dσ baseDoms
     let boxSize := (fdoms.map (fun yd => yd.2.size)).prod
     if boxSize ≤ maxEnumSize then
       let cs := denseGatherConstraintsV fidx xs
@@ -219,7 +242,7 @@ def denseForcedOverV (bs : BusSemantics p) (_facts : BusFacts p bs) (T : DenseDo
         let keys := fdoms.map Prod.fst
         let doms := fdoms.map Prod.snd
         let survC := denseCompiledSurvV bs cs.active bis.interactions keys
-        match denseScanBoxV survC.run doms with
+        match denseScanBoxV (denseTrackDomsV dσ baseDoms) survC.run doms with
         | none =>
           -- no surviving point: the box has no solutions, so everything is vacuously forced
           keys.map (fun x => (x, (0 : ZMod p)))
@@ -229,10 +252,7 @@ def denseForcedOverV (bs : BusSemantics p) (_facts : BusFacts p bs) (T : DenseDo
       else []
     else []
 
-/-! ## `collectForced`, value-only
-
-Targets are deduplicated (`denseVarSetKey`) then folded in order; the independent per-target
-enumerations can be spawned in parallel on large systems. -/
+/-! ## `collectForced`, value-only -/
 
 /-- The `seen`-deduplicated target list, keyed by `denseVarSetKey`: keeps the first target with
     each distinct variable set and drops later repeats. -/
@@ -252,20 +272,15 @@ private def ddRegB : VarRegistry × VarId :=
 #guard denseDedupTargetsV [[ddRegA.2], [ddRegB.2]] ∅ == [[ddRegA.2], [ddRegB.2]]
 
 /-- Collect every checked forced constant: dedup the targets, then fold each target's forced
-    constants into the solution map in target order. When `parallel`, the independent per-target
-    enumerations are spawned as `Task`s and joined in the same order, so the output is unchanged. -/
+    constants into the solution map in target order. -/
 def denseCollectForcedV (bs : BusSemantics p) (facts : BusFacts p bs)
-    (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (parallel : Bool)
-    (targets : List (List VarId)) (seen : Std.HashSet (List VarId)) (dσ0 : DenseSolved p) :
+    (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (targets : List (List VarId))
+    (seen : Std.HashSet (List VarId)) (dσ0 : DenseSolved p) :
     DenseSolved p :=
   let uniq := denseDedupTargetsV targets seen
-  if parallel then
-    let tasks := uniq.map (fun xs => Task.spawn fun _ => denseForcedOverV bs facts T fidx xs)
-    tasks.foldl (init := dσ0) fun dσ t =>
-      dσ.insertAll ((t.get).map (fun f => (f.1, DenseExpr.const f.2)))
-  else
-    uniq.foldl (init := dσ0) fun dσ xs =>
-      dσ.insertAll ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))
+  uniq.foldl (init := dσ0) fun dσ xs =>
+    dσ.insertAll
+      ((denseForcedOverV bs facts T fidx dσ xs).map (fun f => (f.1, DenseExpr.const f.2)))
 
 /-! ## The pass transform, value-only -/
 
@@ -309,9 +324,7 @@ def denseDomainBatchσV (bs : BusSemantics p) (facts : BusFacts p bs)
   let busPlans := denseBusPlansV bs facts d.busInteractions
   let targets := densePlanTargetsV csPlans busPlans
   let fidx := denseForcedIdxV csPlans busPlans
-  -- Fan out only at keccak/SHA scale; below it the sequential fold avoids spawn overhead.
-  denseCollectForcedV bs facts T fidx (8192 ≤ d.algebraicConstraints.length) targets ∅
-    DenseSolved.empty
+  denseCollectForcedV bs facts T fidx targets ∅ DenseSolved.empty
 
 /-- The value-only dense domain-batch transform. -/
 def denseDomainBatchTransformV (pw : PrimeWitness p) (bs : BusSemantics p)

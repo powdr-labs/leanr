@@ -4498,3 +4498,29 @@ iterations and finished at the same 2773 variables, 2370 bus interactions, and 3
 closures, and the proof-integrity and unused-theorem checks pass.
 
 **Worked: yes (effectiveness unchanged on the measured case; large domainBatch runtime win).**
+
+### 129. Runtime: accumulated forced constants shrink later domainBatch boxes
+
+domainBatch now folds targets in order while threading its solution map. Constants proved for one
+target narrow the same variables to singleton domains before a later target's box-size and
+work-budget gates. The later scan enumerates a smaller product and may admit a box that was
+previously skipped.
+Solved positions start absent from the candidate mask, so their singleton values do not prevent the
+scanner's all-candidates-refuted early exit. The final substitution map still contains every prior
+constant plus the newly checked unknown positions.
+
+The proof carries the entailed-map invariant through the target fold. It establishes that the real
+satisfying environment belongs to every narrowed domain, then reuses the box-survivor argument; the
+candidate-mask proof permits untracked positions while retaining the guarantees for every emitted
+constant. The per-target task fan-out is removed because the production runner already parallelizes
+APCs and later targets now depend on earlier results.
+
+On `SP1/keccak/apc_001_pc0x78007bbc`, two runs averaged 33.455 s in domainBatch versus a recorded
+same-revision `origin/main` run at 33.832 s: **1.11% lower pass runtime**. Whole-run timing was noisy
+and inconclusive because unchanged bus passes moved by several seconds. Both runs used five cleanup
+iterations and converged to the same 2773 variables, 2370 bus interactions, and 313 constraints;
+cycle 0 additionally reached 9421 variables / 6883 constraints instead of 9423 / 6887, with later
+cycles converging to the baseline sizes.
+
+**Worked: yes (small targeted runtime win plus earlier simplification; corpus CI is the deciding
+measurement).**

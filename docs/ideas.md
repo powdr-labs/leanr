@@ -194,6 +194,12 @@ enumeration core itself (SP1 apc_030's 19 s single-cycle spike) is untouched: th
 **cross-cycle memoization of enumeration negatives** (needs pass-state threading — R6's
 substrate), not setup cost.
 
+Accumulated forced constants are **done (entry 129)**: the target fold narrows already-solved
+variables to singleton domains before the size/work gates and does not track them as fresh scan
+candidates. This can make a later over-budget target enumerable and preserves early scan exit.
+Removing those singleton positions from points entirely, while compiling their uses as constants,
+remains a possible follow-up if profiles show enough target overlap.
+
 **R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
 index gate**  ·  mostly **done (entries 105/107/109)**:
    - reencode: the pruned index (`CoveredIndex.buildPruned`, entry 105 — items with more than 8
@@ -271,13 +277,13 @@ remaining cost is *productive first-time enumeration*; the levers there are effe
 (replace enumeration classes with algebra, cf. the quadratic-roots effectiveness idea 1) or
 intra-enumeration (survivor-scan compilation is already tuned).
 
-**R7. Intra-pass parallelism**  ·  partially **done (entry 114)**: domainBatch's per-target
-enumerations are `Task`-parallel with ordered joins (byte-identical σ; keccak domainBatch
-55 → 18 s on 4 cores — CI's 32 cores have more headroom). Still open: domainFold's and
-reencode's per-target *gating* work is also independent between accepts, but their loops rewrite
-`cs` on accept, so parallelizing needs a speculative gather-then-replay structure — only worth it
-if their serial remainder grows relative to the rest. busPairCancel/busUnify are inherently
-sequential scans (window state).
+**R7. Intra-pass parallelism**  ·  domainBatch's target fan-out was **retired (entry 129)** so
+each target can consume constants forced by earlier targets; production parallelism is across APCs,
+where nested task fan-out would oversubscribe the runner. Still open: domainFold's and reencode's
+per-target *gating* work is independent between accepts, but their loops rewrite `cs` on accept, so
+parallelizing needs a speculative gather-then-replay structure — only worth it if their serial
+remainder grows relative to the rest. busPairCancel/busUnify are inherently sequential scans
+(window state).
 
 **R8. busPairCancel residual quadratics** (formerly part of R1)  ·  ~7 % of the post-114 keccak
 profile. `shieldOk` re-scans (and `liveArr` materializes) the whole live before-region per

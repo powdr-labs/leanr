@@ -463,28 +463,50 @@ def denseStepSomeV (surv : List (ZMod p) → Bool) (cands : DenseCandsV p) (pt :
     cands.zipWith (fun c v => match c with | some cv => if cv = v then some cv else none | none => none) pt
   else cands
 
-theorem denseScanStepV_some (surv : List (ZMod p) → Bool) (cands : DenseCandsV p)
-    (pt : List (ZMod p)) : denseScanStepV surv (some cands) pt = some (denseStepSomeV surv cands pt) := by
+theorem denseScanStepV_some (track : List Bool) (surv : List (ZMod p) → Bool)
+    (cands : DenseCandsV p) (pt : List (ZMod p)) :
+    denseScanStepV track surv (some cands) pt = some (denseStepSomeV surv cands pt) := by
   cases h : surv pt
   · simp [denseScanStepV, denseStepSomeV, h]
   · simp [denseScanStepV, denseStepSomeV, h]; rfl
 
-theorem denseScanStepV_none_pos (surv : List (ZMod p) → Bool) (pt : List (ZMod p))
-    (hs : surv pt = true) : denseScanStepV surv none pt = some (pt.map some) := by
+theorem denseScanStepV_none_pos (track : List Bool) (surv : List (ZMod p) → Bool)
+    (pt : List (ZMod p)) (hs : surv pt = true) :
+    denseScanStepV track surv none pt = some (denseCandsOfPointV track pt) := by
   simp only [denseScanStepV, if_pos hs]
 
-theorem denseScanStepV_none_neg (surv : List (ZMod p) → Bool) (pt : List (ZMod p))
-    (hs : ¬ surv pt = true) : denseScanStepV surv none pt = none := by
+theorem denseScanStepV_none_neg (track : List Bool) (surv : List (ZMod p) → Bool)
+    (pt : List (ZMod p)) (hs : ¬ surv pt = true) : denseScanStepV track surv none pt = none := by
   simp only [denseScanStepV, if_neg hs]
 
+theorem denseCandsOfPointV_getElem (track : List Bool) (pt : List (ZMod p))
+    (n : Nat) (c : ZMod p) (h : (denseCandsOfPointV track pt)[n]? = some (some c)) :
+    pt[n]? = some c := by
+  induction track generalizing pt n with
+  | nil => simp [denseCandsOfPointV] at h
+  | cons tracked rest ih =>
+      cases pt with
+      | nil => simp [denseCandsOfPointV] at h
+      | cons v vs =>
+          cases n with
+          | zero =>
+              simp only [denseCandsOfPointV, List.getElem?_cons_zero] at h ⊢
+              split at h <;> simp_all
+          | succ n =>
+              simp only [denseCandsOfPointV, List.getElem?_cons_succ] at h ⊢
+              exact ih vs n h
+
 /-- The plain (no-stop) fold from a tracking state stays a tracking state. -/
-theorem foldl_denseScanStep_some_eq (surv : List (ZMod p) → Bool) :
+theorem foldl_denseScanStep_some_eq (track : List Bool) (surv : List (ZMod p) → Bool) :
     ∀ (pts : List (List (ZMod p))) (cands : DenseCandsV p),
-      pts.foldl (denseScanStepV surv) (some cands) = some (pts.foldl (denseStepSomeV surv) cands) := by
+      pts.foldl (denseScanStepV track surv) (some cands) =
+        some (pts.foldl (denseStepSomeV surv) cands) := by
   intro pts
   induction pts with
   | nil => intro cands; rfl
-  | cons pt rest ih => intro cands; rw [List.foldl_cons, List.foldl_cons, denseScanStepV_some, ih]
+  | cons pt rest ih =>
+      intro cands
+      rw [List.foldl_cons, List.foldl_cons, denseScanStepV_some, ih]
 
 /-- One tracking step forces a `some c` slot to agree with the point (the intersection semantics). -/
 theorem denseStepSomeV_getElem (surv : List (ZMod p) → Bool) (cands : DenseCandsV p)
@@ -536,9 +558,10 @@ theorem denseStepSomeV_forces (surv : List (ZMod p) → Bool) (n : Nat) (c : ZMo
       · exact hrest pt' hpt' hs'
 
 /-- Intersection certificate for the plain fold from the *searching* state `none`. -/
-theorem foldl_denseScanStep_forces (surv : List (ZMod p) → Bool) (n : Nat) (c : ZMod p) :
+theorem foldl_denseScanStep_forces (track : List Bool) (surv : List (ZMod p) → Bool)
+    (n : Nat) (c : ZMod p) :
     ∀ (pts : List (List (ZMod p))) (mask : DenseCandsV p),
-      pts.foldl (denseScanStepV surv) none = some mask → mask[n]? = some (some c) →
+      pts.foldl (denseScanStepV track surv) none = some mask → mask[n]? = some (some c) →
       ∀ pt ∈ pts, surv pt = true → pt[n]? = some c := by
   intro pts
   induction pts with
@@ -547,17 +570,18 @@ theorem foldl_denseScanStep_forces (surv : List (ZMod p) → Bool) (n : Nat) (c 
     intro mask h hmask
     rw [List.foldl_cons] at h
     by_cases hs : surv pt = true
-    · rw [denseScanStepV_none_pos surv pt hs, foldl_denseScanStep_some_eq] at h
+    · rw [denseScanStepV_none_pos track surv pt hs,
+        foldl_denseScanStep_some_eq track surv] at h
       simp only [Option.some.injEq] at h
       subst h
-      obtain ⟨hback, hrest⟩ := denseStepSomeV_forces surv n c rest (pt.map some) hmask
+      obtain ⟨hback, hrest⟩ :=
+        denseStepSomeV_forces surv n c rest (denseCandsOfPointV track pt) hmask
+      have hfirst : pt[n]? = some c := denseCandsOfPointV_getElem track pt n c hback
       intro pt'' hpt'' hs''
       rcases List.mem_cons.1 hpt'' with rfl | hpt''
-      · rw [List.getElem?_map, Option.map_eq_some_iff] at hback
-        obtain ⟨b, hb, hbc⟩ := hback
-        rw [hb]; exact hbc
+      · exact hfirst
       · exact hrest pt'' hpt'' hs''
-    · rw [denseScanStepV_none_neg surv pt hs] at h
+    · rw [denseScanStepV_none_neg track surv pt hs] at h
       intro pt'' hpt'' hs''
       rcases List.mem_cons.1 hpt'' with rfl | hpt''
       · exact absurd hs'' hs
@@ -578,9 +602,9 @@ theorem foldlStop_eq_foldl_or_stop {α β : Type} (f : β → α → β) (stop :
     · rw [foldlStop, if_neg hs, List.foldl_cons]; exact ih (f acc a)
 
 /-- The early-stop scan from a tracking state is never `none`. -/
-theorem foldlStop_denseScanStep_isSome (surv : List (ZMod p) → Bool) :
+theorem foldlStop_denseScanStep_isSome (track : List Bool) (surv : List (ZMod p) → Bool) :
     ∀ (pts : List (List (ZMod p))) (cands : DenseCandsV p),
-      (foldlStop (denseScanStepV surv) denseScanStopV pts (some cands)).isSome = true := by
+      (foldlStop (denseScanStepV track surv) denseScanStopV pts (some cands)).isSome = true := by
   intro pts
   induction pts with
   | nil => intro cands; rfl
@@ -592,9 +616,10 @@ theorem foldlStop_denseScanStep_isSome (surv : List (ZMod p) → Bool) :
     · rw [if_neg hstop, denseScanStepV_some]; exact ih (denseStepSomeV surv cands pt)
 
 /-- If the early-stop scan from the searching state returns `none`, no enumerated point survives. -/
-theorem foldlStop_denseScanStep_none (surv : List (ZMod p) → Bool) :
+theorem foldlStop_denseScanStep_none (track : List Bool) (surv : List (ZMod p) → Bool) :
     ∀ (pts : List (List (ZMod p))),
-      foldlStop (denseScanStepV surv) denseScanStopV pts none = none → ∀ pt ∈ pts, surv pt = false := by
+      foldlStop (denseScanStepV track surv) denseScanStopV pts none = none →
+        ∀ pt ∈ pts, surv pt = false := by
   intro pts
   induction pts with
   | nil => intro _ pt hpt; simp at hpt
@@ -603,24 +628,27 @@ theorem foldlStop_denseScanStep_none (surv : List (ZMod p) → Bool) :
     rw [foldlStop, if_neg (by simp [denseScanStopV] : ¬ denseScanStopV (none : Option (DenseCandsV p)) = true)] at h
     by_cases hs : surv pt = true
     · exfalso
-      rw [denseScanStepV_none_pos surv pt hs] at h
-      have hsome := foldlStop_denseScanStep_isSome surv rest (pt.map some)
+      rw [denseScanStepV_none_pos track surv pt hs] at h
+      have hsome :=
+        foldlStop_denseScanStep_isSome track surv rest (denseCandsOfPointV track pt)
       rw [h] at hsome; simp at hsome
-    · rw [denseScanStepV_none_neg surv pt hs] at h
+    · rw [denseScanStepV_none_neg track surv pt hs] at h
       rcases List.mem_cons.1 hpt' with rfl | hpt'
       · exact Bool.eq_false_iff.mpr hs
       · exact ih h pt' hpt'
 
 /-- **Value-only scan `none` case.** No point of the box survives the scanned predicate. -/
-theorem denseScanBoxV_none_unsat (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p))
-    (h : denseScanBoxV surv doms = none) : ∀ pt ∈ assignmentsV doms, surv pt = false := by
+theorem denseScanBoxV_none_unsat (track : List Bool) (surv : List (ZMod p) → Bool)
+    (doms : List (FiniteDomain p)) (h : denseScanBoxV track surv doms = none) :
+    ∀ pt ∈ assignmentsV doms, surv pt = false := by
   rw [denseScanBoxV, denseBoxFoldV_eq] at h
-  exact foldlStop_denseScanStep_none surv (assignmentsV doms) h
+  exact foldlStop_denseScanStep_none track surv (assignmentsV doms) h
 
 /-- **Value-only scan `some` case.** A `some c` in the returned mask is agreed on by every surviving
     enumerated point. -/
-theorem denseScanBoxV_forces (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p))
-    (mask : DenseCandsV p) (h : denseScanBoxV surv doms = some mask) (n : Nat) (c : ZMod p)
+theorem denseScanBoxV_forces (track : List Bool) (surv : List (ZMod p) → Bool)
+    (doms : List (FiniteDomain p)) (mask : DenseCandsV p)
+    (h : denseScanBoxV track surv doms = some mask) (n : Nat) (c : ZMod p)
     (hmask : mask[n]? = some (some c)) :
     ∀ pt ∈ assignmentsV doms, surv pt = true → pt[n]? = some c := by
   rw [denseScanBoxV, denseBoxFoldV_eq] at h
@@ -631,10 +659,11 @@ theorem denseScanBoxV_forces (surv : List (ZMod p) → Bool) (doms : List (Finit
     have hmem : (some c : Option (ZMod p)) ∈ mask := List.mem_of_getElem? hmask
     have := hall (some c) hmem
     simp at this
-  rcases foldlStop_eq_foldl_or_stop (denseScanStepV surv) denseScanStopV (assignmentsV doms) none with
+  rcases foldlStop_eq_foldl_or_stop (denseScanStepV track surv) denseScanStopV
+      (assignmentsV doms) none with
     heq | hstop
   · rw [heq] at h
-    exact foldl_denseScanStep_forces surv n c (assignmentsV doms) mask h hmask
+    exact foldl_denseScanStep_forces track surv n c (assignmentsV doms) mask h hmask
   · rw [h, hne] at hstop; exact absurd hstop (by simp)
 
 /-! ## Value-only compiled evaluation and restriction survival -/
@@ -1028,24 +1057,70 @@ theorem denseGatherBusesV_plan_mem (fidx : DenseForcedIdx p) (plans : List (Dens
   exact ⟨plan, hmem, by simpa [plan] using hbi', by simpa [plan] using husable,
     by simpa [plan] using hvars⟩
 
+theorem denseRestrictDomainV_fst (dσ : DenseSolved p) (xd : VarId × FiniteDomain p) :
+    (denseRestrictDomainV dσ xd).1 = xd.1 := by
+  unfold denseRestrictDomainV
+  split <;> rfl
+
+theorem denseRestrictDomsV_fst (dσ : DenseSolved p)
+    (doms : List (VarId × FiniteDomain p)) :
+    (denseRestrictDomsV dσ doms).map Prod.fst = doms.map Prod.fst := by
+  rw [denseRestrictDomsV, List.map_map]
+  apply List.map_congr_left
+  intro xd _
+  exact denseRestrictDomainV_fst dσ xd
+
+theorem denseRestrictDomainV_mem (dσ : DenseSolved p) (denv : VarId → ZMod p)
+    (hσ : ∀ i c, dσ.map[i]? = some (.const c) → denv i = c)
+    (xd : VarId × FiniteDomain p) (hdom : denv xd.1 ∈ xd.2.toList) :
+    denv (denseRestrictDomainV dσ xd).1 ∈ (denseRestrictDomainV dσ xd).2.toList := by
+  cases hmap : dσ.map[xd.1]? with
+  | none => simpa [denseRestrictDomainV, hmap] using hdom
+  | some e =>
+      cases e with
+      | const c =>
+          simp only [denseRestrictDomainV, hmap, FiniteDomain.toList, List.mem_singleton]
+          exact hσ xd.1 c hmap
+      | var i => simpa [denseRestrictDomainV, hmap] using hdom
+      | add a b => simpa [denseRestrictDomainV, hmap] using hdom
+      | mul a b => simpa [denseRestrictDomainV, hmap] using hdom
+
+theorem denseRestrictDomsV_mem (dσ : DenseSolved p) (denv : VarId → ZMod p)
+    (hσ : ∀ i c, dσ.map[i]? = some (.const c) → denv i = c)
+    (doms : List (VarId × FiniteDomain p))
+    (hdoms : ∀ xd ∈ doms, denv xd.1 ∈ xd.2.toList) :
+    ∀ xd ∈ denseRestrictDomsV dσ doms, denv xd.1 ∈ xd.2.toList := by
+  intro xd hxd
+  rw [denseRestrictDomsV] at hxd
+  obtain ⟨base, hbase, rfl⟩ := List.mem_map.mp hxd
+  exact denseRestrictDomainV_mem dσ denv hσ base (hdoms base hbase)
+
 /-- **Value-only `forcedOver` entailment.** Every forced pair `(x, c)` is entailed by `denv`, given
     the domain table is sound at `denv` and the covered items evaluate/oblige correctly. -/
 theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
-    (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (xs : List VarId) (denv : VarId → ZMod p)
+    (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (dσ : DenseSolved p)
+    (xs : List VarId) (denv : VarId → ZMod p)
+    (hσ : ∀ i c, dσ.map[i]? = some (.const c) → denv i = c)
     (hTs : DenseTableSoundAt denv T)
     (hes : ∀ e ∈ (denseGatherConstraintsV fidx xs).active,
       e.eval denv = 0 ∧ ∀ i ∈ e.vars, i ∈ xs)
     (hbis : ∀ bi ∈ (denseGatherBusesV fidx xs).interactions,
       ((denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false)
         ∧ ∀ i ∈ denseBIVars bi, i ∈ xs) :
-    ∀ f ∈ denseForcedOverV bs facts T fidx xs, denv f.1 = f.2 := by
+    ∀ f ∈ denseForcedOverV bs facts T fidx dσ xs, denv f.1 = f.2 := by
   unfold denseForcedOverV
   cases hdoms : T.doms xs with
   | none => intro f hf; simp at hf
-  | some fdoms =>
-    have hkeys : fdoms.map Prod.fst = xs := DenseDomainTable.doms_fst T xs fdoms hdoms
-    have hmem : ∀ kd ∈ fdoms, denv kd.1 ∈ kd.2.toList :=
-      fun kd hkd => hTs kd.1 kd.2 (DenseDomainTable.doms_getElem T xs fdoms hdoms kd hkd)
+  | some baseDoms =>
+    let fdoms := denseRestrictDomsV dσ baseDoms
+    have hkeys : fdoms.map Prod.fst = xs := by
+      rw [show fdoms = denseRestrictDomsV dσ baseDoms from rfl,
+        denseRestrictDomsV_fst]
+      exact DenseDomainTable.doms_fst T xs baseDoms hdoms
+    have hbase : ∀ kd ∈ baseDoms, denv kd.1 ∈ kd.2.toList :=
+      fun kd hkd => hTs kd.1 kd.2 (DenseDomainTable.doms_getElem T xs baseDoms hdoms kd hkd)
+    have hmem : ∀ kd ∈ fdoms, denv kd.1 ∈ kd.2.toList := by
+      exact denseRestrictDomsV_mem dσ denv hσ baseDoms hbase
     have hinbox : (fdoms.map Prod.fst).map denv ∈ assignmentsV (fdoms.map Prod.snd) := by
       rw [List.map_map]; exact mem_assignmentsV denv fdoms hmem
     dsimp only
@@ -1059,18 +1134,18 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
         · exact fun bi hbi => (hbis bi hbi).1
         · intro e he i hi; rw [hkeys]; exact (hes e he).2 i hi
         · intro bi hbi i hi; rw [hkeys]; exact (hbis bi hbi).2 i hi
-      cases hscan : denseScanBoxV (denseCompiledSurvV bs
+      cases hscan : denseScanBoxV (denseTrackDomsV dσ baseDoms) (denseCompiledSurvV bs
           (denseGatherConstraintsV fidx xs).active
           (denseGatherBusesV fidx xs).interactions
           (fdoms.map Prod.fst)).run (fdoms.map Prod.snd) with
       | none =>
           intro f hf
-          have hcontra := denseScanBoxV_none_unsat _ _ hscan _ hinbox
+          have hcontra := denseScanBoxV_none_unsat _ _ _ hscan _ hinbox
           rw [hcontra] at hsurv; exact absurd hsurv (by simp)
       | some cands =>
           intro f hf
           obtain ⟨n, hn1, hn2⟩ := mem_zip_filterMap (fdoms.map Prod.fst) cands f hf
-          have hforce := denseScanBoxV_forces _ _ cands hscan n f.2 hn2 _ hinbox hsurv
+          have hforce := denseScanBoxV_forces _ _ _ cands hscan n f.2 hn2 _ hinbox hsurv
           rw [List.getElem?_map, hn1] at hforce
           simp only [Option.map_some, Option.some.injEq] at hforce
           exact hforce
@@ -1134,38 +1209,20 @@ theorem EntailedMap_foldl_insert (d : DenseConstraintSystem p) (bs : BusSemantic
         exact hm i t hit
     · exact fun pr' hpr' => hpairs pr' (List.mem_cons_of_mem _ hpr')
 
-/-- `(Task.spawn f).get` reduces to `f ()` definitionally (`Task` is a one-field structure filled
-    with `fn ()`). -/
-theorem get_spawn {α : Type} (f : Unit → α) : (Task.spawn f).get = f () := rfl
-
-/-- The parallel and serial branches of `denseCollectForcedV` compute the same solution map, so the
-    entailment invariant can be proved over the single serial fold over `denseDedupTargetsV`. -/
-theorem denseCollectForcedV_eq_serial (bs : BusSemantics p) (facts : BusFacts p bs)
-    (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (parallel : Bool)
-    (targets : List (List VarId)) (seen : Std.HashSet (List VarId)) (dσ0 : DenseSolved p) :
-    denseCollectForcedV bs facts T fidx parallel targets seen dσ0
-      = (denseDedupTargetsV targets seen).foldl
-          (fun dσ xs => dσ.insertAll
-            ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))) dσ0 := by
-  simp only [denseCollectForcedV]
-  split_ifs with hp
-  · simp only [List.foldl_map, get_spawn]
-  · rfl
-
-/-- The `collectForced` fold preserves the entailment invariant (via
-    `denseCollectForcedV_eq_serial`; `hforced` is stated for every variable set). -/
+/-- The `collectForced` fold preserves the entailment invariant. -/
 theorem denseCollectForcedV_entailed (bs : BusSemantics p) (facts : BusFacts p bs)
     (T : DenseDomainTable p) (fidx : DenseForcedIdx p)
     (d : DenseConstraintSystem p)
-    (hforced : ∀ xs, ∀ f ∈ denseForcedOverV bs facts T fidx xs, ∀ denv,
-      d.satisfies bs denv → denv f.1 = f.2) :
-    ∀ (parallel : Bool) (targets : List (List VarId)) (seen : Std.HashSet (List VarId))
-      (dσ : DenseSolved p),
+    (hforced : ∀ dσ, EntailedMap d bs dσ.map → ∀ xs,
+      ∀ f ∈ denseForcedOverV bs facts T fidx dσ xs, ∀ denv,
+        d.satisfies bs denv → denv f.1 = f.2) :
+    ∀ (targets : List (List VarId)) (seen : Std.HashSet (List VarId)) (dσ : DenseSolved p),
       EntailedMap d bs dσ.map →
-      EntailedMap d bs (denseCollectForcedV bs facts T fidx parallel targets seen dσ).map := by
+      EntailedMap d bs (denseCollectForcedV bs facts T fidx targets seen dσ).map := by
   have hfold : ∀ (uniq : List (List VarId)) (dσ : DenseSolved p), EntailedMap d bs dσ.map →
       EntailedMap d bs (uniq.foldl (fun dσ xs => dσ.insertAll
-        ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))) dσ).map := by
+        ((denseForcedOverV bs facts T fidx dσ xs).map
+          (fun f => (f.1, DenseExpr.const f.2)))) dσ).map := by
     intro uniq
     induction uniq with
     | nil => intro dσ h; exact h
@@ -1180,9 +1237,9 @@ theorem denseCollectForcedV_entailed (bs : BusSemantics p) (facts : BusFacts p b
       refine ⟨fun z hz => by simp [DenseExpr.vars] at hz, fun denv hsat => ?_⟩
       show denv f.1 = (DenseExpr.const f.2).eval denv
       rw [DenseExpr.eval]
-      exact hforced xs f hf denv hsat
-  intro parallel targets seen dσ h
-  rw [denseCollectForcedV_eq_serial]
+      exact hforced dσ h xs f hf denv hsat
+  intro targets seen dσ h
+  unfold denseCollectForcedV
   exact hfold (denseDedupTargetsV targets seen) dσ h
 
 /-! ## Reflexive (identity) correctness -/
@@ -1231,22 +1288,24 @@ theorem denseDomainBatchσV_eq (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) :
     denseDomainBatchσV bs facts d
       = denseCollectForcedV bs facts (dbT bs facts d) (dbFidx bs facts d)
-          (8192 ≤ d.algebraicConstraints.length) (dbTargets bs facts d) ∅ DenseSolved.empty := rfl
+          (dbTargets bs facts d) ∅ DenseSolved.empty := rfl
 
 theorem denseDomainBatchσV_entailed [Fact p.Prime] [NeZero p]
     (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConstraintSystem p) :
     EntailedMap d bs (denseDomainBatchσV bs facts d).map := by
   rw [denseDomainBatchσV_eq]
   refine denseCollectForcedV_entailed bs facts (dbT bs facts d) (dbFidx bs facts d) d
-    ?hforced (8192 ≤ d.algebraicConstraints.length) (dbTargets bs facts d) ∅ DenseSolved.empty ?hbase
+    ?hforced (dbTargets bs facts d) ∅ DenseSolved.empty ?hbase
   case hbase =>
     intro i t h
     rw [DenseSolved.empty, Std.HashMap.getElem?_empty] at h
     exact absurd h (by simp)
   case hforced =>
-    intro xs f hf denv hsat
-    refine denseForcedOverV_entails bs facts (dbT bs facts d) (dbFidx bs facts d) xs denv
-      ?_ ?_ ?_ f hf
+    intro dσ hσ xs f hf denv hsat
+    refine denseForcedOverV_entails bs facts (dbT bs facts d) (dbFidx bs facts d) dσ xs denv
+      ?_ ?_ ?_ ?_ f hf
+    · intro i c hic
+      simpa [DenseExpr.eval] using (hσ i (.const c) hic).2 denv hsat
     · exact denseDomainTable_soundAt bs facts d denv hsat
     · intro e he
       obtain ⟨plan, hplan, hpe, hpvars, _⟩ := denseGatherConstraintsV_plan_mem
