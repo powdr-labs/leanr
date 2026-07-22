@@ -126,12 +126,17 @@ targets) sit next to the definitions. All six benchmark exports stayed byte-iden
 differs only on adversarial equal-name inputs. The proof plumbing was type-only (the entailment
 proofs never inspect the key).
 
-## Task 3 — Remove the remaining references into OldVariableBased/
+## Task 3 — Remove the remaining references into OldVariableBased/ — DONE
 
-Task 3 proceeds in labelled steps A–F. Steps A–E are done (representation-independent re-homes,
-the sparse LinExpr spec core, the two decode transports, and the finite-domain enumeration engine);
-Step F is all that remains — native twins / re-homes for the residual `Variable`-typed memory-bus
-theorems, plus the two Step-B residual legacy couplings.
+Task 3 proceeded in labelled steps A–F, all now done (representation-independent re-homes, the
+sparse LinExpr spec core, the two decode transports, the finite-domain enumeration engine, and the
+residual memory-bus / substitution couplings). An identifier-level sweep of the whole non-legacy
+tree (comments excluded) shows **zero** non-legacy code consuming any `OldVariableBased/`
+definition. The only arrows that remain into the legacy tree are the documented reachability-keeper
+imports (see "Dies with the folder" below): `Implementation/Optimizer.lean`'s legacy import block,
+the keeper `import` line inside each of the eight Task 1 port files, the four import-only keeper
+wrappers, and the four content-vestigial keepers — sixteen files in all, each verified to reference
+no legacy identifier in code. Task 4 deletes them.
 
 **Step A — re-home representation-independent legacy content — DONE.** Content that quantifies over
 `Nat`/`ZMod`/`List`/bus-spec values only, previously owned by `OldVariableBased/` files that the
@@ -259,20 +264,39 @@ the compiled evaluators/compilers and the eager box engine `IExpr.eval` / `evalW
 `doms_fst:542` flag was `Dense/DomainBatch.lean`'s own `DenseDomainTable.doms_fst` definition (whose
 docstring names the spec lemma), not a use of the spec `DomainTable.doms_fst`.
 
-**Step F — native twins or re-homes for the residual memory-bus theorems.** The `Variable`-typed
-facts the dense `BusPairCancel` cluster still consumes through `OldVariableBased/BusPairCancel.lean`
-(and its neighbours): `multiplicitySum_append`, `mem_core_of_ne`, `MemoryBusShape.setNewMult_ne_zero`,
-plus the extra legacy pulls surfaced by the Step-A scan — `IntervalForce.srep` and `MemoryBusDrop`.
-Also fold in the two Step-B residual couplings: `DomainProp.lean` still uses
-`ConstraintSystem.subst` / `subst_correct` from `OldVariableBased/Subst.lean`, and `MemoryUnify.lean`
-still imports `OldVariableBased/TrivialConstraint.lean`.
+**Step F — re-home the residual memory-bus / substitution couplings — DONE.** The last genuine
+arrows from non-legacy code into `OldVariableBased/` are gone:
 
-**Scan findings (current):** `DomainFold.lean` is already keeper-only (no non-legacy consumer);
-dense `Gauss.lean`'s consumption of spec `Expression.isVar` / `varCount` is resolved by Step B (moved
-to `LinExprCore.lean`); `MemoryUnify.lean` was a newly-identified `LinExpr` consumer (handled by
-Step B); the `BusPairCancel` cluster's extra legacy pulls (`IntervalForce.srep`, `MemoryBusDrop`)
-join Step F's scope; `Implementation/Optimizer.lean`'s `ComputationMethod.eval_congr` use is handled
-by Step A.
+- **busPairCancel cluster.** The two representation-independent facts the dense cluster consumed
+  through `BusPairCancelJustify.lean`'s import of `OldVariableBased/BusPairCancel.lean` were
+  re-homed to the neutral `OptimizerPasses/ListSplit.lean` (fully-qualified names preserved; legacy
+  `BusPairCancel.lean` already imports `ListSplit`, so it picks them up back): the generic list
+  lemma `mem_core_of_ne` (a two-point-split lemma — ListSplit's own topic) and the spec-side
+  net-multiplicity additivity `multiplicitySum_append` (over `Spec`'s `BusState p`). The two facts
+  the TODO also flagged were already non-legacy and needed no work: `IntervalForce.srep` lives in
+  the neutral `OptimizerPasses/IntervalForce.lean` (Step A) and `MemoryBusShape.setNewMult_ne_zero`
+  / `filter_split` live in `ApcOptimizer/Implementation/MemoryBusDrop.lean`; `MemoryBusDrop` is a
+  module name, not a legacy pull. `BusPairCancelJustify.lean` dropped its
+  `OldVariableBased.BusPairCancel` import and now imports the neutral homes it actually uses
+  (`IntervalForce`, `ListSplit`, `SearchBudgets`); `BusPairCancelCore.lean` imports
+  `MemoryBusDrop` directly for `filter_split` / `setNewMult_ne_zero`.
+- **`Subst` re-home.** The substitution equivalence machinery (`Expression.subst` /
+  `BusInteraction.subst` / `ConstraintSystem.subst` with the `eval`/`satisfies`/`sideEffects`/
+  `admissible`/`vars` transfer lemmas and the payoff `ConstraintSystem.subst_correct`) moved to the
+  new neutral `OptimizerPasses/SubstCore.lean` (imports `Basic` only; fully-qualified names
+  preserved). `DomainProp.lean` (permanent `Variable`-side shared-facts file) imports `SubstCore`
+  directly; legacy `OldVariableBased/Subst.lean` imports it back and keeps only the
+  `substFromConstraint` pass builder on top of it.
+- **`MemoryUnify` → `TrivialConstraint`.** Vestigial for `MemoryUnify` itself (it references
+  nothing from `TrivialConstraint`), so the import was dropped. It had been an accidental conduit
+  by which legacy `OldVariableBased/BusUnify.lean` reached legacy `Expression.isConstZero`; that
+  legacy consumer now imports `OldVariableBased/TrivialConstraint.lean` directly (legacy→legacy).
+- **dense `Affine` / `Normalize` / `Gauss` vestigial imports.** These three dense files still
+  imported their legacy namesakes, consuming no legacy definition — only using them as a transitive
+  conduit for the `ring` tactic and for the Step-A/Step-B re-homes (`argmin_map_key` /
+  `map_filterMap`, now in `ListSplit.lean`). The legacy imports were dropped: `Affine.lean` imports
+  `Mathlib.Tactic.Ring` directly (inherited by `Normalize`/`Gauss`), and `Gauss.lean` imports
+  `ListSplit` directly.
 
 **Dies with the folder (Task 4) — reachability keepers:** after Task 1, no schedule or pipeline
 code references a legacy pass; what remains are imports kept only so the legacy modules stay in

@@ -1,4 +1,4 @@
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Subst
+import ApcOptimizer.Implementation.OptimizerPasses.SubstCore
 import ApcOptimizer.Implementation.OptimizerPasses.LinExprCore
 import ApcOptimizer.Implementation.OptimizerPasses.FactPass
 import ApcOptimizer.Utils.Size

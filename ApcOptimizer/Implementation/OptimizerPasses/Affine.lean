@@ -1,5 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Subst
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.Affine
+import Mathlib.Tactic.Ring
 
 set_option autoImplicit false
 

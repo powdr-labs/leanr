@@ -223,3 +223,22 @@ theorem zip_map_self_mem {α β : Type} (f : α → β) (l : List α) (a : α) (
     · simp
     · simp only [List.map_cons, List.zip_cons_cons]
       exact List.mem_cons_of_mem _ (ih ha)
+
+/-- Every element of a two-point split other than the two distinguished ones lies in the
+    remaining region. -/
+theorem mem_core_of_ne {α : Type _} {l A B C : List α} {S R x : α}
+    (hsplit : l = A ++ S :: B ++ R :: C) (hx : x ∈ l) (hxS : x ≠ S) (hxR : x ≠ R) :
+    x ∈ A ++ B ++ C := by
+  subst hsplit
+  simp only [List.mem_append, List.mem_cons] at hx ⊢
+  tauto
+
+/-- Net multiplicity (over the representation-independent `BusState p`) is additive over
+    concatenation of bus states. -/
+theorem multiplicitySum_append {p : ℕ} (msg : BusMessage p) (s t : BusState p) :
+    multiplicitySum msg (s ++ t) = multiplicitySum msg s + multiplicitySum msg t := by
+  induction s with
+  | nil => simp [multiplicitySum]
+  | cons hd tl ih =>
+      simp only [List.cons_append, multiplicitySum, ih]
+      rw [← add_assoc]

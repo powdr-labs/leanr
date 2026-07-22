@@ -1,5 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.RootPairUnify
-import ApcOptimizer.Implementation.OptimizerPasses.OldVariableBased.BusPairCancel
+import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
+import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
+import ApcOptimizer.Implementation.OptimizerPasses.SearchBudgets
 
 set_option autoImplicit false
 
@@ -215,8 +217,7 @@ reused unqualified below — same precedent as `maxDeepPoints` in the C1a header
 
 ### `IntervalForce.srep` reuse (no dense counterpart needed)
 
-`IntervalForce.srep` (`OptimizerPasses/IntervalForce.lean:50`, already transitively imported
-through `OptimizerPasses.BusPairCancel`, which imports `OptimizerPasses.IntervalForce`) is
+`IntervalForce.srep` (`OptimizerPasses/IntervalForce.lean:74`, imported directly above) is
 `fun c : ZMod p => if c.val ≤ (p - 1) / 2 then (c.val : Int) else (c.val : Int) - p` — a plain
 `ZMod p → Int` function with no `Variable`/`Expression`/`VarId`/`DenseExpr` anywhere in its
 signature or body. It is representation-independent data, so `basisReduceGo`'s dense mirror below

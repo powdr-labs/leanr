@@ -1,5 +1,4 @@
 import ApcOptimizer.Implementation.OptimizerPasses.DomainProp
-import ApcOptimizer.Implementation.OptimizerPasses.TrivialConstraint
 import ApcOptimizer.MemoryBus
 
 set_option autoImplicit false
