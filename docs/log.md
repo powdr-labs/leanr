@@ -4455,3 +4455,21 @@ Proof-only, output byte-identical on the 13-case sample.
 
 **Worked: yes (−45 intervalForce, −105 transport, −34 byte lemmas; net vs main now ≈ −290
 excluding the append-only log).**
+
+### 127. Structure: one byte-check classifier behind the three duplicate recognizers
+
+`denseSvCheck?` (ByteCheckPack), `denseByteCheckOperands?` (RedundantByteDrop) and
+`denseMatchByteSingle` (TupleRange) matched the same `byteXorSpec` shape family — XOR self-check,
+zero-operand mirrors, NOT/255 forms, OR-identity mirrors, packed pair — with near-identical
+twin branch proofs (~110 lines each). One classifier `denseByteShape?` (shape enum
+`DenseByteShape`, parameterized on the constant-comparison predicate: structural for
+ByteCheckPack/TupleRange, `constValue?`-folded for RedundantByteDrop, preserving each consumer's
+exact branch order, gates and multiplicity policy) now carries the single per-shape soundness
+proof; the recognizers are thin projections, their soundness lemmas short corollaries with
+unchanged statements. `denseAsBytePair` (SplitBytePair) stays bespoke — it has no bound gate, so
+a classifier projection would change its recognition domain. Output byte-identical on the
+13-case sample. **Worked: yes (net −79 lines).** Remaining recognizer-family candidates for a
+future pass: `denseXorEq?`/`denseBoolEq?` (XorEqExtract) and `denseIdentityPairAt`
+(IdentitySubst) could share the classifier's shape dispatch but keep bespoke conclusions
+(entailed equality / var-equality); the seqz build-and-compare path shares only the encode
+layout and should stay put.
