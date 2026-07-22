@@ -10,8 +10,6 @@ import ApcOptimizer.Implementation.OptimizerPasses.Reencode
 import ApcOptimizer.Implementation.OptimizerPasses.HintCollapse
 import ApcOptimizer.Implementation.OptimizerPasses.RedundantByteDrop
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.RedundantByteDrop
-import ApcOptimizer.Implementation.OptimizerPasses.SubsumedRange
-import ApcOptimizer.Implementation.OptimizerPasses.Proofs.SubsumedRange
 import ApcOptimizer.Implementation.OptimizerPasses.SubsumedCheck
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.SubsumedCheck
 import ApcOptimizer.Implementation.OptimizerPasses.XorEqExtract
