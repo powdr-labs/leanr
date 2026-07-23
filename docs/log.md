@@ -4498,3 +4498,25 @@ iterations and finished at the same 2773 variables, 2370 bus interactions, and 3
 closures, and the proof-integrity and unused-theorem checks pass.
 
 **Worked: yes (effectiveness unchanged on the measured case; large domainBatch runtime win).**
+
+### 129. Runtime: skip domainBatch boxes with no effective filter
+
+`domainBatch` now records whether each stateless bus interaction is already accepted throughout
+the stored finite domains. The recognizer handles fully constant messages directly and uses exact
+`BusFacts` for variable/tuple range checks, layout-independent single-slot range checks, and byte
+pair checks. When every gathered algebraic constraint is redundant and every gathered bus has
+that certificate, the pass extracts constant coordinates from the symbolic domains instead of
+enumerating the Cartesian product. The emitted constants are independently justified by domain-
+table soundness in `Proofs/DomainBatch.lean`; empty domains retain the existing scan path.
+
+Targeted local profiles used revision `498092b`'s values from `openvm-profile.csv` as the baseline.
+`domainBatch` changed from 3159 → 2725 ms on OpenVM keccak (−13.7%), 255 → 228 ms on
+`openvm-eth/apc_044` (−10.6%), 188 → 179 ms on `openvm-eth/apc_094` (−4.8%), and 2430 → 2325 ms
+on `wasm-eth/apc_063` (−4.3%); `wasm-eth/apc_065` was flat at 131 → 132 ms. The five-case sum was
+6163 → 5589 ms (−9.3%). Cleanup iteration counts were unchanged; the three locally rechecked small
+cases retained their output sizes, so relative effectiveness was 1.000× / 1.000× / 1.000× on
+variables / bus interactions / constraints. Full same-runner runtime and effectiveness evaluation
+is delegated to the draft PR's CI workflows.
+
+**Worked locally: yes (verified shortcut, representative domainBatch runtime win; full-set result
+pending CI).**
