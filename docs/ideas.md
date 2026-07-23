@@ -208,6 +208,10 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
    - ~~domainFold's direct-path double `coveredBy` sweep~~ **done**: one `partition` per target
      feeds both the covered set and the no-op gate (`systemHasFoldableW`).
    - ~~both passes' doubled `c.vars.dedup` setup~~ **done** (`hashedDedup`, computed once).
+   - ~~reencode's repeated finite-domain factorization across overlapping targets~~ **done (entry
+     136)**: large indexed runs cache one compact root plan per source constraint, retaining source
+     positions and clearing the cache after each accepted rewrite. A reuse gate keeps small/direct
+     runs on the original path.
    - ~~domainFold's per-accept rebuild~~ **done (entry 109)**: `foldOut` is order-preserving
      (in-place rewrite), `FoldIdx` carries bucket-completeness invariants (stale supersets fine,
      re-checked at use), `refresh` keeps the buckets with no rebuild, and the fold itself is
