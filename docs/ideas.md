@@ -28,6 +28,64 @@ improved wasm-eth and/or OpenVM keccak).
 
 ## Open ideas, priority order
 
+### OpenVM-eth semantic review (2026-07-22)
+
+A high-level, per-block "what actually needs to be proven" pass over all 100 openvm-eth cases
+(renders diffed apc-vs-powdr; compile-time-constant lens). apc already leads powdr on all three
+axes here (vars 4.553× vs 4.092×, bus 3.558× vs 3.480×, con 10.845× vs 5.853×), so these are
+*absolute*-minimality wins. Compile-time PC constants are **already** thorough: AUIPC/JAL return
+addresses fold to literal limbs (e.g. `[1, 4, 180, 201, 55, 0]`), opcode-selector flags fold out,
+and every JALR `to_pc = 2·to_pc_limbs__0 + 65536·to_pc_limbs__1` is genuinely runtime (tied to an
+`rs1` read) — no still-symbolic PC constants remain. The wins below are elsewhere.
+
+**A. Byte-justify through a surviving bitwise/shift lookup — one fix, two wins (~62 bus).**
+*bus (+ a little vars), openvm · high value / medium effort.* The single unifying finding: the
+byte justifier (`denseByteJustifiedW` in `Proofs/BusPairCancelJustify.lean`, and `denseByteJustified`
+behind `redundantByteDrop`) can prove `e ∈ [0,256)` only from a direct Bus-3 range check or an
+algebraic constraint — never through a *bitwise-lookup relation*. Two separate losses are the same
+blocker:
+  - **Memory telescoping (50 interactions, 7 cases: apc_042 +16, apc_038/051 +8, apc_037/100 +6,
+    apc_073 +4, apc_098 +2).** `busPairCancel` already finds the exact-duplicate send/receive pairs
+    (identical payload+timestamp, net-zero mult) and passes the region/shield tests; it stalls only
+    at `denseRecvSlotsJustified` because the read-back value's byteness is forced by a surviving
+    Bus-6 XOR/AND (e.g. `read_data__0_32 = b_24 AND c_24`), not a range check. powdr cancels 100% of
+    these; apc cancels 0.
+  - **Self-XOR redundant byte checks, category A (12 of the 27 `[x,x,0,1]` cases).** The self-XOR'd
+    `x` is the AND/OR *output* of a preceding XOR interaction, so it is already byte-forced and the
+    self-XOR is fully redundant (powdr drops it). `redundantByteDrop` can't discharge it for the same
+    reason. (The other 15 self-XORs are genuine lone leftovers — powdr spends the same one
+    `[x,0,0,0]`; a wash, not a win.)
+
+  Fix: add one justification arm / `BusFact` recognizing that a value pinned by a bitwise interaction
+  result slot (`2c = o1 + o2 ∓ r`, the AND/OR output) lies in `[0,256)`. Sound via `BusFacts.slotBound`
+  (the retained XOR still forces byteness — a discharged obligation, not a bypass); no audited surface.
+  apc_100's 6 memory cases carry affine shift-gadget data instead of a clean AND, so the arm must also
+  bound affine combinations against the shift/rotate gadget's range forms (generalize `basisJustified`).
+
+**B. Multi-limb is-zero / SEQZ fold (~21 con + apc_018's 5 vars / 9 con).** *con + vars, openvm ·
+medium value / low-medium effort.* For a branch-on-zero, apc emits one zero-forcing row per limb —
+`(cmp ± 1)·aᵢ = 0` for i=0..3 — plus a sum-of-squares inverse witness. powdr folds the four into one
+`(cmp ± 1)·(Σ aᵢ) = 0` (sound because the limbs are byte-range-checked, so `Σ aᵢ = 0 ⇔ every aᵢ = 0`)
+and uses the linear-sum inverse. Recurs exactly +3 con in apc_001/007/017/047/054/073/098 (both BEQ
+`cmp·aᵢ` and BNE `(cmp−1)·aᵢ` sign variants). **apc_018 is the same idea one level up** and is the
+only substantive *variable* loss in the set: a compare-against-zero left as a full `diff_marker`
+gadget (4 markers + diff_val + ~13 con) where powdr uses the cheap is-zero form (+5 vars, +9 con).
+A recognizer "comparison target is 0 ⇒ use is-zero over the limb-sum, not per-limb / not diff_marker"
+captures both. The `SeqzCollapse` recognizer is currently too rigid to catch these.
+
+**C. Canonicalize product factors, then dedup (32 con, zero risk).** *con, openvm · low value /
+low effort.* apc keeps both `(x − 1)·x = 0` and `x·(x − 1) = 0` (commuted factors) on
+`opcode_loadb_flag1` in 6 cases (apc_010 ×16, apc_014 ×8, apc_031 ×4, apc_097 ×2, apc_008/091 ×1);
+powdr canonicalizes factor order and drops the duplicate. Variable- and bus-neutral pure waste.
+
+**Verified minimal / already ahead (no action):** compile-time PC constants (all folded); tuple- vs
+var-range packing (apc leads, never under-packs — apc_042's +4 bus-10 is a memory artifact of the
+telescoping gap in A, not a range gap); the memory timestamp-ordering auxiliaries (20.5% of all apc
+vars, but representation-neutral vs powdr — apc's 2-limb decomp = powdr's decomp + prev_timestamp —
+and minimal for first-touch accesses; the foldable repeats are exactly A's telescoping targets);
+`b`/`c`/`bit_shift_carry` variable-family excesses (net-neutral basis-choice differences, total var
+delta ≈ 0 on those cases).
+
 ### 1. Quadratic root domains as bounds (`x·(x − c) = 0 → x ∈ {0, c}`)  ·  *bus + vars, sp1*  ·  high value / medium effort
 
 The single biggest residual class. The un-telescoped SP1 memory chains that remain (apc_030's
