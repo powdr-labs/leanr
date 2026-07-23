@@ -188,10 +188,12 @@ these need no new proof.
      unfold them — rework only if they show up in profiles).
 
 **R2. domainBatch setup: stop re-gathering and re-dedup-ing**  ·  **mostly done (entries 104,
-128–129)**. Entry 129 skips the Cartesian scan when every active filter is already discharged by
-constant evaluation or exact `BusFacts` and extracts constant domains directly. Remaining:
-`constraintRedundant` full-box scans (they pay once to save per-target work), and hot-variable
-bucket capping (not byte-identical — the gates read `esFull`).
+128–130)**. Entry 129 skips the Cartesian scan when every active filter is already discharged by
+constant evaluation or exact `BusFacts` and extracts constant domains directly. Entry 130 stores
+anchor buckets as arrays and summarizes inactive variable-free constraints once, so targets no
+longer materialize candidate lists or walk the same inactive tail. Remaining: `constraintRedundant`
+full-box scans (they pay once to save per-target work), and hot-variable bucket capping (not byte-
+identical — the gates read `esFull`).
 
 **R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
 index gate**  ·  mostly **done (entries 105/107/109)**:

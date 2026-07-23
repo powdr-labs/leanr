@@ -299,11 +299,22 @@ structure DenseBusPlan (p : ℕ) where
   informative : Bool
   domainRedundant : Bool
 
+/-- Compact anchor buckets used by the read-only per-target gathers. -/
+structure DenseArrayCovIndex where
+  buckets : Std.HashMap VarId (Array Nat)
+  varless : Array Nat
+
+/-- Constraint anchors with inactive variable-free plans summarized once. -/
+structure DenseConstraintCovIndex where
+  buckets : Std.HashMap VarId (Array Nat)
+  inactiveVarlessCount : Nat
+  activeVarless : Array Nat
+
 /-- The per-target index bundle (plain data; correctness via correspondence). -/
 structure DenseForcedIdx (p : ℕ) where
-  csIdx : DenseCovIndex
+  csIdx : DenseConstraintCovIndex
   arrCs : Array (DenseConstraintPlan p)
-  bisIdx : DenseCovIndex
+  bisIdx : DenseArrayCovIndex
   arrBis : Array (DenseBusPlan p)
 
 /-- The dense domain-table `doms` list has keys `xs`. -/
