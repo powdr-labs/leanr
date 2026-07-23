@@ -4520,3 +4520,32 @@ is delegated to the draft PR's CI workflows.
 
 **Worked locally: yes (verified shortcut, representative domainBatch runtime win; full-set result
 pending CI).**
+
+### 130. Runtime: compact direct domainBatch gathers and one variable-free summary
+
+`domainBatch` now freezes its anchor buckets into arrays and folds those arrays directly for each
+target variable. The constraint index keeps only active variable-free positions and one count for
+all inactive variable-free plans; the latter therefore contributes to the work heuristic without
+being appended to and traversed in every target's candidate stream. Bus gathers use the same direct
+array-bucket traversal. Bounds, scope, activity, and usability are still rechecked at use, so the
+compact indexes remain untrusted planning data.
+
+The generated C contains tight `Array.foldl` loops using borrowed array reads; the former
+`denseCandidates` list construction and its shared list-spine consumption are absent from both
+gathers. The gather proofs now establish provenance through each checked array position and compose
+that invariant across the target's bucket arrays and the exceptional variable-free arrays.
+
+Local profiles used the five representatives from `domainBatchProposals.md`. Against entry 129's
+merged measurements, `domainBatch` changed from 2725 → 2376 ms on OpenVM keccak (−12.8%),
+228 → 202 ms on `openvm-eth/apc_044` (−11.4%), and 2325 → 2094 ms on
+`wasm-eth/apc_063` (−9.9%); `openvm-eth/apc_094` and `wasm-eth/apc_065` were flat within
+millisecond noise at 179 → 180 and 132 → 133 ms. The five-case sum was 5589 → 4985 ms
+(−10.8%). Relative to revision `498092b` in the checked-in `openvm-profile.csv`, the cumulative
+five-case reduction is 6163 → 4985 ms (−19.1%). No `origin/main` binary was rebuilt. Cleanup
+iteration counts matched the CSV on all five cases; full same-runner runtime and effectiveness
+evaluation is delegated to the draft PR's CI workflows.
+
+`lake build` is warning-free, generated C was inspected, and the proof-integrity and unused-theorem
+checks pass.
+
+**Worked locally: yes (representative domainBatch runtime win; full-set result pending CI).**

@@ -244,22 +244,26 @@ structure DenseConstraintGatherV (p : ℕ) where
   fullCount : Nat
   active : List (DenseExpr p)
 
-def denseGatherConstraintsLoopV (arr : Array (DenseConstraintPlan p)) (xs : List VarId) :
-    List Nat → DenseConstraintGatherV p → DenseConstraintGatherV p
-  | [], acc => acc
-  | i :: rest, acc =>
-    if h : i < arr.size then
-      let plan := arr[i]
-      if denseVarsInListF xs plan.vars then
-        denseGatherConstraintsLoopV arr xs rest
-          { fullCount := acc.fullCount + 1,
-            active := if plan.active then plan.expr :: acc.active else acc.active }
-      else denseGatherConstraintsLoopV arr xs rest acc
-    else denseGatherConstraintsLoopV arr xs rest acc
+def denseGatherConstraintAtV (arr : Array (DenseConstraintPlan p)) (xs : List VarId)
+    (acc : DenseConstraintGatherV p) (i : Nat) : DenseConstraintGatherV p :=
+  if h : i < arr.size then
+    let plan := arr[i]
+    if denseVarsInListF xs plan.vars then
+      { fullCount := acc.fullCount + 1,
+        active := if plan.active then plan.expr :: acc.active else acc.active }
+    else acc
+  else acc
+
+def denseGatherConstraintArrayV (arr : Array (DenseConstraintPlan p)) (xs : List VarId)
+    (positions : Array Nat) (acc : DenseConstraintGatherV p) : DenseConstraintGatherV p :=
+  positions.foldl (denseGatherConstraintAtV arr xs) acc
 
 def denseGatherConstraintsV (fidx : DenseForcedIdx p) (xs : List VarId) :
     DenseConstraintGatherV p :=
-  denseGatherConstraintsLoopV fidx.arrCs xs (denseCandidates fidx.csIdx xs) ⟨0, []⟩
+  let acc := xs.foldl (fun acc v =>
+    denseGatherConstraintArrayV fidx.arrCs xs (fidx.csIdx.buckets.getD v #[]) acc)
+    ⟨fidx.csIdx.inactiveVarlessCount, []⟩
+  denseGatherConstraintArrayV fidx.arrCs xs fidx.csIdx.activeVarless acc
 
 structure DenseBusGatherV (p : ℕ) where
   count : Nat
@@ -267,23 +271,27 @@ structure DenseBusGatherV (p : ℕ) where
   allDomainRedundant : Bool
   interactions : List (BusInteraction (DenseExpr p))
 
-def denseGatherBusesLoopV (arr : Array (DenseBusPlan p)) (xs : List VarId) :
-    List Nat → DenseBusGatherV p → DenseBusGatherV p
-  | [], acc => acc
-  | i :: rest, acc =>
-    if h : i < arr.size then
-      let plan := arr[i]
-      if plan.usable && denseVarsInListF xs plan.vars then
-        denseGatherBusesLoopV arr xs rest
-          { count := acc.count + 1,
-            informative := acc.informative || plan.informative,
-            allDomainRedundant := acc.allDomainRedundant && plan.domainRedundant,
-            interactions := plan.interaction :: acc.interactions }
-      else denseGatherBusesLoopV arr xs rest acc
-    else denseGatherBusesLoopV arr xs rest acc
+def denseGatherBusAtV (arr : Array (DenseBusPlan p)) (xs : List VarId)
+    (acc : DenseBusGatherV p) (i : Nat) : DenseBusGatherV p :=
+  if h : i < arr.size then
+    let plan := arr[i]
+    if plan.usable && denseVarsInListF xs plan.vars then
+      { count := acc.count + 1,
+        informative := acc.informative || plan.informative,
+        allDomainRedundant := acc.allDomainRedundant && plan.domainRedundant,
+        interactions := plan.interaction :: acc.interactions }
+    else acc
+  else acc
+
+def denseGatherBusArrayV (arr : Array (DenseBusPlan p)) (xs : List VarId)
+    (positions : Array Nat) (acc : DenseBusGatherV p) : DenseBusGatherV p :=
+  positions.foldl (denseGatherBusAtV arr xs) acc
 
 def denseGatherBusesV (fidx : DenseForcedIdx p) (xs : List VarId) : DenseBusGatherV p :=
-  denseGatherBusesLoopV fidx.arrBis xs (denseCandidates fidx.bisIdx xs) ⟨0, false, true, []⟩
+  let acc := xs.foldl (fun acc v =>
+    denseGatherBusArrayV fidx.arrBis xs (fidx.bisIdx.buckets.getD v #[]) acc)
+    ⟨0, false, true, []⟩
+  denseGatherBusArrayV fidx.arrBis xs fidx.bisIdx.varless acc
 
 /-- All checked forced constants over the variable set `xs`. `keys` drives the compiler and the
     final zip; the unkeyed `doms` drives the value-only scan. -/
@@ -376,11 +384,30 @@ def densePlanTargetsV (cs : List (DenseConstraintPlan p)) (bis : List (DenseBusP
     List (List VarId) :=
   cs.map (fun c => c.vars) ++ bis.map (fun bi => bi.vars)
 
+def denseFreezeBuckets (buckets : Std.HashMap VarId (List Nat)) :
+    Std.HashMap VarId (Array Nat) :=
+  buckets.fold (fun out v positions => out.insert v positions.toArray) ∅
+
+def denseFreezeCovIndex (idx : DenseCovIndex) : DenseArrayCovIndex :=
+  { buckets := denseFreezeBuckets idx.buckets,
+    varless := idx.varless.toArray }
+
+def denseConstraintCovIndexV (cs : List (DenseConstraintPlan p)) : DenseConstraintCovIndex :=
+  let arr := cs.toArray
+  let idx := denseAnchorCovBuild (fun c => c.vars) cs
+  let summary := idx.varless.foldl (init := (0, #[])) fun acc i =>
+    if h : i < arr.size then
+      if arr[i].active then (acc.1, acc.2.push i) else (acc.1 + 1, acc.2)
+    else acc
+  { buckets := denseFreezeBuckets idx.buckets,
+    inactiveVarlessCount := summary.1,
+    activeVarless := summary.2 }
+
 def denseForcedIdxV (cs : List (DenseConstraintPlan p)) (bis : List (DenseBusPlan p)) :
     DenseForcedIdx p :=
-  { csIdx := denseAnchorCovBuild (fun c => c.vars) cs,
+  { csIdx := denseConstraintCovIndexV cs,
     arrCs := cs.toArray,
-    bisIdx := denseAnchorCovBuild (fun bi => bi.vars) bis,
+    bisIdx := denseFreezeCovIndex (denseAnchorCovBuild (fun bi => bi.vars) bis),
     arrBis := bis.toArray }
 
 /-- Domain-batch: builds a finite domain per variable (from constraints like `x*(x-1)=0` giving

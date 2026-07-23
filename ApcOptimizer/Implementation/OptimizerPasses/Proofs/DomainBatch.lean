@@ -971,39 +971,67 @@ theorem mem_zip_filterMap {α : Type} (keys : List α) (cands : DenseCandsV p) (
           · obtain ⟨n, hn1, hn2⟩ := ih ocs hf'
             exact ⟨n + 1, by simpa using hn1, by simpa using hn2⟩
 
-theorem denseGatherConstraintsLoopV_active_mem (arr : Array (DenseConstraintPlan p))
-    (xs : List VarId) (candidates : List Nat) (acc : DenseConstraintGatherV p)
+theorem denseGatherConstraintAtV_active_mem (arr : Array (DenseConstraintPlan p))
+    (xs : List VarId) (acc : DenseConstraintGatherV p) (i : Nat)
     (hacc : ∀ e ∈ acc.active, ∃ i, ∃ h : i < arr.size,
       arr[i].expr = e ∧ denseVarsInListF xs arr[i].vars = true ∧ arr[i].active = true) :
-    ∀ e ∈ (denseGatherConstraintsLoopV arr xs candidates acc).active,
+    ∀ e ∈ (denseGatherConstraintAtV arr xs acc i).active,
       ∃ i, ∃ h : i < arr.size,
         arr[i].expr = e ∧ denseVarsInListF xs arr[i].vars = true ∧ arr[i].active = true := by
-  induction candidates generalizing acc with
-  | nil => simpa [denseGatherConstraintsLoopV] using hacc
+  intro e he
+  by_cases hi : i < arr.size
+  · by_cases hvars : denseVarsInListF xs arr[i].vars = true
+    · simp only [denseGatherConstraintAtV, hi, ↓reduceDIte, hvars, ↓reduceIte] at he
+      by_cases hactive : arr[i].active = true
+      · simp only [hactive, ↓reduceIte] at he
+        rcases List.mem_cons.1 he with he | he
+        · subst e; exact ⟨i, hi, rfl, hvars, hactive⟩
+        · exact hacc e he
+      · simp [hactive] at he
+        exact hacc e he
+    · apply hacc e
+      simpa [denseGatherConstraintAtV, hi, hvars] using he
+  · apply hacc e
+    simpa [denseGatherConstraintAtV, hi] using he
+
+theorem denseGatherConstraintArrayV_active_mem (arr : Array (DenseConstraintPlan p))
+    (xs : List VarId) (positions : Array Nat) (acc : DenseConstraintGatherV p)
+    (hacc : ∀ e ∈ acc.active, ∃ i, ∃ h : i < arr.size,
+      arr[i].expr = e ∧ denseVarsInListF xs arr[i].vars = true ∧ arr[i].active = true) :
+    ∀ e ∈ (denseGatherConstraintArrayV arr xs positions acc).active,
+      ∃ i, ∃ h : i < arr.size,
+        arr[i].expr = e ∧ denseVarsInListF xs arr[i].vars = true ∧ arr[i].active = true := by
+  rw [denseGatherConstraintArrayV, ← Array.foldl_toList]
+  induction positions.toList generalizing acc with
+  | nil => simpa using hacc
   | cons i rest ih =>
-      by_cases hi : i < arr.size
-      · by_cases hvars : denseVarsInListF xs arr[i].vars = true
-        · simp only [denseGatherConstraintsLoopV, hi, ↓reduceDIte, hvars, ↓reduceIte]
-          apply ih
-          intro e he
-          by_cases hactive : arr[i].active = true
-          · simp only [hactive, ↓reduceIte] at he
-            rcases List.mem_cons.1 he with he | he
-            · subst e; exact ⟨i, hi, rfl, hvars, hactive⟩
-            · exact hacc e he
-          · simp [hactive] at he
-            exact hacc e he
-        · simpa [denseGatherConstraintsLoopV, hi, hvars] using ih acc hacc
-      · simpa [denseGatherConstraintsLoopV, hi] using ih acc hacc
+      simp only [List.foldl_cons]
+      exact ih (denseGatherConstraintAtV arr xs acc i)
+        (denseGatherConstraintAtV_active_mem arr xs acc i hacc)
+
+theorem denseGatherConstraintBucketsV_active_mem (arr : Array (DenseConstraintPlan p))
+    (idx : DenseConstraintCovIndex) (xs vs : List VarId) (acc : DenseConstraintGatherV p)
+    (hacc : ∀ e ∈ acc.active, ∃ i, ∃ h : i < arr.size,
+      arr[i].expr = e ∧ denseVarsInListF xs arr[i].vars = true ∧ arr[i].active = true) :
+    ∀ e ∈ (vs.foldl (fun acc v =>
+        denseGatherConstraintArrayV arr xs (idx.buckets.getD v #[]) acc) acc).active,
+      ∃ i, ∃ h : i < arr.size,
+        arr[i].expr = e ∧ denseVarsInListF xs arr[i].vars = true ∧ arr[i].active = true := by
+  induction vs generalizing acc with
+  | nil => simpa using hacc
+  | cons v rest ih =>
+      simp only [List.foldl_cons]
+      exact ih _ (denseGatherConstraintArrayV_active_mem arr xs _ acc hacc)
 
 theorem denseGatherConstraintsV_active_mem (fidx : DenseForcedIdx p) (xs : List VarId)
     {e : DenseExpr p} (he : e ∈ (denseGatherConstraintsV fidx xs).active) :
     ∃ i, ∃ h : i < fidx.arrCs.size,
       fidx.arrCs[i].expr = e ∧ denseVarsInListF xs fidx.arrCs[i].vars = true ∧
         fidx.arrCs[i].active = true := by
-  apply denseGatherConstraintsLoopV_active_mem fidx.arrCs xs (denseCandidates fidx.csIdx xs)
-    ⟨0, []⟩ (by simp) e
-  exact he
+  rw [denseGatherConstraintsV] at he
+  apply denseGatherConstraintArrayV_active_mem fidx.arrCs xs fidx.csIdx.activeVarless _
+    (denseGatherConstraintBucketsV_active_mem fidx.arrCs fidx.csIdx xs xs
+      ⟨fidx.csIdx.inactiveVarlessCount, []⟩ (by simp)) e he
 
 theorem denseGatherConstraintsV_plan_mem (fidx : DenseForcedIdx p)
     (plans : List (DenseConstraintPlan p)) (harr : fidx.arrCs = plans.toArray)
@@ -1020,40 +1048,73 @@ theorem denseGatherConstraintsV_plan_mem (fidx : DenseForcedIdx p)
   exact ⟨plan, hmem, by simpa [plan] using hie, by simpa [plan] using hvars,
     by simpa [plan] using hactive⟩
 
-theorem denseGatherBusesLoopV_interactions_mem (arr : Array (DenseBusPlan p))
-    (xs : List VarId) (candidates : List Nat) (acc : DenseBusGatherV p)
+theorem denseGatherBusAtV_interactions_mem (arr : Array (DenseBusPlan p))
+    (xs : List VarId) (acc : DenseBusGatherV p) (i : Nat)
     (hacc : ∀ bi ∈ acc.interactions, ∃ i, ∃ h : i < arr.size,
       arr[i].interaction = bi ∧ arr[i].usable = true ∧
         denseVarsInListF xs arr[i].vars = true) :
-    ∀ bi ∈ (denseGatherBusesLoopV arr xs candidates acc).interactions,
+    ∀ bi ∈ (denseGatherBusAtV arr xs acc i).interactions,
       ∃ i, ∃ h : i < arr.size,
         arr[i].interaction = bi ∧ arr[i].usable = true ∧
           denseVarsInListF xs arr[i].vars = true := by
-  induction candidates generalizing acc with
-  | nil => simpa [denseGatherBusesLoopV] using hacc
+  intro bi hbi
+  by_cases hi : i < arr.size
+  · by_cases husable : arr[i].usable = true
+    · by_cases hvars : denseVarsInListF xs arr[i].vars = true
+      · simp only [denseGatherBusAtV, hi, ↓reduceDIte, husable, hvars, Bool.and_self,
+          ↓reduceIte] at hbi
+        rcases List.mem_cons.1 hbi with hbi | hbi
+        · subst bi; exact ⟨i, hi, rfl, husable, hvars⟩
+        · exact hacc bi hbi
+      · apply hacc bi
+        simpa [denseGatherBusAtV, hi, husable, hvars] using hbi
+    · apply hacc bi
+      simpa [denseGatherBusAtV, hi, husable] using hbi
+  · apply hacc bi
+    simpa [denseGatherBusAtV, hi] using hbi
+
+theorem denseGatherBusArrayV_interactions_mem (arr : Array (DenseBusPlan p))
+    (xs : List VarId) (positions : Array Nat) (acc : DenseBusGatherV p)
+    (hacc : ∀ bi ∈ acc.interactions, ∃ i, ∃ h : i < arr.size,
+      arr[i].interaction = bi ∧ arr[i].usable = true ∧
+        denseVarsInListF xs arr[i].vars = true) :
+    ∀ bi ∈ (denseGatherBusArrayV arr xs positions acc).interactions,
+      ∃ i, ∃ h : i < arr.size,
+        arr[i].interaction = bi ∧ arr[i].usable = true ∧
+          denseVarsInListF xs arr[i].vars = true := by
+  rw [denseGatherBusArrayV, ← Array.foldl_toList]
+  induction positions.toList generalizing acc with
+  | nil => simpa using hacc
   | cons i rest ih =>
-      by_cases hi : i < arr.size
-      · by_cases husable : arr[i].usable = true
-        · by_cases hvars : denseVarsInListF xs arr[i].vars = true
-          · simp only [denseGatherBusesLoopV, hi, ↓reduceDIte, husable, hvars,
-              Bool.and_self, ↓reduceIte]
-            apply ih
-            intro bi hbi
-            rcases List.mem_cons.1 hbi with hbi | hbi
-            · subst bi; exact ⟨i, hi, rfl, husable, hvars⟩
-            · exact hacc bi hbi
-          · simpa [denseGatherBusesLoopV, hi, husable, hvars] using ih acc hacc
-        · simpa [denseGatherBusesLoopV, hi, husable] using ih acc hacc
-      · simpa [denseGatherBusesLoopV, hi] using ih acc hacc
+      simp only [List.foldl_cons]
+      exact ih (denseGatherBusAtV arr xs acc i)
+        (denseGatherBusAtV_interactions_mem arr xs acc i hacc)
+
+theorem denseGatherBusBucketsV_interactions_mem (arr : Array (DenseBusPlan p))
+    (idx : DenseArrayCovIndex) (xs vs : List VarId) (acc : DenseBusGatherV p)
+    (hacc : ∀ bi ∈ acc.interactions, ∃ i, ∃ h : i < arr.size,
+      arr[i].interaction = bi ∧ arr[i].usable = true ∧
+        denseVarsInListF xs arr[i].vars = true) :
+    ∀ bi ∈ (vs.foldl (fun acc v =>
+        denseGatherBusArrayV arr xs (idx.buckets.getD v #[]) acc) acc).interactions,
+      ∃ i, ∃ h : i < arr.size,
+        arr[i].interaction = bi ∧ arr[i].usable = true ∧
+          denseVarsInListF xs arr[i].vars = true := by
+  induction vs generalizing acc with
+  | nil => simpa using hacc
+  | cons v rest ih =>
+      simp only [List.foldl_cons]
+      exact ih _ (denseGatherBusArrayV_interactions_mem arr xs _ acc hacc)
 
 theorem denseGatherBusesV_interactions_mem (fidx : DenseForcedIdx p) (xs : List VarId)
     {bi : BusInteraction (DenseExpr p)} (hbi : bi ∈ (denseGatherBusesV fidx xs).interactions) :
     ∃ i, ∃ h : i < fidx.arrBis.size,
       fidx.arrBis[i].interaction = bi ∧ fidx.arrBis[i].usable = true ∧
         denseVarsInListF xs fidx.arrBis[i].vars = true := by
-  apply denseGatherBusesLoopV_interactions_mem fidx.arrBis xs (denseCandidates fidx.bisIdx xs)
-    ⟨0, false, true, []⟩ (by simp) bi
-  exact hbi
+  rw [denseGatherBusesV] at hbi
+  apply denseGatherBusArrayV_interactions_mem fidx.arrBis xs fidx.bisIdx.varless _
+    (denseGatherBusBucketsV_interactions_mem fidx.arrBis fidx.bisIdx xs xs
+      ⟨0, false, true, []⟩ (by simp)) bi hbi
 
 theorem denseGatherBusesV_plan_mem (fidx : DenseForcedIdx p) (plans : List (DenseBusPlan p))
     (harr : fidx.arrBis = plans.toArray) (xs : List VarId)
