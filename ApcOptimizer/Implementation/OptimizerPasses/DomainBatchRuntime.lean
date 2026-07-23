@@ -158,6 +158,86 @@ def denseConstraintRedundantV (T : DenseDomainTable p) (c : DenseExpr p) : Bool 
         denseAllBoxV (fun a => decide (c.eval (denseEnvOfKeysV (d.map Prod.fst) a) = 0))
           (d.map Prod.snd)
 
+def denseDomainBelowV (d : FiniteDomain p) (bound : Nat) : Bool :=
+  match d with
+  | .explicit vs => vs.all (fun v => decide (v.val < bound))
+  | .range size => decide (size ≤ bound)
+
+def denseExprDomainBelowV (T : DenseDomainTable p) (e : DenseExpr p) (bound : Nat) : Bool :=
+  match e.constValue? with
+  | some c => decide (c.val < bound)
+  | none =>
+    match e with
+    | .var i => match T.map[i]? with | some d => denseDomainBelowV d bound | none => false
+    | _ => false
+
+def denseRangeCheckDomainRedundantV {bs : BusSemantics p} (facts : BusFacts p bs)
+    (T : DenseDomainTable p)
+    (bi : BusInteraction (DenseExpr p)) : Bool :=
+  match bi.multiplicity.constValue? with
+  | some mult =>
+    if mult = 0 then true
+    else if mult = 1 then
+      match facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?) with
+      | some (slot, bound) =>
+        match bi.payload[slot]? with
+        | some e => denseExprDomainBelowV T e bound
+        | none => false
+      | none => false
+    else false
+  | none => false
+
+def denseConstBiV? (bi : BusInteraction (DenseExpr p)) : Option (BusInteraction (ZMod p)) := do
+  let mult ← bi.multiplicity.constValue?
+  let payload ← bi.payload.mapM DenseExpr.constValue?
+  pure { busId := bi.busId, multiplicity := mult, payload }
+
+def denseBytePairDomainRedundantV {bs : BusSemantics p} (facts : BusFacts p bs)
+    (T : DenseDomainTable p) (bi : BusInteraction (DenseExpr p)) : Bool :=
+  match facts.byteXorSpec bi.busId with
+  | none => false
+  | some spec =>
+    match spec.decode bi.payload with
+    | none => false
+    | some (op, o1, o2, result) =>
+      match op.constValue?, result.constValue? with
+      | some opValue, some resultValue =>
+        opValue = spec.pairOp && resultValue = 0 &&
+          denseExprDomainBelowV T o1 spec.bound && denseExprDomainBelowV T o2 spec.bound
+      | _, _ => false
+
+def denseBiDomainRedundantV (bs : BusSemantics p) (facts : BusFacts p bs) (T : DenseDomainTable p)
+    (bi : BusInteraction (DenseExpr p)) : Bool :=
+  match denseConstBiV? bi with
+  | some value => value.multiplicity = 0 || !bs.violatesConstraint value
+  | none =>
+    if facts.neverViolates bi.busId then true
+    else
+      match bi.payload with
+      | [x, b] =>
+        if facts.varRangeBus bi.busId then
+          match b.constValue? with
+          | some width =>
+            if width.val ≤ 17 then denseExprDomainBelowV T x (2 ^ width.val) else false
+          | none => false
+        else
+          match facts.tupleRangeBus bi.busId with
+          | some (boundX, boundB) =>
+            denseExprDomainBelowV T x boundX && denseExprDomainBelowV T b boundB
+          | none => denseRangeCheckDomainRedundantV facts T bi ||
+              denseBytePairDomainRedundantV facts T bi
+      | _ => denseRangeCheckDomainRedundantV facts T bi ||
+          denseBytePairDomainRedundantV facts T bi
+
+def denseDomainConstantValueV? (d : FiniteDomain p) : Option (ZMod p) :=
+  match d with
+  | .explicit [] => none
+  | .explicit (v :: vs) => if vs.all (fun w => decide (w = v)) then some v else none
+  | .range size => if size = 1 then some 0 else none
+
+def denseConstantDomainsV (fdoms : List (VarId × FiniteDomain p)) : List (VarId × ZMod p) :=
+  fdoms.filterMap fun xd => (denseDomainConstantValueV? xd.2).map (fun c => (xd.1, c))
+
 /-! ## `forcedOver`, value-only -/
 
 structure DenseConstraintGatherV (p : ℕ) where
@@ -184,6 +264,7 @@ def denseGatherConstraintsV (fidx : DenseForcedIdx p) (xs : List VarId) :
 structure DenseBusGatherV (p : ℕ) where
   count : Nat
   informative : Bool
+  allDomainRedundant : Bool
   interactions : List (BusInteraction (DenseExpr p))
 
 def denseGatherBusesLoopV (arr : Array (DenseBusPlan p)) (xs : List VarId) :
@@ -196,12 +277,13 @@ def denseGatherBusesLoopV (arr : Array (DenseBusPlan p)) (xs : List VarId) :
         denseGatherBusesLoopV arr xs rest
           { count := acc.count + 1,
             informative := acc.informative || plan.informative,
+            allDomainRedundant := acc.allDomainRedundant && plan.domainRedundant,
             interactions := plan.interaction :: acc.interactions }
       else denseGatherBusesLoopV arr xs rest acc
     else denseGatherBusesLoopV arr xs rest acc
 
 def denseGatherBusesV (fidx : DenseForcedIdx p) (xs : List VarId) : DenseBusGatherV p :=
-  denseGatherBusesLoopV fidx.arrBis xs (denseCandidates fidx.bisIdx xs) ⟨0, false, []⟩
+  denseGatherBusesLoopV fidx.arrBis xs (denseCandidates fidx.bisIdx xs) ⟨0, false, true, []⟩
 
 /-- All checked forced constants over the variable set `xs`. `keys` drives the compiler and the
     final zip; the unkeyed `doms` drives the value-only scan. -/
@@ -218,14 +300,18 @@ def denseForcedOverV (bs : BusSemantics p) (_facts : BusFacts p bs) (T : DenseDo
       if informative && boxSize * (cs.fullCount + bis.count) ≤ maxEnumWork then
         let keys := fdoms.map Prod.fst
         let doms := fdoms.map Prod.snd
-        let survC := denseCompiledSurvV bs cs.active bis.interactions keys
-        match denseScanBoxV survC.run doms with
-        | none =>
-          -- no surviving point: the box has no solutions, so everything is vacuously forced
-          keys.map (fun x => (x, (0 : ZMod p)))
-        | some cands =>
-          -- recover the forced `(x, c)` pairs by zipping the mask with `keys` once, at the end
-          (keys.zip cands).filterMap (fun xc => xc.2.map (fun c => (xc.1, c)))
+        if cs.active.isEmpty && bis.allDomainRedundant &&
+            doms.all (fun d => d.size != 0) then
+          denseConstantDomainsV fdoms
+        else
+          let survC := denseCompiledSurvV bs cs.active bis.interactions keys
+          match denseScanBoxV survC.run doms with
+          | none =>
+            -- no surviving point: the box has no solutions, so everything is vacuously forced
+            keys.map (fun x => (x, (0 : ZMod p)))
+          | some cands =>
+            -- recover the forced `(x, c)` pairs by zipping the mask with `keys` once, at the end
+            (keys.zip cands).filterMap (fun xc => xc.2.map (fun c => (xc.1, c)))
       else []
     else []
 
@@ -276,14 +362,15 @@ def denseConstraintPlansV (T : DenseDomainTable p) (cs : List (DenseExpr p)) :
       vars := HashedDedup.hashedDedup (hash ·) c.vars,
       active := !denseConstraintRedundantV T c }
 
-def denseBusPlansV (bs : BusSemantics p) (facts : BusFacts p bs)
+def denseBusPlansV (bs : BusSemantics p) (facts : BusFacts p bs) (T : DenseDomainTable p)
     (bis : List (BusInteraction (DenseExpr p))) : List (DenseBusPlan p) :=
   bis.map fun bi =>
     let usable := !bs.isStateful bi.busId
     { interaction := bi,
       vars := HashedDedup.hashedDedup (hash ·) (denseBIVars bi),
       usable,
-      informative := usable && denseBiInformative bs facts bi }
+      informative := usable && denseBiInformative bs facts bi,
+      domainRedundant := usable && denseBiDomainRedundantV bs facts T bi }
 
 def densePlanTargetsV (cs : List (DenseConstraintPlan p)) (bis : List (DenseBusPlan p)) :
     List (List VarId) :=
@@ -306,7 +393,7 @@ def denseDomainBatchσV (bs : BusSemantics p) (facts : BusFacts p bs)
     denseAddBusDoms bs facts d.busInteractions
       (denseAddConstraintDoms d.algebraicConstraints DenseDomainTable.empty)
   let csPlans := denseConstraintPlansV T d.algebraicConstraints
-  let busPlans := denseBusPlansV bs facts d.busInteractions
+  let busPlans := denseBusPlansV bs facts T d.busInteractions
   let targets := densePlanTargetsV csPlans busPlans
   let fidx := denseForcedIdxV csPlans busPlans
   -- Fan out only at keccak/SHA scale; below it the sequential fold avoids spawn overhead.
