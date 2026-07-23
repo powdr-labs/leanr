@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Build the audited-surface paper and emit a self-contained single-page HTML site.
+# Usage: docs/paper/build.sh [--serve]
+set -euo pipefail
+cd "$(dirname "$0")/../.."          # repo root
+
+OUT=docs/paper/_out
+HTML="$OUT/html-single"
+
+# Render the trust-map figure from its Graphviz source (skips if `dot` is absent).
+if command -v dot >/dev/null 2>&1; then
+  dot -Tsvg docs/paper/assets/trust.dot -o docs/paper/assets/trust.svg
+fi
+
+lake build paper
+rm -rf "$OUT"
+lake exe paper --output "$OUT"
+
+# Ship the figure alongside the page (Verso references it relatively).
+cp docs/paper/assets/trust.svg "$HTML/"
+
+echo "Wrote $HTML/index.html"
+if [[ "${1:-}" == "--serve" ]]; then
+  echo "Serving on http://127.0.0.1:8017 (Ctrl-C to stop)"
+  python3 -m http.server 8017 --bind 127.0.0.1 --directory "$HTML"
+fi
