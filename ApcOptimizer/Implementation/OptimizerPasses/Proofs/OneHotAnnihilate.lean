@@ -12,6 +12,50 @@ namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
 
+/-! ## Soundness of the product-pair set: an indexed pair was a present product constraint -/
+
+private theorem denseProdSet_foldl_mem (cs : List (DenseExpr p)) :
+    ∀ (s0 : Std.HashSet (VarId × VarId)) (a b : VarId),
+      (a, b) ∈ cs.foldl (fun s c =>
+        match c with | .mul (.var a') (.var b') => s.insert (a', b') | _ => s) s0 →
+      (a, b) ∈ s0 ∨ (DenseExpr.mul (.var a) (.var b) : DenseExpr p) ∈ cs := by
+  induction cs with
+  | nil => intro s0 a b h; exact Or.inl (by simpa using h)
+  | cons c rest ih =>
+    intro s0 a b h
+    rw [List.foldl_cons] at h
+    have hstep : (a, b) ∈ (match c with
+        | .mul (.var a') (.var b') => s0.insert (a', b') | _ => s0) ∨
+        (DenseExpr.mul (.var a) (.var b) : DenseExpr p) ∈ c :: rest := by
+      rcases ih _ a b h with h' | h'
+      · exact Or.inl h'
+      · exact Or.inr (List.mem_cons_of_mem _ h')
+    rcases hstep with h' | h'
+    · match c with
+      | .const _ => exact Or.inl (by simpa using h')
+      | .var _ => exact Or.inl (by simpa using h')
+      | .add _ _ => exact Or.inl (by simpa using h')
+      | .mul (.const _) _ => exact Or.inl (by simpa using h')
+      | .mul (.add _ _) _ => exact Or.inl (by simpa using h')
+      | .mul (.mul _ _) _ => exact Or.inl (by simpa using h')
+      | .mul (.var a') (.const _) => exact Or.inl (by simpa using h')
+      | .mul (.var a') (.add _ _) => exact Or.inl (by simpa using h')
+      | .mul (.var a') (.mul _ _) => exact Or.inl (by simpa using h')
+      | .mul (.var a') (.var b') =>
+        simp only [Std.HashSet.mem_insert, beq_iff_eq, Prod.mk.injEq] at h'
+        rcases h' with ⟨rfl, rfl⟩ | hin
+        · exact Or.inr (List.mem_cons_self ..)
+        · exact Or.inl hin
+    · exact Or.inr h'
+
+/-- Every pair the product set records is a present `a * b` constraint. -/
+theorem denseProdSet_mem {cs : List (DenseExpr p)} {a b : VarId}
+    (h : (a, b) ∈ denseProdSet cs) :
+    (DenseExpr.mul (.var a) (.var b) : DenseExpr p) ∈ cs := by
+  rcases denseProdSet_foldl_mem cs ∅ a b h with h' | h'
+  · simp at h'
+  · exact h'
+
 /-- The affine-closer recogniser's guarantee: the cofactor is `Σ mᵢ − 1` (`k = 1`) or `1 − Σ mᵢ`
     (`k = −1`); in both, `const = −k` and every coefficient is `k`. -/
 theorem denseAffineCloser_spec (a : DenseExpr p) (la : DenseLinExpr p)
@@ -111,18 +155,20 @@ theorem denseDeadVars_entailed (d : DenseConstraintSystem p) (bs : BusSemantics 
         linear_combination hcq0
     have hveval : ∀ t ∈ la.terms, denv t.1 * denv x' = 0 := by
       intro t ht
-      have hp : denseHasProd d t.1 x' = true := (List.all_eq_true.1 hgate) t ht
-      unfold denseHasProd at hp
-      obtain ⟨cv, hcv_mem, hcv⟩ := List.any_eq_true.1 hp
-      have hcv0 : cv.eval denv = 0 := hconstr cv hcv_mem
-      simp only [Bool.or_eq_true] at hcv
-      rcases hcv with he | he
-      · obtain rfl := eq_of_beq he
-        simpa only [DenseExpr.eval] using hcv0
-      · obtain rfl := eq_of_beq he
-        simp only [DenseExpr.eval] at hcv0
-        rw [mul_comm] at hcv0
-        exact hcv0
+      have hp : denseHasProdS (denseProdSet d.algebraicConstraints) t.1 x' = true :=
+        (List.all_eq_true.1 hgate) t ht
+      unfold denseHasProdS at hp
+      rw [Bool.or_eq_true] at hp
+      have hcv0 : (DenseExpr.mul (.var t.1) (.var x') : DenseExpr p).eval denv = 0 ∨
+          (DenseExpr.mul (.var x') (.var t.1) : DenseExpr p).eval denv = 0 := by
+        rcases hp with h1 | h1
+        · exact Or.inl (hconstr _ (denseProdSet_mem (Std.HashSet.mem_iff_contains.mpr h1)))
+        · exact Or.inr (hconstr _ (denseProdSet_mem (Std.HashSet.mem_iff_contains.mpr h1)))
+      rcases hcv0 with he | he
+      · simpa only [DenseExpr.eval] using he
+      · simp only [DenseExpr.eval] at he
+        rw [mul_comm] at he
+        exact he
     exact denseAnnihilate hveval hqeval
 
 /-- Every variable of an added `x = 0` occurs in `d`: the closer `.mul A (.var x)` is a present
