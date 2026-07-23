@@ -4606,3 +4606,64 @@ effectiveness evaluation is delegated to the draft PR's CI workflows.
 
 **Worked locally: yes (fan-out reduced by orders of magnitude; representative runtime neutral;
 full-set result pending CI).**
+
+### 133. Runtime: dynamic global Markowitz scheduling for Gauss
+
+Gauss now replaces its two source-order sweeps with a dynamic global scheduler. Each active row
+caches its normalized expression, unique variables, and all solvable pivots; exact row/column and
+pivot/row incidence maps maintain classical Markowitz fill costs as pivots eliminate variables.
+A generation-checked binary heap selects the global minimum, with protected-variable status,
+stored-solution rewrite work, the prior local score, row position, and variable index as stable
+tie-breakers. Only incident rows are substituted and relinearized. Removed rows are also removed
+from the incidence maps, while stale heap entries are discarded lazily.
+
+The scheduler is proof-irrelevant planning data. Before adopting a heap choice, Gauss reloads the
+original constraint, applies the complete current solution, normalizes it, and solves the hinted
+pivot again (falling back to the verified local selector if needed). The new fuel-inductive proof
+therefore establishes entailment and occurrence closure without trusting heap order, generations,
+cached rows, incidence maps, or scores.
+
+One serial local profile was run on each representative from `ranked_passes.md`, using the
+same-session `origin/main` profiles as baseline. Gauss changed from 42,368 → 4,508 ms on
+`wasm-eth/apc_063` (−89.4%), 11,209 → 3,636 ms on `wasm-eth/apc_037` (−67.6%),
+1,190 → 742 ms on `openvm-eth/apc_037` (−37.6%), 2,536 → 2,927 ms on OpenVM keccak
+(+15.4%), and 444 → 504 ms on `openvm-eth/apc_005` (+13.5%). The five-case Gauss sum fell
+57,747 → 12,317 ms (−78.7%); whole-profile time fell 185,174 → 141,421 ms (−23.6%).
+Cleanup iteration counts were unchanged except `openvm-eth/apc_037`, which took one additional
+productive cycle and ended one variable and one constraint smaller.
+
+`lake build` is warning-free, generated C uses specialized heap and row-fold functions, and the
+proof-integrity and unused-theorem checks pass. Full same-runner runtime and effectiveness
+evaluation is delegated to the draft PR's CI workflows.
+
+**Worked locally: yes (large representative Gauss and whole-profile runtime win; full-set result
+pending CI).**
+
+### 134. Runtime: gate Markowitz scheduling below 8192 rows
+
+PR #190's effectiveness CI showed that unconditional Markowitz scheduling changed the final SP1
+RSP variable count from 10,627 to 10,702. Seven cases regressed by 91 variables while two improved
+by 16. Targeted tracing on the repeated apc_016 shape found equal source-order and Markowitz pivot
+counts in each cleanup cycle, but different pivot keys and right-hand sides in affine rows connected
+to nonlinear constraints. The regression is therefore a downstream basis-sensitivity effect, not
+a missed-elimination or stale-heap bug.
+
+Putting the static occurrence score ahead of fill was rejected: apc_016 recovered only 2 of its 18
+variables, apc_024 and apc_060 did not recover any, and apc_073 lost its 13-variable improvement.
+A 16,384-row source-order gate restored RSP and SP1 keccak exactly but also restored the wasm-eth
+apc_037 Gauss cost (11,145 ms versus the 11,209 ms baseline), because earlier passes reduce that
+case below the gate before Gauss runs.
+
+Gauss now retains the exact two-sweep source-order algorithm below 8192 algebraic constraints and
+uses the dynamic scheduler only at or above that size. All SP1 RSP inputs have at most 3433
+constraints, so the corpus retains its previous pivot behavior without a VM-specific condition. A
+targeted apc_016 export returned to 268 variables, 262 bus interactions, and 21 constraints. The
+single wasm-eth apc_037 profile retained a 3,850 ms Gauss time and 40,341 ms total, respectively
+65.7% and 15.7% below the source-order baseline, and its final profiled state returned from 1898 to
+1896 variables.
+
+The Gauss and executable builds are warning-free; full corpus confirmation is delegated to the
+updated PR's CI.
+
+**Worked locally: yes (RSP baseline behavior restored while the large-case runtime win remains;
+full-set result pending CI).**
