@@ -4606,3 +4606,35 @@ effectiveness evaluation is delegated to the draft PR's CI workflows.
 
 **Worked locally: yes (fan-out reduced by orders of magnitude; representative runtime neutral;
 full-set result pending CI).**
+
+### 133. Runtime: dynamic global Markowitz scheduling for Gauss
+
+Gauss now replaces its two source-order sweeps with a dynamic global scheduler. Each active row
+caches its normalized expression, unique variables, and all solvable pivots; exact row/column and
+pivot/row incidence maps maintain classical Markowitz fill costs as pivots eliminate variables.
+A generation-checked binary heap selects the global minimum, with protected-variable status,
+stored-solution rewrite work, the prior local score, row position, and variable index as stable
+tie-breakers. Only incident rows are substituted and relinearized. Removed rows are also removed
+from the incidence maps, while stale heap entries are discarded lazily.
+
+The scheduler is proof-irrelevant planning data. Before adopting a heap choice, Gauss reloads the
+original constraint, applies the complete current solution, normalizes it, and solves the hinted
+pivot again (falling back to the verified local selector if needed). The new fuel-inductive proof
+therefore establishes entailment and occurrence closure without trusting heap order, generations,
+cached rows, incidence maps, or scores.
+
+One serial local profile was run on each representative from `ranked_passes.md`, using the
+same-session `origin/main` profiles as baseline. Gauss changed from 42,368 → 4,508 ms on
+`wasm-eth/apc_063` (−89.4%), 11,209 → 3,636 ms on `wasm-eth/apc_037` (−67.6%),
+1,190 → 742 ms on `openvm-eth/apc_037` (−37.6%), 2,536 → 2,927 ms on OpenVM keccak
+(+15.4%), and 444 → 504 ms on `openvm-eth/apc_005` (+13.5%). The five-case Gauss sum fell
+57,747 → 12,317 ms (−78.7%); whole-profile time fell 185,174 → 141,421 ms (−23.6%).
+Cleanup iteration counts were unchanged except `openvm-eth/apc_037`, which took one additional
+productive cycle and ended one variable and one constraint smaller.
+
+`lake build` is warning-free, generated C uses specialized heap and row-fold functions, and the
+proof-integrity and unused-theorem checks pass. Full same-runner runtime and effectiveness
+evaluation is delegated to the draft PR's CI workflows.
+
+**Worked locally: yes (large representative Gauss and whole-profile runtime win; full-set result
+pending CI).**

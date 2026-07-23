@@ -249,6 +249,12 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
      empty first solution map returns immediately, while productive runs retain both sweeps;
      occurrence and reverse-dependency construction fold expression leaves directly without
      building `DenseExpr.vars` and its append chains.
+   - ~~gauss source-order sweeps~~ **done (entry 133)**: a dynamic global Markowitz scheduler
+     keeps normalized rows, exact active incidence, all solvable pivots, and a lazy generation-
+     checked heap. It updates only rows incident to each chosen pivot and ranks protected status,
+     classical fill, stored-solution rewrite cost, and the prior local score lexicographically.
+     Heap metadata remains untrusted: every selection is re-solved from the original constraint
+     under the current substitution before adoption.
 
 **R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
 *medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs
