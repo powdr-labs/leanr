@@ -265,8 +265,8 @@ def denseBoxFoldV {β : Type} (ops : DenseZModOps p) (f : β → List (ZMod p) �
         (fun acc'' v => f acc'' (v :: a)) stop acc') stop rest acc
 
 /-- `(assignments doms).all pred`, value-only (used by `denseConstraintRedundantV`). -/
-def denseAllBoxV (pred : List (ZMod p) → Bool) (doms : List (FiniteDomain p)) : Bool :=
-  let ops : DenseZModOps p := denseZModOps
+def denseAllBoxV (ops : DenseZModOps p) (pred : List (ZMod p) → Bool)
+    (doms : List (FiniteDomain p)) : Bool :=
   denseBoxFoldV ops (fun acc pt => acc && pred pt) (fun acc => !acc) doms true
 
 /-! ### The value-only box scan
@@ -297,9 +297,9 @@ def denseScanStopV : Option (DenseCandsV p) → Bool
 
 /-- The value-only box scan, streamed lazily over the symbolic domains; the caller
     (`denseForcedOverV`) zips the final mask with `keys` once, after the scan finishes. -/
-def denseScanBoxV (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p)) :
+def denseScanBoxV (ops : DenseZModOps p) (surv : List (ZMod p) → Bool)
+    (doms : List (FiniteDomain p)) :
     Option (DenseCandsV p) :=
-  let ops : DenseZModOps p := denseZModOps
   denseBoxFoldV ops (denseScanStepV surv) denseScanStopV doms none
 
 /-! ## Redundancy check, value-only -/
@@ -315,11 +315,13 @@ def denseConstraintRedundantV (T : DenseDomainTable p) (c : DenseExpr p) : Bool 
       | some ic =>
         let ops : DenseZModOps p := denseZModOps
         let dec : DecidableEq (ZMod p) := inferInstance
-        denseAllBoxV
+        denseAllBoxV ops
           (fun a => @decide (denseIExprEvalWithV ops a ic = ops.zero) (dec _ ops.zero))
           (d.map Prod.snd)
       | none =>
-        denseAllBoxV (fun a => decide (c.eval (denseEnvOfKeysV (d.map Prod.fst) a) = 0))
+        let ops : DenseZModOps p := denseZModOps
+        denseAllBoxV ops
+          (fun a => decide (c.eval (denseEnvOfKeysV (d.map Prod.fst) a) = ops.zero))
           (d.map Prod.snd)
 
 def denseDomainBelowV (d : FiniteDomain p) (bound : Nat) : Bool :=
@@ -503,11 +505,15 @@ def denseForcedPreflightV (T : DenseDomainTable p) (fidx : DenseForcedIdx p)
       else none
     else none
 
+def densePairValueV (value : ZMod p) (keys : List VarId) : List (VarId × ZMod p) :=
+  keys.map (fun x => (x, value))
+
 def denseRunForcedScanV (bs : BusSemantics p) (facts : BusFacts p bs)
     (job : DenseForcedScanV p) : List (VarId × ZMod p) :=
   let survC := denseCompiledSurvV bs facts job.active job.interactions job.keys
-  match denseScanBoxV survC.run job.doms with
-  | none => job.keys.map (fun x => (x, (0 : ZMod p)))
+  let ops : DenseZModOps p := denseZModOps
+  match denseScanBoxV ops survC.run job.doms with
+  | none => densePairValueV ops.zero job.keys
   | some cands =>
     (job.keys.zip cands).filterMap (fun xc => xc.2.map (fun c => (xc.1, c)))
 

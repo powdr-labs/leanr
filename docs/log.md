@@ -4606,3 +4606,29 @@ effectiveness evaluation is delegated to the draft PR's CI workflows.
 
 **Worked locally: yes (fan-out reduced by orders of magnitude; representative runtime neutral;
 full-set result pending CI).**
+
+### 133. Runtime: hoist domainBatch field support out of generated loops
+
+The redundancy checker now receives one `DenseZModOps` record in its box fold and constructs that
+record only after the domain and box-size gates. Its fallback compares against the record's zero,
+so generated `denseConstraintRedundantV` no longer constructs and projects a `ZMod` ring dictionary
+at function entry for every constraint, including early rejects. The box scanner likewise receives
+its operations record from `denseRunForcedScanV`; the vacuous-result path passes `ops.zero` to a
+first-order key/value mapper instead of reconstructing generic zero on every recursive map step.
+
+Generated C confirms that the redundancy function begins directly with variable/domain lookup and
+does not build field support before either early exit. The new mapping loop takes zero as a value
+argument and contains no `ZMod_commRing` call or superclass projection. Constant range bounds were
+already stored in compiled bus plans by entry 131, and entry 130's gather loops already use borrowed
+array reads, tail jumps, and exclusive accumulators with no `lean_dec_ref_cold`, so those two proposed
+cleanups required no further source change.
+
+Three local runs of each `domainBatchProposals.md` representative used entry 132's merged
+measurements as the baseline; no baseline binary was rebuilt. Median `domainBatch` time changed
+from 1525 → 1504 ms on OpenVM keccak, 209 → 203 ms on `openvm-eth/apc_044`, 33 → 33 ms on
+`openvm-eth/apc_094`, 1590 → 1569 ms on `wasm-eth/apc_063`, and 29 → 28 ms on
+`wasm-eth/apc_065`. The five-case sum was 3386 → 3337 ms (−1.4%). Cleanup iteration counts and
+final sizes were unchanged. Full same-runner runtime and effectiveness evaluation is delegated to
+the draft PR's CI workflows.
+
+**Worked locally: yes (small consistent representative runtime win; full-set result pending CI).**

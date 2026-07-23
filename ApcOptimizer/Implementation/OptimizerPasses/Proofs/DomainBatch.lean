@@ -616,15 +616,17 @@ theorem foldlStop_denseScanStep_none (surv : List (ZMod p) → Bool) :
       · exact ih h pt' hpt'
 
 /-- **Value-only scan `none` case.** No point of the box survives the scanned predicate. -/
-theorem denseScanBoxV_none_unsat (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p))
-    (h : denseScanBoxV surv doms = none) : ∀ pt ∈ assignmentsV doms, surv pt = false := by
+theorem denseScanBoxV_none_unsat (ops : DenseZModOps p) (surv : List (ZMod p) → Bool)
+    (doms : List (FiniteDomain p)) (h : denseScanBoxV ops surv doms = none) :
+    ∀ pt ∈ assignmentsV doms, surv pt = false := by
   rw [denseScanBoxV, denseBoxFoldV_eq] at h
   exact foldlStop_denseScanStep_none surv (assignmentsV doms) h
 
 /-- **Value-only scan `some` case.** A `some c` in the returned mask is agreed on by every surviving
     enumerated point. -/
-theorem denseScanBoxV_forces (surv : List (ZMod p) → Bool) (doms : List (FiniteDomain p))
-    (mask : DenseCandsV p) (h : denseScanBoxV surv doms = some mask) (n : Nat) (c : ZMod p)
+theorem denseScanBoxV_forces (ops : DenseZModOps p) (surv : List (ZMod p) → Bool)
+    (doms : List (FiniteDomain p)) (mask : DenseCandsV p)
+    (h : denseScanBoxV ops surv doms = some mask) (n : Nat) (c : ZMod p)
     (hmask : mask[n]? = some (some c)) :
     ∀ pt ∈ assignmentsV doms, surv pt = true → pt[n]? = some c := by
   rw [denseScanBoxV, denseBoxFoldV_eq] at h
@@ -1632,13 +1634,13 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
         · exact fun bi hbi => (hbis bi hbi).1
         · intro e he i hi; rw [hkeys]; exact (hes e he).2 i hi
         · intro bi hbi i hi; rw [hkeys]; exact (hbis bi hbi).2 i hi
-      cases hscan : denseScanBoxV (denseCompiledSurvV bs facts
+      cases hscan : denseScanBoxV (denseZModOps : DenseZModOps p) (denseCompiledSurvV bs facts
           (denseGatherConstraintsV fidx xs).active
           (denseGatherBusesV fidx xs).interactions
           (fdoms.map Prod.fst)).run (fdoms.map Prod.snd) with
       | none =>
           intro f hf
-          have hcontra := denseScanBoxV_none_unsat _ _ hscan _ hinbox
+          have hcontra := denseScanBoxV_none_unsat _ _ _ hscan _ hinbox
           rw [hcontra] at hsurv; exact absurd hsurv (by simp)
       | some cands =>
           intro f hf
@@ -1646,7 +1648,7 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
               (fun xc => xc.2.map (fun c => (xc.1, c))) := by
             simpa only [denseRunForcedPlanV, denseRunForcedScanV, hscan] using hf
           obtain ⟨n, hn1, hn2⟩ := mem_zip_filterMap (fdoms.map Prod.fst) cands f hf'
-          have hforce := denseScanBoxV_forces _ _ cands hscan n f.2 hn2 _ hinbox hsurv
+          have hforce := denseScanBoxV_forces _ _ _ cands hscan n f.2 hn2 _ hinbox hsurv
           rw [List.getElem?_map, hn1] at hforce
           simp only [Option.map_some, Option.some.injEq] at hforce
           exact hforce

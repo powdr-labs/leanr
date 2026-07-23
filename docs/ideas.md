@@ -187,13 +187,15 @@ these need no new proof.
      still recompute per-constraint `eraseDups`, but only on gate-passing constraints (proofs
      unfold them — rework only if they show up in profiles).
 
-**R2. domainBatch setup and enumeration**  ·  **mostly done (entries 104, 128–131)**. Entry 129
+**R2. domainBatch setup and enumeration**  ·  **mostly done (entries 104, 128–133)**. Entry 129
 skips the Cartesian scan when every active filter is already discharged by
 constant evaluation or exact `BusFacts` and extracts constant domains directly. Entry 130 stores
 anchor buckets as arrays and summarizes inactive variable-free constraints once, so targets no
 longer materialize candidate lists or walk the same inactive tail. Entry 131 advances range domains
 in `ZMod` instead of recasting each element and compiles exact range/byte bus facts into scalar,
-allocation-free checks, with the opaque evaluator retained as fallback. Remaining:
+allocation-free checks, with the opaque evaluator retained as fallback. Entry 133 keeps field
+operation records behind the redundancy gates and threads the scan's record through its vacuous
+result construction. Remaining:
 `constraintRedundant` full-box scans (they pay once to save per-target work), the list-shaped point
 and candidate-mask scanner, and hot-variable bucket capping (not byte-identical — the gates read
 `esFull`).
