@@ -4578,3 +4578,31 @@ Full same-runner runtime and effectiveness evaluation is delegated to the draft 
 and proof-integrity/unused-theorem checks pass.
 
 **Worked locally: yes (representative domainBatch runtime win; full-set result pending CI).**
+
+### 132. Runtime: preflighted bounded domainBatch tasks
+
+`domainBatch` now separates per-target planning from enumeration. The sequential preflight applies
+all domain, box-size, informativeness, and work gates, resolves the no-effective-filter shortcut,
+and drops rejected targets before any task is created. Remaining plans are partitioned into at most
+64 contiguous chunks by estimated scan work; only chunks containing a real scan use `Task.spawn`,
+while immediate singleton results use `Task.pure`. Results are joined and inserted in original
+target order.
+
+The generated C completes the `filterMap` preflight before constructing chunks or tasks, has its
+only spawn in the chunk runner, and captures the compiled plan chunk rather than the domain table
+and target index. A `gdb` counter on OpenVM keccak observed 193 task spawns over all ten pass
+invocations, versus the old first invocation alone spawning 24,582 per-target tasks. The new proof
+shows that chunk flattening restores the exact plan sequence and that both spawned and pure tasks
+return the serial result, preserving `denseCollectForcedV_eq_serial` and the existing correctness
+argument.
+
+Local profiles used entry 131's merged measurements as the baseline; no `origin/main` binary was
+rebuilt. `domainBatch` changed from 1449 → 1525 ms on OpenVM keccak, 206 → 209 ms on
+`openvm-eth/apc_044`, 36 → 33 ms on `openvm-eth/apc_094`, 1616 → 1590 ms on
+`wasm-eth/apc_063`, and 29 → 29 ms on `wasm-eth/apc_065`. The five-case sum was 3336 → 3386 ms
+(+1.5%, within local timing noise), with unchanged cleanup iteration counts. The main result is the
+bounded task count and removal of rejected-target task allocation; full same-runner runtime and
+effectiveness evaluation is delegated to the draft PR's CI workflows.
+
+**Worked locally: yes (fan-out reduced by orders of magnitude; representative runtime neutral;
+full-set result pending CI).**

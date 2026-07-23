@@ -275,9 +275,9 @@ worklists where a substitution dirties only the items mentioning substituted var
 the levers there are effectiveness-side (replace enumeration classes with algebra, cf. the
 quadratic-roots effectiveness idea 1) or intra-enumeration.
 
-**R7. Intra-pass parallelism**  ·  partially **done (entry 114)**: domainBatch's per-target
-enumerations are `Task`-parallel with ordered joins (byte-identical σ; keccak domainBatch
-55 → 18 s on 4 cores — CI's 32 cores have more headroom). Still open: domainFold's and
+**R7. Intra-pass parallelism**  ·  partially **done (entries 114, 132)**: domainBatch's independent
+enumerations use ordered parallel joins, with entry 132 preflighting every target and replacing
+per-target tasks with at most 64 contiguous work-balanced chunks. Still open: domainFold's and
 reencode's per-target *gating* work is also independent between accepts, but their loops rewrite
 `cs` on accept, so parallelizing needs a speculative gather-then-replay structure — only worth it
 if their serial remainder grows relative to the rest. busPairCancel/busUnify are inherently

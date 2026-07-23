@@ -457,12 +457,30 @@ def denseGatherBusesV (fidx : DenseForcedIdx p) (xs : List VarId) : DenseBusGath
     ⟨0, false, true, []⟩
   denseGatherBusArrayV fidx.arrBis xs fidx.bisIdx.varless acc
 
-/-- All checked forced constants over the variable set `xs`. `keys` drives the compiler and the
-    final zip; the unkeyed `doms` drives the value-only scan. -/
-def denseForcedOverV (bs : BusSemantics p) (_facts : BusFacts p bs) (T : DenseDomainTable p)
-    (fidx : DenseForcedIdx p) (xs : List VarId) : List (VarId × ZMod p) :=
+structure DenseForcedScanV (p : ℕ) where
+  keys : List VarId
+  doms : List (FiniteDomain p)
+  active : List (DenseExpr p)
+  interactions : List (BusInteraction (DenseExpr p))
+  work : Nat
+
+inductive DenseForcedPlanV (p : ℕ) where
+  | done (forced : List (VarId × ZMod p))
+  | scan (job : DenseForcedScanV p)
+
+def DenseForcedPlanV.work : DenseForcedPlanV p → Nat
+  | .done _ => 0
+  | .scan job => job.work
+
+def DenseForcedPlanV.needsScan : DenseForcedPlanV p → Bool
+  | .done _ => false
+  | .scan _ => true
+
+/-- Apply every per-target gate before scheduling and retain only immediate results or real scans. -/
+def denseForcedPreflightV (T : DenseDomainTable p) (fidx : DenseForcedIdx p)
+    (xs : List VarId) : Option (DenseForcedPlanV p) :=
   match T.doms xs with
-  | none => []
+  | none => none
   | some fdoms =>
     let boxSize := (fdoms.map (fun yd => yd.2.size)).prod
     if boxSize ≤ maxEnumSize then
@@ -474,18 +492,36 @@ def denseForcedOverV (bs : BusSemantics p) (_facts : BusFacts p bs) (T : DenseDo
         let doms := fdoms.map Prod.snd
         if cs.active.isEmpty && bis.allDomainRedundant &&
             doms.all (fun d => d.size != 0) then
-          denseConstantDomainsV fdoms
+          some (.done (denseConstantDomainsV fdoms))
         else
-          let survC := denseCompiledSurvV bs _facts cs.active bis.interactions keys
-          match denseScanBoxV survC.run doms with
-          | none =>
-            -- no surviving point: the box has no solutions, so everything is vacuously forced
-            keys.map (fun x => (x, (0 : ZMod p)))
-          | some cands =>
-            -- recover the forced `(x, c)` pairs by zipping the mask with `keys` once, at the end
-            (keys.zip cands).filterMap (fun xc => xc.2.map (fun c => (xc.1, c)))
-      else []
-    else []
+          some (.scan {
+            keys,
+            doms,
+            active := cs.active,
+            interactions := bis.interactions,
+            work := boxSize * (cs.active.length + bis.count + keys.length) })
+      else none
+    else none
+
+def denseRunForcedScanV (bs : BusSemantics p) (facts : BusFacts p bs)
+    (job : DenseForcedScanV p) : List (VarId × ZMod p) :=
+  let survC := denseCompiledSurvV bs facts job.active job.interactions job.keys
+  match denseScanBoxV survC.run job.doms with
+  | none => job.keys.map (fun x => (x, (0 : ZMod p)))
+  | some cands =>
+    (job.keys.zip cands).filterMap (fun xc => xc.2.map (fun c => (xc.1, c)))
+
+def denseRunForcedPlanV (bs : BusSemantics p) (facts : BusFacts p bs) :
+    DenseForcedPlanV p → List (VarId × ZMod p)
+  | .done forced => forced
+  | .scan job => denseRunForcedScanV bs facts job
+
+/-- All checked forced constants over `xs`, factored through the scheduler's preflight plan. -/
+def denseForcedOverV (bs : BusSemantics p) (facts : BusFacts p bs) (T : DenseDomainTable p)
+    (fidx : DenseForcedIdx p) (xs : List VarId) : List (VarId × ZMod p) :=
+  match denseForcedPreflightV T fidx xs with
+  | none => []
+  | some plan => denseRunForcedPlanV bs facts plan
 
 /-! ## `collectForced`, value-only
 
@@ -509,21 +545,55 @@ private def ddRegB : VarRegistry × VarId :=
   ddRegA.1.register { name := "x", powdrId? := some 2 }
 #guard denseDedupTargetsV [[ddRegA.2], [ddRegB.2]] ∅ == [[ddRegA.2], [ddRegB.2]]
 
-/-- Collect every checked forced constant: dedup the targets, then fold each target's forced
-    constants into the solution map in target order. When `parallel`, the independent per-target
-    enumerations are spawned as `Task`s and joined in the same order, so the output is unchanged. -/
+def domainBatchParallelChunks : Nat := 64
+
+def denseTakeForcedChunkV (budget : Nat) :
+    List (DenseForcedPlanV p) → Nat → List (DenseForcedPlanV p) × List (DenseForcedPlanV p)
+  | [], _ => ([], [])
+  | plan :: rest, used =>
+    if used != 0 && budget < used + plan.work then ([], plan :: rest)
+    else
+      let tail := denseTakeForcedChunkV budget rest (used + plan.work)
+      (plan :: tail.1, tail.2)
+
+def denseForcedChunksV (budget : Nat) : Nat → List (DenseForcedPlanV p) →
+    List (List (DenseForcedPlanV p))
+  | _, [] => []
+  | 0, plans => [plans]
+  | splits + 1, plans =>
+    let chunk := denseTakeForcedChunkV budget plans 0
+    chunk.1 :: denseForcedChunksV budget splits chunk.2
+
+def denseRunForcedChunkV (bs : BusSemantics p) (facts : BusFacts p bs)
+    (chunk : List (DenseForcedPlanV p)) : List (List (VarId × ZMod p)) :=
+  chunk.map (denseRunForcedPlanV bs facts)
+
+def denseForcedChunkTaskV (bs : BusSemantics p) (facts : BusFacts p bs)
+    (chunk : List (DenseForcedPlanV p)) : Task (List (List (VarId × ZMod p))) :=
+  if chunk.any DenseForcedPlanV.needsScan then
+    Task.spawn fun _ => denseRunForcedChunkV bs facts chunk
+  else
+    Task.pure (denseRunForcedChunkV bs facts chunk)
+
+def denseInsertForcedV (dσ : DenseSolved p) (forced : List (VarId × ZMod p)) : DenseSolved p :=
+  dσ.insertAll (forced.map (fun f => (f.1, DenseExpr.const f.2)))
+
+/-- Preflight targets, then run real scans in at most `domainBatchParallelChunks` ordered tasks. -/
 def denseCollectForcedV (bs : BusSemantics p) (facts : BusFacts p bs)
     (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (parallel : Bool)
     (targets : List (List VarId)) (seen : Std.HashSet (List VarId)) (dσ0 : DenseSolved p) :
     DenseSolved p :=
   let uniq := denseDedupTargetsV targets seen
+  let plans := uniq.filterMap (denseForcedPreflightV T fidx)
   if parallel then
-    let tasks := uniq.map (fun xs => Task.spawn fun _ => denseForcedOverV bs facts T fidx xs)
-    tasks.foldl (init := dσ0) fun dσ t =>
-      dσ.insertAll ((t.get).map (fun f => (f.1, DenseExpr.const f.2)))
+    let totalWork := plans.foldl (fun total plan => total + plan.work) 0
+    let budget := max 1 ((totalWork + domainBatchParallelChunks - 1) /
+      domainBatchParallelChunks)
+    let chunks := denseForcedChunksV budget (domainBatchParallelChunks - 1) plans
+    let tasks := chunks.map (denseForcedChunkTaskV bs facts)
+    (tasks.flatMap Task.get).foldl denseInsertForcedV dσ0
   else
-    uniq.foldl (init := dσ0) fun dσ xs =>
-      dσ.insertAll ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))
+    plans.foldl (fun dσ plan => denseInsertForcedV dσ (denseRunForcedPlanV bs facts plan)) dσ0
 
 /-! ## The pass transform, value-only -/
 

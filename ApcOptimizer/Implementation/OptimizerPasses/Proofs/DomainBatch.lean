@@ -1611,7 +1611,7 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
       ((denseBIEval bi denv).multiplicity ≠ 0 → bs.violatesConstraint (denseBIEval bi denv) = false)
         ∧ ∀ i ∈ denseBIVars bi, i ∈ xs) :
     ∀ f ∈ denseForcedOverV bs facts T fidx xs, denv f.1 = f.2 := by
-  unfold denseForcedOverV
+  unfold denseForcedOverV denseForcedPreflightV
   cases hdoms : T.doms xs with
   | none => intro f hf; simp at hf
   | some fdoms =>
@@ -1642,7 +1642,10 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
           rw [hcontra] at hsurv; exact absurd hsurv (by simp)
       | some cands =>
           intro f hf
-          obtain ⟨n, hn1, hn2⟩ := mem_zip_filterMap (fdoms.map Prod.fst) cands f hf
+          have hf' : f ∈ ((fdoms.map Prod.fst).zip cands).filterMap
+              (fun xc => xc.2.map (fun c => (xc.1, c))) := by
+            simpa only [denseRunForcedPlanV, denseRunForcedScanV, hscan] using hf
+          obtain ⟨n, hn1, hn2⟩ := mem_zip_filterMap (fdoms.map Prod.fst) cands f hf'
           have hforce := denseScanBoxV_forces _ _ cands hscan n f.2 hn2 _ hinbox hsurv
           rw [List.getElem?_map, hn1] at hforce
           simp only [Option.map_some, Option.some.injEq] at hforce
@@ -1711,6 +1714,77 @@ theorem EntailedMap_foldl_insert (d : DenseConstraintSystem p) (bs : BusSemantic
     with `fn ()`). -/
 theorem get_spawn {α : Type} (f : Unit → α) : (Task.spawn f).get = f () := rfl
 
+theorem get_pure {α : Type} (x : α) : (Task.pure x).get = x := rfl
+
+theorem denseTakeForcedChunkV_append (budget used : Nat) (plans : List (DenseForcedPlanV p)) :
+    (denseTakeForcedChunkV budget plans used).1 ++
+      (denseTakeForcedChunkV budget plans used).2 = plans := by
+  induction plans generalizing used with
+  | nil => rfl
+  | cons plan rest ih =>
+    rw [denseTakeForcedChunkV]
+    by_cases hsplit : used != 0 && budget < used + plan.work
+    · rw [if_pos hsplit]
+      rfl
+    · rw [if_neg hsplit]
+      simpa only [List.cons_append] using
+        congrArg (plan :: ·) (ih (used + plan.work))
+
+theorem denseForcedChunksV_flatten (budget splits : Nat) (plans : List (DenseForcedPlanV p)) :
+    (denseForcedChunksV budget splits plans).flatten = plans := by
+  induction splits generalizing plans with
+  | zero => cases plans <;> simp [denseForcedChunksV]
+  | succ splits ih =>
+    cases plans with
+    | nil => simp [denseForcedChunksV]
+    | cons plan rest =>
+      simp only [denseForcedChunksV, List.flatten_cons, ih]
+      exact denseTakeForcedChunkV_append budget 0 (plan :: rest)
+
+theorem denseForcedChunkTaskV_get (bs : BusSemantics p) (facts : BusFacts p bs)
+    (chunk : List (DenseForcedPlanV p)) :
+    (denseForcedChunkTaskV bs facts chunk).get = denseRunForcedChunkV bs facts chunk := by
+  unfold denseForcedChunkTaskV
+  split
+  · exact get_spawn _
+  · exact get_pure _
+
+private theorem denseFlatMapMap_eq_mapFlatten {α β : Type} (f : α → β)
+    (chunks : List (List α)) :
+    chunks.flatMap (fun chunk => chunk.map f) = chunks.flatten.map f := by
+  induction chunks with
+  | nil => rfl
+  | cons chunk rest ih => simp only [List.flatMap_cons, List.flatten_cons, List.map_append, ih]
+
+theorem denseForcedChunkTasksV_eq (bs : BusSemantics p) (facts : BusFacts p bs)
+    (budget splits : Nat) (plans : List (DenseForcedPlanV p)) :
+    ((denseForcedChunksV budget splits plans).map (denseForcedChunkTaskV bs facts)).flatMap
+        Task.get = plans.map (denseRunForcedPlanV bs facts) := by
+  rw [List.flatMap_map]
+  simp only [denseForcedChunkTaskV_get, denseRunForcedChunkV]
+  rw [denseFlatMapMap_eq_mapFlatten, denseForcedChunksV_flatten]
+
+private theorem densePreflightFoldV (bs : BusSemantics p) (facts : BusFacts p bs)
+    (T : DenseDomainTable p) (fidx : DenseForcedIdx p) (targets : List (List VarId))
+    (dσ0 : DenseSolved p) :
+    (targets.filterMap (denseForcedPreflightV T fidx)).foldl
+        (fun dσ plan => denseInsertForcedV dσ (denseRunForcedPlanV bs facts plan)) dσ0 =
+      targets.foldl (fun dσ xs => dσ.insertAll
+        ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))) dσ0 := by
+  induction targets generalizing dσ0 with
+  | nil => rfl
+  | cons xs rest ih =>
+    cases hp : denseForcedPreflightV T fidx xs with
+    | none =>
+      simp only [List.filterMap_cons, hp, List.foldl_cons, denseForcedOverV,
+        List.map_nil, DenseSolved.insertAll]
+      exact ih dσ0
+    | some plan =>
+      simp only [List.filterMap_cons, hp, List.foldl_cons, denseForcedOverV,
+        denseInsertForcedV]
+      exact ih (dσ0.insertAll
+        ((denseRunForcedPlanV bs facts plan).map (fun f => (f.1, DenseExpr.const f.2))))
+
 /-- The parallel and serial branches of `denseCollectForcedV` compute the same solution map, so the
     entailment invariant can be proved over the single serial fold over `denseDedupTargetsV`. -/
 theorem denseCollectForcedV_eq_serial (bs : BusSemantics p) (facts : BusFacts p bs)
@@ -1722,8 +1796,9 @@ theorem denseCollectForcedV_eq_serial (bs : BusSemantics p) (facts : BusFacts p 
             ((denseForcedOverV bs facts T fidx xs).map (fun f => (f.1, DenseExpr.const f.2)))) dσ0 := by
   simp only [denseCollectForcedV]
   split_ifs with hp
-  · simp only [List.foldl_map, get_spawn]
-  · rfl
+  · rw [denseForcedChunkTasksV_eq, List.foldl_map]
+    exact densePreflightFoldV bs facts T fidx (denseDedupTargetsV targets seen) dσ0
+  · exact densePreflightFoldV bs facts T fidx (denseDedupTargetsV targets seen) dσ0
 
 /-- The `collectForced` fold preserves the entailment invariant (via
     `denseCollectForcedV_eq_serial`; `hforced` is stated for every variable set). -/
