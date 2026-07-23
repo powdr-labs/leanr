@@ -61,6 +61,36 @@ def denseInterpOfV (patts : List (List (VarId × ZMod p))) (vals : List (ZMod p)
     else (patts.zip vals).foldl (fun acc av =>
       .add acc (.mul (denseIndicatorExpr av.1) (.const av.2))) (.const 0)
 
+def denseInterpBasisOfV (basis : List (DenseExpr p)) (vals : List (ZMod p)) : DenseExpr p :=
+  match vals with
+  | [] => .const 0
+  | v₀ :: _ =>
+    if vals.all (fun v => decide (v = v₀)) then .const v₀
+    else (basis.zip vals).foldl (fun acc av =>
+      .add acc (.mul av.1 (.const av.2))) (.const 0)
+
+theorem denseInterpBasisFold_eq (patts : List (List (VarId × ZMod p)))
+    (vals : List (ZMod p)) (acc : DenseExpr p) :
+    ((patts.map denseIndicatorExpr).zip vals).foldl
+        (fun out av => .add out (.mul av.1 (.const av.2))) acc =
+      (patts.zip vals).foldl
+        (fun out av => .add out (.mul (denseIndicatorExpr av.1) (.const av.2))) acc := by
+  induction patts generalizing vals acc with
+  | nil => simp
+  | cons patt patts ih =>
+      cases vals with
+      | nil => simp
+      | cons val vals => simp [ih]
+
+theorem denseInterpBasisOfV_eq (patts : List (List (VarId × ZMod p)))
+    (vals : List (ZMod p)) :
+    denseInterpBasisOfV (patts.map denseIndicatorExpr) vals = denseInterpOfV patts vals := by
+  cases vals with
+  | nil => rfl
+  | cons val vals =>
+      simp only [denseInterpBasisOfV, denseInterpOfV]
+      split <;> simp_all [denseInterpBasisFold_eq]
+
 /-- Take `cand` if its variables lie in the bits and it agrees with the substitution values on
     every pattern; otherwise fall back to the plain substitution `sub`. -/
 def denseCandSelect (bits : List VarId) (patts : List (List (VarId × ZMod p)))
@@ -77,6 +107,28 @@ def denseGroupRewriteCand (bits : List VarId) (σfn : VarId → Option (DenseExp
   let vals := patts.map (fun aβ => sub.evalFast (denseEnvOfFast aβ))
   denseCandSelect bits patts sub ((denseInterpOfV patts vals).fold) vals
 
+def DenseExpr.addVarsInF (xs : List VarId) (a b : DenseExpr p) : Bool :=
+  (DenseExpr.add a b).varsInF xs
+
+def DenseExpr.addVarsInFFast (xs : List VarId) (a b : DenseExpr p) : Bool :=
+  a.varsInF xs && b.varsInF xs
+
+@[csimp] theorem DenseExpr.addVarsInF_eq_fast :
+    @DenseExpr.addVarsInF = @DenseExpr.addVarsInFFast := by
+  funext p xs a b
+  rfl
+
+def DenseExpr.mulVarsInF (xs : List VarId) (a b : DenseExpr p) : Bool :=
+  (DenseExpr.mul a b).varsInF xs
+
+def DenseExpr.mulVarsInFFast (xs : List VarId) (a b : DenseExpr p) : Bool :=
+  a.varsInF xs && b.varsInF xs
+
+@[csimp] theorem DenseExpr.mulVarsInF_eq_fast :
+    @DenseExpr.mulVarsInF = @DenseExpr.mulVarsInFFast := by
+  funext p xs a b
+  rfl
+
 /-- Replace maximal wholly-in-group subexpressions by their interpolations; substitute
     variable-wise everywhere else. -/
 def denseGroupRewrite (xs bits : List VarId) (σfn : VarId → Option (DenseExpr p))
@@ -85,11 +137,126 @@ def denseGroupRewrite (xs bits : List VarId) (σfn : VarId → Option (DenseExpr
   | .var y =>
       if denseContainsFast xs y then denseGroupRewriteCand bits σfn patts (.var y) else .var y
   | .add a b =>
-      if (DenseExpr.add a b).varsInF xs then denseGroupRewriteCand bits σfn patts (.add a b)
+      if a.addVarsInF xs b then denseGroupRewriteCand bits σfn patts (.add a b)
       else .add (denseGroupRewrite xs bits σfn patts a) (denseGroupRewrite xs bits σfn patts b)
   | .mul a b =>
-      if (DenseExpr.mul a b).varsInF xs then denseGroupRewriteCand bits σfn patts (.mul a b)
+      if a.mulVarsInF xs b then denseGroupRewriteCand bits σfn patts (.mul a b)
       else .mul (denseGroupRewrite xs bits σfn patts a) (denseGroupRewrite xs bits σfn patts b)
+
+structure DenseReencodeContext (p : ℕ) where
+  xs : List VarId
+  bits : List VarId
+  hm : Std.HashMap VarId (DenseExpr p)
+  patts : List (List (VarId × ZMod p))
+  basis : List (DenseExpr p)
+
+def DenseReencodeContext.mk' (xs bits : List VarId)
+    (hm : Std.HashMap VarId (DenseExpr p)) : DenseReencodeContext p :=
+  let patts := denseAssignments (denseBitBox bits)
+  ⟨xs, bits, hm, patts, patts.map denseIndicatorExpr⟩
+
+def denseGroupSubstExpr (ctx : DenseReencodeContext p) : DenseExpr p → DenseExpr p
+  | .const n => .const n
+  | .var y => if denseContainsFast ctx.xs y then ctx.hm[y]?.getD (.var y) else .var y
+  | .add a b => .add (denseGroupSubstExpr ctx a) (denseGroupSubstExpr ctx b)
+  | .mul a b => .mul (denseGroupSubstExpr ctx a) (denseGroupSubstExpr ctx b)
+
+theorem denseGroupSubstExpr_eq (ctx : DenseReencodeContext p) (e : DenseExpr p) :
+    denseGroupSubstExpr ctx e = e.substF (denseGroupSubst ctx.xs ctx.hm) := by
+  induction e with
+  | const => rfl
+  | var y =>
+      simp only [denseGroupSubstExpr, DenseExpr.substF, denseGroupSubst]
+      by_cases h : denseContainsFast ctx.xs y = true
+      · rw [if_pos h, if_pos h]
+        cases ctx.hm[y]? <;> simp
+      · rw [if_neg h, if_neg h]
+  | add a b iha ihb => simp [denseGroupSubstExpr, DenseExpr.substF, iha, ihb]
+  | mul a b iha ihb => simp [denseGroupSubstExpr, DenseExpr.substF, iha, ihb]
+
+def denseGroupRewriteCandCtx (ctx : DenseReencodeContext p) (e : DenseExpr p) : DenseExpr p :=
+  denseGroupRewriteCand ctx.bits (denseGroupSubst ctx.xs ctx.hm) ctx.patts e
+
+def denseGroupRewriteCandCtxFast (ctx : DenseReencodeContext p) (e : DenseExpr p) : DenseExpr p :=
+  let sub := denseGroupSubstExpr ctx e
+  let vals := ctx.patts.map (fun aβ => sub.evalFast (denseEnvOfFast aβ))
+  denseCandSelect ctx.bits ctx.patts sub ((denseInterpBasisOfV ctx.basis vals).fold) vals
+
+theorem denseGroupRewriteCandCtx_eq_fast :
+    ∀ ctx : DenseReencodeContext p, ctx.basis = ctx.patts.map denseIndicatorExpr →
+      denseGroupRewriteCandCtx ctx = denseGroupRewriteCandCtxFast ctx := by
+  intro ctx hbasis
+  funext e
+  simp only [denseGroupRewriteCandCtx, denseGroupRewriteCand, denseGroupRewriteCandCtxFast,
+    denseGroupSubstExpr_eq, hbasis, denseInterpBasisOfV_eq]
+
+theorem denseGroupRewriteCandCtx_eq_fast_of_basis
+    (ctx : DenseReencodeContext p) (hbasis : ctx.basis = ctx.patts.map denseIndicatorExpr)
+    (e : DenseExpr p) :
+    denseGroupRewriteCandCtx ctx e = denseGroupRewriteCandCtxFast ctx e := by
+  rw [denseGroupRewriteCandCtx_eq_fast ctx hbasis]
+
+def denseGroupRewriteCtx (ctx : DenseReencodeContext p) (e : DenseExpr p) : DenseExpr p :=
+  denseGroupRewrite ctx.xs ctx.bits (denseGroupSubst ctx.xs ctx.hm) ctx.patts e
+
+def denseGroupRewriteCtxFast (ctx : DenseReencodeContext p) : DenseExpr p → DenseExpr p
+  | .const n => .const n
+  | .var y =>
+      if denseContainsFast ctx.xs y then denseGroupRewriteCandCtxFast ctx (.var y) else .var y
+  | .add a b =>
+      if a.varsInF ctx.xs && b.varsInF ctx.xs then
+        denseGroupRewriteCandCtxFast ctx (.add a b)
+      else .add (denseGroupRewriteCtxFast ctx a) (denseGroupRewriteCtxFast ctx b)
+  | .mul a b =>
+      if a.varsInF ctx.xs && b.varsInF ctx.xs then
+        denseGroupRewriteCandCtxFast ctx (.mul a b)
+      else .mul (denseGroupRewriteCtxFast ctx a) (denseGroupRewriteCtxFast ctx b)
+
+theorem denseGroupRewriteCtx_eq_fast
+    (ctx : DenseReencodeContext p) (hbasis : ctx.basis = ctx.patts.map denseIndicatorExpr) :
+    denseGroupRewriteCtx ctx = denseGroupRewriteCtxFast ctx := by
+  funext e
+  induction e with
+  | const => rfl
+  | var y =>
+      simp only [denseGroupRewriteCtx, denseGroupRewrite, denseGroupRewriteCtxFast]
+      split
+      · change denseGroupRewriteCandCtx ctx (.var y) =
+          denseGroupRewriteCandCtxFast ctx (.var y)
+        exact denseGroupRewriteCandCtx_eq_fast_of_basis ctx hbasis _
+      · rfl
+  | add a b iha ihb =>
+      simp only [denseGroupRewriteCtx, denseGroupRewrite, denseGroupRewriteCtxFast,
+        DenseExpr.addVarsInF, DenseExpr.varsInF]
+      split
+      · change denseGroupRewriteCandCtx ctx (.add a b) =
+          denseGroupRewriteCandCtxFast ctx (.add a b)
+        exact denseGroupRewriteCandCtx_eq_fast_of_basis ctx hbasis _
+      · simp [denseGroupRewriteCtx] at iha ihb
+        simp [iha, ihb]
+  | mul a b iha ihb =>
+      simp only [denseGroupRewriteCtx, denseGroupRewrite, denseGroupRewriteCtxFast,
+        DenseExpr.mulVarsInF, DenseExpr.varsInF]
+      split
+      · change denseGroupRewriteCandCtx ctx (.mul a b) =
+          denseGroupRewriteCandCtxFast ctx (.mul a b)
+        exact denseGroupRewriteCandCtx_eq_fast_of_basis ctx hbasis _
+      · simp [denseGroupRewriteCtx] at iha ihb
+        simp [iha, ihb]
+
+theorem denseGroupRewriteCtx_mk_eq_fast (xs bits : List VarId)
+    (hm : Std.HashMap VarId (DenseExpr p)) :
+    denseGroupRewriteCtx (DenseReencodeContext.mk' xs bits hm) =
+      denseGroupRewriteCtxFast (DenseReencodeContext.mk' xs bits hm) :=
+  denseGroupRewriteCtx_eq_fast _ rfl
+
+theorem denseGroupRewrite_mk_eq_fast (xs bits : List VarId)
+    (hm : Std.HashMap VarId (DenseExpr p)) :
+    denseGroupRewrite xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits)) =
+      denseGroupRewriteCtxFast (DenseReencodeContext.mk' xs bits hm) := by
+  change denseGroupRewriteCtx (DenseReencodeContext.mk' xs bits hm) =
+    denseGroupRewriteCtxFast (DenseReencodeContext.mk' xs bits hm)
+  exact denseGroupRewriteCtx_mk_eq_fast xs bits hm
 
 /-! ## Bounded rewrite degree -/
 
@@ -126,6 +293,133 @@ theorem DenseExpr.degreeWithin_eq (limit : Nat) (e : DenseExpr p) :
       by_cases ha : a.degree ≤ limit <;> by_cases hb : b.degree ≤ limit <;>
         simp [ha, hb] <;> omega
 
+inductive DenseRewriteWithin (p : ℕ) where
+  | over
+  | same (degree : Nat)
+  | changed (expr : DenseExpr p) (degree : Nat)
+
+def DenseRewriteWithin.materialize (original : DenseExpr p) :
+    DenseRewriteWithin p → Option (DenseExpr p × Nat)
+  | .over => none
+  | .same degree => some (original, degree)
+  | .changed expr degree => some (expr, degree)
+
+theorem DenseRewriteWithin.materialize_if {c : Prop} [Decidable c]
+    (original out : DenseExpr p) (degree : Nat) (success : DenseRewriteWithin p)
+    (hsuccess : success.materialize original = some (out, degree)) :
+    (if c then success else .over).materialize original =
+      match if c then some degree else none with
+      | none => none
+      | some d => some (out, d) := by
+  by_cases h : c
+  · simp only [h, if_true]
+    exact hsuccess
+  · simp [h, DenseRewriteWithin.materialize]
+
+def denseRewriteCandWithin (ctx : DenseReencodeContext p) (limit : Nat)
+    (e : DenseExpr p) : DenseRewriteWithin p :=
+  let out := denseGroupRewriteCandCtxFast ctx e
+  match out.degreeWithin limit with
+  | none => .over
+  | some degree => .changed out degree
+
+def denseRewriteWithin (ctx : DenseReencodeContext p) (limit : Nat) :
+    DenseExpr p → DenseRewriteWithin p
+  | .const _ => .same 0
+  | .var y =>
+      if denseContainsFast ctx.xs y then denseRewriteCandWithin ctx limit (.var y)
+      else if 1 ≤ limit then .same 1 else .over
+  | .add a b =>
+      if a.varsInF ctx.xs && b.varsInF ctx.xs then
+        denseRewriteCandWithin ctx limit (.add a b)
+      else
+        match denseRewriteWithin ctx limit a with
+        | .over => .over
+        | .same da =>
+            match denseRewriteWithin ctx limit b with
+            | .over => .over
+            | .same db => .same (max da db)
+            | .changed eb db => .changed (.add a eb) (max da db)
+        | .changed ea da =>
+            match denseRewriteWithin ctx limit b with
+            | .over => .over
+            | .same db => .changed (.add ea b) (max da db)
+            | .changed eb db => .changed (.add ea eb) (max da db)
+  | .mul a b =>
+      if a.varsInF ctx.xs && b.varsInF ctx.xs then
+        denseRewriteCandWithin ctx limit (.mul a b)
+      else
+        match denseRewriteWithin ctx limit a with
+        | .over => .over
+        | .same da =>
+            match denseRewriteWithin ctx limit b with
+            | .over => .over
+            | .same db =>
+                if da + db ≤ limit then .same (da + db) else .over
+            | .changed eb db =>
+                if da + db ≤ limit then .changed (.mul a eb) (da + db) else .over
+        | .changed ea da =>
+            match denseRewriteWithin ctx limit b with
+            | .over => .over
+            | .same db =>
+                if da + db ≤ limit then .changed (.mul ea b) (da + db) else .over
+            | .changed eb db =>
+                if da + db ≤ limit then .changed (.mul ea eb) (da + db) else .over
+
+theorem denseRewriteCandWithin_eq (ctx : DenseReencodeContext p) (limit : Nat)
+    (e : DenseExpr p) :
+    (denseRewriteCandWithin ctx limit e).materialize e =
+      match (denseGroupRewriteCandCtxFast ctx e).degreeWithin limit with
+      | none => none
+      | some degree => some (denseGroupRewriteCandCtxFast ctx e, degree) := by
+  simp only [denseRewriteCandWithin]
+  split <;> rfl
+
+set_option maxRecDepth 10000 in
+theorem denseRewriteWithin_eq (ctx : DenseReencodeContext p) (limit : Nat)
+    (e : DenseExpr p) :
+    (denseRewriteWithin ctx limit e).materialize e =
+      match (denseGroupRewriteCtxFast ctx e).degreeWithin limit with
+      | none => none
+      | some degree => some (denseGroupRewriteCtxFast ctx e, degree) := by
+  induction e with
+  | const => rfl
+  | var y =>
+      simp only [denseRewriteWithin, denseGroupRewriteCtxFast]
+      split
+      · exact denseRewriteCandWithin_eq ctx limit (.var y)
+      · simp only [DenseExpr.degreeWithin]
+        split <;> rfl
+  | add a b iha ihb =>
+      simp only [denseRewriteWithin, denseGroupRewriteCtxFast]
+      split
+      · exact denseRewriteCandWithin_eq ctx limit (.add a b)
+      · simp only [DenseExpr.degreeWithin]
+        cases ha : denseRewriteWithin ctx limit a <;>
+          cases hb : denseRewriteWithin ctx limit b
+        all_goals
+          cases hda : (denseGroupRewriteCtxFast ctx a).degreeWithin limit <;>
+            cases hdb : (denseGroupRewriteCtxFast ctx b).degreeWithin limit <;>
+            simp [hda, hdb, ha, hb, DenseRewriteWithin.materialize] at iha ihb ⊢
+        all_goals
+          exact ⟨⟨iha.1, ihb.1⟩, congrArg₂ max iha.2 ihb.2⟩
+  | mul a b iha ihb =>
+      simp only [denseRewriteWithin, denseGroupRewriteCtxFast]
+      split
+      · exact denseRewriteCandWithin_eq ctx limit (.mul a b)
+      · simp only [DenseExpr.degreeWithin]
+        cases ha : denseRewriteWithin ctx limit a <;>
+          cases hb : denseRewriteWithin ctx limit b
+        all_goals
+          cases hda : (denseGroupRewriteCtxFast ctx a).degreeWithin limit <;>
+            cases hdb : (denseGroupRewriteCtxFast ctx b).degreeWithin limit <;>
+            simp [hda, hdb, ha, hb, DenseRewriteWithin.materialize] at iha ihb ⊢
+        all_goals
+          rw [← iha.1, iha.2, ← ihb.1, ihb.2]
+          clear iha ihb ha hb hda hdb
+          apply DenseRewriteWithin.materialize_if
+          rfl
+
 /-- Degree-only twin of `denseGroupRewrite`, without constructing mixed enclosing nodes. -/
 def denseGroupRewriteDegreeWithin (limit : Nat) (xs bits : List VarId)
     (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p))) :
@@ -136,7 +430,7 @@ def denseGroupRewriteDegreeWithin (limit : Nat) (xs bits : List VarId)
         (denseGroupRewriteCand bits σfn patts (.var y)).degreeWithin limit
       else (DenseExpr.var y : DenseExpr p).degreeWithin limit
   | .add a b =>
-      if (DenseExpr.add a b).varsInF xs then
+      if a.addVarsInF xs b then
         (denseGroupRewriteCand bits σfn patts (.add a b)).degreeWithin limit
       else
         match denseGroupRewriteDegreeWithin limit xs bits σfn patts a with
@@ -146,7 +440,7 @@ def denseGroupRewriteDegreeWithin (limit : Nat) (xs bits : List VarId)
             | none => none
             | some db => some (max da db)
   | .mul a b =>
-      if (DenseExpr.mul a b).varsInF xs then
+      if a.mulVarsInF xs b then
         (denseGroupRewriteCand bits σfn patts (.mul a b)).degreeWithin limit
       else
         match denseGroupRewriteDegreeWithin limit xs bits σfn patts a with
@@ -211,6 +505,202 @@ def denseReencodeOut (d : DenseConstraintSystem p) (xs bits : List VarId)
           bi.multiplicity,
       payload := bi.payload.map
         (denseGroupRewrite xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))) }) }
+
+def denseReencodeOutFast (d : DenseConstraintSystem p) (xs bits : List VarId)
+    (hm : Std.HashMap VarId (DenseExpr p)) : DenseConstraintSystem p :=
+  let ctx := DenseReencodeContext.mk' xs bits hm
+  { algebraicConstraints :=
+      ((d.algebraicConstraints.filter (fun c => !denseCoveredBy xs c)).map
+        (denseGroupRewriteCtxFast ctx))
+        ++ bits.map denseBoolConstraint,
+    busInteractions := d.busInteractions.map (fun bi => { bi with
+      multiplicity := denseGroupRewriteCtxFast ctx bi.multiplicity,
+      payload := bi.payload.map (denseGroupRewriteCtxFast ctx) }) }
+
+@[csimp] theorem denseReencodeOut_eq_fast :
+    @denseReencodeOut = @denseReencodeOutFast := by
+  funext p d xs bits hm
+  simp only [denseReencodeOut, denseReencodeOutFast]
+  rw [denseGroupRewrite_mk_eq_fast]
+
+def denseRewriteExprsWithin (ctx : DenseReencodeContext p) (limit : Nat) :
+    List (DenseExpr p) → Option (List (DenseExpr p))
+  | [] => some []
+  | e :: es =>
+      match (denseRewriteWithin ctx limit e).materialize e with
+      | none => none
+      | some (out, _) =>
+          match denseRewriteExprsWithin ctx limit es with
+          | none => none
+          | some outs => some (out :: outs)
+
+theorem denseRewriteExprsWithin_eq (ctx : DenseReencodeContext p) (limit : Nat)
+    (es : List (DenseExpr p)) :
+    denseRewriteExprsWithin ctx limit es =
+      let outs := es.map (denseGroupRewriteCtxFast ctx)
+      if outs.all (fun e => decide (e.degree ≤ limit)) then some outs else none := by
+  induction es with
+  | nil => rfl
+  | cons e es ih =>
+      simp only [denseRewriteExprsWithin, List.map_cons, List.all_cons]
+      rw [denseRewriteWithin_eq, DenseExpr.degreeWithin_eq]
+      by_cases h : (denseGroupRewriteCtxFast ctx e).degree ≤ limit
+      · by_cases hs :
+          (es.map (denseGroupRewriteCtxFast ctx)).all
+            (fun out => decide (out.degree ≤ limit)) = true
+        · have ihsome : denseRewriteExprsWithin ctx limit es =
+              some (es.map (denseGroupRewriteCtxFast ctx)) := by
+            rw [ih, if_pos hs]
+          simp [h, hs, ihsome]
+        · have ihnone : denseRewriteExprsWithin ctx limit es = none := by
+            rw [ih, if_neg hs]
+          simp [h, hs, ihnone]
+      · simp [h]
+
+def denseRewriteBIWithin (ctx : DenseReencodeContext p) (limit : Nat)
+    (bi : BusInteraction (DenseExpr p)) : Option (BusInteraction (DenseExpr p)) :=
+  match (denseRewriteWithin ctx limit bi.multiplicity).materialize bi.multiplicity with
+  | none => none
+  | some (mult, _) =>
+      match denseRewriteExprsWithin ctx limit bi.payload with
+      | none => none
+      | some payload => some { bi with multiplicity := mult, payload := payload }
+
+theorem denseRewriteBIWithin_eq (ctx : DenseReencodeContext p) (limit : Nat)
+    (bi : BusInteraction (DenseExpr p)) :
+    denseRewriteBIWithin ctx limit bi =
+      let out := { bi with
+        multiplicity := denseGroupRewriteCtxFast ctx bi.multiplicity,
+        payload := bi.payload.map (denseGroupRewriteCtxFast ctx) }
+      if decide (out.multiplicity.degree ≤ limit) &&
+          out.payload.all (fun e => decide (e.degree ≤ limit))
+      then some out else none := by
+  simp only [denseRewriteBIWithin]
+  rw [denseRewriteWithin_eq, denseRewriteExprsWithin_eq, DenseExpr.degreeWithin_eq]
+  by_cases hm : (denseGroupRewriteCtxFast ctx bi.multiplicity).degree ≤ limit
+  · by_cases hp :
+      (bi.payload.map (denseGroupRewriteCtxFast ctx)).all
+        (fun out => decide (out.degree ≤ limit)) = true
+    · simp [hm, hp]
+    · simp [hm, hp]
+  · simp [hm]
+
+def denseRewriteBIsWithin (ctx : DenseReencodeContext p) (limit : Nat) :
+    List (BusInteraction (DenseExpr p)) → Option (List (BusInteraction (DenseExpr p)))
+  | [] => some []
+  | bi :: bis =>
+      match denseRewriteBIWithin ctx limit bi with
+      | none => none
+      | some out =>
+          match denseRewriteBIsWithin ctx limit bis with
+          | none => none
+          | some outs => some (out :: outs)
+
+theorem denseRewriteBIsWithin_eq (ctx : DenseReencodeContext p) (limit : Nat)
+    (bis : List (BusInteraction (DenseExpr p))) :
+    denseRewriteBIsWithin ctx limit bis =
+      let outs := bis.map (fun bi => { bi with
+        multiplicity := denseGroupRewriteCtxFast ctx bi.multiplicity,
+        payload := bi.payload.map (denseGroupRewriteCtxFast ctx) })
+      if outs.all (fun bi =>
+          decide (bi.multiplicity.degree ≤ limit) &&
+            bi.payload.all (fun e => decide (e.degree ≤ limit)))
+      then some outs else none := by
+  induction bis with
+  | nil => rfl
+  | cons bi bis ih =>
+      simp only [denseRewriteBIsWithin, List.map_cons, List.all_cons]
+      rw [denseRewriteBIWithin_eq]
+      let out := { bi with
+        multiplicity := denseGroupRewriteCtxFast ctx bi.multiplicity,
+        payload := bi.payload.map (denseGroupRewriteCtxFast ctx) }
+      let outs := bis.map (fun bi => { bi with
+        multiplicity := denseGroupRewriteCtxFast ctx bi.multiplicity,
+        payload := bi.payload.map (denseGroupRewriteCtxFast ctx) })
+      by_cases hhead :
+          (decide (out.multiplicity.degree ≤ limit) &&
+            out.payload.all (fun e => decide (e.degree ≤ limit))) = true
+      · by_cases htail :
+          outs.all (fun bi =>
+            decide (bi.multiplicity.degree ≤ limit) &&
+              bi.payload.all (fun e => decide (e.degree ≤ limit))) = true
+        · have hheadSome : denseRewriteBIWithin ctx limit bi = some { bi with
+              multiplicity := denseGroupRewriteCtxFast ctx bi.multiplicity,
+              payload := bi.payload.map (denseGroupRewriteCtxFast ctx) } := by
+            rw [denseRewriteBIWithin_eq]
+            exact if_pos hhead
+          have htailSome : denseRewriteBIsWithin ctx limit bis = some
+              (bis.map (fun bi => { bi with
+                multiplicity := denseGroupRewriteCtxFast ctx bi.multiplicity,
+                payload := bi.payload.map (denseGroupRewriteCtxFast ctx) })) := by
+            rw [ih, if_pos htail]
+          dsimp [out, outs] at hhead htail ⊢
+          rw [if_pos hhead, htailSome,
+            if_pos (by rw [Bool.and_eq_true]; exact ⟨hhead, htail⟩)]
+        · have htailNone : denseRewriteBIsWithin ctx limit bis = none := by
+            rw [ih, if_neg htail]
+          have hheadSome : denseRewriteBIWithin ctx limit bi = some { bi with
+              multiplicity := denseGroupRewriteCtxFast ctx bi.multiplicity,
+              payload := bi.payload.map (denseGroupRewriteCtxFast ctx) } := by
+            rw [denseRewriteBIWithin_eq]
+            exact if_pos hhead
+          dsimp [out, outs] at hhead htail ⊢
+          rw [if_pos hhead, htailNone,
+            if_neg (by intro h; rw [Bool.and_eq_true] at h; exact htail h.2)]
+      · have hheadNone : denseRewriteBIWithin ctx limit bi = none := by
+          rw [denseRewriteBIWithin_eq]
+          exact if_neg hhead
+        dsimp [out, outs] at hhead ⊢
+        rw [if_neg hhead,
+          if_neg (by intro h; rw [Bool.and_eq_true] at h; exact hhead h.1)]
+
+def denseReencodeOutWithin (b : DegreeBound) (d : DenseConstraintSystem p)
+    (xs bits : List VarId) (hm : Std.HashMap VarId (DenseExpr p)) :
+    Option (DenseConstraintSystem p) :=
+  let out := denseReencodeOut d xs bits hm
+  if out.withinDegreeB b then some out else none
+
+def denseReencodeOutWithinFast (b : DegreeBound) (d : DenseConstraintSystem p)
+    (xs bits : List VarId) (hm : Std.HashMap VarId (DenseExpr p)) :
+    Option (DenseConstraintSystem p) :=
+  let ctx := DenseReencodeContext.mk' xs bits hm
+  let kept := d.algebraicConstraints.filter (fun c => !denseCoveredBy xs c)
+  match denseRewriteExprsWithin ctx b.identities kept with
+  | none => none
+  | some cs =>
+      if (bits.map (denseBoolConstraint (p := p))).all
+          (fun e => decide (e.degree ≤ b.identities)) then
+        match denseRewriteBIsWithin ctx b.busInteractions d.busInteractions with
+        | none => none
+        | some bis => some {
+            algebraicConstraints := cs ++ bits.map denseBoolConstraint,
+            busInteractions := bis }
+      else none
+
+@[csimp] theorem denseReencodeOutWithin_eq_fast :
+    @denseReencodeOutWithin = @denseReencodeOutWithinFast := by
+  funext p b d xs bits hm
+  simp only [denseReencodeOutWithin, denseReencodeOutWithinFast,
+    DenseConstraintSystem.withinDegreeB]
+  rw [denseReencodeOut_eq_fast, denseRewriteExprsWithin_eq, denseRewriteBIsWithin_eq]
+  simp only [denseReencodeOutFast, List.all_append]
+  by_cases hcs :
+      ((d.algebraicConstraints.filter (fun c => !denseCoveredBy xs c)).map
+        (denseGroupRewriteCtxFast (DenseReencodeContext.mk' xs bits hm))).all
+          (fun e => decide (e.degree ≤ b.identities)) = true <;>
+    by_cases hbool :
+      (bits.map (denseBoolConstraint (p := p))).all
+        (fun e => decide (e.degree ≤ b.identities)) = true <;>
+    by_cases hbis :
+      (d.busInteractions.map (fun bi => { bi with
+        multiplicity :=
+          denseGroupRewriteCtxFast (DenseReencodeContext.mk' xs bits hm) bi.multiplicity,
+        payload := bi.payload.map
+          (denseGroupRewriteCtxFast (DenseReencodeContext.mk' xs bits hm)) })).all
+          (fun bi =>
+            decide (bi.multiplicity.degree ≤ b.busInteractions) &&
+              bi.payload.all (fun e => decide (e.degree ≤ b.busInteractions))) = true <;>
+    simp [hcs, hbool, hbis]
 
 /-! ## The group's surviving values -/
 
@@ -515,8 +1005,8 @@ def denseReencodeStep (b : DegreeBound) (useIdx : Bool)
     if xs.all (fun x => decide (x ∉ bits)) then
     if bits.all (fun b => decide ((reg1.resolve b).powdrId? = none)) then
     if denseCheckReencode d xs bits hm then
-      let ro := denseReencodeOut d xs bits hm
-      if ro.withinDegreeB b then
+      match denseReencodeOutWithin b d xs bits hm with
+      | some ro =>
         -- `d` changed: rebuild the index and variable set for `ro`.
         let roCsVs :=
           ro.algebraicConstraints.map (fun c => HashedDedup.hashedDedup (hash ·) c.vars)
@@ -527,7 +1017,7 @@ def denseReencodeStep (b : DegreeBound) (useIdx : Bool)
          Std.HashSet.ofList ro.occ,
          (if pre.2.enabled then denseBuildReencodeUsePlan ro roCsVs
           else denseReencodeEmptyUsePlan))
-      else (reg1, d, [], csIdx, arrCs, varSet, pre.2)
+      | none => (reg1, d, [], csIdx, arrCs, varSet, pre.2)
     else (reg1, d, [], csIdx, arrCs, varSet, pre.2)
     else (reg1, d, [], csIdx, arrCs, varSet, pre.2)
     else (reg1, d, [], csIdx, arrCs, varSet, pre.2)
@@ -569,13 +1059,13 @@ def denseReencodeStepDirect (b : DegreeBound)
     if xs.all (fun x => decide (x ∉ bits)) then
     if bits.all (fun bb => decide ((reg1.resolve bb).powdrId? = none)) then
     if denseCheckReencode d xs bits hm then
-      let ro := denseReencodeOut d xs bits hm
-      if ro.withinDegreeB b then
+      match denseReencodeOutWithin b d xs bits hm with
+      | some ro =>
         (reg1, ro,
          bits.map (fun bb => (bb, denseBitCM (denseAssignments (denseBitBox bits)) xs hm bb)),
          ro.algebraicConstraints.toArray,
          Std.HashSet.ofList ro.occ)
-      else (reg1, d, [], arrCs, varSet)
+      | none => (reg1, d, [], arrCs, varSet)
     else (reg1, d, [], arrCs, varSet)
     else (reg1, d, [], arrCs, varSet)
     else (reg1, d, [], arrCs, varSet)
