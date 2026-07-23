@@ -187,13 +187,16 @@ these need no new proof.
      still recompute per-constraint `eraseDups`, but only on gate-passing constraints (proofs
      unfold them — rework only if they show up in profiles).
 
-**R2. domainBatch setup: stop re-gathering and re-dedup-ing**  ·  **mostly done (entries 104,
-128–130)**. Entry 129 skips the Cartesian scan when every active filter is already discharged by
+**R2. domainBatch setup and enumeration**  ·  **mostly done (entries 104, 128–131)**. Entry 129
+skips the Cartesian scan when every active filter is already discharged by
 constant evaluation or exact `BusFacts` and extracts constant domains directly. Entry 130 stores
 anchor buckets as arrays and summarizes inactive variable-free constraints once, so targets no
-longer materialize candidate lists or walk the same inactive tail. Remaining: `constraintRedundant`
-full-box scans (they pay once to save per-target work), and hot-variable bucket capping (not byte-
-identical — the gates read `esFull`).
+longer materialize candidate lists or walk the same inactive tail. Entry 131 advances range domains
+in `ZMod` instead of recasting each element and compiles exact range/byte bus facts into scalar,
+allocation-free checks, with the opaque evaluator retained as fallback. Remaining:
+`constraintRedundant` full-box scans (they pay once to save per-target work), the list-shaped point
+and candidate-mask scanner, and hot-variable bucket capping (not byte-identical — the gates read
+`esFull`).
 
 **R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
 index gate**  ·  mostly **done (entries 105/107/109)**:

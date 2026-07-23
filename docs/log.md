@@ -4549,3 +4549,32 @@ evaluation is delegated to the draft PR's CI workflows.
 checks pass.
 
 **Worked locally: yes (representative domainBatch runtime win; full-set result pending CI).**
+
+### 131. Runtime: field-incremented domain enumeration and compiled bus predicates
+
+The range-domain fold now constructs field zero once and advances with the hoisted field add-one
+operation instead of converting every enumerated `Nat` to `ZMod`. Its generalized equality proof
+shows the new loop still streams exactly `FiniteDomain.toList`. Generated `EnumEngine.c` has no
+`Nat.cast` call in the range loop; the remaining cast belongs to the eager `toList` specification.
+
+`domainBatch` now compiles interactions described by exact `BusFacts` into direct predicates for
+variable ranges (including a precomputed constant-width bound), tuple ranges, arbitrary-slot range
+checks, and byte XOR/pair/OR/AND relations; `neverViolates` checks compile to `true`. Each predicate
+evaluates multiplicity first and skips the remaining fields when it is zero. Recognized cases read
+only scalar compiled expressions and do not construct a payload list or evaluated
+`BusInteraction`; unsupported shapes retain the opaque fallback, which also became
+multiplicity-first. The proof establishes per-form equality to the source obligation, lifts it
+through the compiled interaction list, and preserves the existing all-or-nothing compiler fallback.
+
+Local profiles used the five representatives from `domainBatchProposals.md` and entry 130's merged
+measurements as the baseline; no `origin/main` binary was rebuilt. `domainBatch` changed from
+2376 → 1449 ms on OpenVM keccak (−39.0%), 202 → 206 ms on `openvm-eth/apc_044` (within noise),
+180 → 36 ms on `openvm-eth/apc_094` (−80.0%), 2094 → 1616 ms on
+`wasm-eth/apc_063` (−22.8%), and 133 → 29 ms on `wasm-eth/apc_065` (−78.2%). The five-case sum
+was 4985 → 3336 ms (**−33.1%**). Cleanup iteration counts were unchanged on all five cases.
+Full same-runner runtime and effectiveness evaluation is delegated to the draft PR's CI workflows.
+
+`lake build` is warning-free, the generated C was inspected for both intended inner-loop changes,
+and proof-integrity/unused-theorem checks pass.
+
+**Worked locally: yes (representative domainBatch runtime win; full-set result pending CI).**
