@@ -91,6 +91,110 @@ def denseGroupRewrite (xs bits : List VarId) (σfn : VarId → Option (DenseExpr
       if (DenseExpr.mul a b).varsInF xs then denseGroupRewriteCand bits σfn patts (.mul a b)
       else .mul (denseGroupRewrite xs bits σfn patts a) (denseGroupRewrite xs bits σfn patts b)
 
+/-! ## Bounded rewrite degree -/
+
+/-- The exact degree when it is at most `limit`, with early exit above the bound. -/
+def DenseExpr.degreeWithin (limit : Nat) : DenseExpr p → Option Nat
+  | .const _ => some 0
+  | .var _ => if 1 ≤ limit then some 1 else none
+  | .add a b =>
+      match a.degreeWithin limit with
+      | none => none
+      | some da =>
+          match b.degreeWithin limit with
+          | none => none
+          | some db => some (max da db)
+  | .mul a b =>
+      match a.degreeWithin limit with
+      | none => none
+      | some da =>
+          match b.degreeWithin limit with
+          | none => none
+          | some db => if da + db ≤ limit then some (da + db) else none
+
+theorem DenseExpr.degreeWithin_eq (limit : Nat) (e : DenseExpr p) :
+    e.degreeWithin limit = if e.degree ≤ limit then some e.degree else none := by
+  induction e with
+  | const => simp [DenseExpr.degreeWithin, DenseExpr.degree]
+  | var => simp [DenseExpr.degreeWithin, DenseExpr.degree]
+  | add a b iha ihb =>
+      simp only [DenseExpr.degreeWithin, DenseExpr.degree, iha, ihb]
+      by_cases ha : a.degree ≤ limit <;> by_cases hb : b.degree ≤ limit <;>
+        simp [ha, hb]
+  | mul a b iha ihb =>
+      simp only [DenseExpr.degreeWithin, DenseExpr.degree, iha, ihb]
+      by_cases ha : a.degree ≤ limit <;> by_cases hb : b.degree ≤ limit <;>
+        simp [ha, hb] <;> omega
+
+/-- Degree-only twin of `denseGroupRewrite`, without constructing mixed enclosing nodes. -/
+def denseGroupRewriteDegreeWithin (limit : Nat) (xs bits : List VarId)
+    (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p))) :
+    DenseExpr p → Option Nat
+  | .const n => (DenseExpr.const n : DenseExpr p).degreeWithin limit
+  | .var y =>
+      if denseContainsFast xs y then
+        (denseGroupRewriteCand bits σfn patts (.var y)).degreeWithin limit
+      else (DenseExpr.var y : DenseExpr p).degreeWithin limit
+  | .add a b =>
+      if (DenseExpr.add a b).varsInF xs then
+        (denseGroupRewriteCand bits σfn patts (.add a b)).degreeWithin limit
+      else
+        match denseGroupRewriteDegreeWithin limit xs bits σfn patts a with
+        | none => none
+        | some da =>
+            match denseGroupRewriteDegreeWithin limit xs bits σfn patts b with
+            | none => none
+            | some db => some (max da db)
+  | .mul a b =>
+      if (DenseExpr.mul a b).varsInF xs then
+        (denseGroupRewriteCand bits σfn patts (.mul a b)).degreeWithin limit
+      else
+        match denseGroupRewriteDegreeWithin limit xs bits σfn patts a with
+        | none => none
+        | some da =>
+            match denseGroupRewriteDegreeWithin limit xs bits σfn patts b with
+            | none => none
+            | some db => if da + db ≤ limit then some (da + db) else none
+
+theorem denseGroupRewriteDegreeWithin_eq (limit : Nat) (xs bits : List VarId)
+    (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p)))
+    (e : DenseExpr p) :
+    denseGroupRewriteDegreeWithin limit xs bits σfn patts e =
+      (denseGroupRewrite xs bits σfn patts e).degreeWithin limit := by
+  induction e with
+  | const => rfl
+  | var y =>
+      simp only [denseGroupRewriteDegreeWithin, denseGroupRewrite]
+      split <;> rfl
+  | add a b iha ihb =>
+      simp only [denseGroupRewriteDegreeWithin, denseGroupRewrite]
+      split
+      · rfl
+      · simp only [DenseExpr.degreeWithin, iha, ihb]
+  | mul a b iha ihb =>
+      simp only [denseGroupRewriteDegreeWithin, denseGroupRewrite]
+      split
+      · rfl
+      · simp only [DenseExpr.degreeWithin, iha, ihb]
+
+/-- Whether rewriting `e` exceeds `limit`; the final system degree guard remains authoritative. -/
+def denseGroupRewriteDegreeOver (limit : Nat) (xs bits : List VarId)
+    (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p)))
+    (e : DenseExpr p) : Bool :=
+  decide (limit < (denseGroupRewrite xs bits σfn patts e).degree)
+
+def denseGroupRewriteDegreeOverFast (limit : Nat) (xs bits : List VarId)
+    (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p)))
+    (e : DenseExpr p) : Bool :=
+  (denseGroupRewriteDegreeWithin limit xs bits σfn patts e).isNone
+
+@[csimp] theorem denseGroupRewriteDegreeOver_eq_fast :
+    @denseGroupRewriteDegreeOver = @denseGroupRewriteDegreeOverFast := by
+  funext p limit xs bits σfn patts e
+  simp only [denseGroupRewriteDegreeOver, denseGroupRewriteDegreeOverFast,
+    denseGroupRewriteDegreeWithin_eq, DenseExpr.degreeWithin_eq]
+  split <;> simp_all
+
 /-! ## The re-encoded system -/
 
 /-- The re-encoded system: substitute the group everywhere, drop the now-covered constraints, and
@@ -202,6 +306,111 @@ def DenseExpr.sharesVarIn (xs : List VarId) : DenseExpr p → Bool
 
 /-! ## The build/step/loop/pass layer -/
 
+/-- One expression root relevant to the re-encoding degree pre-gate. -/
+structure DenseReencodeUse (p : ℕ) where
+  expr : DenseExpr p
+  vars : List VarId
+  identity : Bool
+
+structure DenseReencodeUseBuild (p : ℕ) where
+  roots : Array (DenseReencodeUse p)
+  buckets : Std.HashMap VarId (List Nat)
+
+/-- Per-invocation root postings and reusable candidate-union scratch. -/
+structure DenseReencodeUsePlan (p : ℕ) where
+  roots : Array (DenseReencodeUse p)
+  buckets : Std.HashMap VarId (Array Nat)
+  marks : Array Nat
+  generation : Nat
+  enabled : Bool
+  directRejects : Nat
+
+def denseReencodeEmptyUsePlan : DenseReencodeUsePlan p :=
+  ⟨#[], ∅, #[], 0, false, 0⟩
+
+def denseReencodeAddUse (st : DenseReencodeUseBuild p) (e : DenseExpr p)
+    (vs : List VarId) (identity : Bool) : DenseReencodeUseBuild p :=
+  let i := st.roots.size
+  { roots := st.roots.push ⟨e, vs, identity⟩
+    buckets := vs.foldl (fun m v => m.insert v (i :: m.getD v [])) st.buckets }
+
+def denseReencodeFreezeUseBuckets (buckets : Std.HashMap VarId (List Nat)) :
+    Std.HashMap VarId (Array Nat) :=
+  buckets.fold (fun out v positions => out.insert v positions.toArray) ∅
+
+/-- Build all algebraic and bus-expression root postings. Constraint variables reuse `csVs`. -/
+def denseBuildReencodeUsePlan (d : DenseConstraintSystem p) (csVs : List (List VarId)) :
+    DenseReencodeUsePlan p :=
+  let stCs := (d.algebraicConstraints.zip csVs).foldl (init := ⟨#[], ∅⟩)
+    fun st cv => denseReencodeAddUse st cv.1 cv.2 true
+  let st := d.busInteractions.foldl (init := stCs) fun st bi =>
+    let mvs := HashedDedup.hashedDedup (hash ·) bi.multiplicity.vars
+    let st := denseReencodeAddUse st bi.multiplicity mvs false
+    bi.payload.foldl (init := st) fun st e =>
+      denseReencodeAddUse st e (HashedDedup.hashedDedup (hash ·) e.vars) false
+  { roots := st.roots
+    buckets := denseReencodeFreezeUseBuckets st.buckets
+    marks := Array.replicate st.roots.size 0
+    generation := 0
+    enabled := true
+    directRejects := 0 }
+
+/-- Check one use-plan posting after deduplicating it with the generation-stamped scratch array. -/
+def denseDegPreRejectUse (b : DegreeBound) (roots : Array (DenseReencodeUse p))
+    (xs bits : List VarId) (σ : VarId → Option (DenseExpr p))
+    (patts : List (List (VarId × ZMod p))) (generation pos : Nat)
+    (marks : Array Nat) : Bool × Array Nat :=
+  if marks[pos]? == some generation then (false, marks)
+  else
+    let marks := marks.setIfInBounds pos generation
+    match roots[pos]? with
+    | none => (false, marks)
+    | some use =>
+        if use.vars.any (denseContainsFast xs) &&
+            !(use.identity && denseVarsInListF xs use.vars) then
+          let limit := if use.identity then b.identities else b.busInteractions
+          (denseGroupRewriteDegreeOver limit xs bits σ patts use.expr, marks)
+        else (false, marks)
+
+def denseDegPreRejectPostingGo (b : DegreeBound) (roots : Array (DenseReencodeUse p))
+    (xs bits : List VarId) (σ : VarId → Option (DenseExpr p))
+    (patts : List (List (VarId × ZMod p))) (generation : Nat)
+    (positions : Array Nat) (marks : Array Nat) (i : Nat) :
+    Nat → Bool × Array Nat
+  | 0 => (false, marks)
+  | fuel + 1 =>
+      match positions[i]? with
+      | none => (false, marks)
+      | some pos =>
+          let checked := denseDegPreRejectUse b roots xs bits σ patts generation pos marks
+          if checked.1 then checked
+          else denseDegPreRejectPostingGo b roots xs bits σ patts generation positions checked.2
+            (i + 1) fuel
+
+def denseDegPreRejectBuckets (b : DegreeBound) (roots : Array (DenseReencodeUse p))
+    (buckets : Std.HashMap VarId (Array Nat))
+    (xs bits : List VarId) (σ : VarId → Option (DenseExpr p))
+    (patts : List (List (VarId × ZMod p))) (generation : Nat) :
+    List VarId → Array Nat → Bool × Array Nat
+  | [], marks => (false, marks)
+  | x :: rest, marks =>
+      let positions := buckets.getD x #[]
+      let checked := denseDegPreRejectPostingGo b roots xs bits σ patts generation positions marks
+        0 positions.size
+      if checked.1 then checked
+      else denseDegPreRejectBuckets b roots buckets xs bits σ patts generation rest checked.2
+
+/-- Indexed degree pre-gate. Each root is rechecked from its stored exact variable list. -/
+def denseDegPreRejectIndexed (b : DegreeBound) (plan : DenseReencodeUsePlan p)
+    (xs bits : List VarId) (hm : Std.HashMap VarId (DenseExpr p)) :
+    Bool × DenseReencodeUsePlan p :=
+  match plan with
+  | ⟨roots, buckets, marks, generation₀, enabled, directRejects⟩ =>
+      let generation := generation₀ + 1
+      let checked := denseDegPreRejectBuckets b roots buckets xs bits (denseGroupSubst xs hm)
+        (denseAssignments (denseBitBox bits)) generation xs marks
+      (checked.1, ⟨roots, buckets, checked.2, generation, enabled, directRejects⟩)
+
 /-- Build the inverted index (`VarId`-keyed twin of `CoveredIndex.buildPruned`), skipping items
     with more than `maxVars` distinct variables. -/
 def denseBuildPruned {α : Type} (varsOf : α → List VarId) (maxVars : Nat) (items : List α) :
@@ -272,22 +481,35 @@ def denseDegPreReject (b : DegreeBound) (d : DenseConstraintSystem p)
     gates in order, minting fresh bits and rewriting `d` only on full acceptance. -/
 def denseReencodeStep (b : DegreeBound) (useIdx : Bool)
     (reg : VarRegistry) (d : DenseConstraintSystem p) (csIdx : DenseCovIndex)
-    (arrCs : Array (DenseExpr p)) (varSet : Std.HashSet VarId) (xs : List VarId)
-    (freshBase : String) :
+    (arrCs : Array (DenseExpr p)) (varSet : Std.HashSet VarId)
+    (usePlan : DenseReencodeUsePlan p) (xs : List VarId) (freshBase : String) :
     VarRegistry × DenseConstraintSystem p × DenseDerivations p × DenseCovIndex ×
-      Array (DenseExpr p) × Std.HashSet VarId :=
+      Array (DenseExpr p) × Std.HashSet VarId × DenseReencodeUsePlan p :=
   if xs.all (fun x => reg.isInput x) then
   if (match reg.idOf? ({ name := freshBase ++ "_0" } : Variable) with
       | some i => varSet.contains i
       | none => false) then
     -- fresh-name collision: `denseCheckReencode` would reject after the full freshness scan anyway
-    (reg, d, [], csIdx, arrCs, varSet)
+    (reg, d, [], csIdx, arrCs, varSet, usePlan)
   else
   match denseBuildReencode reg useIdx csIdx arrCs xs freshBase with
-  | (reg1, none) => (reg1, d, [], csIdx, arrCs, varSet)
+  | (reg1, none) => (reg1, d, [], csIdx, arrCs, varSet, usePlan)
   | (reg1, some (bits, hm)) =>
+    let pre := if usePlan.enabled then denseDegPreRejectIndexed b usePlan xs bits hm
+      else (denseDegPreReject b d xs bits hm, usePlan)
     -- Degree pre-gate: reject early what the final `withinDegreeB` gate would reject anyway.
-    if denseDegPreReject b d xs bits hm then (reg1, d, [], csIdx, arrCs, varSet)
+    if pre.1 then
+      let nextPlan :=
+        if useIdx && !pre.2.enabled then
+          let rejects := pre.2.directRejects + 1
+          -- Accepted OpenVM rewrites are cheaper direct; amortize setup over repeated rejections.
+          if 64 ≤ rejects then
+            denseBuildReencodeUsePlan d
+              (d.algebraicConstraints.map
+                (fun c => HashedDedup.hashedDedup (hash ·) c.vars))
+          else { pre.2 with directRejects := rejects }
+        else pre.2
+      (reg1, d, [], csIdx, arrCs, varSet, nextPlan)
     else
     if xs.all (fun x => varSet.contains x) then
     if xs.all (fun x => decide (x ∉ bits)) then
@@ -296,30 +518,81 @@ def denseReencodeStep (b : DegreeBound) (useIdx : Bool)
       let ro := denseReencodeOut d xs bits hm
       if ro.withinDegreeB b then
         -- `d` changed: rebuild the index and variable set for `ro`.
+        let roCsVs :=
+          ro.algebraicConstraints.map (fun c => HashedDedup.hashedDedup (hash ·) c.vars)
         (reg1, ro,
          bits.map (fun b => (b, denseBitCM (denseAssignments (denseBitBox bits)) xs hm b)),
          (if useIdx then denseBuildPruned DenseExpr.vars 8 ro.algebraicConstraints else ⟨∅, []⟩),
          ro.algebraicConstraints.toArray,
-         Std.HashSet.ofList ro.occ)
-      else (reg1, d, [], csIdx, arrCs, varSet)
-    else (reg1, d, [], csIdx, arrCs, varSet)
-    else (reg1, d, [], csIdx, arrCs, varSet)
-    else (reg1, d, [], csIdx, arrCs, varSet)
-    else (reg1, d, [], csIdx, arrCs, varSet)
-  else (reg, d, [], csIdx, arrCs, varSet)
+         Std.HashSet.ofList ro.occ,
+         (if pre.2.enabled then denseBuildReencodeUsePlan ro roCsVs
+          else denseReencodeEmptyUsePlan))
+      else (reg1, d, [], csIdx, arrCs, varSet, pre.2)
+    else (reg1, d, [], csIdx, arrCs, varSet, pre.2)
+    else (reg1, d, [], csIdx, arrCs, varSet, pre.2)
+    else (reg1, d, [], csIdx, arrCs, varSet, pre.2)
+    else (reg1, d, [], csIdx, arrCs, varSet, pre.2)
+  else (reg, d, [], csIdx, arrCs, varSet, usePlan)
 
 /-- Process the candidate groups sequentially, threading the registry, index, and variable set. -/
 def denseReencodeLoop (b : DegreeBound) (useIdx : Bool) :
     List (List VarId) → Nat → VarRegistry → DenseConstraintSystem p → DenseCovIndex →
-      Array (DenseExpr p) → Std.HashSet VarId →
+      Array (DenseExpr p) → Std.HashSet VarId → DenseReencodeUsePlan p →
       VarRegistry × DenseConstraintSystem p × DenseDerivations p
-  | [], _, reg, d, _, _, _ => (reg, d, [])
-  | xs :: rest, idx, reg, d, csIdx, arrCs, varSet =>
-    let (reg1, d1, derivs1, csIdx1, arrCs1, varSet1) :=
-      denseReencodeStep b useIdx reg d csIdx arrCs varSet xs
+  | [], _, reg, d, _, _, _, _ => (reg, d, [])
+  | xs :: rest, idx, reg, d, csIdx, arrCs, varSet, usePlan =>
+    let (reg1, d1, derivs1, csIdx1, arrCs1, varSet1, usePlan1) :=
+      denseReencodeStep b useIdx reg d csIdx arrCs varSet usePlan xs
         (s!"rnc{d.algebraicConstraints.length}_{d.busInteractions.length}_{idx}")
     let (reg2, d2, derivs2) :=
-      denseReencodeLoop b useIdx rest (idx + 1) reg1 d1 csIdx1 arrCs1 varSet1
+      denseReencodeLoop b useIdx rest (idx + 1) reg1 d1 csIdx1 arrCs1 varSet1 usePlan1
+    (reg2, d2, derivs1 ++ derivs2)
+
+/-- The allocation-minimal direct step used below the covered-index threshold. -/
+def denseReencodeStepDirect (b : DegreeBound)
+    (reg : VarRegistry) (d : DenseConstraintSystem p) (arrCs : Array (DenseExpr p))
+    (varSet : Std.HashSet VarId) (xs : List VarId) (freshBase : String) :
+    VarRegistry × DenseConstraintSystem p × DenseDerivations p ×
+      Array (DenseExpr p) × Std.HashSet VarId :=
+  if xs.all (fun x => reg.isInput x) then
+  if (match reg.idOf? ({ name := freshBase ++ "_0" } : Variable) with
+      | some i => varSet.contains i
+      | none => false) then
+    (reg, d, [], arrCs, varSet)
+  else
+  match denseBuildReencode reg false ⟨∅, []⟩ arrCs xs freshBase with
+  | (reg1, none) => (reg1, d, [], arrCs, varSet)
+  | (reg1, some (bits, hm)) =>
+    if denseDegPreReject b d xs bits hm then (reg1, d, [], arrCs, varSet)
+    else
+    if xs.all (fun x => varSet.contains x) then
+    if xs.all (fun x => decide (x ∉ bits)) then
+    if bits.all (fun bb => decide ((reg1.resolve bb).powdrId? = none)) then
+    if denseCheckReencode d xs bits hm then
+      let ro := denseReencodeOut d xs bits hm
+      if ro.withinDegreeB b then
+        (reg1, ro,
+         bits.map (fun bb => (bb, denseBitCM (denseAssignments (denseBitBox bits)) xs hm bb)),
+         ro.algebraicConstraints.toArray,
+         Std.HashSet.ofList ro.occ)
+      else (reg1, d, [], arrCs, varSet)
+    else (reg1, d, [], arrCs, varSet)
+    else (reg1, d, [], arrCs, varSet)
+    else (reg1, d, [], arrCs, varSet)
+    else (reg1, d, [], arrCs, varSet)
+  else (reg, d, [], arrCs, varSet)
+
+def denseReencodeLoopDirect (b : DegreeBound) :
+    List (List VarId) → Nat → VarRegistry → DenseConstraintSystem p →
+      Array (DenseExpr p) → Std.HashSet VarId →
+      VarRegistry × DenseConstraintSystem p × DenseDerivations p
+  | [], _, reg, d, _, _ => (reg, d, [])
+  | xs :: rest, idx, reg, d, arrCs, varSet =>
+    let (reg1, d1, derivs1, arrCs1, varSet1) :=
+      denseReencodeStepDirect b reg d arrCs varSet xs
+        (s!"rnc{d.algebraicConstraints.length}_{d.busInteractions.length}_{idx}")
+    let (reg2, d2, derivs2) :=
+      denseReencodeLoopDirect b rest (idx + 1) reg1 d1 arrCs1 varSet1
     (reg2, d2, derivs1 ++ derivs2)
 
 /-- Witness re-encoding. When a group of variables `xs` is so constrained that only a few value
@@ -345,10 +618,15 @@ def denseReencodeF (pw : PrimeWitness p) (b : DegreeBound) (reg : VarRegistry)
         some (vs.mergeSort (fun a b => compare (reg.resolve a) (reg.resolve b) != .gt))
       else none))
     let useIdx := 8192 ≤ d.algebraicConstraints.length
-    denseReencodeLoop b useIdx targets 0 reg d
-      (if useIdx then denseBuildPruned DenseExpr.vars 8 d.algebraicConstraints else ⟨∅, []⟩)
-      d.algebraicConstraints.toArray
-      (Std.HashSet.ofList d.occ)
+    if useIdx then
+      denseReencodeLoop b true targets 0 reg d
+        (denseBuildPruned DenseExpr.vars 8 d.algebraicConstraints)
+        d.algebraicConstraints.toArray
+        (Std.HashSet.ofList d.occ)
+        denseReencodeEmptyUsePlan
+    else
+      denseReencodeLoopDirect b targets 0 reg d d.algebraicConstraints.toArray
+        (Std.HashSet.ofList d.occ)
   else (reg, d, [])
 
 end ApcOptimizer.Dense

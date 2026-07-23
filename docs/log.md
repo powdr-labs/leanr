@@ -4698,3 +4698,33 @@ unused-theorem checks pass.
 
 **Worked locally: yes (representative Gauss runtime win with unchanged final sizes; full-set
 result pending CI).**
+
+### 136. Runtime: indexed, degree-only reencode rejection
+
+Large rejection-heavy reencode invocations now build a compact root-use plan after 64 direct degree
+rejects demonstrate that its setup can be amortized. Algebraic roots reuse the pass's existing
+deduplicated variable lists; bus multiplicities and payload expressions are indexed once. Each
+target unions its variable postings through a generation-stamped array, rechecks the stored exact
+root variables, and visits only relevant roots. A retained rewrite rebuilds the plan.
+
+The degree pre-gate uses a proved `@[csimp]` bounded traversal equal to the original
+`degree (denseGroupRewrite ...)` test. It constructs the same checked interpolation only at maximal
+wholly-in-group nodes, combines degrees without building mixed enclosing expression trees, and
+stops when a subtree already exceeds the bound. The final `withinDegreeB` check remains
+authoritative. Small systems use a separate direct step and loop with the original runtime shape;
+an initial shared-state version regressed accepted `openvm-eth/apc_044`, which motivated the split.
+
+Pinned serial profiles changed reencode from 3285 → 2967 ms on OpenVM keccak (−9.7%) and
+1233 → 1205 ms on `openvm-eth/apc_044` (−2.3%). Whole-profile time changed
+41,680 → 40,405 ms (−3.1%) and 5839 → 5769 ms (−1.2%), respectively, with unchanged cleanup
+iterations. Serialized outputs are byte-identical on the five `reencodeProposals.md`
+representatives, so variable, bus-interaction, and algebraic-constraint effectiveness are
+unchanged.
+
+`lake build` is warning-free, generated C has no `sharesVarIn` or full `denseGroupRewrite` call in
+the indexed pre-gate and mutates the generation array without `lean_copy_expand_array`, and the
+proof-integrity and unused-theorem checks pass. Full same-runner runtime evaluation is delegated to
+the draft PR's CI workflow.
+
+**Worked locally: yes (keccak reencode and whole-profile runtime win; direct accepted rewrites
+preserved; full-set result pending CI).**
