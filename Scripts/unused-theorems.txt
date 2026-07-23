@@ -15,6 +15,12 @@ simpleOptimizer_maintainsCorrectness
 ApcOptimizer.OpenVM.openVmOptimizer_maintainsCorrectness
 ApcOptimizer.SP1.sp1Optimizer_maintainsCorrectness
 
+# Standalone optimality demonstration (ApcOptimizer/Examples/ToyOptimality.lean); not part of the
+# correctness proof, so it needs its own roots.
+ApcOptimizer.ToyOptimality.toyOptimum_optimal
+ApcOptimizer.ToyOptimality.toyOptimum_isCorrect
+ApcOptimizer.ToyOptimality.toy_generated_at_least_optimum
+
 # Theorems the closure cannot see are used, so they must be listed by hand. The only class so far:
 # a `rfl`-lemma named in a `simp only`/`rw` list whose rewrite step collapses to `Eq.refl`, leaving
 # no reference to the lemma in the resulting proof term.
