@@ -158,10 +158,15 @@ structure DensePdEntry (p : ℕ) where
 def densePdDropSet (bs : BusSemantics p) (singles : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) :
     Std.HashMap UInt64 (List (BusInteraction (DenseExpr p))) := Id.run do
-  let mut buckets : Std.HashMap UInt64 (List (DensePdEntry p)) := ∅
-  let mut firstMemo : Std.HashMap Nat Bool := ∅
+  -- Per coarse key (bus id, constant multiplicity, payload length), keep only the first-of-class
+  -- *representatives* seen so far; a later interaction certified equal to a representative is a
+  -- drop. Storing representatives only (never the dropped entries) keeps the per-interaction scan
+  -- proportional to the number of distinct classes in a bucket rather than its total size, and
+  -- makes the first-of-class memo unnecessary (a stored representative is first-of-class by
+  -- construction). Only a heuristic drop *proposal*: `densePointwiseDupDropF` re-verifies every
+  -- proposal against `densePdKeep`, so this carries no soundness obligation.
+  let mut reps : Std.HashMap UInt64 (List (DensePdEntry p)) := ∅
   let mut drops : Std.HashMap UInt64 (List (BusInteraction (DenseExpr p))) := ∅
-  let mut pos := 0
   for bi in bis do
     if !bs.isStateful bi.busId then
       match bi.multiplicity.constValue? with
@@ -170,35 +175,13 @@ def densePdDropSet (bs : BusSemantics p) (singles : List (DenseExpr p))
         let key := mixHash (hash bi.busId) (mixHash (hash m.val) (hash bi.payload.length))
         let sigs : Array (UInt64 × UInt64) :=
           (bi.payload.map (fun e => (e.bHash, e.pdVarBloom))).toArray
-        let entries := buckets.getD key []
-        -- an exact duplicate mirrors its first occurrence's decision (findIdx? semantics)
-        match entries.find? (fun e => decide (e.bi = bi)) with
-        | some e =>
-          if !e.kept then
-            let vk := densePdValHash bi
-            drops := drops.insert vk (bi :: (drops.getD vk []))
-        | none =>
-          -- drop iff an earlier kept, first-of-class, certified twin exists
-          let mut dropped := false
-          for e in entries do
-            if !dropped && e.kept && densePdSigsCompatible e.sigs sigs then
-              if denseMsgEqCert singles e.bi bi then
-                let isFirst ← do
-                  match firstMemo[e.pos]? with
-                  | some b => pure b
-                  | none =>
-                    let b := entries.all (fun e' =>
-                      !(e'.pos < e.pos && densePdSigsCompatible e'.sigs e.sigs
-                        && denseMsgEqCert singles e'.bi e.bi))
-                    firstMemo := firstMemo.insert e.pos b
-                    pure b
-                if isFirst then
-                  dropped := true
-          if dropped then
-            let vk := densePdValHash bi
-            drops := drops.insert vk (bi :: (drops.getD vk []))
-          buckets := buckets.insert key ({ pos, bi, sigs, kept := !dropped } :: entries)
-    pos := pos + 1
+        let entries := reps.getD key []
+        if entries.any (fun e => densePdSigsCompatible e.sigs sigs && denseMsgEqCert singles e.bi bi)
+        then
+          let vk := densePdValHash bi
+          drops := drops.insert vk (bi :: (drops.getD vk []))
+        else
+          reps := reps.insert key ({ pos := 0, bi, sigs, kept := true } :: entries)
   return drops
 
 /-- Drop `bi` iff its value bucket holds a certified dropped twin. The `{b // densePdKeep … = false}`
