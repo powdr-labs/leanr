@@ -297,6 +297,7 @@ structure DenseBusPlan (p : ℕ) where
   vars : List VarId
   usable : Bool
   informative : Bool
+  domainRedundant : Bool
 
 /-- The per-target index bundle (plain data; correctness via correspondence). -/
 structure DenseForcedIdx (p : ℕ) where

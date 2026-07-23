@@ -903,6 +903,48 @@ theorem DenseDomainTable.doms_getElem (T : DenseDomainTable p) :
         · exact hd
         · exact ih ds' hr kd hkd'
 
+theorem denseDomainConstantValueV?_mem_eq (d : FiniteDomain p) (c x : ZMod p)
+    (hc : denseDomainConstantValueV? d = some c) (hx : x ∈ d.toList) : x = c := by
+  cases d with
+  | explicit values =>
+      cases values with
+      | nil => simp [denseDomainConstantValueV?] at hc
+      | cons v vs =>
+          simp only [denseDomainConstantValueV?] at hc
+          split at hc
+          · rename_i hall
+            simp only [Option.some.injEq] at hc
+            subst c
+            simp only [FiniteDomain.toList, List.mem_cons] at hx
+            rcases hx with rfl | hx
+            · rfl
+            · have hdec := (List.all_eq_true.mp hall) x hx
+              exact of_decide_eq_true hdec
+          · simp at hc
+  | range size =>
+      simp only [denseDomainConstantValueV?] at hc
+      split at hc
+      · rename_i hsize
+        subst size
+        simp only [Option.some.injEq] at hc
+        subst c
+        simpa [FiniteDomain.toList] using hx
+      · simp at hc
+
+theorem denseConstantDomainsV_entails (fdoms : List (VarId × FiniteDomain p))
+    (denv : VarId → ZMod p)
+    (hmem : ∀ kd ∈ fdoms, denv kd.1 ∈ kd.2.toList) :
+    ∀ f ∈ denseConstantDomainsV fdoms, denv f.1 = f.2 := by
+  intro f hf
+  obtain ⟨xd, hxd, hmap⟩ := List.mem_filterMap.1 hf
+  cases hc : denseDomainConstantValueV? xd.2 with
+  | none => rw [hc] at hmap; simp at hmap
+  | some c =>
+      rw [hc] at hmap
+      simp only [Option.map_some, Option.some.injEq] at hmap
+      subst f
+      exact denseDomainConstantValueV?_mem_eq xd.2 c (denv xd.1) hc (hmem xd hxd)
+
 /-- A pair produced by `(keys.zip cands).filterMap (·.2.map …)` sits at a common index with a
     `some`-masked candidate. -/
 theorem mem_zip_filterMap {α : Type} (keys : List α) (cands : DenseCandsV p) (f : α × ZMod p)
@@ -1010,7 +1052,7 @@ theorem denseGatherBusesV_interactions_mem (fidx : DenseForcedIdx p) (xs : List 
       fidx.arrBis[i].interaction = bi ∧ fidx.arrBis[i].usable = true ∧
         denseVarsInListF xs fidx.arrBis[i].vars = true := by
   apply denseGatherBusesLoopV_interactions_mem fidx.arrBis xs (denseCandidates fidx.bisIdx xs)
-    ⟨0, false, []⟩ (by simp) bi
+    ⟨0, false, true, []⟩ (by simp) bi
   exact hbi
 
 theorem denseGatherBusesV_plan_mem (fidx : DenseForcedIdx p) (plans : List (DenseBusPlan p))
@@ -1049,7 +1091,8 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
     have hinbox : (fdoms.map Prod.fst).map denv ∈ assignmentsV (fdoms.map Prod.snd) := by
       rw [List.map_map]; exact mem_assignmentsV denv fdoms hmem
     dsimp only
-    split_ifs with hbox hwork
+    split_ifs with hbox hwork hfast
+    · exact denseConstantDomainsV_entails fdoms denv hmem
     · have hsurv : (denseCompiledSurvV bs
           (denseGatherConstraintsV fidx xs).active
           (denseGatherBusesV fidx xs).interactions
@@ -1215,7 +1258,7 @@ def dbConstraintPlans (bs : BusSemantics p) (facts : BusFacts p bs)
 
 def dbBusPlans (bs : BusSemantics p) (facts : BusFacts p bs)
     (d : DenseConstraintSystem p) : List (DenseBusPlan p) :=
-  denseBusPlansV bs facts d.busInteractions
+  denseBusPlansV bs facts (dbT bs facts d) d.busInteractions
 
 /-- The target list built by `denseDomainBatchσV`. -/
 def dbTargets (bs : BusSemantics p) (facts : BusFacts p bs)

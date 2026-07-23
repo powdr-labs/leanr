@@ -187,12 +187,11 @@ these need no new proof.
      still recompute per-constraint `eraseDups`, but only on gate-passing constraints (proofs
      unfold them — rework only if they show up in profiles).
 
-**R2. domainBatch setup: stop re-gathering and re-dedup-ing**  ·  **done (entry 104)** except:
-(c) `constraintRedundant` full-box scans (`:899`) remain (they pay once to save per-target work);
-hot-variable bucket capping remains open (not byte-identical — the gates read `esFull`). The
-enumeration core itself (SP1 apc_030's 19 s single-cycle spike) is untouched: that lever is
-**cross-cycle memoization of enumeration negatives** (needs pass-state threading — R6's
-substrate), not setup cost.
+**R2. domainBatch setup: stop re-gathering and re-dedup-ing**  ·  **mostly done (entries 104,
+128–129)**. Entry 129 skips the Cartesian scan when every active filter is already discharged by
+constant evaluation or exact `BusFacts` and extracts constant domains directly. Remaining:
+`constraintRedundant` full-box scans (they pay once to save per-target work), and hot-variable
+bucket capping (not byte-identical — the gates read `esFull`).
 
 **R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
 index gate**  ·  mostly **done (entries 105/107/109)**:
@@ -266,10 +265,10 @@ inputs (0.4 %), apc_030 257 of 1,641 (16 %, and its expensive cycle-5 enumeratio
 cross-cycle scheme must therefore be *finer* than whole-target skipping (powdr-style dirty
 worklists where a substitution dirties only the items mentioning substituted variables — the full
 #146 architecture), and its payoff must be re-estimated per pass first: at target granularity the
-~61 % invocation-level no-op measurement does **not** translate into reusable work. domainBatch's
-remaining cost is *productive first-time enumeration*; the levers there are effectiveness-side
-(replace enumeration classes with algebra, cf. the quadratic-roots effectiveness idea 1) or
-intra-enumeration (survivor-scan compilation is already tuned).
+~61 % invocation-level no-op measurement does **not** translate into reusable work. After entry
+129's no-effective-filter skip, domainBatch's remaining enumeration is relational first-time work;
+the levers there are effectiveness-side (replace enumeration classes with algebra, cf. the
+quadratic-roots effectiveness idea 1) or intra-enumeration.
 
 **R7. Intra-pass parallelism**  ·  partially **done (entry 114)**: domainBatch's per-target
 enumerations are `Task`-parallel with ordered joins (byte-identical σ; keccak domainBatch
