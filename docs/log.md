@@ -4606,3 +4606,36 @@ effectiveness evaluation is delegated to the draft PR's CI workflows.
 
 **Worked locally: yes (fan-out reduced by orders of magnitude; representative runtime neutral;
 full-set result pending CI).**
+
+### 133. Effectiveness: fold multi-limb is-zero clusters `L·vᵢ = 0` into one `L·(Σvᵢ) = 0`
+
+A branch-on-zero (`beq`/`bne`) keeps, per limb, a zero constraint sharing one affine factor: the
+un-collapsed cluster `(-1 + cmp)·a₀ = … = (-1 + cmp)·a₃ = 0` (BNE) or `cmp·a₀ = … = cmp·a₃ = 0`
+(BEQ), alongside the result's booleanity and an inverse witness. New coda pass `denseIsZeroFold`
+recognises a maximal group of `L·v = 0` constraints (written `L·(var v)`) that share one factor `L`,
+with each `v` a byte-bounded `VarId` not occurring in `L`, and replaces the whole group by the
+single `L·(a₀ + a₁ + … ) = 0`, dropping the members. The "`v` not in `L`" gate excludes the
+booleanity `cmp·(cmp − 1)` from the group (which otherwise would poison the shared factor), so it
+survives untouched. Byte bounds are read from `denseBuild` (`Proofs/DigitFold.lean`), so a limb
+range-checked on the bitwise-lookup bus (BNE cases) or as a memory-receive data limb (BEQ cases)
+both qualify; the pass is bus-neutral.
+
+Soundness (`Proofs/IsZeroFold.lean`, via `DensePassCorrect.ofEnvEq`, bus untouched): input ⟹ output
+by summing the members; output ⟹ input by factoring `L·(Σvᵢ) = 0` in the prime field as
+`L = 0 ∨ Σvᵢ = 0` — when `L = 0` every `L·vᵢ = 0`, and when `Σvᵢ = 0` a no-wraparound argument
+(bytes summing to `0` in `ZMod p` with the emitted guard `256·|vs| ≤ p` are individually `0`) forces
+each `vᵢ = 0`. The pass is prime-gated and skips any group failing the size guard.
+
+Placed last in the coda, after `monicScale`/`seqzCollapse` canonicalise the factor into the
+recognised `(affine)·var` form. On `openvm-eth`, seven cases fold their four-limb group into one
+(apc_001/007/017/047/054/073/098), each −3 algebraic constraints, variables and bus interactions
+unchanged. Full-set benchmark vs powdr moved the constraint aggregate 10.845× → 10.867× (geo mean
+12.026× → 12.139×) with variables (4.553× / 3.889×) and bus interactions (3.558× / 2.814×)
+byte-identical to the pre-pass baseline; the per-case variable win/loss/tie counts (31 / 6 / 63)
+are unchanged — zero variable regressions.
+
+`lake build` is warning-free and `Scripts/check-proof-integrity.sh` passes (correctness axioms
+`{propext, Classical.choice, Quot.sound}`, no unused theorems).
+
+**Worked locally: yes (7 openvm-eth cases −3 constraints each; variable/bus-neutral; full-set
+result pending CI).**

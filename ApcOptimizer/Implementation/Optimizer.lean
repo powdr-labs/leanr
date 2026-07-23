@@ -22,6 +22,7 @@ import ApcOptimizer.Implementation.OptimizerPasses.IntervalForce
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DegenRange
 import ApcOptimizer.Implementation.OptimizerPasses.IdentitySubst
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.IdentitySubst
+import ApcOptimizer.Implementation.OptimizerPasses.Proofs.IsZeroFold
 import ApcOptimizer.Implementation.OptimizerPasses.DenseUmbrella
 
 set_option autoImplicit false
@@ -110,7 +111,10 @@ def codaPasses (b : DegreeBound) : List (String × DenseVerifiedPassW p) :=
     ("monicScale", denseMonicScalePass),
     ("constFoldEnd", denseConstantFoldPass),
     -- After `monicScale`, where the seqz cluster reaches its recognised form.
-    ("seqzCollapse", denseSeqzCollapsePass) ]
+    ("seqzCollapse", denseSeqzCollapsePass),
+    -- After `seqzCollapse`, where the un-collapsed per-limb is-zero cluster `(-1 + cmp)·aᵢ = 0`
+    -- (or `cmp·aᵢ = 0`) is in its recognised `(affine)·var` form.
+    ("isZeroFold", denseIsZeroFoldPass pw) ]
 
 /-! ## The dense pipeline
 
