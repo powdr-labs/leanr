@@ -4698,3 +4698,28 @@ unused-theorem checks pass.
 
 **Worked locally: yes (representative Gauss runtime win with unchanged final sizes; full-set
 result pending CI).**
+
+### 136. Runtime: cache reencode finite-domain factor plans
+
+Reencode now factorizes an eligible product constraint into a compact root plan the first time an
+overlapping target asks for its domain. The plan records either a source-order root list for one
+variable, a variable-independent root list, or failure; later targets look it up by the
+constraint's stable position instead of repeating `denseLinearize`, normalization, and root checks.
+The cache is cleared after an accepted rewrite, and source positions are recovered from the
+existing pruned index without allocating a second constraint array. A reuse estimate enables this
+path only for indexed systems with at least 64 repeated target slots; smaller systems retain the
+original loop.
+
+The cache is proof-irrelevant planning data. Every candidate still passes the original
+`denseCheckReencode`, freshness, and degree checks, and the cached loop has its own
+`DensePassCorrect` composition proof. `lake build` is warning-free and proof integrity passes.
+Optimized exports matched `origin/main` byte-for-byte on the SHA-256 profile corpus,
+`openvm-eth/apc_044`, and SP1 RSP `apc_030`.
+
+On `sha256_apc_pre_opt_25pct.json.gz`, reencode fell from 20,596 to 19,306 ms (−6.3%) and the full
+profile from 96,610 to 94,307 ms (−2.4%). On `wasm-eth/apc_036`, reencode fell from 4,108 to
+3,965 ms (−3.5%) and the full profile from 45,359 to 44,121 ms (−2.7%). The smaller OpenVM and SP1
+representatives remained on the original path and were runtime-neutral within local timing noise.
+
+**Worked locally: yes (reencode and whole-profile wins on large overlapping workloads; unchanged
+outputs on representative OpenVM and SP1 inputs; full-set result pending CI).**
