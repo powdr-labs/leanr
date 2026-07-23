@@ -91,6 +91,15 @@ def denseGroupRewrite (xs bits : List VarId) (σfn : VarId → Option (DenseExpr
       if (DenseExpr.mul a b).varsInF xs then denseGroupRewriteCand bits σfn patts (.mul a b)
       else .mul (denseGroupRewrite xs bits σfn patts a) (denseGroupRewrite xs bits σfn patts b)
 
+/-- `denseGroupRewrite` with a cheap top-level skip: an expression that shares no variable with the
+    group and holds no variable-free node to fold is returned untouched (`denseGroupRewrite` would
+    rebuild it identically — see `denseGroupRewriteFast_eq` in `Proofs/Reencode.lean`). This turns
+    the whole-system rewrite in `denseReencodeOut` sparse: the thousands of constraints untouched by
+    a small group skip the rebuild/interpolation entirely. -/
+def denseGroupRewriteFast (xs bits : List VarId) (σfn : VarId → Option (DenseExpr p))
+    (patts : List (List (VarId × ZMod p))) (e : DenseExpr p) : DenseExpr p :=
+  if e.anyVarIn xs || e.hasConstFoldableNode then denseGroupRewrite xs bits σfn patts e else e
+
 /-! ## The re-encoded system -/
 
 /-- The re-encoded system: substitute the group everywhere, drop the now-covered constraints, and
@@ -99,14 +108,14 @@ def denseReencodeOut (d : DenseConstraintSystem p) (xs bits : List VarId)
     (hm : Std.HashMap VarId (DenseExpr p)) : DenseConstraintSystem p :=
   { algebraicConstraints :=
       ((d.algebraicConstraints.filter (fun c => !denseCoveredBy xs c)).map
-        (denseGroupRewrite xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))))
+        (denseGroupRewriteFast xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))))
         ++ bits.map denseBoolConstraint,
     busInteractions := d.busInteractions.map (fun bi => { bi with
       multiplicity :=
-        denseGroupRewrite xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))
+        denseGroupRewriteFast xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))
           bi.multiplicity,
       payload := bi.payload.map
-        (denseGroupRewrite xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))) }) }
+        (denseGroupRewriteFast xs bits (denseGroupSubst xs hm) (denseAssignments (denseBitBox bits))) }) }
 
 /-! ## The group's surviving values -/
 

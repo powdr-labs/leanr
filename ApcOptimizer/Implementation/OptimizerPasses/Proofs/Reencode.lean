@@ -405,6 +405,83 @@ theorem denseGroupRewrite_vars (xs bits : List VarId)
           · exact Or.inl (Or.inr h)
           · exact Or.inr h
 
+/-- An expression that has a variable but none in `xs` is not wholly inside `xs`. -/
+theorem denseVarsInF_false_of_hasVar (xs : List VarId) (e : DenseExpr p) :
+    e.hasVar = true → e.anyVarIn xs = false → e.varsInF xs = false := by
+  induction e with
+  | const n => intro h _; simp [DenseExpr.hasVar] at h
+  | var y => intro _ h; simpa [DenseExpr.varsInF, DenseExpr.anyVarIn] using h
+  | add a b iha ihb =>
+      intro hv hany
+      simp only [DenseExpr.hasVar, Bool.or_eq_true] at hv
+      simp only [DenseExpr.anyVarIn, Bool.or_eq_false_iff] at hany
+      simp only [DenseExpr.varsInF, Bool.and_eq_false_iff]
+      rcases hv with hv | hv
+      · exact Or.inl (iha hv hany.1)
+      · exact Or.inr (ihb hv hany.2)
+  | mul a b iha ihb =>
+      intro hv hany
+      simp only [DenseExpr.hasVar, Bool.or_eq_true] at hv
+      simp only [DenseExpr.anyVarIn, Bool.or_eq_false_iff] at hany
+      simp only [DenseExpr.varsInF, Bool.and_eq_false_iff]
+      rcases hv with hv | hv
+      · exact Or.inl (iha hv hany.1)
+      · exact Or.inr (ihb hv hany.2)
+
+/-- `denseGroupRewrite` returns an untouched expression verbatim: one sharing no variable with the
+    group and holding no variable-free node still to fold is rebuilt identically. -/
+theorem denseGroupRewrite_id_of_untouched (xs bits : List VarId)
+    (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p))) (e : DenseExpr p) :
+    e.anyVarIn xs = false → e.hasConstFoldableNode = false →
+    denseGroupRewrite xs bits σfn patts e = e := by
+  induction e with
+  | const n => intro _ _; rfl
+  | var y =>
+      intro hany _
+      simp only [denseGroupRewrite]
+      rw [if_neg (by simpa [DenseExpr.anyVarIn] using hany)]
+  | add a b iha ihb =>
+      intro hany hcfn
+      simp only [DenseExpr.anyVarIn, Bool.or_eq_false_iff] at hany
+      simp only [DenseExpr.hasConstFoldableNode, Bool.or_eq_false_iff] at hcfn
+      have hHasVar : (DenseExpr.add a b).hasVar = true := by simpa using hcfn.1.1
+      simp only [denseGroupRewrite]
+      rw [if_neg (by
+            have hvif : (DenseExpr.add a b).varsInF xs = false :=
+              denseVarsInF_false_of_hasVar xs (.add a b) hHasVar
+                (by simp [DenseExpr.anyVarIn, hany.1, hany.2])
+            simp [hvif]),
+          iha hany.1 hcfn.1.2, ihb hany.2 hcfn.2]
+  | mul a b iha ihb =>
+      intro hany hcfn
+      simp only [DenseExpr.anyVarIn, Bool.or_eq_false_iff] at hany
+      simp only [DenseExpr.hasConstFoldableNode, Bool.or_eq_false_iff] at hcfn
+      have hHasVar : (DenseExpr.mul a b).hasVar = true := by simpa using hcfn.1.1
+      simp only [denseGroupRewrite]
+      rw [if_neg (by
+            have hvif : (DenseExpr.mul a b).varsInF xs = false :=
+              denseVarsInF_false_of_hasVar xs (.mul a b) hHasVar
+                (by simp [DenseExpr.anyVarIn, hany.1, hany.2])
+            simp [hvif]),
+          iha hany.1 hcfn.1.2, ihb hany.2 hcfn.2]
+
+/-- `denseGroupRewriteFast` agrees with `denseGroupRewrite`: on the skipped branch the expression is
+    untouched (`denseGroupRewrite_id_of_untouched`), so the two produce identical output. -/
+theorem denseGroupRewriteFast_eq (xs bits : List VarId)
+    (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p))) (e : DenseExpr p) :
+    denseGroupRewriteFast xs bits σfn patts e = denseGroupRewrite xs bits σfn patts e := by
+  unfold denseGroupRewriteFast
+  by_cases h : (e.anyVarIn xs || e.hasConstFoldableNode) = true
+  · rw [if_pos h]
+  · rw [if_neg h]
+    simp only [Bool.not_eq_true, Bool.or_eq_false_iff] at h
+    exact (denseGroupRewrite_id_of_untouched xs bits σfn patts e h.1 h.2).symm
+
+theorem denseGroupRewriteFast_eq_fun (xs bits : List VarId)
+    (σfn : VarId → Option (DenseExpr p)) (patts : List (List (VarId × ZMod p))) :
+    denseGroupRewriteFast xs bits σfn patts = denseGroupRewrite xs bits σfn patts := by
+  funext e; exact denseGroupRewriteFast_eq xs bits σfn patts e
+
 /-- Every variable of the re-encoded system is either an original variable of `d` or a fresh bit —
     proven by construction from the certified substitution, so the pass needs no scan. -/
 theorem denseReencodeOut_vars_subset (d : DenseConstraintSystem p) (xs bits : List VarId)
@@ -416,7 +493,7 @@ theorem denseReencodeOut_vars_subset (d : DenseConstraintSystem p) (xs bits : Li
     (denseAssignments (denseBitBox bits)) hσ
   simp only [DenseConstraintSystem.occ, List.mem_append, List.mem_flatMap] at hv
   rcases hv with ⟨c, hc, hcv⟩ | ⟨bi, hbi, hbiv⟩
-  · simp only [denseReencodeOut, List.mem_append] at hc
+  · simp only [denseReencodeOut, denseGroupRewriteFast_eq_fun, List.mem_append] at hc
     rcases hc with hc | hc
     · rcases List.mem_map.1 hc with ⟨c0, hc0, rfl⟩
       rcases gr c0 v hcv with h | h
@@ -426,7 +503,7 @@ theorem denseReencodeOut_vars_subset (d : DenseConstraintSystem p) (xs bits : Li
       right
       have hvb : v = b := by simpa [denseBoolConstraint, DenseExpr.vars] using hcv
       exact hvb ▸ hb
-  · simp only [denseReencodeOut, List.mem_map] at hbi
+  · simp only [denseReencodeOut, denseGroupRewriteFast_eq_fun, List.mem_map] at hbi
     rcases hbi with ⟨bi0, hbi0, rfl⟩
     simp only [denseBIVars, List.mem_append, List.mem_flatMap] at hbiv
     rcases hbiv with hmv | ⟨e, he, hev⟩
@@ -1059,7 +1136,7 @@ theorem denseCheckReencode_sound [Fact p.Prime] (d : DenseConstraintSystem p) (b
     (fun c => !denseCoveredBy xs c)
     (bits.map denseBoolConstraint)
     (bits.map (fun b => (b, denseBitCM (denseAssignments (denseBitBox bits)) xs hm b)))
-    rfl hfwd_D hbwd hVars
+    (by simp only [denseReencodeOut, denseGroupRewriteFast_eq_fun]) hfwd_D hbwd hVars
 
 
 /-! ## Step / loop correctness, pass assembly
