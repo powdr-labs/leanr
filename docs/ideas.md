@@ -199,12 +199,17 @@ and candidate-mask scanner, and hot-variable bucket capping (not byte-identical 
 `esFull`).
 
 **R3. domainFold/reencode: fuse the duplicate whole-system scans; retire the 8192 raw-count
-index gate**  ·  mostly **done (entries 105/107/109/136)**:
+index gate**  ·  mostly **done (entries 105/107/109/136/137)**:
    - ~~reencode degree-rejection whole-system scans~~ **done (entry 136)**: after 64 direct
      degree rejects on an indexed invocation, a compact expression-root posting plan replaces
      `sharesVarIn` scans with generation-stamped posting unions. A proved bounded-degree runtime
      twin avoids constructing mixed enclosing rewrite trees. The direct path remains separate so
      accepted OpenVM rewrites do not pay the planning-state overhead.
+   - ~~reencode accepted-output allocation and immediate degree rescan~~ **done (entry 137)**:
+     constructor-free child membership tests, a first-order substitution context, cached indicator
+     bases, and a proved sparse `.same`/`.changed` bounded traversal now build and degree-check the
+     output together. Unchanged roots retain their original expression, and accepted output loops
+     allocate no `denseGroupSubst` closure.
    - reencode: the pruned index (`CoveredIndex.buildPruned`, entry 105 — items with more than 8
      distinct variables can never be covered by a ≤8-variable target, so pruning keeps covered
      sets identical) stays, but **behind the 8192 gate again** (entry 107): CI measured

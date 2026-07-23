@@ -4728,3 +4728,31 @@ the draft PR's CI workflow.
 
 **Worked locally: yes (keccak reencode and whole-profile runtime win; direct accepted rewrites
 preserved; full-set result pending CI).**
+### 137. Runtime: allocation-free reencode output
+
+Accepted reencodings now use a proved first-order context carrying the target group, substitution
+map, bit patterns, and one cached indicator basis. Direct substitution removes the per-root
+`denseGroupSubst` closure, and add/mul membership tests inspect their children without first
+allocating a temporary expression node.
+
+The output builder uses a sparse bounded rewrite result: `.same degree` retains the original
+expression, while `.changed expr degree` materializes only paths containing a rewritten child.
+Its proof equates both the materialized expression and bounded degree with the original semantic
+rewrite. First-order constraint, multiplicity, and payload loops use those results to construct and
+degree-check the candidate system together, replacing the immediate post-build `withinDegreeB`
+walk. The semantic `denseReencodeOut` and checked wrapper remain the proof specifications, with
+proved `@[csimp]` runtime equalities.
+
+Pinned serial stacked profiles changed best reencode time from 1197 → 1182 ms on
+`openvm-eth/apc_044` (−1.3%) and 1205 → 1175 ms on `openvm-eth/apc_067` (−2.5%). Whole-profile
+time was within noise on apc_044 (5739 → 5769 ms) and 5758 → 5745 ms on apc_067. Serialized
+outputs are byte-identical to PR #194 on OpenVM apc_044, apc_067, apc_049, wasm apc_036, and
+OpenVM keccak.
+
+`lake build` is warning-free, generated C uses constructor-free membership tests and contains no
+`denseGroupSubst` closure in the accepted-output loops, and proof-integrity and unused-theorem
+checks pass. Full same-runner runtime evaluation is delegated to the stacked draft PR's CI
+workflow.
+
+**Worked locally: yes (accepted-rewrite reencode runtime win with byte-identical output; full-set
+result pending CI).**

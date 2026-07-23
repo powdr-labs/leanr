@@ -279,7 +279,7 @@ theorem denseGroupRewrite_agree (xs bits : List VarId)
         show (DenseExpr.var y).eval denv₀ = (DenseExpr.var y).eval denv₁
         exact this
   | add a b iha ihb =>
-      simp only [denseGroupRewrite]
+      simp only [denseGroupRewrite, DenseExpr.addVarsInF]
       have hfa : ∀ c ∈ bits, a.mentions c = false := by
         intro c hc
         have := hfresh c hc
@@ -299,7 +299,7 @@ theorem denseGroupRewrite_agree (xs bits : List VarId)
           + ((denseGroupRewrite xs bits σfn patts b).eval denv₀) = a.eval denv₁ + b.eval denv₁
         rw [iha hfa, ihb hfb]
   | mul a b iha ihb =>
-      simp only [denseGroupRewrite]
+      simp only [denseGroupRewrite, DenseExpr.mulVarsInF]
       have hfa : ∀ c ∈ bits, a.mentions c = false := by
         intro c hc
         have := hfresh c hc
@@ -377,7 +377,7 @@ theorem denseGroupRewrite_vars (xs bits : List VarId)
           (show (DenseExpr.var y).varsInF xs = true from hyx) v hv)
       · rw [if_neg hyx]; intro v hv; exact Or.inl hv
   | add a b iha ihb =>
-      simp only [denseGroupRewrite]
+      simp only [denseGroupRewrite, DenseExpr.addVarsInF]
       by_cases hin : (DenseExpr.add a b).varsInF xs = true
       · rw [if_pos hin]; intro v hv
         exact Or.inr (denseGroupRewriteCand_vars xs bits σfn patts hσ (.add a b) hin v hv)
@@ -391,7 +391,7 @@ theorem denseGroupRewrite_vars (xs bits : List VarId)
           · exact Or.inl (Or.inr h)
           · exact Or.inr h
   | mul a b iha ihb =>
-      simp only [denseGroupRewrite]
+      simp only [denseGroupRewrite, DenseExpr.mulVarsInF]
       by_cases hin : (DenseExpr.mul a b).varsInF xs = true
       · rw [if_pos hin]; intro v hv
         exact Or.inr (denseGroupRewriteCand_vars xs bits σfn patts hσ (.mul a b) hin v hv)
@@ -1271,6 +1271,11 @@ theorem denseReencodeStep_correct [Fact p.Prime] (b : DegreeBound) (useIdx : Boo
   fun_cases denseReencodeStep b useIdx reg d csIdx arrCs varSet usePlan xs freshBase
   case case4 =>
     rename_i hgate hcoll reg1 bits hm hbeq pre hdpr hA hB hC hD ro hwd roCsVs
+    have hro : ro = denseReencodeOut d xs bits hm := by
+      unfold denseReencodeOutWithin at hwd
+      dsimp only at hwd
+      split at hwd <;> simp_all
+    subst ro
     have hbext : reg.Extends reg1 := denseBuildReencode_ext_of_eq hbeq
     have hbii : ∀ i, reg1.isInput i = reg.isInput i := fun i =>
       denseBuildReencode_isInput_of_eq hbeq i
@@ -1320,6 +1325,11 @@ theorem denseReencodeStepDirect_correct [Fact p.Prime] (b : DegreeBound)
   fun_cases denseReencodeStepDirect b reg d arrCs varSet xs freshBase
   case case4 =>
     rename_i hgate hcoll reg1 bits hm hbeq hdpr hA hB hC hD ro hwd
+    have hro : ro = denseReencodeOut d xs bits hm := by
+      unfold denseReencodeOutWithin at hwd
+      dsimp only at hwd
+      split at hwd <;> simp_all
+    subst ro
     have hbext : reg.Extends reg1 := denseBuildReencode_ext_of_eq hbeq
     have hbii : ∀ i, reg1.isInput i = reg.isInput i := fun i =>
       denseBuildReencode_isInput_of_eq hbeq i
