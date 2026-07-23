@@ -211,14 +211,6 @@ def denseByteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p))
     denseAffineJustified bound (fun x => denseFindVarBound bs facts (wits x) x) e ||
     denseBasisJustified bound (fun x => denseFindVarBound bs facts (wits x) x) facts fwits e
 
-/-- The plain full-scan form (used by the coda's `RedundantByteDrop`): naive per-query filters, with
-    the basis arm disabled (`fwits = []`). -/
-def denseByteJustified (bound : Nat) (deep : Bool) (all : List (DenseExpr p))
-    (bs : BusSemantics p) (facts : BusFacts p bs)
-    (rest : List (BusInteraction (DenseExpr p))) (e : DenseExpr p) : Bool :=
-  denseByteJustifiedW bound deep (all.filter DenseExpr.isSingleVar)
-    (fun x => all.filter (DenseExpr.mentions x)) bs facts (fun _ => rest) (fun _ => []) e
-
 /-- Are all of `R`'s payload entries at the declared byte slots justified (through the witness
     lookup `wits` and precomputed `domCs`/`candsOf`, see `denseByteJustifiedW`)? -/
 def denseRecvSlotsJustified (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p))
