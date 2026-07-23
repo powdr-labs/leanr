@@ -4667,3 +4667,34 @@ updated PR's CI.
 
 **Worked locally: yes (RSP baseline behavior restored while the large-case runtime win remains;
 full-set result pending CI).**
+
+### 135. Runtime: canonical sparse affine Gauss rows
+
+Gauss now keeps affine source reductions, stored solutions, touched-row rewrites, and Markowitz
+row caches as normalized `DenseLinExpr` values. Sparse substitutions accumulate constants and
+terms directly, merge like terms once, and retain `DenseExpr` only around genuinely nonlinear
+subtrees. The final solution map is converted to expressions once, immediately before the
+existing system-wide substitution boundary. The old expression-based source loop and selector
+proof chain were removed.
+
+The correctness proof works directly over sparse-row evaluation and support. It proves the
+source-order and Markowitz loop invariants independently of scheduler metadata, then proves that
+one-time `HashMap` materialization preserves every lookup's evaluation and occurrence closure.
+The generated C contains only the sparse source loop and materializes `DenseLinExpr.toExpr` at the
+schedule boundary; the old `denseGaussLoop` and `denseFastBest` functions are absent.
+
+One serial local profile was run on each representative from `ranked_passes.md`, using the stacked
+PR #190 revision `32e63a7` as baseline. Gauss changed from 4818 → 4064 ms on
+`wasm-eth/apc_063` (−15.6%), 3893 → 3304 ms on `wasm-eth/apc_037` (−15.1%),
+1182 → 669 ms on `openvm-eth/apc_037` (−43.4%), 3010 → 2718 ms on OpenVM keccak
+(−9.7%), and 444 → 421 ms on `openvm-eth/apc_005` (−5.2%). The five-case Gauss sum
+fell 13,347 → 11,176 ms (−16.3%); whole-profile time fell 141,453 → 138,181 ms
+(−2.3%). Cleanup iteration counts and final variable, bus-interaction, and constraint counts
+matched the baseline on all five cases. Full same-runner runtime and corpus effectiveness
+evaluation is delegated to the stacked draft PR's CI workflows.
+
+`lake build` is warning-free, generated C was inspected, and the proof-integrity and
+unused-theorem checks pass.
+
+**Worked locally: yes (representative Gauss runtime win with unchanged final sizes; full-set
+result pending CI).**

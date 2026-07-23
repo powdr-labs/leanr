@@ -1,7 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Affine
 import ApcOptimizer.Implementation.OptimizerPasses.SubstMap
 import ApcOptimizer.Implementation.OptimizerPasses.Normalize
-import ApcOptimizer.Implementation.OptimizerPasses.ListSplit
 import Batteries.Data.BinaryHeap
 
 set_option autoImplicit false
@@ -12,13 +11,6 @@ Correctness and the wired `denseGaussElimPass` live in `Proofs/Gauss.lean`. -/
 namespace ApcOptimizer.Dense
 
 variable {p : ℕ}
-
-/-- Number of variable occurrences (with multiplicity). -/
-def DenseExpr.varCount : DenseExpr p → Nat
-  | .const _ => 0
-  | .var _ => 1
-  | .add a b => a.varCount + b.varCount
-  | .mul a b => a.varCount + b.varCount
 
 /-- Fold variable leaves in left-to-right order without materializing `vars`. -/
 def DenseExpr.foldVars {α : Type} (e : DenseExpr p) (f : α → VarId → α) (init : α) : α :=
@@ -32,91 +24,11 @@ def DenseExpr.isVar : DenseExpr p → Bool
   | .var _ => true
   | _ => false
 
-/-- The duplication cost of a dense pivot `x := t`, with the protection penalty. -/
-def densePivotScore (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (xt : VarId × DenseExpr p) : Nat :=
-  let base := (occ.getD xt.1 1 - 1) * (1 + xt.2.varCount)
-  if prot.contains xt.1 && !xt.2.isVar then base + 1000000 else base
-
-/-! ## `toExpr` size facts -/
-
-theorem denseToExpr_foldl_varCount (terms : List (VarId × ZMod p)) :
-    ∀ init : DenseExpr p,
-      (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init).varCount
-        = init.varCount + terms.length := by
-  induction terms with
-  | nil => intro init; simp
-  | cons t rest ih =>
-      intro init
-      rw [List.foldl_cons, ih]
-      simp only [DenseExpr.varCount, List.length_cons]
-      omega
-
-theorem DenseLinExpr.toExpr_varCount (l : DenseLinExpr p) : l.toExpr.varCount = l.terms.length := by
-  rw [DenseLinExpr.toExpr, denseToExpr_foldl_varCount]
-  simp [DenseExpr.varCount]
-
-theorem DenseLinExpr.scale_terms_length (k : ZMod p) (l : DenseLinExpr p) :
-    (l.scale k).terms.length = l.terms.length := by
-  simp [DenseLinExpr.scale]
-
-theorem denseToExpr_foldl_isVar (terms : List (VarId × ZMod p)) :
-    ∀ init : DenseExpr p, init.isVar = false →
-      (terms.foldl (fun acc t => .add acc (.mul (.const t.2) (.var t.1))) init).isVar = false := by
-  induction terms with
-  | nil => intro init h; simpa using h
-  | cons t rest ih => intro init _; exact ih _ rfl
-
-theorem DenseLinExpr.toExpr_isVar (l : DenseLinExpr p) : l.toExpr.isVar = false :=
-  denseToExpr_foldl_isVar l.terms _ rfl
-
-/-- Score of a dense pivot on `v` whose solution has `oc` variable occurrences; the
-    `densePivotScore` protection penalty reduces to `prot.contains v`, since a `toExpr` solution is
-    never a bare variable. -/
+/-- The occurrence-weighted duplication cost of pivoting on `v`, with a protection penalty. -/
 def denseGaussScore (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) (v : VarId)
     (oc : Nat) : Nat :=
   let base := (occ.getD v 1 - 1) * (1 + oc)
   if prot.contains v then base + 1000000 else base
-
-theorem denseGaussScore_eq_densePivotScore (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (v : VarId) (t : DenseExpr p) (oc : Nat) (hiv : t.isVar = false) (hvc : t.varCount = oc) :
-    denseGaussScore occ prot v oc = densePivotScore occ prot (v, t) := by
-  subst hvc
-  simp only [denseGaussScore, densePivotScore, hiv, Bool.not_false, Bool.and_true]
-
-/-! ## Closed forms for `trySolve` / `trySolveUnit` -/
-
-theorem DenseLinExpr.trySolve_eq_of_one (l : DenseLinExpr p) (v : VarId) (h : l.coeff v = 1) :
-    l.trySolve v = some (v, ((l.others v).scale (-1)).toExpr) := by
-  unfold DenseLinExpr.trySolve; rw [if_pos h]
-
-theorem DenseLinExpr.trySolve_eq_of_negOne (l : DenseLinExpr p) (v : VarId) (h1 : l.coeff v ≠ 1)
-    (h2 : l.coeff v = -1) : l.trySolve v = some (v, (l.others v).toExpr) := by
-  unfold DenseLinExpr.trySolve; rw [if_neg h1, if_pos h2]
-
-theorem DenseLinExpr.trySolve_eq_none (l : DenseLinExpr p) (v : VarId)
-    (h : ¬(l.coeff v = 1 ∨ l.coeff v = -1)) : l.trySolve v = none := by
-  unfold DenseLinExpr.trySolve
-  rw [if_neg (fun hh => h (Or.inl hh)), if_neg (fun hh => h (Or.inr hh))]
-
-theorem DenseLinExpr.trySolveUnit_eq_of (l : DenseLinExpr p) (v : VarId)
-    (h : l.coeff v * (l.coeff v)⁻¹ = 1) :
-    l.trySolveUnit v = some (v, ((l.others v).scale (-(l.coeff v)⁻¹)).toExpr) := by
-  unfold DenseLinExpr.trySolveUnit; rw [if_pos h]
-
-theorem DenseLinExpr.trySolveUnit_eq_none (l : DenseLinExpr p) (v : VarId)
-    (h : ¬l.coeff v * (l.coeff v)⁻¹ = 1) : l.trySolveUnit v = none := by
-  unfold DenseLinExpr.trySolveUnit; rw [if_neg h]
-
-/-! ## Coefficient / occurrence index -/
-
-/-- Coefficient sum of the terms whose variable is `v`. -/
-def denseCsum (terms : List (VarId × ZMod p)) (v : VarId) : ZMod p :=
-  ((terms.filter (fun t => t.1 = v)).map Prod.snd).sum
-
-/-- Occurrence count of `v` among the terms. -/
-def denseCcnt (terms : List (VarId × ZMod p)) (v : VarId) : Nat :=
-  (terms.filter (fun t => t.1 = v)).length
 
 /-- One index step: add `t`'s coefficient and one occurrence to `t.1`'s entry (0 if absent). -/
 def denseIdxStep (m : Std.HashMap VarId (ZMod p × Nat)) (t : VarId × ZMod p) :
@@ -126,55 +38,6 @@ def denseIdxStep (m : Std.HashMap VarId (ZMod p × Nat)) (t : VarId × ZMod p) :
 /-- The coefficient/occurrence index of a term list. -/
 def denseCoeffIdx (terms : List (VarId × ZMod p)) : Std.HashMap VarId (ZMod p × Nat) :=
   terms.foldl denseIdxStep ∅
-
-theorem denseIdxStep_fold (terms : List (VarId × ZMod p)) :
-    ∀ (m : Std.HashMap VarId (ZMod p × Nat)) (v : VarId),
-      ((terms.foldl denseIdxStep m)[v]?).getD (0, 0)
-        = (((m[v]?).getD (0, 0)).1 + denseCsum terms v,
-           ((m[v]?).getD (0, 0)).2 + denseCcnt terms v) := by
-  induction terms with
-  | nil => intro m v; simp [denseCsum, denseCcnt]
-  | cons t rest ih =>
-      intro m v
-      rw [List.foldl_cons, ih (denseIdxStep m t) v]
-      have hstep : ((denseIdxStep m t)[v]?).getD (0, 0)
-          = (((m[v]?).getD (0, 0)).1 + (if t.1 = v then t.2 else 0),
-             ((m[v]?).getD (0, 0)).2 + (if t.1 = v then 1 else 0)) := by
-        unfold denseIdxStep
-        rw [Std.HashMap.getElem?_insert]
-        by_cases htv : t.1 = v
-        · subst htv; simp
-        · rw [if_neg (by simpa using htv), if_neg htv, if_neg htv]
-          simp
-      rw [hstep]
-      have hcsum : denseCsum (t :: rest) v = (if t.1 = v then t.2 else 0) + denseCsum rest v := by
-        unfold denseCsum; by_cases htv : t.1 = v <;> simp [htv]
-      have hccnt : denseCcnt (t :: rest) v = denseCcnt rest v + (if t.1 = v then 1 else 0) := by
-        unfold denseCcnt; by_cases htv : t.1 = v <;> simp [htv]
-      rw [hcsum, hccnt]
-      refine Prod.ext ?_ ?_ <;> ring
-
-theorem denseCoeffIdx_get (terms : List (VarId × ZMod p)) (v : VarId) :
-    ((denseCoeffIdx terms)[v]?).getD (0, 0) = (denseCsum terms v, denseCcnt terms v) := by
-  simp [denseCoeffIdx, denseIdxStep_fold terms ∅ v]
-
-theorem denseCoeffIdx_coeff (l : DenseLinExpr p) (v : VarId) :
-    (((denseCoeffIdx l.terms)[v]?).getD (0, 0)).1 = l.coeff v := by
-  rw [denseCoeffIdx_get]; rfl
-
-theorem dense_filter_eq_ne_length (terms : List (VarId × ZMod p)) (v : VarId) :
-    (terms.filter (fun t => t.1 ≠ v)).length + (terms.filter (fun t => t.1 = v)).length
-      = terms.length := by
-  induction terms with
-  | nil => rfl
-  | cons t rest ih => by_cases htv : t.1 = v <;> simp_all <;> omega
-
-theorem denseCoeffIdx_others (l : DenseLinExpr p) (v : VarId) :
-    l.terms.length - (((denseCoeffIdx l.terms)[v]?).getD (0, 0)).2 = (l.others v).terms.length := by
-  rw [denseCoeffIdx_get]
-  simp only [DenseLinExpr.others, denseCcnt]
-  have h := dense_filter_eq_ne_length l.terms v
-  omega
 
 /-! ## Descriptors -/
 
@@ -186,24 +49,6 @@ def densePm1Desc (idx : Std.HashMap VarId (ZMod p × Nat)) (total : Nat)
     some (v, denseGaussScore occ prot v (total - ((idx[v]?).getD (0, 0)).2))
   else none
 
-theorem densePm1Desc_eq (l : DenseLinExpr p) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (v : VarId) :
-    densePm1Desc (denseCoeffIdx l.terms) l.terms.length occ prot v
-      = (l.trySolve v).map (fun xt => (xt.1, densePivotScore occ prot xt)) := by
-  unfold densePm1Desc
-  rw [denseCoeffIdx_coeff l v, denseCoeffIdx_others l v]
-  by_cases h1 : l.coeff v = 1
-  · rw [if_pos (Or.inl h1), DenseLinExpr.trySolve_eq_of_one l v h1, Option.map_some,
-      denseGaussScore_eq_densePivotScore occ prot v (((l.others v).scale (-1)).toExpr)
-        (l.others v).terms.length (DenseLinExpr.toExpr_isVar _)
-        (by rw [DenseLinExpr.toExpr_varCount, DenseLinExpr.scale_terms_length])]
-  · by_cases h2 : l.coeff v = -1
-    · rw [if_pos (Or.inr h2), DenseLinExpr.trySolve_eq_of_negOne l v h1 h2, Option.map_some,
-        denseGaussScore_eq_densePivotScore occ prot v ((l.others v).toExpr)
-          (l.others v).terms.length (DenseLinExpr.toExpr_isVar _) (DenseLinExpr.toExpr_varCount _)]
-    · rw [if_neg (by rintro (h | h); exacts [h1 h, h2 h]),
-        DenseLinExpr.trySolve_eq_none l v (by rintro (h | h); exacts [h1 h, h2 h]), Option.map_none]
-
 /-- Unit-pivot descriptor: `some (v, score)` exactly when `l.trySolve v` fails but
     `l.trySolveUnit v` succeeds. -/
 def denseUnitDesc (idx : Std.HashMap VarId (ZMod p × Nat)) (total : Nat)
@@ -214,27 +59,6 @@ def denseUnitDesc (idx : Std.HashMap VarId (ZMod p × Nat)) (total : Nat)
     some (v, denseGaussScore occ prot v (total - ((idx[v]?).getD (0, 0)).2))
   else none
 
-theorem denseUnitDesc_eq (l : DenseLinExpr p) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (v : VarId) :
-    denseUnitDesc (denseCoeffIdx l.terms) l.terms.length occ prot v
-      = (match l.trySolve v with | some _ => none | none => l.trySolveUnit v).map
-          (fun xt : VarId × DenseExpr p => (xt.1, densePivotScore occ prot xt)) := by
-  unfold denseUnitDesc
-  rw [denseCoeffIdx_coeff l v, denseCoeffIdx_others l v]
-  by_cases h1 : l.coeff v = 1
-  · rw [if_neg (fun hc => hc.1 (Or.inl h1)), DenseLinExpr.trySolve_eq_of_one l v h1]; rfl
-  · by_cases h2 : l.coeff v = -1
-    · rw [if_neg (fun hc => hc.1 (Or.inr h2)), DenseLinExpr.trySolve_eq_of_negOne l v h1 h2]; rfl
-    · rw [DenseLinExpr.trySolve_eq_none l v (by rintro (h | h); exacts [h1 h, h2 h])]
-      by_cases h3 : l.coeff v * (l.coeff v)⁻¹ = 1
-      · rw [if_pos ⟨by rintro (h | h); exacts [h1 h, h2 h], h3⟩,
-          DenseLinExpr.trySolveUnit_eq_of l v h3,
-          denseGaussScore_eq_densePivotScore occ prot v (((l.others v).scale (-(l.coeff v)⁻¹)).toExpr)
-            (l.others v).terms.length (DenseLinExpr.toExpr_isVar _)
-            (by rw [DenseLinExpr.toExpr_varCount, DenseLinExpr.scale_terms_length])]
-        rfl
-      · rw [if_neg (fun hc => h3 hc.2), DenseLinExpr.trySolveUnit_eq_none l v h3]; rfl
-
 /-- All pivot descriptors, `±1` first (matching the order of `densePm1PivotsOf ++
     denseUnitPivotsOf`). -/
 def densePivotDescs (l : DenseLinExpr p) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
@@ -243,19 +67,6 @@ def densePivotDescs (l : DenseLinExpr p) (occ : Std.HashMap VarId Nat) (prot : S
   let total := l.terms.length
   (l.terms.map Prod.fst).filterMap (densePm1Desc idx total occ prot)
     ++ (l.terms.map Prod.fst).filterMap (denseUnitDesc idx total occ prot)
-
-theorem densePivotDescs_eq (c : DenseExpr p) (l : DenseLinExpr p) (hlin : denseLinearize c = some l)
-    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
-    densePivotDescs l occ prot
-      = (densePm1PivotsOf c ++ denseUnitPivotsOf c).map (fun xt => (xt.1, densePivotScore occ prot xt)) := by
-  show (l.terms.map Prod.fst).filterMap (densePm1Desc (denseCoeffIdx l.terms) l.terms.length occ prot)
-      ++ (l.terms.map Prod.fst).filterMap (denseUnitDesc (denseCoeffIdx l.terms) l.terms.length occ prot)
-      = (densePm1PivotsOf c ++ denseUnitPivotsOf c).map (fun xt => (xt.1, densePivotScore occ prot xt))
-  unfold densePm1PivotsOf denseUnitPivotsOf
-  rw [hlin, List.map_append, map_filterMap, map_filterMap]
-  congr 1
-  · exact List.filterMap_congr (fun v _ => densePm1Desc_eq l occ prot v)
-  · exact List.filterMap_congr (fun v _ => denseUnitDesc_eq l occ prot v)
 
 /-! ## Boxed runtime twins -/
 
@@ -340,76 +151,6 @@ theorem densePivotDescsWith_eq (ops : DenseZModOps p) (l : DenseLinExpr p)
   funext p l occ prot
   exact (densePivotDescsWith_eq denseZModOps l occ prot).symm
 
-/-! ## Fast pivot selection -/
-
-/-- The cheapest solvable dense pivot of a constraint, building the solution only for the winner. -/
-def denseFastBest (c : DenseExpr p) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
-    Option (VarId × DenseExpr p) :=
-  match denseLinearize c with
-  | none => none
-  | some l =>
-      match (densePivotDescs l occ prot).argmin Prod.snd with
-      | none => none
-      | some (x, _) =>
-          match l.trySolve x with
-          | some xt => some xt
-          | none => l.trySolveUnit x
-
-theorem DenseLinExpr.trySolve_fst (l : DenseLinExpr p) (v : VarId) (w : VarId × DenseExpr p)
-    (h : l.trySolve v = some w) : w.1 = v := by
-  unfold DenseLinExpr.trySolve at h
-  split_ifs at h
-  all_goals simp_all [Prod.ext_iff]
-
-theorem DenseLinExpr.trySolveUnit_fst (l : DenseLinExpr p) (v : VarId) (w : VarId × DenseExpr p)
-    (h : l.trySolveUnit v = some w) : w.1 = v := by
-  unfold DenseLinExpr.trySolveUnit at h
-  split_ifs at h
-  all_goals simp_all [Prod.ext_iff]
-
-theorem denseMem_pm1_trySolve (c : DenseExpr p) (l : DenseLinExpr p)
-    (hlin : denseLinearize c = some l) (w : VarId × DenseExpr p) (h : w ∈ densePm1PivotsOf c) :
-    l.trySolve w.1 = some w := by
-  unfold densePm1PivotsOf at h
-  rw [hlin] at h
-  obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
-  rw [DenseLinExpr.trySolve_fst l v w hv]; exact hv
-
-theorem denseMem_unit_trySolveUnit (c : DenseExpr p) (l : DenseLinExpr p)
-    (hlin : denseLinearize c = some l) (w : VarId × DenseExpr p) (h : w ∈ denseUnitPivotsOf c) :
-    l.trySolve w.1 = none ∧ l.trySolveUnit w.1 = some w := by
-  unfold denseUnitPivotsOf at h
-  rw [hlin] at h
-  obtain ⟨v, _, hv⟩ := List.mem_filterMap.1 h
-  cases hts : l.trySolve v with
-  | some r => rw [hts] at hv; simp at hv
-  | none =>
-      rw [hts] at hv
-      rw [DenseLinExpr.trySolveUnit_fst l v w hv]
-      exact ⟨hts, hv⟩
-
-theorem denseFastBest_eq (c : DenseExpr p) (occ : Std.HashMap VarId Nat)
-    (prot : Std.HashSet VarId) :
-    denseFastBest c occ prot
-      = (densePm1PivotsOf c ++ denseUnitPivotsOf c).argmin (densePivotScore occ prot) := by
-  unfold denseFastBest
-  split
-  · next hlin => simp [densePm1PivotsOf, denseUnitPivotsOf, hlin]
-  · next l hlin =>
-      rw [densePivotDescs_eq c l hlin occ prot,
-        argmin_map_key (fun xt => (xt.1, densePivotScore occ prot xt)) (densePivotScore occ prot)
-          Prod.snd (fun _ => rfl)]
-      cases hA : (densePm1PivotsOf c ++ denseUnitPivotsOf c).argmin (densePivotScore occ prot) with
-      | none => simp
-      | some w =>
-          simp only [Option.map_some]
-          have hmem : w ∈ densePm1PivotsOf c ++ denseUnitPivotsOf c :=
-            List.argmin_mem (by rw [hA]; exact Option.mem_some_self w)
-          rcases List.mem_append.1 hmem with hp | hu
-          · rw [denseMem_pm1_trySolve c l hlin w hp]
-          · obtain ⟨hn, hs⟩ := denseMem_unit_trySolveUnit c l hlin w hu
-            rw [hn, hs]
-
 /-- Occurrence counts of every variable across the dense system (one traversal). -/
 def denseOccurrenceMap (d : DenseConstraintSystem p) : Std.HashMap VarId Nat :=
   let addE := fun (m : Std.HashMap VarId Nat) (e : DenseExpr p) =>
@@ -459,19 +200,6 @@ theorem insertAll_map :
 
 end DenseSolved
 
-def denseGaussLoop (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
-    List (DenseExpr p) → DenseSolved p → DenseSolved p
-  | [], dσ => dσ
-  | c :: rest, dσ =>
-      let c' := (c.substF dσ.fn).normalize
-      match denseFastBest c' occ prot with
-      | none => denseGaussLoop occ prot rest dσ
-      | some (x, t) =>
-          let touched := ((dσ.revDeps[x]?).getD ∅).toList.filterMap (fun y =>
-            (dσ.map[y]?).bind (fun s => if s.mentions x then some (y, s) else none))
-          let pairs := touched.map (fun ys => (ys.1, (ys.2.subst x t).normalize)) ++ [(x, t)]
-          denseGaussLoop occ prot rest (dσ.insertAll pairs)
-
 /-! ## Dynamic sparse scheduling -/
 
 def DenseExpr.uniqueVars (e : DenseExpr p) : List VarId :=
@@ -480,13 +208,166 @@ def DenseExpr.uniqueVars (e : DenseExpr p) : List VarId :=
     (([], ∅) : List VarId × Std.HashSet VarId)
   st.1.reverse
 
+/-- Substitute sparse affine rows into an affine row, preserving first-occurrence term order. -/
+def denseLinSubstF (l : DenseLinExpr p) (σ : VarId → Option (DenseLinExpr p)) :
+    DenseLinExpr p :=
+  let const := l.terms.foldl (fun out yc =>
+    match σ yc.1 with
+    | some t => out + yc.2 * t.const
+    | none => out) l.const
+  let terms := l.terms.flatMap (fun yc =>
+    match σ yc.1 with
+    | some t => t.terms.map (fun zc => (zc.1, yc.2 * zc.2))
+    | none => [yc])
+  (DenseLinExpr.mk const terms).norm
+
+/-- Substitute one canonical affine row into another. -/
+def denseLinSubst (l : DenseLinExpr p) (x : VarId) (t : DenseLinExpr p) : DenseLinExpr p :=
+  denseLinSubstF l (fun y => if y = x then some t else none)
+
+def denseLinAdd (a b : DenseLinExpr p) : DenseLinExpr p :=
+  (a.add b).norm
+
+def denseLinScale (k : ZMod p) (l : DenseLinExpr p) : DenseLinExpr p :=
+  (l.scale k).norm
+
+def DenseLinExpr.mentions (l : DenseLinExpr p) (x : VarId) : Bool :=
+  l.terms.any (fun yc => yc.1 = x)
+
+inductive DenseGaussReduced (p : ℕ) where
+  | affine (row : DenseLinExpr p)
+  | nonlinear (expr : DenseExpr p)
+
+namespace DenseGaussReduced
+
+def toExpr : DenseGaussReduced p → DenseExpr p
+  | .affine row => row.toExpr
+  | .nonlinear expr => expr
+
+def vars : DenseGaussReduced p → List VarId
+  | .affine row => row.terms.map Prod.fst
+  | .nonlinear expr => expr.uniqueVars
+
+def fromExpr (e : DenseExpr p) : DenseGaussReduced p :=
+  match denseLinearize e with
+  | some row => .affine row.norm
+  | none =>
+      let normalized := e.normalize
+      match denseLinearize normalized with
+      | some row => .affine row.norm
+      | none => .nonlinear normalized
+
+end DenseGaussReduced
+
+def denseReducedAdd (ra rb : DenseGaussReduced p) : DenseGaussReduced p :=
+  match ra, rb with
+  | .affine la, .affine lb => .affine (denseLinAdd la lb)
+  | _, _ => .nonlinear (.add ra.toExpr rb.toExpr)
+
+def denseReducedMul (ra rb : DenseGaussReduced p) : DenseGaussReduced p :=
+  match ra, rb with
+  | .affine la, .affine lb =>
+      if la.terms.isEmpty then .affine (denseLinScale la.const lb)
+      else if lb.terms.isEmpty then .affine (denseLinScale lb.const la)
+      else .nonlinear (.mul la.toExpr lb.toExpr)
+  | _, _ => .nonlinear (.mul ra.toExpr rb.toExpr)
+
+/-- Simultaneous sparse substitution and affine normalization, retaining expressions only for
+    genuinely nonlinear subtrees. -/
+def denseSparseSubstF (σ : VarId → Option (DenseLinExpr p)) : DenseExpr p → DenseGaussReduced p
+  | .const n => .affine ⟨n, []⟩
+  | .var x =>
+      match σ x with
+      | some row => .affine row
+      | none => .affine ⟨0, [(x, 1)]⟩
+  | e@(.add a b) =>
+      match denseLinearize e with
+      | some row => .affine (denseLinSubstF row σ)
+      | none =>
+          let ra := denseSparseSubstF σ a
+          let rb := denseSparseSubstF σ b
+          denseReducedAdd ra rb
+  | e@(.mul a b) =>
+      match denseLinearize e with
+      | some row => .affine (denseLinSubstF row σ)
+      | none =>
+          let ra := denseSparseSubstF σ a
+          let rb := denseSparseSubstF σ b
+          denseReducedMul ra rb
+
+def denseReducedSubst (r : DenseGaussReduced p) (x : VarId)
+    (t : DenseLinExpr p) : DenseGaussReduced p :=
+  match r with
+  | .affine row => .affine (denseLinSubst row x t)
+  | .nonlinear expr => denseSparseSubstF (fun y => if y = x then some t else none) expr
+
+structure DenseSparseSolved (p : ℕ) where
+  map : Std.HashMap VarId (DenseLinExpr p)
+  revDeps : Std.HashMap VarId (Std.HashSet VarId)
+
+namespace DenseSparseSolved
+
+def empty : DenseSparseSolved p := { map := ∅, revDeps := ∅ }
+
+def fn (dσ : DenseSparseSolved p) : VarId → Option (DenseLinExpr p) := fun i => dσ.map[i]?
+
+def insertAll (dσ : DenseSparseSolved p) :
+    List (VarId × DenseLinExpr p) → DenseSparseSolved p
+  | [] => dσ
+  | (x, t) :: rest =>
+      DenseSparseSolved.insertAll
+        { map := dσ.map.insert x t
+          revDeps := t.terms.foldl
+            (fun rd zc => rd.insert zc.1 (((rd[zc.1]?).getD ∅).insert x)) dσ.revDeps }
+        rest
+
+def materialize (dσ : DenseSparseSolved p) : DenseSolved p :=
+  let map := dσ.map.toList.foldl
+    (fun out xt => out.insert xt.1 xt.2.toExpr) (∅ : Std.HashMap VarId (DenseExpr p))
+  { map, revDeps := ∅ }
+
+end DenseSparseSolved
+
+def denseSparseSolveAt (l : DenseLinExpr p) (x : VarId) :
+    Option (VarId × DenseLinExpr p) :=
+  if l.coeff x = 1 then some (x, denseLinScale (-1) (l.others x))
+  else if l.coeff x = -1 then some (x, l.others x)
+  else if l.coeff x * (l.coeff x)⁻¹ = 1 then
+    some (x, denseLinScale (-(l.coeff x)⁻¹) (l.others x))
+  else none
+
+def denseSparseBest (l : DenseLinExpr p) (occ : Std.HashMap VarId Nat)
+    (prot : Std.HashSet VarId) : Option (VarId × DenseLinExpr p) :=
+  match (densePivotDescs l occ prot).argmin Prod.snd with
+  | none => none
+  | some (x, _) => denseSparseSolveAt l x
+
+def denseReducedBest (r : DenseGaussReduced p) (occ : Std.HashMap VarId Nat)
+    (prot : Std.HashSet VarId) : Option (VarId × DenseLinExpr p) :=
+  match r with
+  | .affine row => denseSparseBest row occ prot
+  | .nonlinear _ => none
+
+def denseSparseGaussLoop (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
+    List (DenseExpr p) → DenseSparseSolved p → DenseSparseSolved p
+  | [], dσ => dσ
+  | c :: rest, dσ =>
+      let c' := denseSparseSubstF dσ.fn c
+      match denseReducedBest c' occ prot with
+      | none => denseSparseGaussLoop occ prot rest dσ
+      | some (x, t) =>
+          let touched := ((dσ.revDeps[x]?).getD ∅).toList.filterMap (fun y =>
+            (dσ.map[y]?).bind (fun s => if s.mentions x then some (y, s) else none))
+          let pairs := touched.map (fun ys => (ys.1, denseLinSubst ys.2 x t)) ++ [(x, t)]
+          denseSparseGaussLoop occ prot rest (dσ.insertAll pairs)
+
 structure DenseMarkowitzPivot where
   var : VarId
   rhsNnz : Nat
 
 structure DenseMarkowitzRow (p : ℕ) where
   rowId : Nat
-  reduced : DenseExpr p
+  reduced : DenseGaussReduced p
   vars : List VarId
   pivots : List DenseMarkowitzPivot
   generation : Nat
@@ -529,11 +410,11 @@ structure DenseMarkowitzState (p : ℕ) where
   pivotRows : Std.HashMap VarId (Std.HashSet Nat)
   heap : DenseMarkowitzHeap
 
-def denseMarkowitzPivots (e : DenseExpr p) (occ : Std.HashMap VarId Nat)
+def denseMarkowitzPivots (r : DenseGaussReduced p) (occ : Std.HashMap VarId Nat)
     (prot : Std.HashSet VarId) : List DenseMarkowitzPivot :=
-  match denseLinearize e with
-  | none => []
-  | some l =>
+  match r with
+  | .nonlinear _ => []
+  | .affine l =>
       let idx := denseCoeffIdx l.terms
       let vars := l.terms.map Prod.fst
       let descs := vars.filterMap (densePm1Desc idx l.terms.length occ prot) ++
@@ -548,12 +429,22 @@ def denseMarkowitzPivots (e : DenseExpr p) (occ : Std.HashMap VarId Nat)
 
 def denseMarkowitzRow (rowId : Nat) (e : DenseExpr p) (occ : Std.HashMap VarId Nat)
     (prot : Std.HashSet VarId) (generation : Nat := 0) : DenseMarkowitzRow p :=
-  let reduced := e.normalize
+  let reduced := DenseGaussReduced.fromExpr e
   { rowId
     reduced
-    vars := reduced.uniqueVars
+    vars := reduced.vars
     pivots := denseMarkowitzPivots reduced occ prot
     generation
+    active := true }
+
+def denseMarkowitzRefreshRow (r : DenseMarkowitzRow p) (x : VarId) (t : DenseLinExpr p)
+    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) : DenseMarkowitzRow p :=
+  let reduced := denseReducedSubst r.reduced x t
+  { rowId := r.rowId
+    reduced
+    vars := reduced.vars
+    pivots := denseMarkowitzPivots reduced occ prot
+    generation := r.generation + 1
     active := true }
 
 def denseMarkowitzDegreeAdd (m : Std.HashMap VarId Nat) (xs : List VarId) :
@@ -585,7 +476,7 @@ def denseMarkowitzUnindexPivots (idx : Std.HashMap VarId (Std.HashSet Nat))
     (fun idx q => idx.insert q.var (((idx[q.var]?).getD ∅).erase rowId)) idx
 
 def denseMarkowitzEntryOf (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (dσ : DenseSolved p) (st : DenseMarkowitzState p) (rowId : Nat)
+    (dσ : DenseSparseSolved p) (st : DenseMarkowitzState p) (rowId : Nat)
     (r : DenseMarkowitzRow p) (q : DenseMarkowitzPivot) : DenseMarkowitzEntry :=
   let solvedDegree := ((dσ.revDeps[q.var]?).getD ∅).size
   let activeDegree := st.degrees.getD q.var 1
@@ -598,7 +489,7 @@ def denseMarkowitzEntryOf (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarI
     generation := r.generation }
 
 def denseMarkowitzBestEntry? (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (dσ : DenseSolved p) (st : DenseMarkowitzState p) (rowId : Nat)
+    (dσ : DenseSparseSolved p) (st : DenseMarkowitzState p) (rowId : Nat)
     (r : DenseMarkowitzRow p) : Option DenseMarkowitzEntry :=
   r.pivots.foldl (fun best q =>
     let entry := denseMarkowitzEntryOf occ prot dσ st rowId r q
@@ -607,7 +498,7 @@ def denseMarkowitzBestEntry? (occ : Std.HashMap VarId Nat) (prot : Std.HashSet V
     | some old => if denseMarkowitzEntryBetter entry old then some entry else best) none
 
 def denseMarkowitzPushRow (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (dσ : DenseSolved p) (st : DenseMarkowitzState p) (rowId : Nat) :
+    (dσ : DenseSparseSolved p) (st : DenseMarkowitzState p) (rowId : Nat) :
     DenseMarkowitzState p :=
   match st.rows[rowId]? with
   | none => st
@@ -637,7 +528,7 @@ def denseMarkowitzBuild (constraints : List (DenseExpr p))
       rowDeps := denseMarkowitzIndexRow st.rowDeps rowId r.vars
       pivotRows := denseMarkowitzIndexPivots st.pivotRows rowId r.pivots }) base
   indexed.rows.foldl (fun st r =>
-    match denseMarkowitzBestEntry? occ prot DenseSolved.empty st r.rowId r with
+    match denseMarkowitzBestEntry? occ prot DenseSparseSolved.empty st r.rowId r with
     | none => st
     | some entry => { st with heap := st.heap.insert entry }) indexed
 
@@ -666,13 +557,13 @@ def denseMarkowitzCollectIds (idx : Std.HashMap VarId (Std.HashSet Nat))
     ((idx[x]?).getD ∅).toList.foldl (fun out rowId => out.insert rowId) out) ∅
 
 def denseMarkowitzRekey (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (dσ : DenseSolved p) (changed : Std.HashSet VarId) (st : DenseMarkowitzState p) :
+    (dσ : DenseSparseSolved p) (changed : Std.HashSet VarId) (st : DenseMarkowitzState p) :
     DenseMarkowitzState p :=
   (denseMarkowitzCollectIds st.pivotRows changed).toList.foldl
     (denseMarkowitzPushRow occ prot dσ) st
 
 def denseMarkowitzRefreshRows (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (x : VarId) (t : DenseExpr p) (st : DenseMarkowitzState p) :
+    (x : VarId) (t : DenseLinExpr p) (st : DenseMarkowitzState p) :
     DenseMarkowitzState p × Std.HashSet VarId :=
   let rowIds := ((st.rowDeps[x]?).getD ∅).toList
   rowIds.foldl (fun (st, changed) rowId =>
@@ -681,7 +572,7 @@ def denseMarkowitzRefreshRows (occ : Std.HashMap VarId Nat) (prot : Std.HashSet 
     | some r =>
         if !r.active || !r.vars.contains x then (st, changed)
         else
-          let r' := denseMarkowitzRow r.rowId (r.reduced.subst x t) occ prot (r.generation + 1)
+          let r' := denseMarkowitzRefreshRow r x t occ prot
           let changed := (r.vars ++ r'.vars).foldl (fun s y => s.insert y) changed
           ({ st with
               rows := st.rows.setIfInBounds rowId r'
@@ -707,38 +598,34 @@ def denseMarkowitzDeactivate (rowId : Nat) (st : DenseMarkowitzState p) :
           pivotRows := denseMarkowitzUnindexPivots st.pivotRows rowId r.pivots },
         changed)
 
-def denseMarkowitzAdoptPairs (dσ : DenseSolved p) (x : VarId) (t : DenseExpr p) :
-    List (VarId × DenseExpr p) :=
+def denseMarkowitzAdoptPairs (dσ : DenseSparseSolved p) (x : VarId) (t : DenseLinExpr p) :
+    List (VarId × DenseLinExpr p) :=
   let touched := ((dσ.revDeps[x]?).getD ∅).toList.filterMap (fun y =>
     (dσ.map[y]?).bind (fun s => if s.mentions x then some (y, s) else none))
-  touched.map (fun ys => (ys.1, (ys.2.subst x t).normalize)) ++ [(x, t)]
+  touched.map (fun ys => (ys.1, denseLinSubst ys.2 x t)) ++ [(x, t)]
 
 def denseMarkowitzAdopt (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (entry : DenseMarkowitzEntry) (x : VarId) (t : DenseExpr p)
-    (pairs : List (VarId × DenseExpr p)) (st : DenseMarkowitzState p)
-    (dσ : DenseSolved p) : DenseMarkowitzState p :=
+    (entry : DenseMarkowitzEntry) (x : VarId) (t : DenseLinExpr p)
+    (pairs : List (VarId × DenseLinExpr p)) (st : DenseMarkowitzState p)
+    (dσ : DenseSparseSolved p) : DenseMarkowitzState p :=
   let (st, selectedVars) := denseMarkowitzDeactivate entry.rowId st
   let (st, rowVars) := denseMarkowitzRefreshRows occ prot x t st
   let changed := pairs.foldl (fun changed yt =>
-    yt.2.foldVars (fun changed y => changed.insert y) changed) (selectedVars ∪ rowVars)
+    yt.2.terms.foldl (fun changed yc => changed.insert yc.1) changed) (selectedVars ∪ rowVars)
   denseMarkowitzRekey occ prot dσ changed st
 
-def denseSolveAt (c : DenseExpr p) (x : VarId) : Option (VarId × DenseExpr p) :=
-  match denseLinearize c with
-  | none => none
-  | some l =>
-      match l.trySolve x with
-      | some xt => some xt
-      | none => l.trySolveUnit x
-
-def denseMarkowitzPick (c : DenseExpr p) (x : VarId) (occ : Std.HashMap VarId Nat)
-    (prot : Std.HashSet VarId) : Option (VarId × DenseExpr p) :=
-  match denseSolveAt c x with
+def denseMarkowitzPick (r : DenseGaussReduced p) (x : VarId) (occ : Std.HashMap VarId Nat)
+    (prot : Std.HashSet VarId) : Option (VarId × DenseLinExpr p) :=
+  let hinted := match r with
+    | .affine l => denseSparseSolveAt l x
+    | .nonlinear _ => none
+  match hinted with
   | some xt => some xt
-  | none => denseFastBest c occ prot
+  | none => denseReducedBest r occ prot
 
 def denseMarkowitzLoop (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
-    (sources : Array (DenseExpr p)) : Nat → DenseMarkowitzState p → DenseSolved p → DenseSolved p
+    (sources : Array (DenseExpr p)) : Nat → DenseMarkowitzState p →
+      DenseSparseSolved p → DenseSparseSolved p
   | 0, _, dσ => dσ
   | fuel + 1, st, dσ =>
       match denseMarkowitzPopValid (st.heap.size + 1) st with
@@ -748,7 +635,7 @@ def denseMarkowitzLoop (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
           | none => denseMarkowitzLoop occ prot sources fuel
               (denseMarkowitzDeactivate entry.rowId st).1 dσ
           | some c =>
-              let c' := (c.substF dσ.fn).normalize
+              let c' := denseSparseSubstF dσ.fn c
               match denseMarkowitzPick c' entry.pivot occ prot with
               | none => denseMarkowitzLoop occ prot sources fuel
                   (denseMarkowitzDeactivate entry.rowId st).1 dσ
@@ -760,57 +647,29 @@ def denseMarkowitzLoop (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
                     st dσ
 
 def denseMarkowitzSchedule (constraints : List (DenseExpr p)) (occ : Std.HashMap VarId Nat)
-    (prot : Std.HashSet VarId) : DenseSolved p :=
+    (prot : Std.HashSet VarId) : DenseSparseSolved p :=
   let sources := constraints.toArray
   let st := denseMarkowitzBuild constraints occ prot
-  denseMarkowitzLoop occ prot sources sources.size st DenseSolved.empty
+  denseMarkowitzLoop occ prot sources sources.size st DenseSparseSolved.empty
 
 def denseSourceOrderSchedule (constraints : List (DenseExpr p))
-    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) : DenseSolved p :=
-  let first := denseGaussLoop occ prot constraints DenseSolved.empty
-  if first.map.isEmpty then first else denseGaussLoop occ prot constraints first
+    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) : DenseSparseSolved p :=
+  let first := denseSparseGaussLoop occ prot constraints DenseSparseSolved.empty
+  if first.map.isEmpty then first else denseSparseGaussLoop occ prot constraints first
 
 def denseMarkowitzMinRows : Nat := 8192
 
 def denseGaussSchedule (constraints : List (DenseExpr p))
     (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) : DenseSolved p :=
-  if constraints.length < denseMarkowitzMinRows
-  then denseSourceOrderSchedule constraints occ prot
-  else denseMarkowitzSchedule constraints occ prot
+  (if constraints.length < denseMarkowitzMinRows
+    then denseSourceOrderSchedule constraints occ prot
+    else denseMarkowitzSchedule constraints occ prot).materialize
 
 theorem DenseLinExpr.others_terms_fst_mem (l : DenseLinExpr p) (v : VarId) (x : VarId)
     (h : x ∈ (l.others v).terms.map Prod.fst) : x ∈ l.terms.map Prod.fst := by
   simp only [DenseLinExpr.others, List.mem_map] at h ⊢
   obtain ⟨tt, htt, rfl⟩ := h
   exact ⟨tt, List.mem_of_mem_filter htt, rfl⟩
-
-theorem denseTrySolve_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarId × DenseExpr p)
-    (h : l.trySolve v = some w) : ∀ x ∈ w.2.vars, x ∈ l.terms.map Prod.fst := by
-  by_cases h1 : l.coeff v = 1
-  · rw [DenseLinExpr.trySolve_eq_of_one l v h1] at h
-    injection h with h'; subst h'
-    intro x hx
-    exact l.others_terms_fst_mem v x
-      (by rw [← DenseLinExpr.scale_terms_fst (-1) (l.others v)]; exact DenseLinExpr.toExpr_vars _ x hx)
-  · by_cases h2 : l.coeff v = -1
-    · rw [DenseLinExpr.trySolve_eq_of_negOne l v h1 h2] at h
-      injection h with h'; subst h'
-      intro x hx
-      exact l.others_terms_fst_mem v x (DenseLinExpr.toExpr_vars _ x hx)
-    · rw [DenseLinExpr.trySolve_eq_none l v (by rintro (h | h); exacts [h1 h, h2 h])] at h
-      exact absurd h (by simp)
-
-theorem denseTrySolveUnit_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarId × DenseExpr p)
-    (h : l.trySolveUnit v = some w) : ∀ x ∈ w.2.vars, x ∈ l.terms.map Prod.fst := by
-  by_cases h1 : l.coeff v * (l.coeff v)⁻¹ = 1
-  · rw [DenseLinExpr.trySolveUnit_eq_of l v h1] at h
-    injection h with h'; subst h'
-    intro x hx
-    exact l.others_terms_fst_mem v x
-      (by rw [← DenseLinExpr.scale_terms_fst (-(l.coeff v)⁻¹) (l.others v)]
-          exact DenseLinExpr.toExpr_vars _ x hx)
-  · rw [DenseLinExpr.trySolveUnit_eq_none l v h1] at h
-    exact absurd h (by simp)
 
 /-- Batch linear (Gauss) elimination. From a constraint like `x - 2*y - 3 = 0` it derives the
     assignment `x := 2*y + 3`, choosing pivots globally by dynamic Markowitz fill cost on large
