@@ -234,10 +234,11 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
      values in the fully-applied pass body and pass them as parameters** (the `FlagFold`
      comment's pattern); when a pass's profile makes no sense relative to its work, suspect this
      first and bisect with a skip-the-body experiment.
-   - ~~`normalize` linearize fusion~~ **done (entry 115)** for `normalizePass`
-     (`normalizeFused`, proven equal). Gauss's per-constraint `substF |> normalize` still walks
-     the old way. PR #156's wider gauss sweep rewrite was closed after too little whole-run
-     benefit, so this remains available only if a fresh profile justifies it.
+   - ~~`normalize` linearize fusion~~ **done (entries 115, 135)**: `normalizePass` uses
+     `normalizeFused`, while Gauss keeps every affine source row, stored solution, touched-row
+     rewrite, and Markowitz cache in canonical `DenseLinExpr` form. Expression trees survive only
+     for genuinely nonlinear subtrees and at the final `substF` boundary, so pivot sweeps no
+     longer rebuild affine trees merely to linearize them again.
    - ~~`iterateToFixpoint` sizeKey recomputation~~ **done (entry 115)**: the input's key is
      threaded (`iterateToFixpointFrom`), halving the per-cycle occurrence-list walks (~6 % of
      whole-run samples).

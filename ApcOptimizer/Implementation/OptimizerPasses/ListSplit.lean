@@ -2,33 +2,6 @@ import ApcOptimizer.Implementation.OptimizerPasses.Basic
 
 set_option autoImplicit false
 
-/-! ### Generic `argmin` / `filterMap` list lemmas -/
-
-/-- `argmin` commutes with a key-preserving map (`kγ (g a) = kα a`): the winner of the mapped list
-    is the mapped winner — lets us score cheap descriptors instead of built candidates. -/
-theorem argmin_map_key {α γ : Type*} (g : α → γ) (kα : α → Nat) (kγ : γ → Nat)
-    (h : ∀ a, kγ (g a) = kα a) : ∀ l : List α, (l.map g).argmin kγ = (l.argmin kα).map g := by
-  intro l
-  induction l with
-  | nil => simp
-  | cons a t ih =>
-      rw [List.map_cons, List.argmin_cons, List.argmin_cons, ih]
-      cases t.argmin kα with
-      | none => simp
-      | some c =>
-          simp only [Option.map_some, h]
-          by_cases hlt : kα c < kα a <;> simp [hlt]
-
-theorem map_filterMap {α β γ : Type*} (f : α → Option β) (g : β → γ) (l : List α) :
-    (l.filterMap f).map g = l.filterMap (fun a => (f a).map g) := by
-  induction l with
-  | nil => simp
-  | cons a t ih =>
-      simp only [List.filterMap_cons]
-      cases f a with
-      | none => simpa using ih
-      | some b => simp [ih]
-
 /-- `filterMap` respects pointwise equality of its function on the list. -/
 theorem filterMap_congr' {β γ : Type _} {f g : β → Option γ} (l : List β)
     (h : ∀ x ∈ l, f x = g x) : l.filterMap f = l.filterMap g := by
