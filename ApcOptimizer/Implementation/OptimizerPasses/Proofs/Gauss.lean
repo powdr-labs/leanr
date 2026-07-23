@@ -1,4 +1,5 @@
 import ApcOptimizer.Implementation.OptimizerPasses.Gauss
+import ApcOptimizer.Implementation.OptimizerPasses.BridgeSteps
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.DomainBatch
 import ApcOptimizer.Implementation.OptimizerPasses.Proofs.FlagUnify
 
@@ -200,6 +201,26 @@ theorem denseSparseSubstF_eval (σ : VarId → Option (DenseLinExpr p)) (e : Den
           rw [iha, ihb] at hm
           simpa only [DenseExpr.eval] using hm
 
+theorem denseLinSubstSolved_eq (l : DenseLinExpr p) (dσ : DenseSparseSolved p) :
+    denseLinSubstSolved l dσ = denseLinSubstF l dσ.fn := by
+  rfl
+
+theorem denseSparseSubstSolved_eq (dσ : DenseSparseSolved p) (e : DenseExpr p) :
+    denseSparseSubstSolved dσ e = denseSparseSubstF dσ.fn e := by
+  induction e with
+  | const n => rfl
+  | var x => rfl
+  | add a b iha ihb =>
+      simp only [denseSparseSubstSolved, denseSparseSubstF]
+      split
+      · rw [denseLinSubstSolved_eq]
+      · rw [iha, ihb]
+  | mul a b iha ihb =>
+      simp only [denseSparseSubstSolved, denseSparseSubstF]
+      split
+      · rw [denseLinSubstSolved_eq]
+      · rw [iha, ihb]
+
 def DenseGaussReduced.support : DenseGaussReduced p → List VarId
   | .affine row => row.terms.map Prod.fst
   | .nonlinear expr => expr.vars
@@ -359,10 +380,37 @@ theorem denseSparseSubstF_closed (σ : VarId → Option (DenseLinExpr p)) (e : D
           exact denseSparseMulReduced_closed
             (denseSparseSubstF σ a) (denseSparseSubstF σ b) S ha hb
 
+theorem denseLinSubst_eq (s : DenseLinExpr p) (x : VarId) (t : DenseLinExpr p) :
+    denseLinSubst s x t = denseLinSubstF s (fun y => if y = x then some t else none) := by
+  have hconst :
+      (fun (out : ZMod p) (yc : VarId × ZMod p) =>
+        if yc.1 = x then out + yc.2 * t.const else out) =
+      (fun out yc =>
+        match if yc.1 = x then some t else none with
+        | some row => out + yc.2 * row.const
+        | none => out) := by
+    funext out yc
+    split <;> rfl
+  have hterms :
+      (fun (yc : VarId × ZMod p) =>
+        if yc.1 = x then t.terms.map (fun zc => (zc.1, yc.2 * zc.2)) else [yc]) =
+      (fun yc =>
+        match if yc.1 = x then some t else none with
+        | some row => row.terms.map (fun zc => (zc.1, yc.2 * zc.2))
+        | none => [yc]) := by
+    funext yc
+    split <;> rfl
+  unfold denseLinSubst denseLinSubstF
+  apply congrArg DenseLinExpr.norm
+  exact congrArg₂ DenseLinExpr.mk
+    (congrArg (fun f => s.terms.foldl f s.const) hconst)
+    (congrArg (fun f => s.terms.flatMap f) hterms)
+
 theorem denseLinSubst_eval (s : DenseLinExpr p) (x : VarId) (t : DenseLinExpr p)
     (denv : VarId → ZMod p) (hx : denv x = t.eval denv) :
     (denseLinSubst s x t).eval denv = s.eval denv := by
-  rw [denseLinSubst, denseLinSubstF_eval]
+  rw [denseLinSubst_eq]
+  rw [denseLinSubstF_eval]
   congr 1
   funext y
   by_cases hy : y = x
@@ -374,6 +422,7 @@ theorem denseLinSubst_terms_closed (s : DenseLinExpr p) (x : VarId) (t : DenseLi
     (S : VarId → Prop) (hs : ∀ z ∈ s.terms.map Prod.fst, S z)
     (ht : ∀ z ∈ t.terms.map Prod.fst, S z) :
     ∀ z ∈ (denseLinSubst s x t).terms.map Prod.fst, S z := by
+  rw [denseLinSubst_eq]
   apply denseLinSubstF_terms_closed s _ S hs
   intro i row hi
   by_cases hix : i = x
@@ -433,31 +482,31 @@ theorem denseSparseSolveAt_terms (l : DenseLinExpr p) (x y : VarId)
     rw [DenseLinExpr.scale_terms_fst] at hz'
     exact l.others_terms_fst_mem x z hz'
 
-theorem denseSparseBest_sound (l : DenseLinExpr p) (occ : Std.HashMap VarId Nat)
-    (prot : Std.HashSet VarId) (y : VarId) (t : DenseLinExpr p)
+theorem denseSparseBest_sound (l : DenseLinExpr p) (occ : DenseGaussOcc)
+    (prot : DenseGaussProt) (y : VarId) (t : DenseLinExpr p)
     (h : denseSparseBest l occ prot = some (y, t))
     (denv : VarId → ZMod p) (hl : l.eval denv = 0) :
     denv y = t.eval denv := by
   unfold denseSparseBest at h
-  cases hm : (densePivotDescs l occ prot).argmin Prod.snd with
+  cases hm : denseBestPivot l occ prot with
   | none => simp [hm] at h
   | some q =>
       simp only [hm] at h
       exact denseSparseSolveAt_sound l q.1 y t h denv hl
 
-theorem denseSparseBest_terms (l : DenseLinExpr p) (occ : Std.HashMap VarId Nat)
-    (prot : Std.HashSet VarId) (y : VarId) (t : DenseLinExpr p)
+theorem denseSparseBest_terms (l : DenseLinExpr p) (occ : DenseGaussOcc)
+    (prot : DenseGaussProt) (y : VarId) (t : DenseLinExpr p)
     (h : denseSparseBest l occ prot = some (y, t)) :
     ∀ z ∈ t.terms.map Prod.fst, z ∈ l.terms.map Prod.fst := by
   unfold denseSparseBest at h
-  cases hm : (densePivotDescs l occ prot).argmin Prod.snd with
+  cases hm : denseBestPivot l occ prot with
   | none => simp [hm] at h
   | some q =>
       simp only [hm] at h
       exact denseSparseSolveAt_terms l q.1 y t h
 
-theorem denseReducedBest_sound (r : DenseGaussReduced p) (occ : Std.HashMap VarId Nat)
-    (prot : Std.HashSet VarId) (y : VarId) (t : DenseLinExpr p)
+theorem denseReducedBest_sound (r : DenseGaussReduced p) (occ : DenseGaussOcc)
+    (prot : DenseGaussProt) (y : VarId) (t : DenseLinExpr p)
     (h : denseReducedBest r occ prot = some (y, t))
     (denv : VarId → ZMod p) (hr : r.toExpr.eval denv = 0) :
     denv y = t.eval denv := by
@@ -467,8 +516,8 @@ theorem denseReducedBest_sound (r : DenseGaussReduced p) (occ : Std.HashMap VarI
       exact denseSparseBest_sound l occ prot y t h denv
         (by simpa [DenseGaussReduced.toExpr, DenseLinExpr.toExpr_eval] using hr)
 
-theorem denseReducedBest_terms (r : DenseGaussReduced p) (occ : Std.HashMap VarId Nat)
-    (prot : Std.HashSet VarId) (y : VarId) (t : DenseLinExpr p)
+theorem denseReducedBest_terms (r : DenseGaussReduced p) (occ : DenseGaussOcc)
+    (prot : DenseGaussProt) (y : VarId) (t : DenseLinExpr p)
     (h : denseReducedBest r occ prot = some (y, t)) :
     ∀ z ∈ t.terms.map Prod.fst, z ∈ r.support := by
   cases r with
@@ -476,7 +525,7 @@ theorem denseReducedBest_terms (r : DenseGaussReduced p) (occ : Std.HashMap VarI
   | affine l => exact denseSparseBest_terms l occ prot y t h
 
 theorem denseMarkowitzPick_sound (r : DenseGaussReduced p) (hint y : VarId)
-    (t : DenseLinExpr p) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
+    (t : DenseLinExpr p) (occ : DenseGaussOcc) (prot : DenseGaussProt)
     (h : denseMarkowitzPick r hint occ prot = some (y, t))
     (denv : VarId → ZMod p) (hr : r.toExpr.eval denv = 0) :
     denv y = t.eval denv := by
@@ -497,7 +546,7 @@ theorem denseMarkowitzPick_sound (r : DenseGaussReduced p) (hint y : VarId)
             (by simpa [DenseGaussReduced.toExpr, DenseLinExpr.toExpr_eval] using hr)
 
 theorem denseMarkowitzPick_terms (r : DenseGaussReduced p) (hint y : VarId)
-    (t : DenseLinExpr p) (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
+    (t : DenseLinExpr p) (occ : DenseGaussOcc) (prot : DenseGaussProt)
     (h : denseMarkowitzPick r hint occ prot = some (y, t)) :
     ∀ z ∈ t.terms.map Prod.fst, z ∈ r.support := by
   unfold denseMarkowitzPick at h
@@ -515,54 +564,142 @@ theorem denseMarkowitzPick_terms (r : DenseGaussReduced p) (hint y : VarId)
           rw [hq] at hs
           exact denseSparseSolveAt_terms l hint y t hs
 
-theorem DenseSparseSolved.insertAll_map :
-    ∀ (pairs : List (VarId × DenseLinExpr p)) (dσ : DenseSparseSolved p),
-      (dσ.insertAll pairs).map =
-        pairs.foldl (fun m pr => m.insert pr.1 pr.2) dσ.map := by
-  intro pairs
-  induction pairs with
-  | nil => intro dσ; rfl
-  | cons hd tl ih =>
-      intro dσ
-      obtain ⟨x, t⟩ := hd
-      simp only [DenseSparseSolved.insertAll, List.foldl_cons]
+theorem DenseSparseSolved.clearDeps_lookup (dσ : DenseSparseSolved p) (x y : VarId) :
+    (dσ.clearDeps x).lookup y = dσ.lookup y := by
+  rfl
+
+@[simp] theorem DenseSparseSolved.empty_lookup (capacity : Nat) (x : VarId) :
+    (DenseSparseSolved.empty capacity : DenseSparseSolved p).lookup x = none := by
+  simp only [DenseSparseSolved.lookup, DenseSparseSolved.empty]
+  by_cases h : x.index < capacity
+  · rw [Array.getElem?_eq_getElem (by simpa using h)]
+    simp
+  · rw [Array.getElem?_eq_none (by simpa using h)]
+    rfl
+
+theorem DenseSparseSolved.markOldDeps_rows (dσ : DenseSparseSolved p)
+    (terms : List (VarId × ZMod p)) :
+    (markOldDeps dσ terms).rows = dσ.rows := by
+  induction terms generalizing dσ with
+  | nil => rfl
+  | cons yc rest ih =>
+      simp only [markOldDeps]
       rw [ih]
 
-theorem sparseFoldlInsert_preserves {Q : VarId → DenseLinExpr p → Prop} :
-    ∀ (pairs : List (VarId × DenseLinExpr p))
-      (m : Std.HashMap VarId (DenseLinExpr p)),
-      (∀ i t, m[i]? = some t → Q i t) → (∀ pr ∈ pairs, Q pr.1 pr.2) →
-      ∀ i t, (pairs.foldl (fun out pr => out.insert pr.1 pr.2) m)[i]? = some t →
-        Q i t := by
-  intro pairs
-  induction pairs with
-  | nil => intro m hm _ i t ht; exact hm i t ht
-  | cons hd rest ih =>
-      intro m hm hpairs i t ht
-      obtain ⟨x, t0⟩ := hd
-      simp only [List.foldl_cons] at ht
-      refine ih (m.insert x t0) ?_
-        (fun pr hpr => hpairs pr (List.mem_cons_of_mem _ hpr)) i t ht
-      intro j s hjs
-      rw [Std.HashMap.getElem?_insert] at hjs
-      split_ifs at hjs with hjx
-      · simp only [Option.some.injEq] at hjs
-        have hj : x = j := by simpa using hjx
-        rw [← hjs, ← hj]
-        exact hpairs (x, t0) (List.mem_cons_self ..)
-      · exact hm j s hjs
+theorem DenseSparseSolved.addNewDeps_rows (dσ : DenseSparseSolved p) (owner : VarId)
+    (terms : List (VarId × ZMod p)) :
+    (addNewDeps owner dσ terms).rows = dσ.rows := by
+  induction terms generalizing dσ with
+  | nil => rfl
+  | cons yc rest ih =>
+      simp only [addNewDeps]
+      split
+      · rw [ih]
+      · rw [ih]
 
-theorem DenseSparseSolved.insertAll_preserves {Q : VarId → DenseLinExpr p → Prop}
-    (pairs : List (VarId × DenseLinExpr p)) (dσ : DenseSparseSolved p)
-    (hσ : ∀ i t, dσ.fn i = some t → Q i t)
-    (hpairs : ∀ pr ∈ pairs, Q pr.1 pr.2) :
-    ∀ i t, (dσ.insertAll pairs).fn i = some t → Q i t := by
-  intro i t ht
-  simp only [DenseSparseSolved.fn, DenseSparseSolved.insertAll_map] at ht
-  exact sparseFoldlInsert_preserves pairs dσ.map hσ hpairs i t ht
+theorem DenseSparseSolved.removeOldDeps_rows (dσ : DenseSparseSolved p) (owner : VarId)
+    (terms : List (VarId × ZMod p)) :
+    (removeOldDeps owner dσ terms).rows = dσ.rows := by
+  induction terms generalizing dσ with
+  | nil => rfl
+  | cons yc rest ih =>
+      simp only [removeOldDeps]
+      split
+      · rw [ih]
+      · rw [ih]
+
+theorem DenseSparseSolved.clearNewDepMarks_rows (dσ : DenseSparseSolved p)
+    (terms : List (VarId × ZMod p)) :
+    (clearNewDepMarks dσ terms).rows = dσ.rows := by
+  induction terms generalizing dσ with
+  | nil => rfl
+  | cons yc rest ih =>
+      simp only [clearNewDepMarks]
+      rw [ih]
+
+theorem DenseSparseSolved.diffDeps_rows (dσ : DenseSparseSolved p) (owner : VarId)
+    (oldTerms newTerms : List (VarId × ZMod p)) :
+    (dσ.diffDeps owner oldTerms newTerms).rows = dσ.rows := by
+  simp only [diffDeps, clearNewDepMarks_rows, removeOldDeps_rows, addNewDeps_rows,
+    markOldDeps_rows]
+
+theorem DenseSparseSolved.replace_rows (dσ : DenseSparseSolved p) (x : VarId)
+    (t : DenseLinExpr p) :
+    (dσ.replace x t).rows = dσ.rows.setIfInBounds x.index (some t) := by
+  simp only [DenseSparseSolved.replace, DenseSparseSolved.diffDeps_rows]
+
+theorem DenseSparseSolved.replace_preserves {Q : VarId → DenseLinExpr p → Prop}
+    (dσ : DenseSparseSolved p) (x : VarId) (t : DenseLinExpr p)
+    (hσ : ∀ i row, dσ.lookup i = some row → Q i row) (ht : Q x t) :
+    ∀ i row, (dσ.replace x t).lookup i = some row → Q i row := by
+  intro i row hi
+  simp only [DenseSparseSolved.lookup, dσ.replace_rows x t,
+    Array.getElem?_setIfInBounds] at hi
+  split at hi
+  · next hxi =>
+    split at hi
+    · simp only [Option.join_some, Option.some.injEq] at hi
+      have hix : x = i := by
+        cases x
+        cases i
+        simp_all
+      subst i
+      simpa only [hi] using ht
+    · simp at hi
+  · exact hσ i row hi
+
+theorem denseSparseAdoptStep_preserves {Q : VarId → DenseLinExpr p → Prop}
+    (trackChanged : Bool) (x : VarId) (t : DenseLinExpr p)
+    (acc : DenseSparseAdoption p) (y : VarId)
+    (hacc : ∀ i row, acc.solved.lookup i = some row → Q i row)
+    (hsubst : ∀ i row, Q i row → Q i (denseLinSubst row x t)) :
+    ∀ i row, (denseSparseAdoptStep trackChanged x t acc y).solved.lookup i = some row →
+      Q i row := by
+  intro i row hi
+  cases hy : acc.solved.lookup y with
+  | none =>
+      simp only [denseSparseAdoptStep, hy] at hi
+      exact hacc i row hi
+  | some old =>
+      simp only [denseSparseAdoptStep, hy] at hi
+      exact DenseSparseSolved.replace_preserves acc.solved y (denseLinSubst old x t)
+        hacc (hsubst y old (hacc y old hy)) i row hi
+
+theorem denseSparseAdopt_preserves {Q : VarId → DenseLinExpr p → Prop}
+    (trackChanged : Bool) (dσ : DenseSparseSolved p) (x : VarId) (t : DenseLinExpr p)
+    (hσ : ∀ i row, dσ.lookup i = some row → Q i row) (ht : Q x t)
+    (hsubst : ∀ i row, Q i row → Q i (denseLinSubst row x t)) :
+    ∀ i row, (denseSparseAdopt trackChanged dσ x t).solved.lookup i = some row → Q i row := by
+  let initial : DenseSparseAdoption p :=
+    { solved := dσ.clearDeps x
+      changed :=
+        if trackChanged then
+          t.terms.foldl (fun changed yc => changed.insert yc.1)
+            (Std.HashSet.emptyWithCapacity t.terms.length)
+        else ∅ }
+  have hinitial : ∀ i row, initial.solved.lookup i = some row → Q i row := by
+    intro i row hi
+    exact hσ i row (by simpa [initial, DenseSparseSolved.clearDeps_lookup] using hi)
+  have hfold :
+      ∀ (ys : List VarId) (acc : DenseSparseAdoption p),
+        (∀ i row, acc.solved.lookup i = some row → Q i row) →
+        ∀ i row, (ys.foldl (denseSparseAdoptStep trackChanged x t) acc).solved.lookup i =
+          some row →
+          Q i row := by
+    intro ys
+    induction ys with
+    | nil => intro acc hacc; exact hacc
+    | cons y rest ih =>
+        intro acc hacc
+        simp only [List.foldl_cons]
+        exact ih _ (denseSparseAdoptStep_preserves trackChanged x t acc y hacc hsubst)
+  intro i row hi
+  have hout := hfold (dσ.deps x).toList initial hinitial
+  exact DenseSparseSolved.replace_preserves _ x t (hout) ht i row
+    (by simpa [denseSparseAdopt, initial, Std.HashSet.fold_eq_foldl_toList] using hi)
 
 theorem denseSparseGaussLoop_sound (bs : BusSemantics p) (d : DenseConstraintSystem p)
-    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
+    (occ : DenseGaussOcc) (prot : DenseGaussProt) :
     ∀ (pending : List (DenseExpr p)) (dσ : DenseSparseSolved p),
       (∀ c ∈ pending, c ∈ d.algebraicConstraints) →
       (∀ denv, d.satisfies bs denv → ∀ i t,
@@ -581,14 +718,16 @@ theorem denseSparseGaussLoop_sound (bs : BusSemantics p) (d : DenseConstraintSys
       have hcmem : c ∈ d.algebraicConstraints := hpend c (List.mem_cons_self ..)
       have hrest : ∀ c' ∈ rest, c' ∈ d.algebraicConstraints :=
         fun c' h' => hpend c' (List.mem_cons_of_mem _ h')
-      let c' := denseSparseSubstF dσ.fn c
-      cases hpick : denseReducedBest (denseSparseSubstF dσ.fn c) occ prot with
+      let c' := denseSparseSubstSolved dσ c
+      cases hpick : denseReducedBest (denseSparseSubstSolved dσ c) occ prot with
       | none =>
           simp only [denseSparseGaussLoop, hpick]
           exact ih dσ hrest hσs hσv
       | some xt =>
           obtain ⟨x, t⟩ := xt
           have hcclosed : c'.Closed (· ∈ d.occ) := by
+            change (denseSparseSubstSolved dσ c).Closed (· ∈ d.occ)
+            rw [denseSparseSubstSolved_eq]
             apply denseSparseSubstF_closed dσ.fn c
             · intro z hz
               exact DenseConstraintSystem.mem_occ_of_constraint hcmem hz
@@ -596,52 +735,25 @@ theorem denseSparseGaussLoop_sound (bs : BusSemantics p) (d : DenseConstraintSys
           have hx : ∀ denv, d.satisfies bs denv → denv x = t.eval denv := by
             intro denv hsat
             apply denseReducedBest_sound c' occ prot x t hpick denv
-            rw [denseSparseSubstF_eval dσ.fn c denv (hσs denv hsat)]
+            change (denseSparseSubstSolved dσ c).toExpr.eval denv = 0
+            rw [denseSparseSubstSolved_eq,
+              denseSparseSubstF_eval dσ.fn c denv (hσs denv hsat)]
             exact hsat.1 c hcmem
           have htocc : ∀ z ∈ t.terms.map Prod.fst, z ∈ d.occ := by
             intro z hz
             exact hcclosed z (denseReducedBest_terms c' occ prot x t hpick z hz)
-          have htouched : ∀ y s, (y, s) ∈
-                ((dσ.revDeps[x]?).getD ∅).toList.filterMap (fun y =>
-                  (dσ.map[y]?).bind
-                    (fun s => if s.mentions x then some (y, s) else none)) →
-              dσ.fn y = some s := by
-            intro y s hys
-            obtain ⟨_, _, hy'⟩ := List.mem_filterMap.1 hys
-            obtain ⟨s', hs', hif⟩ := Option.bind_eq_some_iff.1 hy'
-            by_cases hm : s'.mentions x
-            · rw [if_pos hm] at hif
-              simp only [Option.some.injEq, Prod.mk.injEq] at hif
-              obtain ⟨rfl, rfl⟩ := hif
-              exact hs'
-            · rw [if_neg hm] at hif
-              exact absurd hif (by simp)
           simp only [denseSparseGaussLoop, hpick]
           refine ih _ hrest ?_ ?_
           · intro denv hsat
-            refine DenseSparseSolved.insertAll_preserves _ dσ (hσs denv hsat) ?_
-            intro pr hpr
-            rcases List.mem_append.1 hpr with hin | hin
-            · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 hin
-              have hmemys : dσ.fn y = some s := htouched y s hys
-              have hy : denv y = s.eval denv := hσs denv hsat y s hmemys
-              exact hy.trans (denseLinSubst_eval s x t denv (hx denv hsat)).symm
-            · rw [List.mem_singleton] at hin
-              subst hin
-              exact hx denv hsat
-          · refine DenseSparseSolved.insertAll_preserves _ dσ hσv ?_
-            intro pr hpr
-            rcases List.mem_append.1 hpr with hin | hin
-            · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 hin
-              have hmemys : dσ.fn y = some s := htouched y s hys
-              exact denseLinSubst_terms_closed s x t (· ∈ d.occ)
-                (hσv y s hmemys) htocc
-            · rw [List.mem_singleton] at hin
-              subst hin
-              exact htocc
+            exact denseSparseAdopt_preserves false dσ x t (hσs denv hsat)
+              (hx denv hsat)
+              (fun y s hy => hy.trans
+                (denseLinSubst_eval s x t denv (hx denv hsat)).symm)
+          · exact denseSparseAdopt_preserves false dσ x t hσv htocc
+              (fun y s hs => denseLinSubst_terms_closed s x t (· ∈ d.occ) hs htocc)
 
 theorem denseSparseMarkowitzLoop_sound (bs : BusSemantics p) (d : DenseConstraintSystem p)
-    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId)
+    (occ : DenseGaussOcc) (prot : DenseGaussProt)
     (sources : Array (DenseExpr p))
     (hsrc : ∀ (i : Nat) (c : DenseExpr p),
       sources[i]? = some c → c ∈ d.algebraicConstraints) :
@@ -671,15 +783,17 @@ theorem denseSparseMarkowitzLoop_sound (bs : BusSemantics p) (d : DenseConstrain
               exact ih _ _ hσs hσv
           | some c =>
               have hcmem : c ∈ d.algebraicConstraints := hsrc entry.rowId c hsource
-              let c' := denseSparseSubstF dσ.fn c
+              let c' := denseSparseSubstSolved dσ c
               cases hpick :
-                  denseMarkowitzPick (denseSparseSubstF dσ.fn c) entry.pivot occ prot with
+                  denseMarkowitzPick (denseSparseSubstSolved dσ c) entry.pivot occ prot with
               | none =>
                   simp only [denseMarkowitzLoop, hpop, hsource, hpick]
                   exact ih _ _ hσs hσv
               | some xt =>
                   obtain ⟨x, t⟩ := xt
                   have hcclosed : c'.Closed (· ∈ d.occ) := by
+                    change (denseSparseSubstSolved dσ c).Closed (· ∈ d.occ)
+                    rw [denseSparseSubstSolved_eq]
                     apply denseSparseSubstF_closed dσ.fn c
                     · intro z hz
                       exact DenseConstraintSystem.mem_occ_of_constraint hcmem hz
@@ -687,208 +801,182 @@ theorem denseSparseMarkowitzLoop_sound (bs : BusSemantics p) (d : DenseConstrain
                   have hx : ∀ denv, d.satisfies bs denv → denv x = t.eval denv := by
                     intro denv hsat
                     apply denseMarkowitzPick_sound c' entry.pivot x t occ prot hpick denv
-                    rw [denseSparseSubstF_eval dσ.fn c denv (hσs denv hsat)]
+                    change (denseSparseSubstSolved dσ c).toExpr.eval denv = 0
+                    rw [denseSparseSubstSolved_eq,
+                      denseSparseSubstF_eval dσ.fn c denv (hσs denv hsat)]
                     exact hsat.1 c hcmem
                   have htocc : ∀ z ∈ t.terms.map Prod.fst, z ∈ d.occ := by
                     intro z hz
                     exact hcclosed z
                       (denseMarkowitzPick_terms c' entry.pivot x t occ prot hpick z hz)
-                  have htouched : ∀ y s, (y, s) ∈
-                        ((dσ.revDeps[x]?).getD ∅).toList.filterMap (fun y =>
-                          (dσ.map[y]?).bind
-                            (fun s => if s.mentions x then some (y, s) else none)) →
-                      dσ.fn y = some s := by
-                    intro y s hys
-                    obtain ⟨_, _, hy'⟩ := List.mem_filterMap.1 hys
-                    obtain ⟨s', hs', hif⟩ := Option.bind_eq_some_iff.1 hy'
-                    by_cases hm : s'.mentions x
-                    · rw [if_pos hm] at hif
-                      simp only [Option.some.injEq, Prod.mk.injEq] at hif
-                      obtain ⟨rfl, rfl⟩ := hif
-                      exact hs'
-                    · rw [if_neg hm] at hif
-                      exact absurd hif (by simp)
-                  let pairs := denseMarkowitzAdoptPairs dσ x t
-                  let dσ' := dσ.insertAll pairs
+                  let adopted := denseSparseAdopt true dσ x t
+                  let dσ' := adopted.solved
                   have hnexts : ∀ denv, d.satisfies bs denv → ∀ i u,
                       dσ'.fn i = some u → denv i = u.eval denv := by
                     intro denv hsat
-                    refine DenseSparseSolved.insertAll_preserves pairs dσ
-                      (hσs denv hsat) ?_
-                    intro pr hpr
-                    unfold denseMarkowitzAdoptPairs at hpr
-                    rcases List.mem_append.1 hpr with hin | hin
-                    · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 hin
-                      have hmemys : dσ.fn y = some s := htouched y s hys
-                      have hy : denv y = s.eval denv := hσs denv hsat y s hmemys
-                      exact hy.trans
-                        (denseLinSubst_eval s x t denv (hx denv hsat)).symm
-                    · rw [List.mem_singleton] at hin
-                      subst hin
-                      exact hx denv hsat
+                    exact denseSparseAdopt_preserves true dσ x t (hσs denv hsat)
+                      (hx denv hsat)
+                      (fun y s hy => hy.trans
+                        (denseLinSubst_eval s x t denv (hx denv hsat)).symm)
                   have hnextv : ∀ i u, dσ'.fn i = some u →
                       ∀ z ∈ u.terms.map Prod.fst, z ∈ d.occ := by
-                    refine DenseSparseSolved.insertAll_preserves pairs dσ hσv ?_
-                    intro pr hpr
-                    unfold denseMarkowitzAdoptPairs at hpr
-                    rcases List.mem_append.1 hpr with hin | hin
-                    · obtain ⟨⟨y, s⟩, hys, rfl⟩ := List.mem_map.1 hin
-                      have hmemys : dσ.fn y = some s := htouched y s hys
-                      exact denseLinSubst_terms_closed s x t (· ∈ d.occ)
-                        (hσv y s hmemys) htocc
-                    · rw [List.mem_singleton] at hin
-                      subst hin
-                      exact htocc
+                    exact denseSparseAdopt_preserves true dσ x t hσv htocc
+                      (fun y s hs =>
+                        denseLinSubst_terms_closed s x t (· ∈ d.occ) hs htocc)
                   simp only [denseMarkowitzLoop, hpop, hsource, hpick]
                   exact ih _ dσ' hnexts hnextv
 
 theorem denseSparseMarkowitzSchedule_sound (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) (occ : Std.HashMap VarId Nat)
-    (prot : Std.HashSet VarId) :
+    (d : DenseConstraintSystem p) (occ : DenseGaussOcc)
+    (prot : DenseGaussProt) (capacity : Nat) :
     (∀ denv, d.satisfies bs denv → ∀ i t,
-        (denseMarkowitzSchedule d.algebraicConstraints occ prot).fn i = some t →
+        (denseMarkowitzSchedule d.algebraicConstraints occ prot capacity).fn i = some t →
         denv i = t.eval denv) ∧
-    (∀ i t, (denseMarkowitzSchedule d.algebraicConstraints occ prot).fn i = some t →
+    (∀ i t, (denseMarkowitzSchedule d.algebraicConstraints occ prot capacity).fn i = some t →
         ∀ z ∈ t.terms.map Prod.fst, z ∈ d.occ) := by
   apply denseSparseMarkowitzLoop_sound bs d occ prot d.algebraicConstraints.toArray
   · intro i c hc
     rw [List.getElem?_toArray] at hc
     exact List.mem_of_getElem? hc
   · intro _ _ _ _ h
-    exact absurd h (by simp [DenseSparseSolved.fn, DenseSparseSolved.empty])
+    simp [DenseSparseSolved.fn] at h
   · intro _ _ h
-    exact absurd h (by simp [DenseSparseSolved.fn, DenseSparseSolved.empty])
+    simp [DenseSparseSolved.fn] at h
 
 theorem denseSparseSourceOrderSchedule_sound (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) (occ : Std.HashMap VarId Nat)
-    (prot : Std.HashSet VarId) :
+    (d : DenseConstraintSystem p) (occ : DenseGaussOcc)
+    (prot : DenseGaussProt) (capacity : Nat) :
     (∀ denv, d.satisfies bs denv → ∀ i t,
-        (denseSourceOrderSchedule d.algebraicConstraints occ prot).fn i = some t →
+        (denseSourceOrderSchedule d.algebraicConstraints occ prot capacity).fn i = some t →
         denv i = t.eval denv) ∧
-    (∀ i t, (denseSourceOrderSchedule d.algebraicConstraints occ prot).fn i = some t →
+    (∀ i t, (denseSourceOrderSchedule d.algebraicConstraints occ prot capacity).fn i = some t →
         ∀ z ∈ t.terms.map Prod.fst, z ∈ d.occ) := by
   have hfirst := denseSparseGaussLoop_sound bs d occ prot
-    d.algebraicConstraints DenseSparseSolved.empty
+    d.algebraicConstraints (DenseSparseSolved.empty capacity)
     (fun _c hc => hc)
-    (fun _ _ _ _ hti =>
-      absurd hti (by simp [DenseSparseSolved.fn, DenseSparseSolved.empty]))
-    (fun _ _ hti =>
-      absurd hti (by simp [DenseSparseSolved.fn, DenseSparseSolved.empty]))
+    (fun _ _ _ _ hti => by simp [DenseSparseSolved.fn] at hti)
+    (fun _ _ hti => by simp [DenseSparseSolved.fn] at hti)
   by_cases hempty :
       (denseSparseGaussLoop occ prot d.algebraicConstraints
-        DenseSparseSolved.empty).map.isEmpty
+        (DenseSparseSolved.empty capacity)).isEmpty
   · simpa [denseSourceOrderSchedule, hempty] using hfirst
   · have hsecond := denseSparseGaussLoop_sound bs d occ prot
       d.algebraicConstraints
-      (denseSparseGaussLoop occ prot d.algebraicConstraints DenseSparseSolved.empty)
+      (denseSparseGaussLoop occ prot d.algebraicConstraints
+        (DenseSparseSolved.empty capacity))
       (fun _c hc => hc) hfirst.1 hfirst.2
     simpa [denseSourceOrderSchedule, hempty] using hsecond
 
-theorem DenseSparseSolved.materialize_lookup (dσ : DenseSparseSolved p)
-    (i : VarId) (e : DenseExpr p) (h : dσ.materialize.fn i = some e) :
-    ∃ row, dσ.fn i = some row ∧ e = row.toExpr := by
-  simp only [DenseSparseSolved.materialize, DenseSolved.fn] at h
-  let pairs := dσ.map.toList.map (fun xt => (xt.1, xt.2.toExpr))
-  have hpairs :
-      pairs.foldl (fun out xt => out.insert xt.1 xt.2)
-          (∅ : Std.HashMap VarId (DenseExpr p)) =
-        dσ.map.toList.foldl (fun out xt => out.insert xt.1 xt.2.toExpr) ∅ := by
-    exact List.foldl_map
-  rw [← hpairs] at h
-  apply foldl_insert_getElem pairs
-    (∅ : Std.HashMap VarId (DenseExpr p))
-    (Q := fun j out => ∃ row, dσ.fn j = some row ∧ out = row.toExpr)
-  · intro j out hj
-    exact absurd hj (by simp)
-  · intro pr hpr
-    obtain ⟨xt, hxt, rfl⟩ := List.mem_map.1 hpr
-    refine ⟨xt.2, ?_, rfl⟩
-    exact Std.HashMap.mem_toList_iff_getElem?_eq_some.1 hxt
-  · exact h
-
-theorem DenseSparseSolved.materialize_sound (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) (dσ : DenseSparseSolved p)
-    (hs : ∀ denv, d.satisfies bs denv → ∀ i t,
-      dσ.fn i = some t → denv i = t.eval denv)
-    (hv : ∀ i t, dσ.fn i = some t →
-      ∀ z ∈ t.terms.map Prod.fst, z ∈ d.occ) :
-    (∀ denv, d.satisfies bs denv → ∀ i e,
-        dσ.materialize.fn i = some e → denv i = e.eval denv) ∧
-    (∀ i e, dσ.materialize.fn i = some e → ∀ z ∈ e.vars, z ∈ d.occ) := by
-  constructor
-  · intro denv hsat i e he
-    obtain ⟨row, hrow, rfl⟩ := dσ.materialize_lookup i e he
-    rw [DenseLinExpr.toExpr_eval]
-    exact hs denv hsat i row hrow
-  · intro i e he z hz
-    obtain ⟨row, hrow, rfl⟩ := dσ.materialize_lookup i e he
-    exact hv i row hrow z (DenseLinExpr.toExpr_vars row z hz)
-
-theorem denseGaussSchedule_sound (bs : BusSemantics p) (d : DenseConstraintSystem p)
-    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
-    (∀ denv, d.satisfies bs denv → ∀ i t,
-        (denseGaussSchedule d.algebraicConstraints occ prot).fn i = some t →
-        denv i = t.eval denv) ∧
-    (∀ i t, (denseGaussSchedule d.algebraicConstraints occ prot).fn i = some t →
-        ∀ z ∈ t.vars, z ∈ d.occ) := by
-  unfold denseGaussSchedule
+theorem denseGaussSparseSchedule_sound (bs : BusSemantics p) (d : DenseConstraintSystem p)
+    (occ : DenseGaussOcc) (prot : DenseGaussProt) (capacity : Nat) :
+    (∀ denv, d.satisfies bs denv → ∀ i row,
+        (denseGaussSparseSchedule d.algebraicConstraints occ prot capacity).lookup i =
+          some row →
+        denv i = row.eval denv) ∧
+    (∀ i row,
+        (denseGaussSparseSchedule d.algebraicConstraints occ prot capacity).lookup i =
+          some row →
+        ∀ z ∈ row.terms.map Prod.fst, z ∈ d.occ) := by
+  unfold denseGaussSparseSchedule
   split
-  · exact DenseSparseSolved.materialize_sound bs d _
-      (denseSparseSourceOrderSchedule_sound bs d occ prot).1
-      (denseSparseSourceOrderSchedule_sound bs d occ prot).2
-  · exact DenseSparseSolved.materialize_sound bs d _
-      (denseSparseMarkowitzSchedule_sound bs d occ prot).1
-      (denseSparseMarkowitzSchedule_sound bs d occ prot).2
+  · exact denseSparseSourceOrderSchedule_sound bs d occ prot capacity
+  · exact denseSparseMarkowitzSchedule_sound bs d occ prot capacity
 
+theorem DenseSparseSolved.fnExpr_lookup (dσ : DenseSparseSolved p)
+    (i : VarId) (e : DenseExpr p) (h : dσ.fnExpr i = some e) :
+    ∃ row, dσ.lookup i = some row ∧ e = row.toExpr := by
+  unfold DenseSparseSolved.fnExpr at h
+  cases hrow : dσ.lookup i with
+  | none => simp [hrow] at h
+  | some row =>
+      simp only [hrow, Option.map_some, Option.some.injEq] at h
+      exact ⟨row, rfl, h.symm⟩
+
+theorem denseSparseExprSubst_eq (dσ : DenseSparseSolved p) (e : DenseExpr p) :
+    denseSparseExprSubst dσ e = e.substF dσ.fnExpr := by
+  induction e with
+  | const n => rfl
+  | var x =>
+      simp only [denseSparseExprSubst, DenseExpr.substF, DenseSparseSolved.fnExpr]
+      cases hrow : dσ.lookup x <;> rfl
+  | add a b iha ihb => simp only [denseSparseExprSubst, DenseExpr.substF, iha, ihb]
+  | mul a b iha ihb => simp only [denseSparseExprSubst, DenseExpr.substF, iha, ihb]
+
+theorem denseSparseBISubst_eq (dσ : DenseSparseSolved p)
+    (bi : BusInteraction (DenseExpr p)) :
+    denseSparseBISubst dσ bi = denseBIsubstF bi dσ.fnExpr := by
+  have hfn : denseSparseExprSubst dσ = fun e => e.substF dσ.fnExpr :=
+    funext (denseSparseExprSubst_eq dσ)
+  cases bi
+  simp only [denseSparseBISubst, denseBIsubstF, hfn]
+
+theorem DenseConstraintSystem.substSparse_eq
+    (d : DenseConstraintSystem p) (dσ : DenseSparseSolved p) :
+    d.substSparse dσ = d.substF dσ.fnExpr := by
+  have hfn : denseSparseExprSubst dσ = fun e => e.substF dσ.fnExpr :=
+    funext (denseSparseExprSubst_eq dσ)
+  have hbi : denseSparseBISubst dσ = fun bi => denseBIsubstF bi dσ.fnExpr :=
+    funext (denseSparseBISubst_eq dσ)
+  cases d
+  simp only [DenseConstraintSystem.substSparse, DenseConstraintSystem.substF,
+    hfn, hbi]
 
 /-! ## The pass's correctness -/
 
-/-- The scheduled solution map is entailed and occurrence-closed. -/
-theorem denseGaussElim_loop_invariant (bs : BusSemantics p) (d : DenseConstraintSystem p) :
-    (∀ denv, d.satisfies bs denv → ∀ i t,
-        (denseGaussSchedule d.algebraicConstraints
-          (denseOccurrenceMap d) (denseProtectedVars d bs)).fn i = some t →
-          denv i = t.eval denv) ∧
-    (∀ i t, (denseGaussSchedule d.algebraicConstraints
-        (denseOccurrenceMap d) (denseProtectedVars d bs)).fn i = some t →
-        ∀ z ∈ t.vars, z ∈ d.occ) := by
-  exact denseGaussSchedule_sound bs d (denseOccurrenceMap d) (denseProtectedVars d bs)
+/-- The scheduled sparse rows are entailed and occurrence-closed. -/
+theorem denseGaussElimSized_loop_invariant (capacity : Nat)
+    (bs : BusSemantics p) (d : DenseConstraintSystem p) :
+    (∀ denv, d.satisfies bs denv → ∀ i e,
+        (denseGaussSparseSchedule d.algebraicConstraints
+          (denseOccurrenceMap capacity d) (denseProtectedVars capacity d bs) capacity).fnExpr i =
+            some e →
+          denv i = e.eval denv) ∧
+    (∀ i e, (denseGaussSparseSchedule d.algebraicConstraints
+        (denseOccurrenceMap capacity d) (denseProtectedVars capacity d bs) capacity).fnExpr i =
+          some e →
+        ∀ z ∈ e.vars, z ∈ d.occ) := by
+  have hs := denseGaussSparseSchedule_sound bs d (denseOccurrenceMap capacity d)
+    (denseProtectedVars capacity d bs) capacity
+  constructor
+  · intro denv hsat i e he
+    obtain ⟨row, hrow, rfl⟩ :=
+      DenseSparseSolved.fnExpr_lookup _ i e he
+    rw [DenseLinExpr.toExpr_eval]
+    exact hs.1 denv hsat i row hrow
+  · intro i e he z hz
+    obtain ⟨row, hrow, rfl⟩ :=
+      DenseSparseSolved.fnExpr_lookup _ i e he
+    exact hs.2 i row hrow z (DenseLinExpr.toExpr_vars row z hz)
 
-/-- `denseGaussElim` preserves coverage: on the non-trivial branch it substitutes an
-    occurrence-closed solution map, whose solutions are covered because their variables occur in a
-    covered system. -/
-theorem denseGaussElim_covered (reg : VarRegistry) (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
-    (denseGaussElim bs d).CoveredBy reg := by
-  rw [denseGaussElim_eq]
-  split_ifs with hempty
+theorem denseGaussElimSized_covered (capacity : Nat) (reg : VarRegistry)
+    (bs : BusSemantics p) (d : DenseConstraintSystem p) (hcov : d.CoveredBy reg) :
+    (denseGaussElimSized capacity bs d).CoveredBy reg := by
+  simp only [denseGaussElimSized]
+  split
   · exact hcov
-  · refine DenseConstraintSystem.substF_covered hcov ?_
-    intro i _ t hti z hz
+  · rw [DenseConstraintSystem.substSparse_eq]
+    refine DenseConstraintSystem.substF_covered hcov ?_
+    intro i _ e he z hz
     exact DenseConstraintSystem.occ_valid hcov z
-      ((denseGaussElim_loop_invariant bs d).2 i t hti z hz)
+      ((denseGaussElimSized_loop_invariant capacity bs d).2 i e he z hz)
 
-/-- **Correctness of `denseGaussElim`.** The empty-map branch is the identity (`refl`); the
-    substitution branch is `substF_denseCorrect`, fed the entailment and occurrence-closure of the
-    final solution map. -/
-theorem denseGaussElim_correct (reg : VarRegistry) (bs : BusSemantics p)
-    (d : DenseConstraintSystem p) :
-    DensePassCorrect reg.isInput d (denseGaussElim bs d) [] bs := by
-  have hinv := denseGaussElim_loop_invariant bs d
-  rw [denseGaussElim_eq]
-  split_ifs with hempty
+theorem denseGaussElimSized_correct (capacity : Nat) (reg : VarRegistry)
+    (bs : BusSemantics p) (d : DenseConstraintSystem p) :
+    DensePassCorrect reg.isInput d (denseGaussElimSized capacity bs d) [] bs := by
+  have hinv := denseGaussElimSized_loop_invariant capacity bs d
+  simp only [denseGaussElimSized]
+  split
   · exact DensePassCorrect.refl reg.isInput d bs
-  · exact DenseConstraintSystem.substF_denseCorrect d _ bs reg.isInput
-      (fun denv hsat i t hti => hinv.1 denv hsat i t hti)
-      (fun i t hti z hz => hinv.2 i t hti z hz)
+  · rw [DenseConstraintSystem.substSparse_eq]
+    exact DenseConstraintSystem.substF_denseCorrect d _ bs reg.isInput
+      (fun denv hsat i e he => hinv.1 denv hsat i e he)
+      (fun i e he z hz => hinv.2 i e he z hz)
 
-/-- The wired dense Gauss-elimination pass (transform `denseGaussElim`, `Gauss.lean`). -/
+/-- The wired dense Gauss-elimination pass. -/
 def denseGaussElimPass : DenseVerifiedPassW p :=
-  DenseVerifiedPassW.of
-    (fun bs _ d => denseGaussElim bs d)
-    (fun _ _ _ => [])
-    (fun reg bs _ d hcov => denseGaussElim_covered reg bs d hcov)
-    (fun _ _ _ _ _ => by intro x hx; simp at hx)
-    (fun reg bs _ d _ => denseGaussElim_correct reg bs d)
+  DenseVerifiedPassW.ofDenseStep (fun reg bs _ d hcov =>
+    DenseNativeStep.ofSame bs
+      (denseGaussElimSized_covered reg.byId.size reg bs d hcov)
+      (denseGaussElimSized_correct reg.byId.size reg bs d))
 
 end ApcOptimizer.Dense

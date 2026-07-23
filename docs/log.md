@@ -4698,3 +4698,34 @@ unused-theorem checks pass.
 
 **Worked locally: yes (representative Gauss runtime win with unchanged final sizes; full-set
 result pending CI).**
+
+### 136. Runtime: exact array-backed Gauss state and first-order generated code
+
+Gauss now sizes occurrence counts, protected-variable bits, sparse solution rows, exact
+reverse-dependency buckets, support marks, Markowitz degrees, and row indexes directly from the
+variable registry. Replacing a solved row uses reusable support marks to diff its old and new
+supports in linear time, updates the exact dependency edges in the same touched-row fold, and
+clears a pivot bucket before propagation. An append-only rewrite-history index retains the
+historical dependent count used by the merged scheduler, so exact live edges do not silently alter
+its scoring heuristic.
+
+The runtime path consumes canonical affine rows directly. Pivot selection is a first-order
+two-pass fold with explicit ±1 precedence and strict first-wins ties; Markowitz pivot construction
+uses the same canonical coefficients without rebuilding coefficient or deduplication tables.
+Sparse solution lookup is specialized in source and Markowitz substitution, source-order adoption
+skips change-set construction, remaining temporary hash tables are pre-sized when their cardinality
+is known, and final substitution reads the solution array without constructing a `DenseSolved`
+map. Initial Markowitz scoring also shares one empty solution state instead of allocating
+registry-sized arrays per row.
+
+The correctness proof now works directly over the registry-sized sparse schedule and final array
+lookup. `lake build` is warning-free, proof integrity and unused-theorem reachability pass, and the
+generated Gauss C has no `lean_alloc_closure`, `argmin`, or `argAux` sites. One-pass local checks on
+the five representatives preserved cleanup iteration counts and final variable, bus-interaction,
+and constraint counts exactly. Local timing did not establish a win: the final
+`wasm-eth/apc_037` check measured 3954 ms versus the merged 3287 ms Gauss baseline, so the
+same-runner corpus decision is delegated to the draft PR's triggered CI rather than inferred from
+the local machine.
+
+**Worked locally: no (structural and effectiveness checks pass, but local runtime is regressive;
+authoritative corpus result pending CI).**
