@@ -186,12 +186,62 @@ def denseBasisJustified (bound : Nat) (bnd : VarId → Option Nat) {bs : BusSema
   | some L => denseBasisReduceGo bound bnd facts fwits basisFuel 0 L.norm
   | none => false
 
+/-! ## Bitwise-lookup AND/OR-output justification -/
+
+/-- The form `2·x + r − o1 − o2`, whose vanishing witnesses `2·x = o1 + o2 − r` (`x = o1 & o2`). -/
+def denseXorAndForm (x : VarId) (o1 o2 r : DenseExpr p) : DenseExpr p :=
+  .add (.mul (.const 2) (.var x))
+    (.add r (.add (.mul (.const (-1)) o1) (.mul (.const (-1)) o2)))
+
+/-- The form `2·x − r − o1 − o2`, whose vanishing witnesses `2·x = o1 + o2 + r` (`x = o1 | o2`). -/
+def denseXorOrForm (x : VarId) (o1 o2 r : DenseExpr p) : DenseExpr p :=
+  .add (.mul (.const 2) (.var x))
+    (.add (.mul (.const (-1)) r) (.add (.mul (.const (-1)) o1) (.mul (.const (-1)) o2)))
+
+/-- Does a dense expression linearize to the zero form (`= 0` under every assignment)? -/
+def denseLinIsZero (e : DenseExpr p) : Bool :=
+  match denseLinearize e with
+  | some L => decide ((DenseLinExpr.norm L).const = 0) && (DenseLinExpr.norm L).terms.isEmpty
+  | none => false
+
+/-- Does one surviving interaction pin `x` as the AND (or, when `allowOr`, OR) output of a
+    byte-forced XOR pair? On a `byteXorSpec` bus (byte bound `≤ 256`), an active (nonzero constant
+    multiplicity) message decoding to `(op, o1, o2, r)` with `op = xorOp` forces `o1, o2 ∈ [0,256)`
+    and `r = o1 ⊕ o2`; if the result slot additionally obeys `r = o1 + o2 − 2·x` (then `x = o1 & o2`)
+    or, when `allowOr`, `r = 2·x − o1 − o2` (then `x = o1 | o2`), then `x ∈ [0,256)` under every
+    assignment satisfying the interaction. E.g. the surviving XOR `[b, c, -2·x + b + c, 1]` pins the
+    AND output `x < 256`. The OR arm is gated by `allowOr` because it is only enabled where it is
+    variable-safe (see the dispatcher). Soundness in `Proofs/BusPairCancelJustify.lean`. -/
+def denseXorAndByteWit (allowOr : Bool) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (x : VarId) (bi : BusInteraction (DenseExpr p)) : Bool :=
+  match facts.byteXorSpec bi.busId with
+  | none => false
+  | some spec =>
+    decide (spec.bound ≤ 256) &&
+    (match bi.multiplicity.constValue? with
+     | some mv => decide (mv ≠ 0)
+     | none => false) &&
+    (match spec.decode bi.payload with
+     | some (op, o1, o2, r) =>
+       decide (op = (.const spec.xorOp : DenseExpr p)) &&
+       (denseLinIsZero (denseXorAndForm x o1 o2 r) ||
+         (allowOr && denseLinIsZero (denseXorOrForm x o1 o2 r)))
+     | none => false)
+
+/-- Is `x` byte-justified by some surviving XOR interaction in `wl` (`denseXorAndByteWit`)? -/
+def denseXorAndByteJustified (allowOr : Bool) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (x : VarId) (wl : List (BusInteraction (DenseExpr p))) : Bool :=
+  wl.any (denseXorAndByteWit allowOr bs facts x)
+
 /-- Is `e` provably a byte under every assignment satisfying the remaining system? Tries, in order:
     a constant `< bound`; a variable with a bus-fact bound `≤ bound`; (when `deep`) a
-    selector-flag-domain deep justification or a single-variable finite-domain justification; an
-    affine recomposition of bounded limbs; or a basis reduction against range-checked slot forms
-    (`fwits`). Remaining interactions are consulted through `wits`; `domCs`/`candsOf` are precomputed
-    by the caller. -/
+    selector-flag-domain deep justification, or a bitwise-lookup AND/OR-output justification
+    (`denseXorAndByteWit`), or a single-variable finite-domain justification; an affine recomposition
+    of bounded limbs; or a basis reduction against range-checked slot forms (`fwits`). Remaining
+    interactions are consulted through `wits`; `domCs`/`candsOf` are precomputed by the caller. The
+    AND/OR arm allows the OR form only via `wits` (never `fwits`): the memory-limb XOR that would
+    unlock it in the pair-cancel caller is a `fwits` form-witness, and enabling OR there perturbs the
+    memory-ordering gadgets into a variable regression, so it is kept to the variable-safe AND form. -/
 def denseByteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p))
     (candsOf : VarId → List (DenseExpr p)) (bs : BusSemantics p)
     (facts : BusFacts p bs) (wits fwits : VarId → List (BusInteraction (DenseExpr p)))
@@ -205,7 +255,10 @@ def denseByteJustifiedW (bound : Nat) (deep : Bool) (domCs : List (DenseExpr p))
         | some b => decide (b ≤ bound)
         | none => false) ||
        (deep && decide (256 ≤ bound) &&
-         denseDeepByteJustified domCs (candsOf x) bs facts wits x)
+         denseDeepByteJustified domCs (candsOf x) bs facts wits x) ||
+       (deep && decide (256 ≤ bound) &&
+         (denseXorAndByteJustified true bs facts x (wits x) ||
+           denseXorAndByteJustified false bs facts x (fwits x)))
      | _ => false) ||
     (deep && decide (256 ≤ bound) && denseDomainByteJustified domCs e) ||
     denseAffineJustified bound (fun x => denseFindVarBound bs facts (wits x) x) e ||

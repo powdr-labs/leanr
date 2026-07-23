@@ -457,6 +457,209 @@ theorem denseBasisJustified_sound (bound : Nat) (bnd : VarId → Option Nat) {bs
       Nat.mod_eq_of_lt (by omega)]
     omega
 
+/-! # Soundness of the bitwise-lookup AND/OR-output justification
+
+`_sound` lemmas for `denseXorAndByteWit`/`denseXorAndByteJustified`: a surviving bus-6 XOR
+interaction whose result slot pins `2·x = o1 + o2 − r` (the AND output `x = o1 & o2`) or
+`2·x = o1 + o2 + r` (the OR output `x = o1 | o2`) forces `x` into `[0,256)`, backed by
+`byteXorSpec_sound` (the bus semantics) — not reproven here. -/
+
+/-- Bit-decomposition identity `a + b = (a ⊕ b) + 2·(a & b)`, by strong recursion on the low bit. -/
+theorem nat_add_eq_xor_add_two_mul_and (a : ℕ) :
+    ∀ b, a + b = Nat.xor a b + 2 * Nat.land a b := by
+  induction a using Nat.strong_induction_on with
+  | _ a ih =>
+    intro b
+    rcases Nat.eq_zero_or_pos a with rfl | ha
+    · simp
+    · have hrec := ih (a / 2) (Nat.div_lt_self ha (by norm_num)) (b / 2)
+      have hxd : Nat.xor a b / 2 = Nat.xor (a / 2) (b / 2) := Nat.xor_div_two
+      have had : Nat.land a b / 2 = Nat.land (a / 2) (b / 2) := Nat.and_div_two
+      have hxm := Nat.div_add_mod (Nat.xor a b) 2
+      have ham := Nat.div_add_mod (Nat.land a b) 2
+      have hda := Nat.div_add_mod a 2
+      have hdb := Nat.div_add_mod b 2
+      have hla2 : Nat.land a b % 2 = 1 ↔ (a % 2 = 1 ∧ b % 2 = 1) := Nat.and_mod_two_eq_one
+      have hxa2 : (Nat.xor a b % 2 = 1) ↔ ¬(a % 2 = 1 ↔ b % 2 = 1) := Nat.xor_mod_two_eq_one
+      have hmx := Nat.mod_two_eq_zero_or_one (Nat.xor a b)
+      have hml := Nat.mod_two_eq_zero_or_one (Nat.land a b)
+      rw [hxd] at hxm
+      rw [had] at ham
+      rcases Nat.mod_two_eq_zero_or_one a with hpa | hpa <;>
+        rcases Nat.mod_two_eq_zero_or_one b with hpb | hpb <;> omega
+
+/-- Bit-decomposition identity `a + b + (a ⊕ b) = 2·(a | b)`, by strong recursion on the low bit. -/
+theorem nat_add_add_xor_eq_two_mul_lor (a : ℕ) :
+    ∀ b, a + b + Nat.xor a b = 2 * Nat.lor a b := by
+  induction a using Nat.strong_induction_on with
+  | _ a ih =>
+    intro b
+    rcases Nat.eq_zero_or_pos a with rfl | ha
+    · simp [Nat.two_mul]
+    · have hrec := ih (a / 2) (Nat.div_lt_self ha (by norm_num)) (b / 2)
+      have hxd : Nat.xor a b / 2 = Nat.xor (a / 2) (b / 2) := Nat.xor_div_two
+      have hod : Nat.lor a b / 2 = Nat.lor (a / 2) (b / 2) := Nat.or_div_two
+      have hxm := Nat.div_add_mod (Nat.xor a b) 2
+      have hom := Nat.div_add_mod (Nat.lor a b) 2
+      have hda := Nat.div_add_mod a 2
+      have hdb := Nat.div_add_mod b 2
+      have hlo2 : Nat.lor a b % 2 = 1 ↔ (a % 2 = 1 ∨ b % 2 = 1) := Nat.or_mod_two_eq_one
+      have hxa2 : (Nat.xor a b % 2 = 1) ↔ ¬(a % 2 = 1 ↔ b % 2 = 1) := Nat.xor_mod_two_eq_one
+      have hmx := Nat.mod_two_eq_zero_or_one (Nat.xor a b)
+      have hmo := Nat.mod_two_eq_zero_or_one (Nat.lor a b)
+      rw [hxd] at hxm
+      rw [hod] at hom
+      rcases Nat.mod_two_eq_zero_or_one a with hpa | hpa <;>
+        rcases Nat.mod_two_eq_zero_or_one b with hpb | hpb <;> omega
+
+/-- If `denseLinIsZero e` holds, `e` evaluates to `0` under every assignment. -/
+theorem denseLinIsZero_sound (e : DenseExpr p) (h : denseLinIsZero e = true)
+    (denv : VarId → ZMod p) : e.eval denv = 0 := by
+  unfold denseLinIsZero at h
+  cases hL : denseLinearize e with
+  | none => rw [hL] at h; simp at h
+  | some L =>
+    rw [hL, Bool.and_eq_true] at h
+    obtain ⟨hconst, hterms⟩ := h
+    have hconst' : (DenseLinExpr.norm L).const = 0 := of_decide_eq_true hconst
+    have hterms' : (DenseLinExpr.norm L).terms = [] := List.isEmpty_iff.mp hterms
+    rw [denseLinearize_eval e L hL denv, ← DenseLinExpr.norm_eval]
+    simp only [DenseLinExpr.eval, hconst', hterms', List.map_nil, List.sum_nil, add_zero]
+
+/-- Evaluation of the AND-witness form `2·x + r − o1 − o2`. -/
+theorem denseXorAndForm_eval (x : VarId) (o1 o2 r : DenseExpr p) (denv : VarId → ZMod p) :
+    (denseXorAndForm x o1 o2 r).eval denv
+      = 2 * denv x + r.eval denv - o1.eval denv - o2.eval denv := by
+  simp only [denseXorAndForm, DenseExpr.eval]; ring
+
+/-- Evaluation of the OR-witness form `2·x − r − o1 − o2`. -/
+theorem denseXorOrForm_eval (x : VarId) (o1 o2 r : DenseExpr p) (denv : VarId → ZMod p) :
+    (denseXorOrForm x o1 o2 r).eval denv
+      = 2 * denv x - r.eval denv - o1.eval denv - o2.eval denv := by
+  simp only [denseXorOrForm, DenseExpr.eval]; ring
+
+/-- From `2·z = 2·k` (in `ZMod p`, `p` prime) with `k < 256` a natural, conclude `z.val < 256`:
+    cancel `2` (field, unless `p = 2` where `z.val < p ≤ 2`). -/
+theorem two_mul_eq_two_mul_byte [Fact p.Prime] (z : ZMod p) (k : ℕ) (hk : k < 256)
+    (hfin : (2 : ZMod p) * z = 2 * ((k : ℕ) : ZMod p)) : z.val < 256 := by
+  haveI : NeZero p := ⟨(Fact.out : p.Prime).ne_zero⟩
+  by_cases h2 : (2 : ZMod p) = 0
+  · have hcast2 : ((2 : ℕ) : ZMod p) = 0 := by exact_mod_cast h2
+    have hdvd : p ∣ 2 := (CharP.cast_eq_zero_iff (ZMod p) p 2).mp hcast2
+    have hple : p ≤ 2 := Nat.le_of_dvd (by decide) hdvd
+    have hlt := ZMod.val_lt z
+    omega
+  · have hz : z = ((k : ℕ) : ZMod p) := mul_left_cancel₀ h2 hfin
+    rw [hz, ZMod.val_natCast]
+    have := Nat.mod_le k p
+    omega
+
+/-- A surviving XOR interaction whose result slot pins `2·x = o1 + o2 − r` (AND) or
+    `2·x = o1 + o2 + r` (OR) forces `x < 256`: the accepted (byte-forced) operands and the XOR
+    relation give `x = o1 & o2` resp. `x = o1 | o2 ∈ [0,256)`. -/
+theorem denseXorAndByteWit_sound [Fact p.Prime] (allowOr : Bool)
+    (bs : BusSemantics p) (facts : BusFacts p bs)
+    (x : VarId) (bi : BusInteraction (DenseExpr p))
+    (h : denseXorAndByteWit allowOr bs facts x bi = true) (denv : VarId → ZMod p)
+    (hviol : (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false) :
+    (denv x).val < 256 := by
+  unfold denseXorAndByteWit at h
+  cases hspec : facts.byteXorSpec bi.busId with
+  | none => rw [hspec] at h; simp at h
+  | some spec =>
+    rw [hspec, Bool.and_eq_true, Bool.and_eq_true] at h
+    obtain ⟨⟨hbnd, hmul⟩, hdec⟩ := h
+    have hbnd' : spec.bound ≤ 256 := of_decide_eq_true hbnd
+    cases hmc : bi.multiplicity.constValue? with
+    | none => rw [hmc] at hmul; simp at hmul
+    | some mv =>
+      rw [hmc] at hmul
+      have hmv : mv ≠ 0 := of_decide_eq_true hmul
+      cases hd : spec.decode bi.payload with
+      | none => rw [hd] at hdec; simp at hdec
+      | some t =>
+        obtain ⟨op, o1, o2, r⟩ := t
+        rw [hd, Bool.and_eq_true] at hdec
+        obtain ⟨hop, hlin⟩ := hdec
+        have hopEv : op.eval denv = spec.xorOp := by rw [of_decide_eq_true hop]; rfl
+        have hmulEv : (denseBIEval bi denv).multiplicity = mv :=
+          bi.multiplicity.constValue?_sound mv hmc denv
+        have hvf : bs.violatesConstraint (denseBIEval bi denv) = false :=
+          hviol (by rw [hmulEv]; exact hmv)
+        obtain ⟨_, _, hsound⟩ := facts.byteXorSpec_sound bi.busId spec hspec
+        have hdecEv : spec.decode (denseBIEval bi denv).payload
+            = some (op.eval denv, o1.eval denv, o2.eval denv, r.eval denv) := by
+          show spec.decode (bi.payload.map (fun e => e.eval denv)) = _
+          rw [spec.decode_map, hd]; rfl
+        obtain ⟨ha, hb, hxr⟩ :=
+          ((hsound (denseBIEval bi denv).payload (op.eval denv) (o1.eval denv) (o2.eval denv)
+              (r.eval denv) (denseBIEval bi denv).multiplicity hdecEv).1 hopEv).mp hvf
+        have haa : (((o1.eval denv).val : ℕ) : ZMod p) = o1.eval denv :=
+          ZMod.natCast_rightInverse (o1.eval denv)
+        have hbb : (((o2.eval denv).val : ℕ) : ZMod p) = o2.eval denv :=
+          ZMod.natCast_rightInverse (o2.eval denv)
+        have hrr : (((r.eval denv).val : ℕ) : ZMod p) = r.eval denv :=
+          ZMod.natCast_rightInverse (r.eval denv)
+        rcases Bool.or_eq_true _ _ |>.mp hlin with hand | hor
+        · -- AND: `2·x = o1 + o2 − r`, so `x = o1 & o2`
+          have hzero := denseLinIsZero_sound (denseXorAndForm x o1 o2 r) hand denv
+          rw [denseXorAndForm_eval] at hzero
+          have heq : (2 : ZMod p) * denv x
+              = o1.eval denv + o2.eval denv - r.eval denv := by linear_combination hzero
+          have hident : (o1.eval denv).val + (o2.eval denv).val
+              = (r.eval denv).val + 2 * Nat.land (o1.eval denv).val (o2.eval denv).val := by
+            have hid := nat_add_eq_xor_add_two_mul_and (o1.eval denv).val (o2.eval denv).val
+            rw [← hxr] at hid; exact hid
+          have hZ : o1.eval denv + o2.eval denv
+              = r.eval denv
+                + 2 * ((Nat.land (o1.eval denv).val (o2.eval denv).val : ℕ) : ZMod p) := by
+            have hc := congrArg (fun n : ℕ => (n : ZMod p)) hident
+            push_cast at hc
+            rw [haa, hbb, hrr] at hc
+            linear_combination hc
+          refine two_mul_eq_two_mul_byte (denv x) (Nat.land (o1.eval denv).val (o2.eval denv).val)
+            ?_ (by linear_combination heq + hZ)
+          have hkle : Nat.land (o1.eval denv).val (o2.eval denv).val ≤ (o1.eval denv).val :=
+            Nat.and_le_left
+          omega
+        · -- OR: `2·x = o1 + o2 + r`, so `x = o1 | o2`
+          have hor' : denseLinIsZero (denseXorOrForm x o1 o2 r) = true := by
+            rw [Bool.and_eq_true] at hor; exact hor.2
+          have hzero := denseLinIsZero_sound (denseXorOrForm x o1 o2 r) hor' denv
+          rw [denseXorOrForm_eval] at hzero
+          have heq : (2 : ZMod p) * denv x
+              = o1.eval denv + o2.eval denv + r.eval denv := by linear_combination hzero
+          have hident : (o1.eval denv).val + (o2.eval denv).val + (r.eval denv).val
+              = 2 * Nat.lor (o1.eval denv).val (o2.eval denv).val := by
+            have hid := nat_add_add_xor_eq_two_mul_lor (o1.eval denv).val (o2.eval denv).val
+            rw [← hxr] at hid; exact hid
+          have hZ : o1.eval denv + o2.eval denv + r.eval denv
+              = 2 * ((Nat.lor (o1.eval denv).val (o2.eval denv).val : ℕ) : ZMod p) := by
+            have hc := congrArg (fun n : ℕ => (n : ZMod p)) hident
+            push_cast at hc
+            rw [haa, hbb, hrr] at hc
+            linear_combination hc
+          refine two_mul_eq_two_mul_byte (denv x) (Nat.lor (o1.eval denv).val (o2.eval denv).val)
+            ?_ (by linear_combination heq + hZ)
+          have h256 : (2 : ℕ) ^ 8 = 256 := by norm_num
+          have hlt : Nat.lor (o1.eval denv).val (o2.eval denv).val < 2 ^ 8 :=
+            Nat.or_lt_two_pow (by rw [h256]; omega) (by rw [h256]; omega)
+          rw [h256] at hlt; exact hlt
+
+/-- If some interaction of `wl` (each never violating when active) AND/OR-output-justifies `x`,
+    then `x` is a byte. -/
+theorem denseXorAndByteJustified_sound [Fact p.Prime] (allowOr : Bool)
+    (bs : BusSemantics p) (facts : BusFacts p bs)
+    (x : VarId) (wl : List (BusInteraction (DenseExpr p)))
+    (h : denseXorAndByteJustified allowOr bs facts x wl = true) (denv : VarId → ZMod p)
+    (hbus : ∀ bi ∈ wl, (denseBIEval bi denv).multiplicity ≠ 0 →
+      bs.violatesConstraint (denseBIEval bi denv) = false) :
+    (denv x).val < 256 := by
+  unfold denseXorAndByteJustified at h
+  obtain ⟨bi, hbi, hb⟩ := List.any_eq_true.1 h
+  exact denseXorAndByteWit_sound allowOr bs facts x bi hb denv (hbus bi hbi)
+
 /-! # Soundness of the byte-justification dispatcher
 
 `_sound` lemmas for `denseByteJustifiedW`/`denseByteJustified`/`denseRecvSlotsJustified`.
@@ -500,22 +703,31 @@ theorem denseByteJustifiedW_sound (bound : Nat) (deep : Bool) (all domCs : List 
       | var x =>
         dsimp only at h
         show (denv x).val < bound
-        rcases Bool.or_eq_true _ _ |>.mp h with h' | h'
-        · cases hb : denseFindVarBound bs facts (wits x) x with
-          | some b =>
-            rw [hb] at h'
-            dsimp only at h'
+        rcases Bool.or_eq_true _ _ |>.mp h with hAB | hC
+        · rcases Bool.or_eq_true _ _ |>.mp hAB with h' | h'
+          · cases hb : denseFindVarBound bs facts (wits x) x with
+            | some b =>
+              rw [hb] at h'
+              dsimp only at h'
+              exact lt_of_lt_of_le
+                (denseFindVarBound_sound bs facts (wits x) x b hb denv (hbusW x))
+                (of_decide_eq_true h')
+            | none => rw [hb] at h'; simp at h'
+          · rw [Bool.and_eq_true, Bool.and_eq_true] at h'
+            haveI : Fact p.Prime := ⟨hdeep h'.1.1⟩
+            haveI : NeZero p := ⟨(hdeep h'.1.1).ne_zero⟩
             exact lt_of_lt_of_le
-              (denseFindVarBound_sound bs facts (wits x) x b hb denv (hbusW x))
-              (of_decide_eq_true h')
-          | none => rw [hb] at h'; simp at h'
-        · rw [Bool.and_eq_true, Bool.and_eq_true] at h'
-          haveI : Fact p.Prime := ⟨hdeep h'.1.1⟩
-          haveI : NeZero p := ⟨(hdeep h'.1.1).ne_zero⟩
-          exact lt_of_lt_of_le
-            (denseDeepByteJustified_sound all domCs (candsOf x) bs facts wits x hdomCs (hcands x)
-              h'.2 denv hall hbusW)
-            (of_decide_eq_true h'.1.2)
+              (denseDeepByteJustified_sound all domCs (candsOf x) bs facts wits x hdomCs (hcands x)
+                h'.2 denv hall hbusW)
+              (of_decide_eq_true h'.1.2)
+        · rw [Bool.and_eq_true, Bool.and_eq_true] at hC
+          haveI : Fact p.Prime := ⟨hdeep hC.1.1⟩
+          refine lt_of_lt_of_le ?_ (of_decide_eq_true hC.1.2)
+          rcases Bool.or_eq_true _ _ |>.mp hC.2 with hw | hf
+          · exact denseXorAndByteJustified_sound true bs facts x (wits x) hw denv
+              (fun bi hbi => hbusW x bi hbi)
+          · exact denseXorAndByteJustified_sound false bs facts x (fwits x) hf denv
+              (fun bi hbi => hbus bi (hfwits x bi hbi))
       | const n => simp at h
       | add a b => simp at h
       | mul a b => simp at h

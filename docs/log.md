@@ -4606,3 +4606,40 @@ effectiveness evaluation is delegated to the draft PR's CI workflows.
 
 **Worked locally: yes (fan-out reduced by orders of magnitude; representative runtime neutral;
 full-set result pending CI).**
+### 133. Byte-justify a value through a surviving bitwise-lookup (XOR) relation
+
+The dense byte-justifier (`denseByteJustifiedW`, `BusPairCancelJustify.lean`) could prove
+`e ∈ [0,256)` only from a direct range check, a bus-fact slot bound, a selector-domain
+enumeration, or an affine/basis recomposition — never through a surviving bus-6 (OpenVM
+BitwiseLookup) XOR relation. That blind spot left byte checks and duplicate memory reads
+un-droppable when a read-back value's byteness came only from such a relation.
+
+New arm `denseXorAndByteWit`: on a `byteXorSpec` bus (byte bound `≤ 256`), an active XOR message
+decoding to `(op, o1, o2, r)` with `op = xorOp` forces `o1, o2 ∈ [0,256)` and `r = o1 ⊕ o2`
+(`byteXorSpec_sound`, reused — the bus semantics is not reproven). If the result slot additionally
+pins `2·x = o1 + o2 − r` then `x = o1 & o2`, or `2·x = o1 + o2 + r` then `x = o1 | o2`, so `x` is a
+byte. Soundness rests on the two bit-decomposition identities `a + b = (a⊕b) + 2·(a&b)` and
+`a + b + (a⊕b) = 2·(a|b)` (proved by strong recursion on the low bit) plus a `2·z = 2·k`
+cancellation in the prime field; the recognizer is a purely syntactic linear-identity check on the
+slot, so a false recognition would fail the linear check rather than mis-justify.
+
+Wired into `denseByteJustifiedW`'s `.var x` branch, so both consumers pick it up:
+`redundantByteDrop` drops self-XOR byte checks `[x, x, 0, 1]` whose `x` is already an XOR AND/OR
+output, and `busPairCancel` telescopes exact-duplicate memory send/receive pairs whose read-back
+limbs are so pinned (e.g. apc_042 register reads). The AND form fires from `wits ∪ fwits`; the OR
+form is restricted to `wits` — in the pair-cancel caller the enabling XOR is an `fwits`
+form-witness, and letting OR fire there perturbs a memory address-ordering (`diff_marker`) gadget on
+apc_037 into a +4 variable regression, so OR is kept to the variable-safe path.
+
+Bus interactions before → after on the openvm-eth set (variables unchanged on every case,
+constraints unchanged): apc_042 260 → 244 (−16, the headline duplicate-memory telescoping),
+apc_100 −4, apc_037 −5, apc_073 −2, apc_090 −2, and −1 on each of apc_008/014/018/038/039/051/053/
+056/060/064/069/075/079/092/093/096/097. Set totals 16355 → 16309 bus interactions (−46) with
+27757 → 27757 variables (zero per-case variable regressions). Full same-runner evaluation is
+delegated to the draft PR's CI.
+
+`lake build` is warning-free; proof integrity green (correctness axioms
+{propext, Classical.choice, Quot.sound}, no `sorry`/`admit`/`axiom`/`native_decide`, no unused
+theorems).
+
+**Worked locally: yes (bus-interaction win, zero variable regressions).**
