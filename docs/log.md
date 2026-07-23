@@ -4606,3 +4606,22 @@ effectiveness evaluation is delegated to the draft PR's CI workflows.
 
 **Worked locally: yes (fan-out reduced by orders of magnitude; representative runtime neutral;
 full-set result pending CI).**
+
+### 133. commDedup: drop booleanity twins equal up to `+`/`*` commutativity
+
+`denseDedupPass` compares constraints structurally, so the twin booleanity checks
+`(x − 1)·x = 0` and `x·(x − 1) = 0` (same polynomial, product factors swapped) both survive to
+the output. New pass `denseCommDedupPass` drops a constraint when an earlier-kept one matches it
+up to commutativity of `+`/`*` (`denseCommEq`, sound via `denseCommEq_eval`: a match implies equal
+evaluation, so the kept constraint pins the dropped one to zero). Bus interactions are untouched,
+so it is variable- and bus-neutral by construction. Wired as the **last** coda pass: the twins only
+reach the recognised `(affine)·(affine)` factored form after `monicScale`, so an earlier placement
+(tried first in `cleanupPasses`) saw nothing.
+
+Per-case constraint drops (variables and bus unchanged): apc_010 251 → 235 (−16), apc_014
+131 → 123 (−8), apc_031 68 → 64 (−4), apc_097 41 → 39 (−2), apc_008 61 → 60 (−1). `lake build`
+warning-free; proof integrity green (correctness axioms `{propext, Classical.choice, Quot.sound}`,
+no unused theorems). Full-set aggregate via the draft PR's CI.
+
+**Worked: yes (constraint-axis only, variable/bus-neutral; ~31 constraints across the measured
+cases).**
