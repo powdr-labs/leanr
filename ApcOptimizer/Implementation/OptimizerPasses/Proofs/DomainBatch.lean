@@ -420,24 +420,28 @@ def assignmentsV : List (FiniteDomain p) → List (List (ZMod p))
   | d :: rest => (assignmentsV rest).flatMap (fun a => d.toList.map (fun v => v :: a))
 
 /-- `denseBoxFoldV` streams exactly the eager fold over `assignmentsV`. -/
-theorem denseBoxFoldV_eq {β : Type} (f : β → List (ZMod p) → β) (stop : β → Bool)
+theorem denseBoxFoldV_eq {β : Type} (ops : DenseZModOps p)
+    (f : β → List (ZMod p) → β) (stop : β → Bool)
     (doms : List (FiniteDomain p)) (acc : β) :
-    denseBoxFoldV f stop doms acc = foldlStop f stop (assignmentsV doms) acc := by
+    denseBoxFoldV ops f stop doms acc = foldlStop f stop (assignmentsV doms) acc := by
   induction doms generalizing f acc with
   | nil => simp only [denseBoxFoldV, assignmentsV, foldlStop]
   | cons d rest ih =>
     rw [denseBoxFoldV, ih]
-    show foldlStop (fun acc' a => d.foldElts (fun acc'' v => f acc'' (v :: a)) stop acc') stop
-        (assignmentsV rest) acc
+    show foldlStop (fun acc' a =>
+        d.foldElts ops.zero (fun v => ops.add v ops.one)
+          (fun acc'' v => f acc'' (v :: a)) stop acc') stop (assignmentsV rest) acc
       = foldlStop f stop (assignmentsV (d :: rest)) acc
     rw [show assignmentsV (d :: rest)
           = (assignmentsV rest).flatMap (fun a => d.toList.map (fun v => v :: a)) from rfl,
       ← foldlStop_flatMap f stop (fun a => d.toList.map (fun v => v :: a))]
     apply foldlStop_congr
     intro acc' a
-    show d.foldElts (fun acc'' v => f acc'' (v :: a)) stop acc'
+    show d.foldElts ops.zero (fun v => ops.add v ops.one)
+        (fun acc'' v => f acc'' (v :: a)) stop acc'
       = foldlStop f stop (d.toList.map (fun v => v :: a)) acc'
-    rw [FiniteDomain.foldElts_eq, foldlStop_map]
+    rw [FiniteDomain.foldElts_eq ops.zero (fun v => ops.add v ops.one) ops.zero_eq
+      (fun v => by simp only; rw [ops.add_eq, ops.one_eq]), foldlStop_map]
 
 /-- The restriction of a satisfying `denv` to a keyed domain list is one of the value-only
     enumerated assignments. -/
@@ -758,82 +762,546 @@ theorem denseCompileEs_mapV (ops : DenseZModOps p) (keys : List VarId) (pt : Lis
         rw [List.map_cons, List.map_cons, ih irest hr,
           denseCompileE_evalV ops keys pt e ie he]
 
-/-- Compiled interaction evaluation agrees with the fallback message (value-only). -/
-theorem denseCompileBi_evalWithV (ops : DenseZModOps p) (keys : List VarId)
-    (pt : List (ZMod p)) (bi : BusInteraction (DenseExpr p)) (cbi : CBi p)
-    (h : denseCompileBi keys bi = some cbi) :
-    denseCBiEvalWithV ops cbi pt
-      = { busId := bi.busId,
-          multiplicity := bi.multiplicity.eval (denseEnvOfKeysV keys pt),
-          payload := bi.payload.map (fun e => e.eval (denseEnvOfKeysV keys pt)) } := by
-  cases hm : denseCompileE keys bi.multiplicity with
-  | none => rw [denseCompileBi, hm] at h; simp at h
-  | some m =>
-    cases hpl : denseCompileEs keys bi.payload with
-    | none => rw [denseCompileBi, hm, hpl] at h; simp at h
-    | some pl =>
-      rw [denseCompileBi, hm, hpl] at h; simp only [Option.some.injEq] at h; subst h
-      unfold denseCBiEvalWithV
-      dsimp only
-      rw [denseCompileE_evalV ops keys pt bi.multiplicity m hm,
-        denseCompileEs_mapV ops keys pt bi.payload pl hpl]
+private theorem denseByteXorSpec_decode_iff (bs : BusSemantics p) (facts : BusFacts p bs)
+    (spec : ByteXorSpec p) (bi : BusInteraction (DenseExpr p))
+    (hspec : facts.byteXorSpec bi.busId = some spec)
+    (op o1 o2 r : DenseExpr p) (hdec : spec.decode bi.payload = some (op, o1, o2, r))
+    (denv : VarId → ZMod p) :
+    (op.eval denv = spec.xorOp →
+        (bs.violatesConstraint (denseBIEval bi denv) = false ↔
+          (o1.eval denv).val < spec.bound ∧ (o2.eval denv).val < spec.bound ∧
+            (r.eval denv).val = Nat.xor (o1.eval denv).val (o2.eval denv).val)) ∧
+    (op.eval denv = spec.pairOp →
+        (bs.violatesConstraint (denseBIEval bi denv) = false ↔
+          (o1.eval denv).val < spec.bound ∧ (o2.eval denv).val < spec.bound ∧
+            r.eval denv = 0)) := by
+  obtain ⟨_, _, hsound⟩ := facts.byteXorSpec_sound bi.busId spec hspec
+  have hdecEv : spec.decode (denseBIEval bi denv).payload =
+      some (op.eval denv, o1.eval denv, o2.eval denv, r.eval denv) := by
+    show spec.decode (bi.payload.map (fun e => e.eval denv)) = _
+    rw [spec.decode_map, hdec]
+    rfl
+  exact hsound (denseBIEval bi denv).payload (op.eval denv) (o1.eval denv) (o2.eval denv)
+    (r.eval denv) (denseBIEval bi denv).multiplicity hdecEv
 
-/-- Compiled-list obligation check agrees with the source list's (value-only). -/
-theorem denseCompileBis_allV (ops : DenseZModOps p) (isZero : ZMod p → Bool)
+private theorem denseByteBoolSound_decode_iff (bs : BusSemantics p) (facts : BusFacts p bs)
+    (spec : ByteXorSpec p) (bi : BusInteraction (DenseExpr p))
+    (hspec : facts.byteXorSpec bi.busId = some spec)
+    (op o1 o2 r : DenseExpr p) (hdec : spec.decode bi.payload = some (op, o1, o2, r))
+    (denv : VarId → ZMod p) :
+    (∀ oop, spec.orOp = some oop → op.eval denv = oop →
+        (bs.violatesConstraint (denseBIEval bi denv) = false ↔
+          (o1.eval denv).val < spec.bound ∧ (o2.eval denv).val < spec.bound ∧
+            (r.eval denv).val = Nat.lor (o1.eval denv).val (o2.eval denv).val)) ∧
+    (∀ aop, spec.andOp = some aop → op.eval denv = aop →
+        (bs.violatesConstraint (denseBIEval bi denv) = false ↔
+          (o1.eval denv).val < spec.bound ∧ (o2.eval denv).val < spec.bound ∧
+            (r.eval denv).val = Nat.land (o1.eval denv).val (o2.eval denv).val)) := by
+  have hdecEv : spec.decode (denseBIEval bi denv).payload =
+      some (op.eval denv, o1.eval denv, o2.eval denv, r.eval denv) := by
+    show spec.decode (bi.payload.map (fun e => e.eval denv)) = _
+    rw [spec.decode_map, hdec]
+    rfl
+  exact facts.byteBoolSound bi.busId spec hspec (denseBIEval bi denv).payload (op.eval denv)
+    (o1.eval denv) (o2.eval denv) (r.eval denv) (denseBIEval bi denv).multiplicity hdecEv
+
+private theorem denseNotBoolEqDecide (b : Bool) (P : Prop) [Decidable P]
+    (h : b = false ↔ P) : (!b) = decide P := by
+  cases b <;> simp_all
+
+private instance denseBytePredKindHoldsDecidable (kind : DenseBytePredKind) (a b r : ZMod p) :
+    Decidable (kind.Holds a b r) := by
+  cases kind <;> simp [DenseBytePredKind.Holds] <;> infer_instance
+
+theorem denseBytePredRelationV_eq (isZero : ZMod p → Bool)
+    (hz : ∀ v, isZero v = decide (v = 0)) (kind : DenseBytePredKind) (a b r : ZMod p) :
+    denseBytePredRelationV isZero kind a b r = decide (kind.Holds a b r) := by
+  cases kind <;> simp [denseBytePredRelationV, DenseBytePredKind.Holds, hz]
+
+private theorem denseVarRangePred_eval (ops : DenseZModOps p) (isZero : ZMod p → Bool)
+    (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (keys : List VarId) (pt : List (ZMod p)) (bi : BusInteraction (DenseExpr p))
+    (x width : DenseExpr p) (mult ix iwidth : IExpr p)
+    (hpay : bi.payload = [x, width]) (hfact : facts.varRangeBus bi.busId = true)
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (hx : denseCompileE keys x = some ix) (hw : denseCompileE keys width = some iwidth) :
+    denseCBiPredEvalV ops isZero bs pt (.varRange mult ix iwidth)
+      = denseBiObligationV bs bi keys pt := by
+  let env := denseEnvOfKeysV keys pt
+  have hme := denseCompileE_evalV ops keys pt bi.multiplicity mult hm
+  have hxe := denseCompileE_evalV ops keys pt x ix hx
+  have hwe := denseCompileE_evalV ops keys pt width iwidth hw
+  have hiff := (facts.varRangeBus_sound bi.busId hfact).2
+    (x.eval env) (width.eval env) (bi.multiplicity.eval env)
+  have hb :
+      (!bs.violatesConstraint
+          { busId := bi.busId, multiplicity := bi.multiplicity.eval env,
+            payload := [x.eval env, width.eval env] })
+        = decide ((width.eval env).val ≤ 17 ∧ (x.eval env).val < 2 ^ (width.eval env).val) :=
+    denseNotBoolEqDecide _ _ hiff
+  simp only [denseCBiPredEvalV, denseBiObligationV, hme, hxe, hwe, hpay, List.map_cons,
+    List.map_nil, hz]
+  exact congrArg (fun tail => if decide (bi.multiplicity.eval env = 0) then true else tail) hb.symm
+
+private theorem denseVarRangeConstPred_eval (ops : DenseZModOps p)
+    (isZero : ZMod p → Bool) (hz : ∀ v, isZero v = decide (v = 0))
+    (bs : BusSemantics p) (facts : BusFacts p bs) (keys : List VarId) (pt : List (ZMod p))
+    (bi : BusInteraction (DenseExpr p)) (x width : DenseExpr p) (widthValue : ZMod p)
+    (mult ix : IExpr p) (hpay : bi.payload = [x, width])
+    (hfact : facts.varRangeBus bi.busId = true)
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (hx : denseCompileE keys x = some ix) (hw : width.constValue? = some widthValue)
+    (hle : widthValue.val ≤ 17) :
+    denseCBiPredEvalV ops isZero bs pt (.varRangeConst mult ix (2 ^ widthValue.val))
+      = denseBiObligationV bs bi keys pt := by
+  let env := denseEnvOfKeysV keys pt
+  have hme := denseCompileE_evalV ops keys pt bi.multiplicity mult hm
+  have hxe := denseCompileE_evalV ops keys pt x ix hx
+  have hwe := width.constValue?_sound widthValue hw env
+  have hiff := (facts.varRangeBus_sound bi.busId hfact).2
+    (x.eval env) (width.eval env) (bi.multiplicity.eval env)
+  have hiff' :
+      bs.violatesConstraint
+          { busId := bi.busId, multiplicity := bi.multiplicity.eval env,
+            payload := [x.eval env, width.eval env] } = false
+        ↔ (x.eval env).val < 2 ^ widthValue.val := by
+    simpa [hwe, hle] using hiff
+  have hb :
+      (!bs.violatesConstraint
+          { busId := bi.busId, multiplicity := bi.multiplicity.eval env,
+            payload := [x.eval env, width.eval env] })
+        = decide ((x.eval env).val < 2 ^ widthValue.val) :=
+    denseNotBoolEqDecide _ _ hiff'
+  simp only [denseCBiPredEvalV, denseBiObligationV, hme, hxe, hpay, List.map_cons,
+    List.map_nil, hz]
+  exact congrArg (fun tail => if decide (bi.multiplicity.eval env = 0) then true else tail) hb.symm
+
+private theorem denseTupleRangePred_eval (ops : DenseZModOps p) (isZero : ZMod p → Bool)
+    (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (keys : List VarId) (pt : List (ZMod p)) (bi : BusInteraction (DenseExpr p))
+    (x y : DenseExpr p) (mult ix iy : IExpr p) (boundX boundY : Nat)
+    (hpay : bi.payload = [x, y]) (hfact : facts.tupleRangeBus bi.busId = some (boundX, boundY))
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (hx : denseCompileE keys x = some ix) (hy : denseCompileE keys y = some iy) :
+    denseCBiPredEvalV ops isZero bs pt (.tupleRange mult ix iy boundX boundY)
+      = denseBiObligationV bs bi keys pt := by
+  let env := denseEnvOfKeysV keys pt
+  have hme := denseCompileE_evalV ops keys pt bi.multiplicity mult hm
+  have hxe := denseCompileE_evalV ops keys pt x ix hx
+  have hye := denseCompileE_evalV ops keys pt y iy hy
+  have hiff := (facts.tupleRangeBus_sound bi.busId boundX boundY hfact).2.2
+    (x.eval env) (y.eval env) (bi.multiplicity.eval env)
+  have hb :
+      (!bs.violatesConstraint
+          { busId := bi.busId, multiplicity := bi.multiplicity.eval env,
+            payload := [x.eval env, y.eval env] })
+        = decide ((x.eval env).val < boundX ∧ (y.eval env).val < boundY) :=
+    denseNotBoolEqDecide _ _ hiff
+  simp only [denseCBiPredEvalV, denseBiObligationV, hme, hxe, hye, hpay, List.map_cons,
+    List.map_nil, hz]
+  exact congrArg (fun tail => if decide (bi.multiplicity.eval env = 0) then true else tail) hb.symm
+
+private theorem denseFallbackPred_eval (ops : DenseZModOps p) (isZero : ZMod p → Bool)
     (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p) (keys : List VarId)
-    (pt : List (ZMod p)) :
-    ∀ (bis : List (BusInteraction (DenseExpr p))) (cbis : List (CBi p)),
-      denseCompileBis keys bis = some cbis →
-      cbis.all (fun cbi => let v := denseCBiEvalWithV ops cbi pt;
-          isZero v.multiplicity || !bs.violatesConstraint v)
-        = bis.all (fun bi =>
-          let v : BusInteraction (ZMod p) :=
-            { busId := bi.busId,
-              multiplicity := bi.multiplicity.eval (denseEnvOfKeysV keys pt),
-              payload := bi.payload.map (fun e => e.eval (denseEnvOfKeysV keys pt)) };
-          decide (v.multiplicity = 0) || !bs.violatesConstraint v) := by
+    (pt : List (ZMod p)) (bi : BusInteraction (DenseExpr p)) (mult : IExpr p)
+    (payload : List (IExpr p)) (hm : denseCompileE keys bi.multiplicity = some mult)
+    (hpl : denseCompileEs keys bi.payload = some payload) :
+    denseCBiPredEvalV ops isZero bs pt (.fallback ⟨bi.busId, mult, payload⟩)
+      = denseBiObligationV bs bi keys pt := by
+  simp only [denseCBiPredEvalV, denseBiObligationV,
+    denseCompileE_evalV ops keys pt bi.multiplicity mult hm,
+    denseCompileEs_mapV ops keys pt bi.payload payload hpl, hz]
+
+private theorem denseFixedRangePred_eval (ops : DenseZModOps p) (isZero : ZMod p → Bool)
+    (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (keys : List VarId) (pt : List (ZMod p)) (bi : BusInteraction (DenseExpr p))
+    (multValue : ZMod p) (e : DenseExpr p) (mult value : IExpr p) (slot bound : Nat)
+    (hmv : bi.multiplicity.constValue? = some multValue) (hmv1 : multValue = 1)
+    (hrange : facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?)
+      = some (slot, bound))
+    (hslot : bi.payload[slot]? = some e)
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (he : denseCompileE keys e = some value) :
+    denseCBiPredEvalV ops isZero bs pt (.fixedRange mult value bound)
+      = denseBiObligationV bs bi keys pt := by
+  let env := denseEnvOfKeysV keys pt
+  let msg : BusInteraction (ZMod p) :=
+    { busId := bi.busId,
+      multiplicity := bi.multiplicity.eval env,
+      payload := bi.payload.map (fun e => e.eval env) }
+  have hme := denseCompileE_evalV ops keys pt bi.multiplicity mult hm
+  have hee := denseCompileE_evalV ops keys pt e value he
+  have hmone : msg.multiplicity = 1 := by
+    dsimp only [msg]
+    rw [bi.multiplicity.constValue?_sound multValue hmv env, hmv1]
+  obtain ⟨_, hsound⟩ := facts.rangeCheckAt_sound bi.busId
+    (bi.payload.map DenseExpr.constValue?) slot bound hrange
+  obtain ⟨_, hiffAt⟩ := hsound msg rfl hmone (denseMatches_evalPattern bi.payload env)
+  have hget : msg.payload[slot]? = some (e.eval env) := by
+    dsimp only [msg]
+    rw [List.getElem?_map, hslot]
+    rfl
+  have hiff := hiffAt (e.eval env) hget
+  have hb : (!bs.violatesConstraint msg) = decide ((e.eval env).val < bound) :=
+    denseNotBoolEqDecide _ _ hiff
+  simp only [denseCBiPredEvalV, denseBiObligationV, hme, hee, hz]
+  change (if decide (msg.multiplicity = 0) then true
+    else decide ((e.eval env).val < bound)) =
+      (if decide (msg.multiplicity = 0) then true else !bs.violatesConstraint msg)
+  exact congrArg (fun tail => if decide (msg.multiplicity = 0) then true else tail) hb.symm
+
+private theorem denseBytePred_eval (ops : DenseZModOps p) (isZero : ZMod p → Bool)
+    (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p)
+    (keys : List VarId) (pt : List (ZMod p)) (bi : BusInteraction (DenseExpr p))
+    (mult : IExpr p) (o1 o2 result : DenseExpr p) (io1 io2 iresult : IExpr p)
+    (bound : Nat) (kind : DenseBytePredKind)
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (ho1 : denseCompileE keys o1 = some io1) (ho2 : denseCompileE keys o2 = some io2)
+    (hresult : denseCompileE keys result = some iresult)
+    (hiff : bs.violatesConstraint (denseBIEval bi (denseEnvOfKeysV keys pt)) = false ↔
+      (o1.eval (denseEnvOfKeysV keys pt)).val < bound ∧
+      (o2.eval (denseEnvOfKeysV keys pt)).val < bound ∧
+      kind.Holds (o1.eval (denseEnvOfKeysV keys pt)) (o2.eval (denseEnvOfKeysV keys pt))
+        (result.eval (denseEnvOfKeysV keys pt))) :
+    denseCBiPredEvalV ops isZero bs pt (.byte mult io1 io2 iresult bound kind)
+      = denseBiObligationV bs bi keys pt := by
+  let env := denseEnvOfKeysV keys pt
+  have hme := denseCompileE_evalV ops keys pt bi.multiplicity mult hm
+  have h1e := denseCompileE_evalV ops keys pt o1 io1 ho1
+  have h2e := denseCompileE_evalV ops keys pt o2 io2 ho2
+  have hre := denseCompileE_evalV ops keys pt result iresult hresult
+  have hb : (!bs.violatesConstraint (denseBIEval bi env)) = decide
+      ((o1.eval env).val < bound ∧ (o2.eval env).val < bound ∧
+        kind.Holds (o1.eval env) (o2.eval env) (result.eval env)) :=
+    denseNotBoolEqDecide _ _ hiff
+  simp only [denseCBiPredEvalV, denseBiObligationV, hme, h1e, h2e, hre, hz,
+    denseBytePredRelationV_eq isZero hz]
+  change (if decide ((denseBIEval bi env).multiplicity = 0) then true else
+      decide ((o1.eval env).val < bound ∧ (o2.eval env).val < bound) &&
+        decide (kind.Holds (o1.eval env) (o2.eval env) (result.eval env))) =
+    (if decide ((denseBIEval bi env).multiplicity = 0) then true
+      else !bs.violatesConstraint (denseBIEval bi env))
+  rw [hb]
+  by_cases hm0 : (denseBIEval bi env).multiplicity = 0 <;>
+    by_cases h1 : (o1.eval env).val < bound <;>
+    by_cases h2 : (o2.eval env).val < bound <;>
+    by_cases hr : kind.Holds (o1.eval env) (o2.eval env) (result.eval env) <;>
+    simp [hm0, h1, h2, hr]
+
+private theorem denseCompileRangeCBiPredV_eval (ops : DenseZModOps p)
+    (isZero : ZMod p → Bool) (hz : ∀ v, isZero v = decide (v = 0))
+    (bs : BusSemantics p) (facts : BusFacts p bs) (keys : List VarId) (pt : List (ZMod p))
+    (bi : BusInteraction (DenseExpr p)) (mult : IExpr p) (pred : DenseCBiPred p)
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (h : denseCompileRangeCBiPredV facts keys bi mult = some pred) :
+    denseCBiPredEvalV ops isZero bs pt pred = denseBiObligationV bs bi keys pt := by
+  unfold denseCompileRangeCBiPredV at h
+  cases hmv : bi.multiplicity.constValue? with
+  | none => simp [hmv] at h
+  | some multValue =>
+    simp only [hmv] at h
+    by_cases hm1 : multValue = 1
+    · simp only [hm1, if_pos] at h
+      cases hrange : facts.rangeCheckAt bi.busId (bi.payload.map DenseExpr.constValue?) with
+      | none => simp [hrange] at h
+      | some sb =>
+        obtain ⟨slot, bound⟩ := sb
+        simp only [hrange] at h
+        cases hslot : bi.payload[slot]? with
+        | none => simp [hslot] at h
+        | some e =>
+          simp only [hslot] at h
+          cases he : denseCompileE keys e with
+          | none => simp [he] at h
+          | some value =>
+            simp only [he, Option.map_some, Option.some.injEq] at h
+            subst pred
+            exact denseFixedRangePred_eval ops isZero hz bs facts keys pt bi multValue e mult
+              value slot bound hmv hm1 hrange hslot hm he
+    · simp [hm1] at h
+
+private theorem denseCompileByteCBiPredV_eval (ops : DenseZModOps p)
+    (isZero : ZMod p → Bool) (hz : ∀ v, isZero v = decide (v = 0))
+    (bs : BusSemantics p) (facts : BusFacts p bs) (keys : List VarId) (pt : List (ZMod p))
+    (bi : BusInteraction (DenseExpr p)) (mult : IExpr p) (pred : DenseCBiPred p)
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (h : denseCompileByteCBiPredV facts keys bi mult = some pred) :
+    denseCBiPredEvalV ops isZero bs pt pred = denseBiObligationV bs bi keys pt := by
+  unfold denseCompileByteCBiPredV at h
+  cases hspec : facts.byteXorSpec bi.busId with
+  | none => simp [hspec] at h
+  | some spec =>
+    simp only [hspec] at h
+    cases hdec : spec.decode bi.payload with
+    | none => simp [hdec] at h
+    | some decoded =>
+      obtain ⟨op, o1, o2, result⟩ := decoded
+      simp only [hdec] at h
+      cases hop : op.constValue? with
+      | none => simp [hop] at h
+      | some opValue =>
+        simp only [hop] at h
+        cases ho1 : denseCompileE keys o1 with
+        | none => simp [ho1] at h
+        | some io1 =>
+          simp only [ho1] at h
+          cases ho2 : denseCompileE keys o2 with
+          | none => simp [ho2] at h
+          | some io2 =>
+            simp only [ho2] at h
+            cases hresult : denseCompileE keys result with
+            | none => simp [hresult] at h
+            | some iresult =>
+              simp only [hresult] at h
+              let env := denseEnvOfKeysV keys pt
+              have hopeval := op.constValue?_sound opValue hop env
+              by_cases hxor : opValue = spec.xorOp
+              · simp only [hxor, if_pos] at h
+                simp only [Option.some.injEq] at h
+                subst pred
+                have hiff := (denseByteXorSpec_decode_iff bs facts spec bi hspec op o1 o2
+                  result hdec env).1 (hopeval.trans hxor)
+                exact denseBytePred_eval ops isZero hz bs keys pt bi mult o1 o2 result io1 io2
+                  iresult spec.bound .xor hm ho1 ho2 hresult (by
+                    simpa [DenseBytePredKind.Holds] using hiff)
+              · simp only [hxor, if_false] at h
+                by_cases hpair : opValue = spec.pairOp
+                · simp only [hpair, if_pos] at h
+                  simp only [Option.some.injEq] at h
+                  subst pred
+                  have hiff := (denseByteXorSpec_decode_iff bs facts spec bi hspec op o1 o2
+                    result hdec env).2 (hopeval.trans hpair)
+                  exact denseBytePred_eval ops isZero hz bs keys pt bi mult o1 o2 result io1 io2
+                    iresult spec.bound .pair hm ho1 ho2 hresult (by
+                      simpa [DenseBytePredKind.Holds] using hiff)
+                · simp only [hpair, if_false] at h
+                  cases hor : spec.orOp with
+                  | some orOp =>
+                    simp only [hor] at h
+                    by_cases hopOr : opValue = orOp
+                    · simp only [hopOr, if_pos] at h
+                      simp only [Option.some.injEq] at h
+                      subst pred
+                      have hiff := (denseByteBoolSound_decode_iff bs facts spec bi hspec op o1 o2
+                        result hdec env).1 orOp hor (hopeval.trans hopOr)
+                      exact denseBytePred_eval ops isZero hz bs keys pt bi mult o1 o2 result io1
+                        io2 iresult spec.bound .or hm ho1 ho2 hresult (by
+                          simpa [DenseBytePredKind.Holds] using hiff)
+                    · simp only [hopOr, if_false] at h
+                      cases hand : spec.andOp with
+                      | none => simp [hand] at h
+                      | some andOp =>
+                        simp only [hand] at h
+                        by_cases hopAnd : opValue = andOp
+                        · simp only [hopAnd, if_pos, Option.some.injEq] at h
+                          subst pred
+                          have hiff := (denseByteBoolSound_decode_iff bs facts spec bi hspec op o1
+                            o2 result hdec env).2 andOp hand (hopeval.trans hopAnd)
+                          exact denseBytePred_eval ops isZero hz bs keys pt bi mult o1 o2 result
+                            io1 io2 iresult spec.bound .and hm ho1 ho2 hresult (by
+                              simpa [DenseBytePredKind.Holds] using hiff)
+                        · simp [hopAnd] at h
+                  | none =>
+                    simp only [hor] at h
+                    cases hand : spec.andOp with
+                    | none => simp [hand] at h
+                    | some andOp =>
+                      simp only [hand] at h
+                      by_cases hopAnd : opValue = andOp
+                      · simp only [hopAnd, if_pos, Option.some.injEq] at h
+                        subst pred
+                        have hiff := (denseByteBoolSound_decode_iff bs facts spec bi hspec op o1 o2
+                          result hdec env).2 andOp hand (hopeval.trans hopAnd)
+                        exact denseBytePred_eval ops isZero hz bs keys pt bi mult o1 o2 result io1
+                          io2 iresult spec.bound .and hm ho1 ho2 hresult (by
+                            simpa [DenseBytePredKind.Holds] using hiff)
+                      · simp [hopAnd] at h
+
+private theorem denseCompileOtherCBiPredV_eval (ops : DenseZModOps p)
+    (isZero : ZMod p → Bool) (hz : ∀ v, isZero v = decide (v = 0))
+    (bs : BusSemantics p) (facts : BusFacts p bs) (keys : List VarId) (pt : List (ZMod p))
+    (bi : BusInteraction (DenseExpr p)) (mult : IExpr p) (pred : DenseCBiPred p)
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (h : denseCompileOtherCBiPredV facts keys bi mult = some pred) :
+    denseCBiPredEvalV ops isZero bs pt pred = denseBiObligationV bs bi keys pt := by
+  unfold denseCompileOtherCBiPredV at h
+  cases hrange : denseCompileRangeCBiPredV facts keys bi mult with
+  | some rangePred =>
+    simp only [hrange, Option.some.injEq] at h
+    subst pred
+    exact denseCompileRangeCBiPredV_eval ops isZero hz bs facts keys pt bi mult rangePred hm hrange
+  | none =>
+    simp only [hrange] at h
+    cases hbyte : denseCompileByteCBiPredV facts keys bi mult with
+    | some bytePred =>
+      simp only [hbyte, Option.some.injEq] at h
+      subst pred
+      exact denseCompileByteCBiPredV_eval ops isZero hz bs facts keys pt bi mult bytePred hm hbyte
+    | none =>
+      simp only [hbyte] at h
+      cases hpayload : denseCompileEs keys bi.payload with
+      | none => simp [hpayload] at h
+      | some payload =>
+        simp only [hpayload, Option.map_some, Option.some.injEq] at h
+        subst pred
+        exact denseFallbackPred_eval ops isZero hz bs keys pt bi mult payload hm hpayload
+
+private theorem denseCompilePairCBiPredV_eval (ops : DenseZModOps p)
+    (isZero : ZMod p → Bool) (hz : ∀ v, isZero v = decide (v = 0))
+    (bs : BusSemantics p) (facts : BusFacts p bs) (keys : List VarId) (pt : List (ZMod p))
+    (bi : BusInteraction (DenseExpr p)) (mult : IExpr p) (x width : DenseExpr p)
+    (pred : DenseCBiPred p) (hpay : bi.payload = [x, width])
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (h : denseCompilePairCBiPredV facts keys bi mult x width = some pred) :
+    denseCBiPredEvalV ops isZero bs pt pred = denseBiObligationV bs bi keys pt := by
+  unfold denseCompilePairCBiPredV at h
+  cases hx : denseCompileE keys x with
+  | none =>
+    simp only [hx] at h
+    exact denseCompileOtherCBiPredV_eval ops isZero hz bs facts keys pt bi mult pred hm h
+  | some ix =>
+    simp only [hx] at h
+    cases hwidth : denseCompileE keys width with
+    | none =>
+      simp only [hwidth] at h
+      exact denseCompileOtherCBiPredV_eval ops isZero hz bs facts keys pt bi mult pred hm h
+    | some iwidth =>
+      simp only [hwidth] at h
+      by_cases hvar : facts.varRangeBus bi.busId = true
+      · simp only [hvar, if_true] at h
+        cases hwc : width.constValue? with
+        | none =>
+          simp only [hwc, Option.some.injEq] at h
+          subst pred
+          exact denseVarRangePred_eval ops isZero hz bs facts keys pt bi x width mult ix iwidth
+            hpay hvar hm hx hwidth
+        | some widthValue =>
+          simp only [hwc] at h
+          by_cases hle : widthValue.val ≤ 17
+          · simp only [hle, if_true, Option.some.injEq] at h
+            subst pred
+            exact denseVarRangeConstPred_eval ops isZero hz bs facts keys pt bi x width
+              widthValue mult ix hpay hvar hm hx hwc hle
+          · simp only [hle, if_false, Option.some.injEq] at h
+            subst pred
+            exact denseVarRangePred_eval ops isZero hz bs facts keys pt bi x width mult ix iwidth
+              hpay hvar hm hx hwidth
+      · have hvarFalse : facts.varRangeBus bi.busId = false := Bool.eq_false_of_not_eq_true hvar
+        simp only [hvarFalse, Bool.false_eq_true, if_false] at h
+        cases htuple : facts.tupleRangeBus bi.busId with
+        | none =>
+          simp only [htuple] at h
+          exact denseCompileOtherCBiPredV_eval ops isZero hz bs facts keys pt bi mult pred hm h
+        | some bounds =>
+          obtain ⟨boundX, boundY⟩ := bounds
+          simp only [htuple, Option.some.injEq] at h
+          subst pred
+          exact denseTupleRangePred_eval ops isZero hz bs facts keys pt bi x width mult ix iwidth
+            boundX boundY hpay htuple hm hx hwidth
+
+private theorem denseCompilePayloadCBiPredV_eval (ops : DenseZModOps p)
+    (isZero : ZMod p → Bool) (hz : ∀ v, isZero v = decide (v = 0))
+    (bs : BusSemantics p) (facts : BusFacts p bs) (keys : List VarId) (pt : List (ZMod p))
+    (bi : BusInteraction (DenseExpr p)) (mult : IExpr p) (payload : List (DenseExpr p))
+    (pred : DenseCBiPred p) (hpay : bi.payload = payload)
+    (hm : denseCompileE keys bi.multiplicity = some mult)
+    (h : denseCompilePayloadCBiPredV facts keys bi mult payload = some pred) :
+    denseCBiPredEvalV ops isZero bs pt pred = denseBiObligationV bs bi keys pt := by
+  cases payload with
+  | nil =>
+    exact denseCompileOtherCBiPredV_eval ops isZero hz bs facts keys pt bi mult pred hm h
+  | cons x rest =>
+    cases rest with
+    | nil =>
+      exact denseCompileOtherCBiPredV_eval ops isZero hz bs facts keys pt bi mult pred hm h
+    | cons width tail =>
+      cases tail with
+      | nil =>
+        exact denseCompilePairCBiPredV_eval ops isZero hz bs facts keys pt bi mult x width pred
+          hpay hm h
+      | cons third tail =>
+        exact denseCompileOtherCBiPredV_eval ops isZero hz bs facts keys pt bi mult pred hm h
+
+private theorem denseCompileCBiPredV_eval (ops : DenseZModOps p)
+    (isZero : ZMod p → Bool) (hz : ∀ v, isZero v = decide (v = 0))
+    (bs : BusSemantics p) (facts : BusFacts p bs) (keys : List VarId) (pt : List (ZMod p))
+    (bi : BusInteraction (DenseExpr p)) (pred : DenseCBiPred p)
+    (h : denseCompileCBiPredV facts keys bi = some pred) :
+    denseCBiPredEvalV ops isZero bs pt pred = denseBiObligationV bs bi keys pt := by
+  unfold denseCompileCBiPredV at h
+  by_cases hnever : facts.neverViolates bi.busId = true
+  · simp only [hnever, if_true, Option.some.injEq] at h
+    subst pred
+    have hnv := facts.neverViolates_sound (denseBIEval bi (denseEnvOfKeysV keys pt)) hnever
+    unfold denseCBiPredEvalV denseBiObligationV
+    change true = (if decide ((denseBIEval bi (denseEnvOfKeysV keys pt)).multiplicity = 0)
+      then true else !bs.violatesConstraint (denseBIEval bi (denseEnvOfKeysV keys pt)))
+    rw [hnv]
+    simp
+  · have hneverFalse : facts.neverViolates bi.busId = false := Bool.eq_false_of_not_eq_true hnever
+    simp only [hneverFalse, Bool.false_eq_true, if_false] at h
+    cases hm : denseCompileE keys bi.multiplicity with
+    | none => simp [hm] at h
+    | some mult =>
+      simp only [hm] at h
+      exact denseCompilePayloadCBiPredV_eval ops isZero hz bs facts keys pt bi mult bi.payload
+        pred rfl hm h
+
+private theorem denseCompileCBiPredsV_all (ops : DenseZModOps p)
+    (isZero : ZMod p → Bool) (hz : ∀ v, isZero v = decide (v = 0))
+    (bs : BusSemantics p) (facts : BusFacts p bs) (keys : List VarId) (pt : List (ZMod p)) :
+    ∀ (bis : List (BusInteraction (DenseExpr p))) (preds : List (DenseCBiPred p)),
+      denseCompileCBiPredsV facts keys bis = some preds →
+      preds.all (denseCBiPredEvalV ops isZero bs pt) =
+        bis.all (fun bi => denseBiObligationV bs bi keys pt) := by
   intro bis
   induction bis with
-  | nil => intro cbis h; rw [denseCompileBis] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | nil =>
+    intro preds h
+    simp only [denseCompileCBiPredsV, Option.some.injEq] at h
+    subst preds
+    rfl
   | cons bi rest ih =>
-    intro cbis h
-    cases hb : denseCompileBi keys bi with
-    | none => rw [denseCompileBis, hb] at h; simp at h
-    | some cbi =>
-      cases hr : denseCompileBis keys rest with
-      | none => rw [denseCompileBis, hb, hr] at h; simp at h
-      | some crest =>
-        rw [denseCompileBis, hb, hr] at h; simp only [Option.some.injEq] at h; subst h
-        rw [List.all_cons, List.all_cons, ih crest hr]
-        simp only [denseCompileBi_evalWithV ops keys pt bi cbi hb, hz]
+    intro preds h
+    cases hb : denseCompileCBiPredV facts keys bi with
+    | none => simp [denseCompileCBiPredsV, hb] at h
+    | some pred =>
+      cases hr : denseCompileCBiPredsV facts keys rest with
+      | none => simp [denseCompileCBiPredsV, hb, hr] at h
+      | some restPreds =>
+        simp only [denseCompileCBiPredsV, hb, hr, Option.some.injEq] at h
+        subst preds
+        rw [List.all_cons, List.all_cons,
+          denseCompileCBiPredV_eval ops isZero hz bs facts keys pt bi pred hb,
+          ih restPreds hr]
 
-/-- The value-only compiled survivor predicate under compile success agrees with the uncompiled one. -/
 theorem denseSurvivesAllCWV_eq (ops : DenseZModOps p) (isZero : ZMod p → Bool)
-    (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p) (es : List (DenseExpr p))
-    (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId) (ces : List (IExpr p))
-    (cbis : List (CBi p)) (pt : List (ZMod p))
-    (hce : denseCompileEs keys es = some ces) (hcb : denseCompileBis keys bis = some cbis) :
-    denseSurvivesAllCWV ops isZero bs ces cbis pt = denseSurvivesAllMV bs es bis keys pt := by
+    (hz : ∀ v, isZero v = decide (v = 0)) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (es : List (DenseExpr p)) (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId)
+    (ces : List (IExpr p)) (preds : List (DenseCBiPred p)) (pt : List (ZMod p))
+    (hce : denseCompileEs keys es = some ces)
+    (hcb : denseCompileCBiPredsV facts keys bis = some preds) :
+    denseSurvivesAllCWV ops isZero bs ces preds pt = denseSurvivesAllMV bs es bis keys pt := by
   unfold denseSurvivesAllCWV denseSurvivesAllMV
   congr 1
   · exact denseCompileEs_allV ops isZero hz keys pt es ces hce
-  · exact denseCompileBis_allV ops isZero hz bs keys pt bis cbis hcb
+  · exact denseCompileCBiPredsV_all ops isZero hz bs facts keys pt bis preds hcb
 
-/-- The value-only compiled survivor predicate agrees with the uncompiled one on every point. -/
-theorem denseCompiledSurvV_eq (bs : BusSemantics p) (es : List (DenseExpr p))
-    (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId) (pt : List (ZMod p)) :
-    (denseCompiledSurvV bs es bis keys).run pt = denseSurvivesAllMV bs es bis keys pt := by
+theorem denseCompiledSurvV_eq (bs : BusSemantics p) (facts : BusFacts p bs)
+    (es : List (DenseExpr p)) (bis : List (BusInteraction (DenseExpr p)))
+    (keys : List VarId) (pt : List (ZMod p)) :
+    (denseCompiledSurvV bs facts es bis keys).run pt = denseSurvivesAllMV bs es bis keys pt := by
   unfold denseCompiledSurvV
   cases hce : denseCompileEs keys es with
   | none => rfl
   | some ces =>
-    cases hcb : denseCompileBis keys bis with
+    cases hcb : denseCompileCBiPredsV facts keys bis with
     | none => rfl
-    | some cbis =>
+    | some preds =>
       change denseSurvivesAllCWV denseZModOps (fun v => decide (v = denseZModOps.zero))
-          bs ces cbis pt = denseSurvivesAllMV bs es bis keys pt
+          bs ces preds pt = denseSurvivesAllMV bs es bis keys pt
       exact denseSurvivesAllCWV_eq denseZModOps _ (fun _ => rfl)
-        bs es bis keys ces cbis pt hce hcb
+        bs facts es bis keys ces preds pt hce hcb
 
 /-- The restriction of a satisfying `denv` survives the covered-item predicate (value-only). -/
 theorem denseSurvivesAllMV_restriction (bs : BusSemantics p) (es : List (DenseExpr p))
@@ -857,24 +1325,25 @@ theorem denseSurvivesAllMV_restriction (bs : BusSemantics p) (es : List (DenseEx
     intro bi hbi
     have hbe : denseBIEval bi (denseEnvOfKeysV keys (keys.map denv)) = denseBIEval bi denv :=
       denseBIEval_congr bi _ _ (fun i hi => denseEnvOfKeysV_map denv keys i (hbik bi hbi i hi))
-    show (decide ((denseBIEval bi (denseEnvOfKeysV keys (keys.map denv))).multiplicity = 0)
-      || !bs.violatesConstraint (denseBIEval bi (denseEnvOfKeysV keys (keys.map denv)))) = true
+    unfold denseBiObligationV
+    change (if decide ((denseBIEval bi (denseEnvOfKeysV keys (keys.map denv))).multiplicity = 0)
+      then true
+      else !bs.violatesConstraint (denseBIEval bi (denseEnvOfKeysV keys (keys.map denv)))) = true
     rw [hbe]
     by_cases hm : (denseBIEval bi denv).multiplicity = 0
     · simp [hm]
-    · have hd : decide ((denseBIEval bi denv).multiplicity = 0) = false := decide_eq_false hm
-      rw [hd, Bool.false_or]
-      simpa using hbi0 bi hbi hm
+    · simp [hm, hbi0 bi hbi hm]
 
 /-- The restriction survives the compiled survivor predicate (value-only). -/
-theorem denseCompiledSurvV_restriction (bs : BusSemantics p) (es : List (DenseExpr p))
+theorem denseCompiledSurvV_restriction (bs : BusSemantics p) (facts : BusFacts p bs)
+    (es : List (DenseExpr p))
     (bis : List (BusInteraction (DenseExpr p))) (keys : List VarId) (denv : VarId → ZMod p)
     (hes0 : ∀ e ∈ es, e.eval denv = 0)
     (hbi0 : ∀ bi ∈ bis, (denseBIEval bi denv).multiplicity ≠ 0 →
       bs.violatesConstraint (denseBIEval bi denv) = false)
     (hesk : ∀ e ∈ es, ∀ i ∈ e.vars, i ∈ keys)
     (hbik : ∀ bi ∈ bis, ∀ i ∈ denseBIVars bi, i ∈ keys) :
-    (denseCompiledSurvV bs es bis keys).run (keys.map denv) = true := by
+    (denseCompiledSurvV bs facts es bis keys).run (keys.map denv) = true := by
   rw [denseCompiledSurvV_eq]
   exact denseSurvivesAllMV_restriction bs es bis keys denv hes0 hbi0 hesk hbik
 
@@ -1154,7 +1623,7 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
     dsimp only
     split_ifs with hbox hwork hfast
     · exact denseConstantDomainsV_entails fdoms denv hmem
-    · have hsurv : (denseCompiledSurvV bs
+    · have hsurv : (denseCompiledSurvV bs facts
           (denseGatherConstraintsV fidx xs).active
           (denseGatherBusesV fidx xs).interactions
           (fdoms.map Prod.fst)).run ((fdoms.map Prod.fst).map denv) = true := by
@@ -1163,7 +1632,7 @@ theorem denseForcedOverV_entails (bs : BusSemantics p) (facts : BusFacts p bs)
         · exact fun bi hbi => (hbis bi hbi).1
         · intro e he i hi; rw [hkeys]; exact (hes e he).2 i hi
         · intro bi hbi i hi; rw [hkeys]; exact (hbis bi hbi).2 i hi
-      cases hscan : denseScanBoxV (denseCompiledSurvV bs
+      cases hscan : denseScanBoxV (denseCompiledSurvV bs facts
           (denseGatherConstraintsV fidx xs).active
           (denseGatherBusesV fidx xs).interactions
           (fdoms.map Prod.fst)).run (fdoms.map Prod.snd) with
