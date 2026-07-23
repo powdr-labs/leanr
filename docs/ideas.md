@@ -254,7 +254,14 @@ index gate**  ·  mostly **done (entries 105/107/109)**:
      checked heap. It updates only rows incident to each chosen pivot and ranks protected status,
      classical fill, stored-solution rewrite cost, and the prior local score lexicographically.
      Heap metadata remains untrusted: every selection is re-solved from the original constraint
-     under the current substitution before adoption.
+     under the current substitution before adoption. Entry 134 keeps the exact source-order path
+     below 8192 rows: the scheduler's fixed cost is not justified there, and changing the affine
+     basis in nonlinear-connected components can worsen later syntactic cleanup.
+   - **Still open — component-aware Gauss scheduling**: source-order and Markowitz eliminate the
+     same number of pivots on the affected SP1 shapes, but choose different bases where affine rows
+     share variables with nonlinear constraints. Preserve source order only in those connected
+     components and use Markowitz in purely affine components; this could safely extend dynamic
+     scheduling below the coarse 8192-row gate.
 
 **R5. Framework: track "pass returned input unchanged" and skip the per-pass degree check**  ·
 *medium value, one framework change*. Every pass is `guardDegree`-wrapped, and the guard runs

@@ -459,6 +459,19 @@ theorem insertAll_map :
 
 end DenseSolved
 
+def denseGaussLoop (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) :
+    List (DenseExpr p) → DenseSolved p → DenseSolved p
+  | [], dσ => dσ
+  | c :: rest, dσ =>
+      let c' := (c.substF dσ.fn).normalize
+      match denseFastBest c' occ prot with
+      | none => denseGaussLoop occ prot rest dσ
+      | some (x, t) =>
+          let touched := ((dσ.revDeps[x]?).getD ∅).toList.filterMap (fun y =>
+            (dσ.map[y]?).bind (fun s => if s.mentions x then some (y, s) else none))
+          let pairs := touched.map (fun ys => (ys.1, (ys.2.subst x t).normalize)) ++ [(x, t)]
+          denseGaussLoop occ prot rest (dσ.insertAll pairs)
+
 /-! ## Dynamic sparse scheduling -/
 
 def DenseExpr.uniqueVars (e : DenseExpr p) : List VarId :=
@@ -752,6 +765,19 @@ def denseMarkowitzSchedule (constraints : List (DenseExpr p)) (occ : Std.HashMap
   let st := denseMarkowitzBuild constraints occ prot
   denseMarkowitzLoop occ prot sources sources.size st DenseSolved.empty
 
+def denseSourceOrderSchedule (constraints : List (DenseExpr p))
+    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) : DenseSolved p :=
+  let first := denseGaussLoop occ prot constraints DenseSolved.empty
+  if first.map.isEmpty then first else denseGaussLoop occ prot constraints first
+
+def denseMarkowitzMinRows : Nat := 8192
+
+def denseGaussSchedule (constraints : List (DenseExpr p))
+    (occ : Std.HashMap VarId Nat) (prot : Std.HashSet VarId) : DenseSolved p :=
+  if constraints.length < denseMarkowitzMinRows
+  then denseSourceOrderSchedule constraints occ prot
+  else denseMarkowitzSchedule constraints occ prot
+
 theorem DenseLinExpr.others_terms_fst_mem (l : DenseLinExpr p) (v : VarId) (x : VarId)
     (h : x ∈ (l.others v).terms.map Prod.fst) : x ∈ l.terms.map Prod.fst := by
   simp only [DenseLinExpr.others, List.mem_map] at h ⊢
@@ -787,20 +813,21 @@ theorem denseTrySolveUnit_vars_subset (l : DenseLinExpr p) (v : VarId) (w : VarI
     exact absurd h (by simp)
 
 /-- Batch linear (Gauss) elimination. From a constraint like `x - 2*y - 3 = 0` it derives the
-    assignment `x := 2*y + 3`, choosing pivots globally by dynamic Markowitz fill cost. -/
+    assignment `x := 2*y + 3`, choosing pivots globally by dynamic Markowitz fill cost on large
+    systems and preserving source order on smaller systems. -/
 def denseGaussElim (bs : BusSemantics p) (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   let occ := denseOccurrenceMap d
   let prot := denseProtectedVars d bs
-  let solved := denseMarkowitzSchedule d.algebraicConstraints occ prot
+  let solved := denseGaussSchedule d.algebraicConstraints occ prot
   if solved.map.isEmpty then d else d.substF solved.fn
 
 /-- `denseGaussElim` as an explicit `if` (the `let` zeta-reduces). -/
 theorem denseGaussElim_eq (bs : BusSemantics p) (d : DenseConstraintSystem p) :
     denseGaussElim bs d =
-      if (denseMarkowitzSchedule d.algebraicConstraints
+      if (denseGaussSchedule d.algebraicConstraints
           (denseOccurrenceMap d) (denseProtectedVars d bs)).map.isEmpty
       then d
-      else d.substF (denseMarkowitzSchedule d.algebraicConstraints
+      else d.substF (denseGaussSchedule d.algebraicConstraints
           (denseOccurrenceMap d) (denseProtectedVars d bs)).fn := rfl
 
 /-! `denseGaussElimPass` (the wired pass) is built and proved in `Proofs/Gauss.lean`. -/

@@ -4638,3 +4638,32 @@ evaluation is delegated to the draft PR's CI workflows.
 
 **Worked locally: yes (large representative Gauss and whole-profile runtime win; full-set result
 pending CI).**
+
+### 134. Runtime: gate Markowitz scheduling below 8192 rows
+
+PR #190's effectiveness CI showed that unconditional Markowitz scheduling changed the final SP1
+RSP variable count from 10,627 to 10,702. Seven cases regressed by 91 variables while two improved
+by 16. Targeted tracing on the repeated apc_016 shape found equal source-order and Markowitz pivot
+counts in each cleanup cycle, but different pivot keys and right-hand sides in affine rows connected
+to nonlinear constraints. The regression is therefore a downstream basis-sensitivity effect, not
+a missed-elimination or stale-heap bug.
+
+Putting the static occurrence score ahead of fill was rejected: apc_016 recovered only 2 of its 18
+variables, apc_024 and apc_060 did not recover any, and apc_073 lost its 13-variable improvement.
+A 16,384-row source-order gate restored RSP and SP1 keccak exactly but also restored the wasm-eth
+apc_037 Gauss cost (11,145 ms versus the 11,209 ms baseline), because earlier passes reduce that
+case below the gate before Gauss runs.
+
+Gauss now retains the exact two-sweep source-order algorithm below 8192 algebraic constraints and
+uses the dynamic scheduler only at or above that size. All SP1 RSP inputs have at most 3433
+constraints, so the corpus retains its previous pivot behavior without a VM-specific condition. A
+targeted apc_016 export returned to 268 variables, 262 bus interactions, and 21 constraints. The
+single wasm-eth apc_037 profile retained a 3,850 ms Gauss time and 40,341 ms total, respectively
+65.7% and 15.7% below the source-order baseline, and its final profiled state returned from 1898 to
+1896 variables.
+
+The Gauss and executable builds are warning-free; full corpus confirmation is delegated to the
+updated PR's CI.
+
+**Worked locally: yes (RSP baseline behavior restored while the large-case runtime win remains;
+full-set result pending CI).**
