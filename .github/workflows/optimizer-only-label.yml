@@ -32,14 +32,14 @@ jobs:
             const LABEL_COLOR = '0e8a16'; // green
             const LABEL_DESCRIPTION =
               'Changes only the AI-maintained optimizer surface ' +
-              '(ApcOptimizer/Implementation/**, docs/log.md, docs/ideas.md) — no audit needed.';
+              '(ApcOptimizer/Implementation/**, agent-docs/log.md, agent-docs/ideas.md) — no audit needed.';
 
             // The whitelist. A file qualifies if it matches ANY of these. Keep this list in sync
             // with the "auditing surface" description in README.md / AGENTS.md.
             const ALLOWED = [
               /^ApcOptimizer\/Implementation\//, // the non-audited optimizer implementation
-              /^docs\/log\.md$/,                 // append-only experiment log
-              /^docs\/ideas\.md$/,               // future-pass ideas
+              /^agent-docs\/log\.md$/,           // append-only experiment log
+              /^agent-docs\/ideas\.md$/,         // future-pass ideas
             ];
             const isAllowed = (filename) => ALLOWED.some((re) => re.test(filename));
 

@@ -12,8 +12,8 @@ must pass.
 
 ## Context
 
-This is a recurring loop — skim the current architecture in `docs/design/architecture.md`, the
-recent `docs/log.md` entries (`tail -100 docs/log.md`; earlier ones describe superseded designs),
+This is a recurring loop — skim the current architecture in `agent-docs/architecture.md`, the
+recent `agent-docs/log.md` entries (`tail -100 agent-docs/log.md`; earlier ones describe superseded designs),
 and recent commits to see what has already been tried. Run a case with, e.g.:
 
 ```
@@ -53,17 +53,17 @@ in the log.
 Write a dense `DenseVerifiedPassW` (impl in a new file, proof + wiring under `Proofs/`) in `ApcOptimizer/Implementation/OptimizerPasses/` file, import it in
 `ApcOptimizer/Implementation/Optimizer.lean`, and add one `(name, pass)` entry to the
 `cleanupPasses` list (the single pass-list both the optimizer and the profiler consume). See
-`AGENTS.md` and `docs/design/architecture.md` for the architecture; correctness follows from the
+`AGENTS.md` and `agent-docs/architecture.md` for the architecture; correctness follows from the
 pass's own `PassCorrect`.
 
 ## Log
 
-Append to `docs/log.md` on each commit: the idea, whether it worked, and the impact (which benchmark,
+Append to `agent-docs/log.md` on each commit: the idea, whether it worked, and the impact (which benchmark,
 how effectiveness changed). Append-only.
 
 ## Ideas file
 
-In each run, read and update `docs/ideas.md` with ideas for future passes. Whenever you come across an idea that doesn't fit in the current session, add it there. Remove implemented ideas.
+In each run, read and update `agent-docs/ideas.md` with ideas for future passes. Whenever you come across an idea that doesn't fit in the current session, add it there. Remove implemented ideas.
 
 ## Looping
 

@@ -3,8 +3,8 @@
 Append-only history of optimizer changes. Each entry records the idea, whether it worked, and its
 impact on effectiveness (distinct variables before / after; higher is better). **Earlier entries
 describe designs and files that have since been superseded** — for the current architecture see
-[`design/architecture.md`](design/architecture.md); for recent work read the last few entries
-(e.g. `tail -100 docs/log.md`).
+[`architecture.md`](architecture.md); for recent work read the last few entries
+(e.g. `tail -100 agent-docs/log.md`).
 
 Every commit keeps `lake build` green and `optimizer_maintainsCorrectness` proven with no
 `sorry`/`admit`/`axiom`/`native_decide` (enforced by CI), leaving the audited spec and bus
@@ -925,7 +925,7 @@ bus effectiveness **1.43× agg** vs powdr **2.52×** — powdr's PC-lookup remov
 interaction cleanup) is a large, previously-invisible gap. apc-optimizer already leads on constraints
 (**8.63×** vs **7.47×**). This suggests a sound, variable-neutral win is available: dropping
 never-violating stateless lookups (e.g. pinned PC lookups) would raise bus effectiveness toward
-powdr without regressing variables. Added to `docs/ideas.md`.
+powdr without regressing variables. Added to `agent-docs/ideas.md`.
 
 ### 43. Disconnected-component removal (`disconnectedComponentPass`)
 New pass `ApcOptimizer/Implementation/OptimizerPasses/DisconnectedComponent.lean`: drop a *disconnected
@@ -955,7 +955,7 @@ on the pre-rename benchmark data (before the #48 variable-rename refactor this r
 shift-limbs): 1027 → 1003 vars. The dominant *unremoved* pattern is the orphaned register read
 (data limbs in a bitwise byte-check `[K − Σ256ⁱ·limbᵢ, …]`): all-zero is not a satisfying witness
 there (the affine slot is a large constant, not a byte) — left for a smarter witness finder (see
-`docs/ideas.md`).
+`agent-docs/ideas.md`).
 
 ### 44. Remove the `iters` parameter: provably-terminating fixpoint cleanup loop
 
@@ -1073,7 +1073,7 @@ all outputs within the degree bound.
 pass, powdr 85). Across a sample (apc_001–008; the small cases re-confirmed identical post-rebase),
 bus interactions total 5839 → **apc-optimizer 1894** (3.08×) vs **powdr 1637** (3.57×), with variables
 unchanged (apc-optimizer keeps ≤ powdr's on every sampled case). The remaining apc-optimizer-vs-powdr bus gap is the PC lookups (bus 2),
-which powdr removes and apc-optimizer keeps (never-violating model) — a separate follow-up (`docs/ideas.md`).
+which powdr removes and apc-optimizer keeps (never-violating model) — a separate follow-up (`agent-docs/ideas.md`).
 
 ### 47. Investigation (Georg): where does `reencode`'s effectiveness actually come from? (no code change)
 Georg asked why `reencode` drives so much effectiveness when powdr has no such pass, and whether a
@@ -1110,7 +1110,7 @@ so fold in bus interactions / non-covered constraints), env'=env, no derivations
 `reencode` and a strict generalization of `domainBatch`/`ConstantFold`. It would recover the ~87% chaining
 collapse (powdr's 1808 is the rough target; apc-optimizer's chaining is if anything stronger) but not the ~13%
 flag compression, which is genuinely reencode-only (it's why apc-optimizer *beats* powdr here: 1683 < 1808). Full
-proposal + the keep-both-vs-replace decision in `docs/ideas.md`. No optimizer/spec change in this entry.
+proposal + the keep-both-vs-replace decision in `agent-docs/ideas.md`. No optimizer/spec change in this entry.
 
 ### 48. Domain-constant subexpression folding (`DomainFold.lean`) — the entry-47 pass, kept alongside `reencode`
 Implemented the entry-47 proposal (Georg chose "keep both"): a new `domainFoldPass`, placed **before**
@@ -1186,7 +1186,7 @@ effectiveness **3.056× → 3.109× aggregate**, **2.406× → 2.559× geomean**
 **30 → 24**, reaching **full parity with powdr (24)**; apc_003 96 → 90; apc_008 89 → 77 (bitwise
 36 → 24). The residual bitwise gap on some blocks (apc_008) is non-self-XOR byte checks the
 recogniser skips; the remaining bus gap is otherwise the tuple-range packing and the memory-pointer
-13-bit checks (see `docs/ideas.md`). Note: variables are ~tied with powdr on this sample (apc-optimizer wins
+13-bit checks (see `agent-docs/ideas.md`). Note: variables are ~tied with powdr on this sample (apc-optimizer wins
 the aggregate, powdr the geomean and 7/12 cases), so bus interactions are the systematic gap this
 targets.
 
@@ -1292,7 +1292,7 @@ apc_001 42→38, apc_028 35→28 (now beats powdr 30), apc_056 28→24, apc_010 
 apc_014 272→268 (beats powdr 274). Full `openvm-eth` aggregate variable effectiveness is now
 **4.064× (geo 3.522×)** vs powdr **4.092× (geo 3.787×)** — near parity on the top-priority metric;
 constraints 8.77× stay well ahead of powdr's 5.85×. The residual per-branch gap is the inverse-hint
-collapse (4 hints → 1), which needs **no** further spec change — see `docs/ideas.md`.
+collapse (4 hints → 1), which needs **no** further spec change — see `agent-docs/ideas.md`.
 
 ### 52. Collapse the multi-limb reciprocal-witness group to one hint (`HintCollapse.lean`) — finishes powdr's `seqz`/`beqz`
 
@@ -1607,7 +1607,7 @@ affected cases (apc_039 ~700 → ~400 ms — the resolved constraints leave late
 work). `lake build` green; `check-proof-integrity.sh` passes; correctness axioms stay
 `{propext, Classical.choice, Quot.sound}`.
 
-Two negative findings recorded in `docs/ideas.md`: the apc_005-class `mem_ptr_limbs` carry
+Two negative findings recorded in `agent-docs/ideas.md`: the apc_005-class `mem_ptr_limbs` carry
 products are **not** one-sided (the 16-bit wrap genuinely occurs on some traces — both factors'
 intervals contain 0), so that bus gap needs cross-access limb unification instead; and the
 apc_018 compare-block gap is the sltu-style `diff_marker` gadget that `hintCollapse`'s matcher
@@ -1654,7 +1654,7 @@ The residual keccak gap is now **variables** (3622 vs 2021): the read-data limbs
 ~1200 vars powdr has none of) survive because they still occur as operands/results of the XOR
 (bitwise) interactions even after their memory pairs cancel. Closing it needs read-value
 unification (substitute a read limb by the value written to that cell, or by the XOR functional
-dependence `slotFun`) — recorded in `docs/ideas.md`.
+dependence `slotFun`) — recorded in `agent-docs/ideas.md`.
 ### 57. Two-root decomposition unification (`RootPairUnify.lean`) — bounded-integer reasoning, aggregate variable lead over powdr
 
 Memory-pointer decompositions pin each limb by a **two-root carry constraint**
@@ -1663,7 +1663,7 @@ limb inside a window smaller than the root gap. Two accesses at the *same* addre
 such constraints with the same `A, k, δ` but distinct limb variables — each variable
 independently picks a root, so no purely algebraic pass can equate them, and every
 finite-*constant*-domain pass is blocked by the parameterized roots (the gap diagnosed in
-`docs/ideas.md`'s mem-ptr item). apc-optimizer kept 258 `mem_ptr_limbs` on apc_005 vs powdr's 130.
+`agent-docs/ideas.md`'s mem-ptr item). apc-optimizer kept 258 `mem_ptr_limbs` on apc_005 vs powdr's 130.
 
 **The bounded-integer argument** (`rootPair_eq`): both roots differ by `g = k⁻¹·δ`; if
 `x.val < B` and `y.val < B` with `B ≤ g.val` and `B ≤ p − g.val`, the field difference
@@ -1703,7 +1703,7 @@ baseline re-measured at this commit's parent):
   — **apc-optimizer takes the aggregate variable lead for the first time**; per-case wins 15 → 17
 - bus interactions 2.922× → 2.924× (downstream cascade), constraints 8.801×/9.918× unchanged
 
-Left on the table (see `docs/ideas.md`): the unification leaves the duplicate's carry
+Left on the table (see `agent-docs/ideas.md`): the unification leaves the duplicate's carry
 constraints and range checks behind as *syntactically identical* copies — a duplicate-dropper
 would convert the remaining redundancy into constraint/bus wins; and powdr's cross-offset
 chaining (`ptr+4` sharing the high limb) needs page-crossing reasoning beyond equal-address
@@ -1736,7 +1736,7 @@ message are two sends. Wired into `cleanupCycle` right after `rootPairUnifyPass`
 **Impact.** apc_005-class: **841 → 713 constraints (−128) and 829 → 765 bus interactions (−64)**
 per block at unchanged 1555 vars — the 64 unified pairs' two carry constraints and one raw-slot
 range check each (the flag-dependent scaled check survives: its flag polynomial differs per
-access, so the copies are not syntactic — see `docs/ideas.md`). 9-case sample across the other
+access, so the copies are not syntactic — see `agent-docs/ideas.md`). 9-case sample across the other
 size classes byte-identical. Full 100-case sweep (before → after):
 
 - variables **4.222×/3.644× unchanged** (the pass is variable-neutral by construction)
@@ -1762,7 +1762,7 @@ holds at every offset-equal point. Measured on apc_005-class blocks exactly **on
 flag components certifies** per pair — the two accesses' encodings relate the other component
 non-componentwise — so the checks do not become fully syntactic duplicates and the bus count
 stays; the remaining component would need a derived-variable substitution `b := f(a₀, a₁)`
-(nonlinear solution, degree-guarded), noted in `docs/ideas.md`.
+(nonlinear solution, degree-guarded), noted in `agent-docs/ideas.md`.
 
 `lake build` green; all three `maintainsCorrectness` theorems still
 `{propext, Classical.choice, Quot.sound}`-only; `check-proof-integrity.sh` passes.
@@ -1818,7 +1818,7 @@ over every constraint every iteration; `domainFold` 3.4 s — the pre-existing
 ### 61. Measurement: free-variable removal and smarter disconnected-witnesses have no remaining targets
 
 Measurement only, no code change (in the spirit of entry 42). Two long-standing candidates — the
-`docs/ideas.md` "smarter witnesses for `disconnectedComponentPass`" item (entry 43's "dominant
+`agent-docs/ideas.md` "smarter witnesses for `disconnectedComponentPass`" item (entry 43's "dominant
 unremoved pattern": orphaned register-read byte-decompositions needing a non-zero witness) and
 powdr's `remove_free_variables` (drop a variable occurring in exactly one solvable
 constraint/stateless interaction) — were sized against the current optimizer's outputs before
@@ -1834,7 +1834,7 @@ implementing. Both are **empty**:
   unconditionally solvable for it (`a` may be zero), so it is not removable under powdr's rule
   either, and it is load-bearing for the is-zero gadget.
 
-The `docs/ideas.md` entry is updated accordingly. Together with entry 55 (degree-bounded
+The `agent-docs/ideas.md` entry is updated accordingly. Together with entry 55 (degree-bounded
 inlining structurally blocked), two of the three Tier-1 variable candidates from the Rust-vs-Lean
 comparison are now measured dead on this benchmark; the live remainder of that tier is the
 constraint/limb-splitting shape (entry 36 lineage).
@@ -1853,13 +1853,13 @@ powdr's exports on loss cases (apc_003: 133 vs 131; apc_047: 91 vs 87). Findings
    splitter for variables' sake; at most it trades a 12-bit range check's operand shape.
 2. **The whole apc_003-class gap (+2/case) is the signed-comparison gadget**: we keep
    `{a_msb_f, b_msb_f, cmp_lt}` where powdr keeps `{cmp_result}` — the msb-extraction booleans
-   survive on our side. New, previously uncatalogued target (`docs/ideas.md`).
+   survive on our side. New, previously uncatalogued target (`agent-docs/ideas.md`).
 3. **The apc_047-class gap (~+3/case) is duplicated read data**: powdr keeps one copy of the
    same-address read words (`b__*`, `writes_aux__prev_data__*`) across consecutive accesses
    where we keep several. Hypothesis: our receive-equals-send chaining (`busUnify`) is blocked
    because the access addresses are still not *syntactically* equal — the entry-59 residual
    (one flag component per access pair relates non-componentwise). Finishing that flag story
-   (the derived-variable interpolation in `docs/ideas.md`) would likely unlock this cascade.
+   (the derived-variable interpolation in `agent-docs/ideas.md`) would likely unlock this cascade.
 
 With entries 55 and 61, all three Tier-1 variable candidates from the Rust-comparison survey
 are now measured dead as scoped; the live variable work is items (2) and (3) above.
@@ -2100,7 +2100,7 @@ unchanged (10.593×/11.585×). Runtime smoke set (13 cases, none width-0-bearing
 
 **Follow-up.** #EQ closes ~40 of apc_071's 123-variable gap to powdr; the residual `a`/`c` families
 (~64 vars on apc_071) are the intermediate effective-address bytes powdr derives directly from
-`base + offset` — a derived-column (reencode-class) elimination (see docs/ideas.md), higher proof
+`base + offset` — a derived-column (reencode-class) elimination (see agent-docs/ideas.md), higher proof
 cost. The same faithful-what-if pass also confirmed three **washes** (do not build): the
 genuine-two-root carry-witness follow-up (add a boolean carry ⇒ net 0 vars — the −249-on-apc_037
 ceiling was unsound one-root collapse), the N2 signed-compare msb fold (basis rename; apc/powdr both
@@ -2187,7 +2187,7 @@ dropped send to be the **earliest active same-address send** (`admissibleMemoryB
 read pairs as an earlier active same-address send with no syntactic match, so every later read
 pair is refused (`pre=false`). Byte justification and the earliest-send condition must **both**
 be relaxed for the chains to cascade; this entry lands the first half (general and correct on its
-own), and records the earliest-send relaxation as the next step (see `docs/ideas.md`) — it is
+own), and records the earliest-send relaxation as the next step (see `agent-docs/ideas.md`) — it is
 sound (a trailing active same-address *receive* in the "before" region shields every earlier
 send, so no removal exposes a mismatched consecutive pair) but touches the memory-discipline
 completeness proof, so is left as a separate, carefully-scoped change. Runtime unaffected
@@ -2240,7 +2240,7 @@ boundary-store-led chains.
 
 The remaining openvm-eth bus gap to powdr is now `−0.120×` agg (from `−0.156×` at clean main),
 narrowed by the two entries together. Residual: the AND-gadget byte source (`apc_037`) and
-range-check packing (see `docs/ideas.md`).
+range-check packing (see `agent-docs/ideas.md`).
 
 ### 71. Tuple-range packing (`TupleRange.lean`) — bus-interaction effectiveness
 
@@ -2280,7 +2280,7 @@ apc_014 156 → **151**, apc_008 63 → 62, apc_001 unchanged (its 17/12-bit che
 bus); apc_005 701 → 702 (+1 — a packed tuple survives where the interplay with the later
 byte-check dropper would otherwise have removed a single; aggregate-invisible). The remaining
 tuple gap is the byte+byte *widening* pack (second slot only needs `< s2`), which needs a
-justification argument — see `docs/ideas.md`.
+justification argument — see `agent-docs/ideas.md`.
 
 ### 72. Runtime: inverted index for the domain-trio covered-set scans (`CoveredIndex.lean`)
 
@@ -2315,7 +2315,7 @@ collateral change); profiled total 494 → 431 s. The `run` wall-clock timer is 
 (baseline solo 529 s vs concurrent 449 s — ~18 % variance), so the per-pass profile deltas are the
 reliable signal; a solo `run` A/B measured 529 → 378 s.
 
-**Remaining (see `docs/ideas.md`).** `domainFold`'s covered scan feeds `foldOut_correct` (tied to
+**Remaining (see `agent-docs/ideas.md`).** `domainFold`'s covered scan feeds `foldOut_correct` (tied to
 `coveredCsOf`), so indexing it needs a `coveredIdx = items.filter Q` equality lemma; the residual
 per-pass time is the finite-domain enumeration itself (box scanning); the next tier is `flagFold`
 and `busUnify` (per-target `cs.vars` / `List.contains` membership).
@@ -2359,7 +2359,7 @@ the dominant term; `domainFold` 54.6 → ~46–48 s (−~13 %). Every other pass
 cross-pass measurement noise; profiled total 383 → 356 s. As in #104 the `run` wall-clock is noisy on
 this machine, so the per-pass profile deltas are the reliable signal.
 
-**Remaining (see `docs/ideas.md`).** `busUnify`'s other per-equality scan,
+**Remaining (see `agent-docs/ideas.md`).** `busUnify`'s other per-equality scan,
 `cs.algebraicConstraints.contains c`, needs a `Hashable (Expression p)` instance to index; the next
 runtime tiers are `flagFold` (~51 s) and the finite-domain box enumeration inside
 `domainBatch` / `domainFold`.
@@ -2491,17 +2491,17 @@ Variable-positive and per-case-neutral: variables 4.507× → **4.509×** agg (3
 interactions 3.405× → 3.401× agg (2.707× → 2.705× geo), constraints 10.595× → 10.590× agg
 (11.585× → 11.578× geo); the per-case standings vs powdr are **unchanged at 25 W / 42 L / 33 T**. The
 variable gain lands on the register/shift blocks carrying `255`-complement (NOT) results (the
-apc_071 / apc_037 cases `docs/ideas.md` flagged for C4b); the sub-0.01× bus/constraint movement is the
+apc_071 / apc_037 cases `agent-docs/ideas.md` flagged for C4b); the sub-0.01× bus/constraint movement is the
 255-XOR interactions staying put as a few downstream cancellations shift (aggregate-invisible).
 
 Together with #105 (entry 71), the keccak variable gap to powdr collapses from +1035 (pre-both) to
 **+7** (post-both). The residual keccak variable families are the memory read/write-aux witnesses and
 `bit_shift_carry` (rotation-gadget carries) — separate mechanisms, not constant-operand XOR; see
-`docs/ideas.md`.
+`agent-docs/ideas.md`.
 
 ## Ideas-file regeneration (2026-07-13, fresh baselines — no optimizer change)
 
-Rewrote `docs/ideas.md` from scratch into a ranked shortlist of 5 high-impact ideas after a
+Rewrote `agent-docs/ideas.md` from scratch into a ranked shortlist of 5 high-impact ideas after a
 multi-agent brainstorm (keccak + openvm-eth first-principles, powdr-gap census, pass generalization,
 prototype measurement). No code change; recording the baselines the ranking rests on. (This commit
 was rebased on top of C4b/#109 — entry 74 — so the ideas file's keccak figures reflect the post-C4b
@@ -2580,7 +2580,7 @@ live benchmark renders:
    competitive gap for idea #5 to close.
 
 **Impact: none** (no code changed; `lake build` unaffected). Idea #5 removed from the active list and
-recorded under "Rejected / measured dead-ends" in `docs/ideas.md`.
+recorded under "Rejected / measured dead-ends" in `agent-docs/ideas.md`.
 
 **Adjacent real wins surfaced while investigating** (already tracked in ideas.md, *not* idea #5): the
 159 redundant range-checks on byte-guaranteed XOR results are a bus-only drop (width-1 range-check →
@@ -2589,7 +2589,7 @@ win. These reduce bus interactions, not variables.
 
 ## 75. Generalized single-value byte-check recognizer: `[0,x,x,1]` mirror drop + form-agnostic pack (idea #3)
 
-**Idea.** `docs/ideas.md` #3 ("bitwise-bus cleanup") had three parts: (i) result-zero equality
+**Idea.** `agent-docs/ideas.md` #3 ("bitwise-bus cleanup") had three parts: (i) result-zero equality
 extraction `[x,y,0,1] ⟹ x=y`, and (ii)/(iii) recognizing the missing XOR-with-zero mirror
 `[0,x,x,1]` so the byte-check dropper/packer reaches it. Measured on the current optimizer output:
 
@@ -2817,7 +2817,7 @@ the size-decreasing cleanup fixpoint. No new `BusFacts`; the pass reuses the `by
 
 ## Ideas-file regeneration from fresh first-principles measurement (2026-07-14, no optimizer change)
 
-Rewrote `docs/ideas.md` from scratch on main `656a9d8` (post-#114) after re-measuring both
+Rewrote `agent-docs/ideas.md` from scratch on main `656a9d8` (post-#114) after re-measuring both
 benchmarks from zero: fresh `opt-export` of all 100 openvm-eth cases + keccak, canonical-polynomial
 diffs against the checked-in powdr exports (exact per-variable/per-interaction attribution, not
 family heuristics). Headline corrections to the previous file's beliefs:
@@ -2848,7 +2848,7 @@ family heuristics). Headline corrections to the previous file's beliefs:
 - Fresh dead ends recorded: keccak-below-powdr, timestamp/mem_ptr 2-var floors (1:1 washes in all
   100 cases), bit_shift_carry representation wash, sub-byte checks not packable as bytes.
 
-New `docs/ideas.md`: 5 ranked ideas (constant-decomposition folding done right; memory-bus
+New `agent-docs/ideas.md`: 5 ranked ideas (constant-decomposition folding done right; memory-bus
 completion in 4 sub-items; seqz comparison collapse; stateless-check hygiene ×4; one-hot
 annihilation) with mechanisms, proof paths, worked examples, and per-benchmark expected impact,
 plus in-flight PR markers and working rules (duplicate-PR check, runtime discipline, per-case
@@ -2895,7 +2895,7 @@ effectiveness as entry 76, fewer passes, ~half the collapse-stage runtime).
 
 ## Entry 80: Width-1 range check → booleanity + subsumed range-check drop (idea 4(b)+(c))
 
-Bundled the two stateless-range-hygiene items from `docs/ideas.md` idea 4. Both are pure bus wins
+Bundled the two stateless-range-hygiene items from `agent-docs/ideas.md` idea 4. Both are pure bus wins
 (variable-neutral), proven with **no new `BusFacts` and no audited-surface change**; correctness
 follows from each pass's own `PassCorrect`.
 
@@ -3501,7 +3501,7 @@ same map idea was right on keccak — the query-time array scan serves both. (3)
 Build green; `Scripts/check-proof-integrity.sh` green (the three correctness theorems still
 depend only on `{propext, Classical.choice, Quot.sound}`). Runtime leftovers (domainBatch box
 streaming / SAT-style pruning, gauss, dedup's quadratics, rootPairUnify's rescans, cross-cycle
-memoization) are recorded in `docs/ideas.md` under "Runtime leftovers". **Worked: yes.**
+memoization) are recorded in `agent-docs/ideas.md` under "Runtime leftovers". **Worked: yes.**
 ### 91. Runtime: tupleRange batch-drain with split-by-construction (effectiveness unchanged)
 
 Profiling the heaviest wasm-eth cases put `tupleRange` second (96.3 s of `apc_012`'s 435 s
@@ -3552,7 +3552,7 @@ depend only on `{propext, Classical.choice, Quot.sound}`). The generated-C audit
 this lever also recorded the remaining ones (ZMod dictionary reconstruction per scalar op,
 gauss's unconditional per-constraint renormalization, rootPairUnify's quadratic seen-join,
 `sizeKey`/`varCount` allocation, variable interning, runtime `p.Prime` decides) in
-`docs/ideas.md` under "Runtime leftovers II". **Worked: yes.**
+`agent-docs/ideas.md` under "Runtime leftovers II". **Worked: yes.**
 
 ### 92. Activate SP1 memory pair cancellation + op-6 range-check subsumption (bus 1.494× → 1.957×, vars 2.652× → 2.938×)
 
@@ -3585,7 +3585,7 @@ layout; OpenVM declares no `rangeCheckAt` and keeps `SubsumedRange`, so it is a 
 `256`-bound path no-ops; OpenVM keccak byte-identical (2021 v / 186 c / 1752 bus); proof integrity
 green ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Remaining SP1
 gap = ALU-intermediate variables (free witnesses powdr inlines) and register-vs-RAM address
-disequality (powdr's sort-based memory argument) — see `docs/ideas.md`. **Worked: yes.**
+disequality (powdr's sort-based memory argument) — see `agent-docs/ideas.md`. **Worked: yes.**
 
 ### 93. Register-vs-RAM address disequality via reciprocal nonzero-witnesses (SP1 vars 2.938× → 3.535×, bus 1.957× → 2.236×)
 
@@ -3620,7 +3620,7 @@ size-monotone; OpenVM keccak byte-identical (2021 v / 186 c / 1752 bus) and its 
 (198 s vs main's 202 s on this container, within variance). Proof integrity green
 ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Remaining SP1 gap:
 the ALU-intermediate / dead-upper-bitwise-byte families (apc_024/040/030 lead) and RAM-vs-RAM
-telescoping — see `docs/ideas.md`. **Worked: yes.**
+telescoping — see `agent-docs/ideas.md`. **Worked: yes.**
 
 ### 94. Affine bound propagation justifies multi-limb memory slots (SP1 bus 2.236× → 2.301×, variable-neutral)
 
@@ -3645,7 +3645,7 @@ lexicographically clean bus win. Size-monotone ⇒ no OpenVM regression: keccak 
 (2021 v / 186 c / 1752 bus), runtime unchanged (200 s). Proof integrity green; no
 `sorry`/`axiom`/`native_decide`. The residual SP1 bus gap is the long same-register access chains
 whose interior pairs still don't telescope (busUnify pairing) and the dead upper bitwise bytes —
-see `docs/ideas.md`. **Worked: yes.**
+see `agent-docs/ideas.md`. **Worked: yes.**
 
 ### 95. Bound the SP1 byte-op result slot (SP1 bus 2.301× → 2.457×, variable-neutral)
 
@@ -3668,7 +3668,7 @@ powdr 1646 → 1080, −566); variables essentially unchanged (3.535× → 3.538
 (`Sp1Facts`), so OpenVM is untouched by construction. Proof integrity green; no
 `sorry`/`axiom`/`native_decide`. Cumulative over entries 93–95: SP1 variables 2.938× → 3.538×, bus
 1.957× → 2.457× (var gap 3715 → 1310, bus gap 3209 → 1080). Residual: dead upper bitwise bytes
-(the variable gap) and the tail of the long register chains — see `docs/ideas.md`. **Worked: yes.**
+(the variable gap) and the tail of the long register chains — see `agent-docs/ideas.md`. **Worked: yes.**
 
 ### 96. Scaled-byte-forces-zero drops the dead upper bitwise bytes (SP1 vars 3.538× → 3.686×)
 
@@ -3696,7 +3696,7 @@ apc_001 now at powdr's exact 113 variables. Cumulative over entries 93–96: SP1
 regression:** keccak byte-identical (2021 v / 186 c / 1752 bus), runtime ~218 s vs main's ~200 s
 (within container variance); the pass fires only where the scaled-byte pattern exists. Proof
 integrity green ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`.
-Residual bus gap: the carry / negative-coefficient memory slots (`x − 2¹⁶·y`) — see `docs/ideas.md`.
+Residual bus gap: the carry / negative-coefficient memory slots (`x − 2¹⁶·y`) — see `agent-docs/ideas.md`.
 **Worked: yes.**
 
 ### 97. Generalize constant-operand bitwise extraction to OR/AND + two-term scaled-zero (SP1 vars 3.672× → 3.735×, bus 2.488× → 2.523×)
@@ -3728,7 +3728,7 @@ and has no huge-scale byte slots, so both mechanisms are no-ops there — keccak
 186 c / 1752 bus). Proof integrity green ({propext, Classical.choice, Quot.sound}); no
 `sorry`/`axiom`/`native_decide`. Residual SP1 gap: the carry / negative-coefficient memory slots
 (`65536·(h₂₆ − h₂₇) + …`), only 16-bit modulo a telescoping relation apc's local pair-cancellation
-can't establish — see `docs/ideas.md`. **Worked: yes.**
+can't establish — see `agent-docs/ideas.md`. **Worked: yes.**
 
 ### 98. Width-0 range check → equality on SP1's op-6 (`RangeForceZero.lean`, vars 3.735× → 3.743×, bus 2.523× → 2.539×)
 
@@ -3842,7 +3842,7 @@ regressed**. apc_001/016/017/024/027/029/031/037/040 now at or **below** powdr's
 1334/11083/18559/23332 baseline; the pass itself is 271 ms of apc_030's 22.6 s (domainBatch
 dominates at 16 s). Proof integrity green ({propext, Classical.choice, Quot.sound}); no
 `sorry`/`axiom`/`native_decide`. Residual: bus gap 625 (memory chains + byte-check layout),
-var gap 55 — see the rewritten `docs/ideas.md`. **Worked: yes.**
+var gap 55 — see the rewritten `agent-docs/ideas.md`. **Worked: yes.**
 
 ### 102. Basis justification: range-checked forms as building blocks (SP1 bus 2.598× → 2.650×)
 
@@ -3877,7 +3877,7 @@ on four OpenVM memory pairs. **Runtime flat-to-better:** apc_030 21.8 s vs 22.6 
 `basisJustified` together < 1.5 % of the heavy-case profile. Proof integrity green
 ({propext, Classical.choice, Quot.sound}); no `sorry`/`axiom`/`native_decide`. Residual SP1 bus
 gap 471: byte-bus identity-OR checks (apc_024/040 ≈ +43 each) and the mid-chain shields — see
-`docs/ideas.md`. **Worked: yes.**
+`agent-docs/ideas.md`. **Worked: yes.**
 
 ### 103. OR-identity byte checks: recognize, dedup, drop, pack (SP1 bus 2.650× → 2.703×)
 
@@ -3910,7 +3910,7 @@ green; no `sorry`/`axiom`/`native_decide`. **Worked: yes.**
 ### 104. Runtime: de-quadratify per-pass hot loops — bucketed dedups, hoisted patterns, single covered gather (output byte-identical)
 
 Pure **runtime** work following a fresh profiling session (measurements and the full prioritized
-plan are in the rewritten `docs/ideas.md` Runtime section): end-to-end scaling is quadratic
+plan are in the rewritten `agent-docs/ideas.md` Runtime section): end-to-end scaling is quadratic
 (openvm-eth size sweep exponent ≈ 1.95), keccak (28.6k constraints / 13.3k interactions) takes
 252 s, and openvm SHA is ~8× keccak — the quadratic loops are what matters. This entry lands the
 proof-cheap slice of R1/R2/R4; every change is output-preserving and verified byte-identical.
@@ -3958,7 +3958,7 @@ pending (wall time).**
 
 ### 105. Runtime: busPairCancel witness index, domainFold scan fusion, reencode always-indexed via pruning (output byte-identical)
 
-Second runtime batch (plan R1/R3 in `docs/ideas.md`; entry 104 was the first). CI's serial
+Second runtime batch (plan R1/R3 in `agent-docs/ideas.md`; entry 104 was the first). CI's serial
 Runtime Bench for entry 104 landed at **0.95× total on openvm-eth** (intervalForce 0.26×, dedup
 0.32×, rootPairUnify 0.80×) with the effectiveness matrix at **+0.000× and per-case sizes
 identical on all five benchmark sets** — the byte-identity discipline holds at corpus scale.
@@ -3986,7 +3986,7 @@ This batch, same discipline:
 domainFold fusion + setup dedups; batch5: + pruned-index reencode). Build warning-free; proof
 integrity green. The remaining structural item is the domainFold *indexed* path (keccak cycles
 0-2): generalize `foldOut_correct` to untrusted covered subsets so the pruned index and
-stale-bucket refresh apply there too — recorded in `docs/ideas.md` R3. **Worked: pending CI.**
+stale-bucket refresh apply there too — recorded in `agent-docs/ideas.md` R3. **Worked: pending CI.**
 
 ### 106. Runtime: parse-time variable interning + the identitySubst arity-expansion bug (2827 ms → 9 ms)
 
@@ -4055,7 +4055,7 @@ box size + covered constraint/interaction content hashes) traced across all invo
 (16 %), with the dominant cycle-5 enumeration all first-time.** Gauss's per-cycle batch
 substitution rewrites the covered items, so the fingerprints churn every cycle — whole-target
 cross-cycle memoization has nothing to reuse, on exactly the cases that matter. Recorded as a
-measured dead end in `docs/ideas.md` R6 (any cross-cycle scheme must be finer-grained than
+measured dead end in `agent-docs/ideas.md` R6 (any cross-cycle scheme must be finer-grained than
 target skipping, and per-pass payoff must be measured first — the invocation-level "61 % no-op"
 figure does not translate to target-level reuse). domainBatch's remaining cost is productive
 first-time enumeration; its levers are effectiveness-side (quadratic-root algebra replacing
@@ -4246,7 +4246,7 @@ shrink every future cycle-heavy case). **Worked: yes.**
 The R4 idea (hash the O(1) `powdrId?` discriminator instead of walking the name string on every
 hash-map probe) was implemented and export-checked: **openvm-eth apc_100 byte-identical, sp1
 apc_030 NOT** — some consumer lets a `Std.HashMap`/`HashSet` iteration order (which the hash
-values determine) reach the output. Reverted; recorded in `docs/ideas.md` with the leak-hunting
+values determine) reach the output. Reverted; recorded in `agent-docs/ideas.md` with the leak-hunting
 prerequisite (order-normalize the offending `toList`/`fold` first — suspects: gauss's `Solved`
 reverse-dependency buckets, `pdDropSet`'s sweep buckets). **Worked: no (reverted, documented).**
 
@@ -4259,7 +4259,7 @@ all five benchmark sets. The structural wins — the index-preserving order-pres
 busUnify sweep, the reencode degree pre-gate, and the parallel enumeration — are exactly the
 super-linear terms that mattered for the openvm-SHA scale (~8× keccak): the remaining top passes
 (domainBatch enumeration, flagFold's certified sweeps) are linear-ish per cycle or parallel.
-Remaining runtime ideas live in the rewritten R-sections of `docs/ideas.md` (R8 busPairCancel
+Remaining runtime ideas live in the rewritten R-sections of `agent-docs/ideas.md` (R8 busPairCancel
 sweep, the hash-order leak hunt, reencode/domainFold direct-path gathers at mid scale).
 
 ### 117. Runtime follow-up: gate domainBatch's fan-out on system size

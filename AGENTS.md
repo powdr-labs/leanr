@@ -49,7 +49,7 @@ construction — a wrong fact would not compile), and `ApcOptimizer/Utils/` is t
   zero audit surface.
 - `ApcOptimizer/Implementation/JsonParser.lean`, `Main.lean` — the powdr-export parser and the benchmark CLI (see
   `README.md`).
-- `docs/design/architecture.md` — how the optimizer is built: the spec, the verified-pass
+- `agent-docs/architecture.md` — how the optimizer is built: the spec, the verified-pass
   framework, `BusFacts`, and the audited `admissible` predicate.
 
 ## Adding an optimization
