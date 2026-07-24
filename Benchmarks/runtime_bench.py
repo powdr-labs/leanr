@@ -120,13 +120,8 @@ def bench(args):
     iters = {}           # case name -> cleanup iterations
     for i, case in enumerate(cases):
         (total,) = best_of([str(binary), "run", *vm_tok, str(case)], args.repeat, parse_run)
-        # `--no-profile` skips the per-pass `profile` pass (a second full optimizer run per case),
-        # halving wall time — used for the slow single-case stress sets (e.g. sha256).
-        if getattr(args, "no_profile", False):
-            its, passes = 0, {}
-        else:
-            _, its, passes = best_of([str(binary), "profile", *vm_tok, str(case)],
-                                     args.repeat, parse_profile)
+        _, its, passes = best_of([str(binary), "profile", *vm_tok, str(case)],
+                                 args.repeat, parse_profile)
         run_ms[case.name] = total
         iters[case.name] = its
         for name, ms in passes.items():
@@ -272,10 +267,6 @@ def main():
                     help="runs per case; the fastest is kept (default: 1)")
     ap.add_argument("--no-build", action="store_true",
                     help="skip `lake build` (the binary must already exist)")
-    ap.add_argument("--no-profile", action="store_true",
-                    help="skip the per-pass `profile` run (a second full optimizer call per case); "
-                         "only the total `run` time is recorded. Halves wall time for slow "
-                         "single-case stress sets (e.g. sha256).")
     ap.add_argument("--binary", type=Path, default=None, metavar="EXE",
                     help="bench this apc-optimizer executable instead of building the repo's "
                          "(e.g. a prebuilt CI artifact); implies no build")

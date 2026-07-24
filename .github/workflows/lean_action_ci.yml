@@ -25,17 +25,18 @@ jobs:
           path: .lake/build/bin/apc-optimizer
           retention-days: 30
 
-  # Effectiveness over the full OpenVM (openvm-eth, wasm-eth) and SP1 (rsp) sets plus the keccak
-  # stress sets. The matrix crosses side (this PR vs the latest main build) with a benchmark group,
-  # so each cell is its own runner: circuit sizes are deterministic, so the sides needn't share a
-  # runner, and splitting the 100-case wasm-eth set into its own group keeps it off the openvm-eth
-  # critical path. `report` merges every cell. benchmark.py also captures a rough total runtime, used
-  # for the report-only runtime row.
+  # Effectiveness over the full OpenVM (openvm-eth, wasm-eth) and SP1 (rsp) sets plus the keccak and
+  # sha256 stress sets. The matrix crosses side (this PR vs the latest main build) with a benchmark
+  # group, so each cell is its own runner: circuit sizes are deterministic, so the sides needn't
+  # share a runner, and splitting the 100-case wasm-eth set into its own group keeps it off the
+  # openvm-eth critical path. `report` merges every cell. benchmark.py also captures a rough total
+  # runtime, used for the report-only runtime row.
   effectiveness:
     if: github.event_name == 'pull_request'
     needs: build
     runs-on: warp-ubuntu-2404-x64-32x
-    timeout-minutes: 10
+    # 30 min: enough for the sha256 stress case (~170k vars, ~20 min for one optimizer run).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -44,11 +45,13 @@ jobs:
         # cell runs (vm picks the Benchmarks/<VM>/ dir + fact-aware backend: openvm -> BabyBear,
         # sp1 -> KoalaBear). Tiny sets ride along with a full one rather than paying for their own
         # runner: the OpenVM and SP1 keccak stress sets sit with openvm-eth; the full 200-case SP1
-        # rsp set pairs with wasm-eth. Per-cell JSON/MD are keyed by a unique label (sp1 sets get an
-        # `sp1-` prefix) so the two `keccak` sets don't collide.
+        # rsp set pairs with wasm-eth. The sha256 stress case (~20 min for one run) gets its own
+        # group so it doesn't push another cell past the timeout. Per-cell JSON/MD are keyed by a
+        # unique label (sp1 sets get an `sp1-` prefix) so the two `keccak` sets don't collide.
         group:
           - { key: openvm, sets: "openvm:openvm-eth openvm:keccak sp1:keccak" }
           - { key: wasm, sets: "openvm:wasm-eth sp1:rsp" }
+          - { key: sha, sets: "openvm:sha256" }
     permissions:
       contents: read
       actions: read
@@ -133,54 +136,11 @@ jobs:
           path: rt-*.json
           if-no-files-found: ignore
 
-  # SHA-256 runtime stress bench: the single ~170k-variable / ~200k-constraint APC. One optimizer
-  # run takes ~20 min, so it gets its OWN runner (off the openvm-eth critical path) with a longer
-  # timeout, and runs both this PR's binary and latest main on the SAME runner so the comparison is
-  # honest. `--no-profile` records only the total `run` time (skips the second per-pass profiling
-  # run), keeping the job to ~2×20 min.
-  bench-runtime-sha:
-    if: github.event_name == 'pull_request'
-    needs: build
-    runs-on: warp-ubuntu-2404-x64-32x
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: apc-optimizer-bin
-          path: bin-target
-      - run: chmod +x bin-target/apc-optimizer
-      - name: Latest-main binary
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          run_id=$(gh run list --workflow "Lean Action CI" --branch main --status success \
-            --limit 1 --json databaseId -q '.[0].databaseId // empty')
-          if [ -n "$run_id" ] && gh run download "$run_id" -n apc-optimizer-bin -D bin-base; then
-            chmod +x bin-base/apc-optimizer
-          fi
-      - name: Runtime, sha256 (~20 min/side, total time only)
-        run: |
-          python3 Benchmarks/runtime_bench.py sha256 --no-profile \
-            --binary bin-target/apc-optimizer --json rt-sha-pr.json
-          if [ -f bin-base/apc-optimizer ]; then
-            python3 Benchmarks/runtime_bench.py sha256 --no-profile \
-              --binary bin-base/apc-optimizer --json rt-sha-main.json
-          fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bench-runtime-sha
-          path: rt-sha-*.json
-          if-no-files-found: ignore
-
   # One sticky comment: per set an effectiveness table (with a report-only runtime row) and, for
   # openvm-eth, the collapsed runtime detail from bench-runtime. Runs even if a job was skipped.
   report:
     if: always() && github.event_name == 'pull_request'
-    needs: [effectiveness, bench-runtime, bench-runtime-sha]
+    needs: [effectiveness, bench-runtime]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -198,9 +158,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: bench-runtime, path: rt }
         continue-on-error: true
-      - uses: actions/download-artifact@v4
-        with: { name: bench-runtime-sha, path: rt-sha }
-        continue-on-error: true
       - name: Baseline sha
         id: base
         env:
@@ -215,7 +172,7 @@ jobs:
         run: |
           : > bench.md
           # Labels match the per-cell JSON/MD written by the effectiveness job (sp1 sets prefixed).
-          for set in openvm-eth wasm-eth keccak sp1-rsp sp1-keccak; do
+          for set in openvm-eth wasm-eth keccak sha256 sp1-rsp sp1-keccak; do
             if [ -f "main/$set.json" ]; then
               python3 Benchmarks/benchmark.py --compare "main/$set.json" "pr/$set.json" \
                 --md "$set.md"
@@ -231,15 +188,6 @@ jobs:
             fi
             printf '\n' >> bench.md
           done
-          # SHA-256 runtime stress case, benched on its own runner (bench-runtime-sha). ~20 min/side,
-          # total `run` time only (--no-profile), so the report is a plain total-time comparison.
-          if [ -f rt-sha/rt-sha-main.json ] && [ -f rt-sha/rt-sha-pr.json ]; then
-            printf '### sha256 runtime (stress case, own runner)\n\n' >> bench.md
-            python3 Benchmarks/runtime_bench.py \
-              --compare rt-sha/rt-sha-main.json rt-sha/rt-sha-pr.json --md rt-sha.md
-            cat rt-sha.md >> bench.md
-            printf '\n' >> bench.md
-          fi
       - name: Report
         uses: ./.github/actions/report-bench
         with:
@@ -249,7 +197,7 @@ jobs:
           pr: ${{ github.event.pull_request.head.repo.full_name == github.repository
                   && github.event.number || '' }}
           note: >-
-            openvm-eth + wasm-eth + keccak + sp1/rsp + sp1/keccak, PR `${{ steps.base.outputs.psha }}`
+            openvm-eth + wasm-eth + keccak + sha256 + sp1/rsp + sp1/keccak, PR `${{ steps.base.outputs.psha }}`
             ${{ steps.base.outputs.sha && format('vs main `{0}`', steps.base.outputs.sha)
                  || '(no main baseline binary)' }}.
             Effectiveness is exact; the runtime row and detail are report-only. Full runtime detail:
