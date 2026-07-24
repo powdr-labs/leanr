@@ -11,12 +11,12 @@ name = "verso"
 git = "https://github.com/leanprover/verso"
 rev = "v4.30.0-rc1"
 
-# Kept last so its versions of transitively-shared dependencies win. Pinned to an
-# exact rev (not "master") so `lake update` cannot drift it.
+# Kept last so its versions of transitively-shared dependencies (e.g. plausible) win, which is
+# what keeps `lake exe cache get` hashes correct. Tracks master, as before.
 [[require]]
 name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4"
-rev = "e60d89a05065d2697d54edf3ca85f05ca920bbb4"
+rev = "master"
 
 [[lean_lib]]
 name = "ApcOptimizer"

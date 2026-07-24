@@ -8,7 +8,7 @@
    "rev": "e60d89a05065d2697d54edf3ca85f05ca920bbb4",
    "name": "mathlib",
    "manifestFile": "lake-manifest.json",
-   "inputRev": "e60d89a05065d2697d54edf3ca85f05ca920bbb4",
+   "inputRev": "master",
    "inherited": false,
    "configFile": "lakefile.lean"},
   {"url": "https://github.com/leanprover/verso",
