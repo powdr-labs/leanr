@@ -249,6 +249,51 @@ def denseFoldLoopV : List (List VarId) → DenseConstraintSystem p → DenseFold
     let r := denseFoldStepV d fidx xs
     denseFoldLoopV rest r.1 r.2
 
+/-! ## The array-native indexed fold loop (runtime twin)
+
+`denseFoldLoopV` threads the *list* system `d` and re-materializes it per accepted fold:
+`denseFoldOutIdxV` maps over `d.algebraicConstraints.zipIdx` / `d.busInteractions.zipIdx` (each an
+O(system) `toArray` + rebuild) and `DenseFoldIdx.refresh` converts the folded lists back to arrays.
+The twin below threads only the `DenseFoldIdx` (already array-backed) and applies an accepted fold
+with `Array.modify` at the touched positions — O(touched) per accept — materializing lists once at
+the pass exit. `denseDomainFoldFV_eq_fast` (`Proofs/DomainFold.lean`) proves it equal to
+`denseDomainFoldFV` and installs it with `@[csimp]`. -/
+
+/-- `denseFoldOutIdxV` + `refresh`, array-native: modify only the touched positions, in place. -/
+def denseFoldOutArrV (fidx : DenseFoldIdx p) (xs : List VarId)
+    (survsV : List (List (ZMod p))) : DenseFoldIdx p :=
+  match fidx with
+  | ⟨idx, arr, bisIdx, arrBis⟩ =>
+    ⟨idx,
+     (denseTouchedSet idx xs).toList.foldl
+       (fun a i => a.modify i
+         (fun c => if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c)) arr,
+     bisIdx,
+     (denseTouchedSet bisIdx xs).toList.foldl
+       (fun a i => a.modify i
+         (fun bi => { bi with
+           multiplicity := denseFoldRewriteIdxV xs survsV bi.multiplicity,
+           payload := bi.payload.map (denseFoldRewriteIdxV xs survsV) })) arrBis⟩
+
+/-- `denseFoldStepV`, array-native: the identical probe/gate served from the shared index, with an
+    accepted fold applied sparsely by `denseFoldOutArrV`. -/
+def denseFoldStepArrV (fidx : DenseFoldIdx p) (xs : List VarId) : DenseFoldIdx p :=
+  let es := denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs
+  match denseGroupDoms es xs with
+  | none => fidx
+  | some doms =>
+    if (doms.map (fun yd => yd.2.length)).prod ≤ 256 then
+      let survsV := denseGroupSurvivorsEV es xs (doms.map Prod.snd)
+      if 1 ≤ survsV.length && denseSystemHasFoldableIdxV fidx xs survsV then
+        denseFoldOutArrV fidx xs survsV
+      else fidx
+    else fidx
+
+/-- Process the candidate groups sequentially, array-native. -/
+def denseFoldLoopArrV : List (List VarId) → DenseFoldIdx p → DenseFoldIdx p
+  | [], fidx => fidx
+  | xs :: rest, fidx => denseFoldLoopArrV rest (denseFoldStepArrV fidx xs)
+
 /-! ## The candidate group list -/
 
 /-- The candidate fold targets: every constraint's 2–8-distinct-variable group all of whose
@@ -273,6 +318,18 @@ def denseDomainFoldFV (pw : PrimeWitness p) (d : DenseConstraintSystem p) : Dens
     let targets := denseTargetsV d
     if domainFoldIndexThreshold ≤ d.algebraicConstraints.length then
       denseFoldLoopV targets d (DenseFoldIdx.mk' d)
+    else denseFoldLoopDirectV targets d
+  else d
+
+/-- `denseDomainFoldFV` with the array-native loop on the indexed path. Proven equal and installed
+    by `denseDomainFoldFV_eq_fast` (`Proofs/DomainFold.lean`). -/
+def denseDomainFoldFVFast (pw : PrimeWitness p) (d : DenseConstraintSystem p) :
+    DenseConstraintSystem p :=
+  if pw.isPrime = true then
+    let targets := denseTargetsV d
+    if domainFoldIndexThreshold ≤ d.algebraicConstraints.length then
+      let fidx := denseFoldLoopArrV targets (DenseFoldIdx.mk' d)
+      { algebraicConstraints := fidx.arr.toList, busInteractions := fidx.arrBis.toList }
     else denseFoldLoopDirectV targets d
   else d
 
