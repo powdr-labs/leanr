@@ -533,22 +533,6 @@ theorem denseByteJustifiedW_sound (bound : Nat) (deep : Bool) (all domCs : List 
         fwits e denv (fun v b hb => denseFindVarBound_sound bs facts (wits v) v b hb denv (hbusW v))
         (fun v bi hbi => hbus bi (hfwits v bi hbi)) h
 
-/-- The plain full-scan form: `denseByteJustifiedW_sound` at the naive per-query filters. -/
-theorem denseByteJustified_sound (bound : Nat) (deep : Bool) (all : List (DenseExpr p))
-    (bs : BusSemantics p)
-    (facts : BusFacts p bs) (rest : List (BusInteraction (DenseExpr p))) (e : DenseExpr p)
-    (hdeep : deep = true → p.Prime)
-    (h : denseByteJustified bound deep all bs facts rest e = true) (denv : VarId → ZMod p)
-    (hall : ∀ c' ∈ all, c'.eval denv = 0)
-    (hbus : ∀ bi ∈ rest, (denseBIEval bi denv).multiplicity ≠ 0 →
-      bs.violatesConstraint (denseBIEval bi denv) = false) :
-    (e.eval denv).val < bound :=
-  denseByteJustifiedW_sound bound deep all (all.filter DenseExpr.isSingleVar)
-    (fun x => all.filter (DenseExpr.mentions x)) bs facts rest (fun _ => rest)
-    (fun _ => []) e hdeep
-    (fun _ hc => List.mem_of_mem_filter hc) (fun _ _ hc => List.mem_of_mem_filter hc)
-    (fun _ _ hbi => hbi) (fun _ _ hbi => absurd hbi (by simp)) h denv hall hbus
-
 /-- If every declared byte slot of `R` is justified, then at every such slot the evaluated payload
     entry of `R` (under any `denv` zeroing `all` and never violating the remaining witnessed
     interactions) is a byte/limb (`< bound`) — `denseDropPair_correct`'s `hbyte` obligation. -/
