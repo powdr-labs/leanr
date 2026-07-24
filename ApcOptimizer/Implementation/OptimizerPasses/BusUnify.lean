@@ -283,7 +283,9 @@ def denseBusUnifyF (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseConst
     let nw : Thunk (DenseNonzeroWits p) :=
       Thunk.mk fun _ => DenseNonzeroWits.build d.algebraicConstraints
     let eqs := denseCollectAllBuses d bs facts T nw
-      ((d.busInteractions.map (fun bi => bi.busId)).dedup)
+      -- `hashedDedup` = `List.dedup` (`hashedDedup_eq`), one bucket per id instead of the
+      -- quadratic full-list membership walk (the interaction list is system-sized).
+      (HashedDedup.hashedDedup (hash ·) (d.busInteractions.map (fun bi => bi.busId)))
     if eqs.isEmpty then d
     else
       -- No-new-variable side condition holds by construction (`denseMemEqConstraints_vars`); the

@@ -355,7 +355,9 @@ def denseCancelLoop (cs0 : DenseConstraintSystem p) (bs : BusSemantics p) (facts
 def denseBusPairCancelPass (pw : PrimeWitness p) (aggressive : Bool) : DenseVerifiedPassW p :=
   fun reg d hcov bs facts =>
   if hp1 : (1 : ZMod p) ≠ 0 then
-    let busIds := (d.busInteractions.map (fun bi => bi.busId)).dedup
+    -- `hashedDedup` = `List.dedup` (`hashedDedup_eq`), one bucket per id instead of the
+    -- quadratic full-list membership walk (the interaction list is system-sized).
+    let busIds := HashedDedup.hashedDedup (hash ·) (d.busInteractions.map (fun bi => bi.busId))
     let deep : Bool := pw.isPrime
     let arr := d.busInteractions.toArray
     let ops : DenseZModOps p := denseZModOps

@@ -529,7 +529,7 @@ def denseBusUnifyNew (bs : BusSemantics p) (facts : BusFacts p bs) (d : DenseCon
   let nw : Thunk (DenseNonzeroWits p) :=
     Thunk.mk fun _ => DenseNonzeroWits.build d.algebraicConstraints
   let eqs := denseCollectAllBuses d bs facts T nw
-    ((d.busInteractions.map (fun bi => bi.busId)).dedup)
+    (HashedDedup.hashedDedup (hash ·) (d.busInteractions.map (fun bi => bi.busId)))
   let dHashes : Std.HashMap UInt64 (List (DenseExpr p)) :=
     d.algebraicConstraints.foldl (fun m c =>
       let h := c.bHash
@@ -578,7 +578,8 @@ theorem denseBusUnifyNew_sound (bs : BusSemantics p) (facts : BusFacts p bs) (re
   have hmem : c ∈ denseCollectAllBuses d bs facts
       (Thunk.mk fun _ => DenseTwoRootMap.build d.algebraicConstraints)
       (Thunk.mk fun _ => DenseNonzeroWits.build d.algebraicConstraints)
-      ((d.busInteractions.map (fun bi => bi.busId)).dedup) := List.mem_of_mem_filter hc
+      (HashedDedup.hashedDedup (hash ·) (d.busInteractions.map (fun bi => bi.busId)))
+    := List.mem_of_mem_filter hc
   exact denseCollectAllBuses_sound d bs facts hp1 reg hcov denv hadm hsat _ c hmem
 
 theorem denseBusUnifyF_covered (reg : VarRegistry) (bs : BusSemantics p) (facts : BusFacts p bs)
