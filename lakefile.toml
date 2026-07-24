@@ -2,6 +2,17 @@ name = "apc-optimizer"
 version = "0.1.0"
 defaultTargets = ["ApcOptimizer", "apc-optimizer"]
 
+# Documentation-only dependency: builds the audited-surface docs site (docs/).
+# Not in defaultTargets, so `lake build` and CI never build it. Declared before
+# mathlib so mathlib's shared-dependency pins (e.g. plausible) take precedence —
+# keeping `lake exe cache get` hashes correct.
+[[require]]
+name = "verso"
+git = "https://github.com/leanprover/verso"
+rev = "v4.30.0-rc1"
+
+# Kept last so its versions of transitively-shared dependencies (e.g. plausible) win, which is
+# what keeps `lake exe cache get` hashes correct. Tracks master, as before.
 [[require]]
 name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4"
@@ -13,3 +24,13 @@ name = "ApcOptimizer"
 [[lean_exe]]
 name = "apc-optimizer"
 root = "Main"
+
+[[lean_lib]]
+name = "Docs"
+srcDir = "docs"
+
+[[lean_exe]]
+name = "docs"
+srcDir = "docs"
+root = "DocsMain"
+supportInterpreter = true

@@ -1,0 +1,47 @@
+digraph trust {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [fontname="Helvetica,Arial,sans-serif", fontsize=12, shape=box, style="rounded,filled", penwidth=1.2];
+  edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, color="#8a8f98", arrowsize=0.8];
+
+  // ---- shipped entry points ----
+  node [fillcolor="#e8eefc", color="#2f5fd0"];
+  ship [label="openVmOptimizer / sp1Optimizer /\nsimpleOptimizer maintainsCorrectness\n(shipped theorems)"];
+
+  // ---- machine-checked (green) ----
+  node [fillcolor="#e4f5e9", color="#2e9e5b"];
+  master  [label="optimizerWithBusFacts_\nmaintainsCorrectness\n(master theorem)"];
+  correct [label="Optimizer.isCorrect"];
+  sound   [label="isSoundReplacementOf\n(soundness)"];
+  complete[label="isCompleteReplacementOf\n(completeness)"];
+  degree  [label="optimizerRespectsDegreeBound"];
+  passes  [label="per-pass PassCorrect proofs\n(one per optimization pass)"];
+  fix     [label="fixpoint terminates\n(sizeKey_wf, well-founded)"];
+  facts   [label="proven BusFacts\n(wrong fact ⇒ won't compile)"];
+
+  // ---- auditor must verify (amber) ----
+  node [fillcolor="#fdf1dd", color="#d99413"];
+  sem     [label="VM bus semantics faithful\n(openVmBusSemantics / sp1BusSemantics)"];
+  admis   [label="memory discipline / admissible\n(Blum et al. offline checking)"];
+  inp     [label="input-circuit assumptions\n(chrono order · invariants · degree ·\npinned PC lookups · byte-ranged writes)"];
+
+  // ---- edges: proof structure ----
+  ship -> master;
+  master -> correct;
+  correct -> sound;
+  correct -> complete;
+  correct -> degree;
+  sound -> passes;
+  complete -> passes;
+  passes -> fix;
+  passes -> facts;
+
+  // ---- edges: assumptions feed in (dashed) ----
+  edge [style=dashed, color="#d99413"];
+  sem -> master;
+  admis -> complete;
+  inp -> complete;
+  inp -> sound;
+
+  { rank=same; sem; admis; inp; }
+}
