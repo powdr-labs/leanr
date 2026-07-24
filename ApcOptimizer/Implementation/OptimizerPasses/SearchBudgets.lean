@@ -32,3 +32,9 @@ def maxEnumWork : Nat := 524288
     the direct per-target `coveredCsOf` scan. Purely a runtime gate — both paths compute the
     identical fold. -/
 def domainFoldIndexThreshold : Nat := 8192
+
+/-- Systems with at least this many bus interactions use the slot-0-indexed representative store in
+    `densePdDropSet`; smaller ones scan the per-class representative list directly (the index's
+    per-interaction map overhead outweighs the scan at fixture scale). Purely a runtime gate — both
+    paths propose the identical drop set. -/
+def pointwiseDupDropIndexThreshold : Nat := 4096

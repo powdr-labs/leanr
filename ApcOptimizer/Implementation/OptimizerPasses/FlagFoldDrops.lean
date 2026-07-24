@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.FlagUnify
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
+import ApcOptimizer.Implementation.OptimizerPasses.SearchBudgets
 
 set_option autoImplicit false
 
@@ -160,12 +161,38 @@ def densePdDropSet (bs : BusSemantics p) (singles : List (DenseExpr p))
     Std.HashMap UInt64 (List (BusInteraction (DenseExpr p))) := Id.run do
   -- Per coarse key (bus id, constant multiplicity, payload length), keep only the first-of-class
   -- *representatives* seen so far; a later interaction certified equal to a representative is a
-  -- drop. Storing representatives only (never the dropped entries) keeps the per-interaction scan
-  -- proportional to the number of distinct classes in a bucket rather than its total size, and
-  -- makes the first-of-class memo unnecessary (a stored representative is first-of-class by
-  -- construction). Only a heuristic drop *proposal*: `densePointwiseDupDropF` re-verifies every
-  -- proposal against `densePdKeep`, so this carries no soundness obligation.
-  let mut reps : Std.HashMap UInt64 (List (DensePdEntry p)) := ∅
+  -- drop. Representatives are indexed by their first payload slot: a certified twin's slot pair
+  -- is value-equal or shares a decomposition carrier (`denseSlotEqCert`), so every true match has
+  -- a representative whose slot 0 is hash-equal to — or shares a variable with — the incoming
+  -- slot 0, and only those buckets are scanned (huge same-key classes, e.g. range checks, would
+  -- otherwise cost O(classes) per interaction). Candidates are re-checked with the full
+  -- signature + certificate tests, so the drop set is unchanged. Only a heuristic drop
+  -- *proposal*: `densePointwiseDupDropF` re-verifies every proposal against `densePdKeep`, so
+  -- this carries no soundness obligation.
+  if bis.length < pointwiseDupDropIndexThreshold then
+    -- Fixture-scale direct scan: same checks against the whole per-class representative list.
+    let mut reps : Std.HashMap UInt64 (List (DensePdEntry p)) := ∅
+    let mut drops : Std.HashMap UInt64 (List (BusInteraction (DenseExpr p))) := ∅
+    for bi in bis do
+      if !bs.isStateful bi.busId then
+        match bi.multiplicity.constValue? with
+        | none => pure ()
+        | some m =>
+          let key := mixHash (hash bi.busId) (mixHash (hash m.val) (hash bi.payload.length))
+          let sigs : Array (UInt64 × UInt64) :=
+            (bi.payload.map (fun e => (e.bHash, e.pdVarBloom))).toArray
+          let entries := reps.getD key []
+          if entries.any (fun e =>
+              densePdSigsCompatible e.sigs sigs && denseMsgEqCert singles e.bi bi) then
+            let vk := densePdValHash bi
+            drops := drops.insert vk (bi :: (drops.getD vk []))
+          else
+            reps := reps.insert key ({ pos := 0, bi, sigs, kept := true } :: entries)
+    return drops
+  else
+  let mut repsByHash : Std.HashMap (UInt64 × UInt64) (List (DensePdEntry p)) := ∅
+  let mut repsByVar : Std.HashMap (UInt64 × VarId) (List (DensePdEntry p)) := ∅
+  let mut repsEmpty : Std.HashMap UInt64 (List (DensePdEntry p)) := ∅
   let mut drops : Std.HashMap UInt64 (List (BusInteraction (DenseExpr p))) := ∅
   for bi in bis do
     if !bs.isStateful bi.busId then
@@ -175,13 +202,29 @@ def densePdDropSet (bs : BusSemantics p) (singles : List (DenseExpr p))
         let key := mixHash (hash bi.busId) (mixHash (hash m.val) (hash bi.payload.length))
         let sigs : Array (UInt64 × UInt64) :=
           (bi.payload.map (fun e => (e.bHash, e.pdVarBloom))).toArray
-        let entries := reps.getD key []
-        if entries.any (fun e => densePdSigsCompatible e.sigs sigs && denseMsgEqCert singles e.bi bi)
-        then
+        let hit :=
+          match bi.payload with
+          | [] =>
+            (repsEmpty.getD key []).any (fun e =>
+              densePdSigsCompatible e.sigs sigs && denseMsgEqCert singles e.bi bi)
+          | e0 :: _ =>
+            let check := fun (e : DensePdEntry p) =>
+              densePdSigsCompatible e.sigs sigs && denseMsgEqCert singles e.bi bi
+            (repsByHash.getD (key, e0.bHash) []).any check ||
+              (HashedDedup.hashedEraseDups (hash ·) e0.vars).any (fun v =>
+                (repsByVar.getD (key, v) []).any check)
+        if hit then
           let vk := densePdValHash bi
           drops := drops.insert vk (bi :: (drops.getD vk []))
         else
-          reps := reps.insert key ({ pos := 0, bi, sigs, kept := true } :: entries)
+          let entry : DensePdEntry p := { pos := 0, bi, sigs, kept := true }
+          match bi.payload with
+          | [] => repsEmpty := repsEmpty.insert key (entry :: repsEmpty.getD key [])
+          | e0 :: _ =>
+            repsByHash := repsByHash.insert (key, e0.bHash)
+              (entry :: repsByHash.getD (key, e0.bHash) [])
+            for v in HashedDedup.hashedEraseDups (hash ·) e0.vars do
+              repsByVar := repsByVar.insert (key, v) (entry :: repsByVar.getD (key, v) [])
   return drops
 
 /-- Drop `bi` iff its value bucket holds a certified dropped twin. The `{b // densePdKeep … = false}`
@@ -215,12 +258,13 @@ def densePointwiseDupDropF (pw : PrimeWitness p) (bs : BusSemantics p)
   if pw.isPrime = true then
     let singles := denseSingleVarCs d.algebraicConstraints
     let drops := densePdDropSet bs singles d.busInteractions
+    -- `singles` is reused in the re-verification below: spelling the filter out again inside the
+    -- `filterMap` closure would recompute the O(system) single-variable scan per proposed drop.
     let verdicts : Std.HashMap UInt64 (List { b : BusInteraction (DenseExpr p) //
-        densePdKeep bs (denseSingleVarCs d.algebraicConstraints) d.busInteractions b = false }) :=
+        densePdKeep bs singles d.busInteractions b = false }) :=
       drops.fold (init := ∅) fun m h l =>
         m.insert h (l.eraseDups.filterMap (fun b =>
-          if hpd : densePdKeep bs (denseSingleVarCs d.algebraicConstraints)
-              d.busInteractions b = false
+          if hpd : densePdKeep bs singles d.busInteractions b = false
           then some ⟨b, hpd⟩ else none))
     d.filterBus (densePdVerdictKeep verdicts)
   else d
