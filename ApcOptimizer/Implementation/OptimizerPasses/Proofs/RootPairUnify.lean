@@ -518,6 +518,514 @@ theorem denseRootPairUnifyF_correct (pw : PrimeWitness p) (reg : VarRegistry) (b
       (fun i t hti z hz => hinv.2 i t hti z hz)
   · exact DensePassCorrect.refl reg.isInput d bs
 
+/-! ## The indexed twins compute the same pass (`@[csimp]` runtime replacement)
+
+`denseRpLoopIdx` (`RootPairUnify.lean`) serves each bound query from a per-variable interaction
+index and a tabulated first-yield domain map instead of scanning the full interaction and
+constraint lists per candidate. The lemmas below show every query answer is unchanged — an
+interaction can only bound `x` if it mentions `x`, and the per-variable bucket is exactly the
+mention-filtered sublist in source order — so the pass is equal; `denseRootPairUnifyF_eq_fast`
+installs the fast body via `@[csimp]`. -/
+
+private theorem eraseDups_nodup {α : Type _} [BEq α] [LawfulBEq α] :
+    ∀ (l : List α), l.eraseDups.Nodup
+  | [] => by simp
+  | a :: as => by
+    rw [List.eraseDups_cons]
+    refine List.nodup_cons.mpr ⟨?_, eraseDups_nodup _⟩
+    intro hmem
+    have hf := (List.mem_filter.mp (List.mem_eraseDups.mp hmem)).2
+    rw [beq_self_eq_true] at hf
+    exact absurd hf (by decide)
+  termination_by l => l.length
+  decreasing_by
+    exact Nat.lt_add_one_of_le (List.length_filter_le ..)
+
+/-- `mentions` decides `vars` membership. -/
+private theorem denseMentions_iff_mem (i : VarId) (e : DenseExpr p) :
+    e.mentions i = true ↔ i ∈ e.vars := by
+  induction e with
+  | const n => simp [DenseExpr.mentions, DenseExpr.vars]
+  | var j =>
+      simp only [DenseExpr.mentions, DenseExpr.vars, List.mem_singleton, beq_iff_eq]
+      exact eq_comm
+  | add a b iha ihb => simp [DenseExpr.mentions, DenseExpr.vars, iha, ihb]
+  | mul a b iha ihb => simp [DenseExpr.mentions, DenseExpr.vars, iha, ihb]
+
+/-- `findSome?` under a pointwise-equal function. -/
+private theorem findSome?_congr' {α β : Type _} {f g : α → Option β} :
+    ∀ (l : List α), (∀ a ∈ l, f a = g a) → l.findSome? f = l.findSome? g := by
+  intro l
+  induction l with
+  | nil => intro _; rfl
+  | cons a rest ih =>
+      intro h
+      rw [List.findSome?_cons, List.findSome?_cons, h a (List.mem_cons_self ..)]
+      cases g a
+      · exact ih (fun b hb => h b (List.mem_cons_of_mem _ hb))
+      · rfl
+
+/-- Dropping list elements on which `f` is `none` keeps the first hit. -/
+private theorem findSome?_filter_eq {α β : Type _} (f : α → Option β) (P : α → Bool) :
+    ∀ (l : List α), (∀ a ∈ l, f a ≠ none → P a = true) →
+      (l.filter P).findSome? f = l.findSome? f := by
+  intro l
+  induction l with
+  | nil => intro _; rfl
+  | cons a rest ih =>
+      intro h
+      by_cases hPa : P a = true
+      · rw [List.filter_cons_of_pos hPa, List.findSome?_cons, List.findSome?_cons]
+        cases f a
+        · exact ih (fun b hb hf => h b (List.mem_cons_of_mem _ hb) hf)
+        · rfl
+      · have hfa : f a = none := by
+          by_contra hne
+          exact hPa (h a (List.mem_cons_self ..) hne)
+        rw [List.filter_cons_of_neg (by simpa using hPa)]
+        simp only [List.findSome?_cons, hfa]
+        exact ih (fun b hb hf => h b (List.mem_cons_of_mem _ hb) hf)
+
+/-- Dropping interactions that yield no bound keeps the first bound. -/
+private theorem denseFindVarBound_filter_eq (bs : BusSemantics p) (facts : BusFacts p bs)
+    (x : VarId) (P : BusInteraction (DenseExpr p) → Bool) :
+    ∀ (l : List (BusInteraction (DenseExpr p))),
+      (∀ bi ∈ l, denseInteractionBound bs facts bi x ≠ none → P bi = true) →
+      denseFindVarBound bs facts (l.filter P) x = denseFindVarBound bs facts l x := by
+  intro l
+  induction l with
+  | nil => intro _; rfl
+  | cons bi rest ih =>
+      intro h
+      by_cases hP : P bi = true
+      · rw [List.filter_cons_of_pos hP]
+        simp only [denseFindVarBound]
+        cases denseInteractionBound bs facts bi x
+        · exact ih (fun b hb hf => h b (List.mem_cons_of_mem _ hb) hf)
+        · rfl
+      · have hno : denseInteractionBound bs facts bi x = none := by
+          by_contra hne
+          exact hP (h bi (List.mem_cons_self ..) hne)
+        rw [List.filter_cons_of_neg (by simpa using hP)]
+        simp only [denseFindVarBound, hno]
+        exact ih (fun b hb hf => h b (List.mem_cons_of_mem _ hb) hf)
+
+/-- A payload with a literal `.var i` slot mentions `i`. -/
+private theorem denseVarSlot_mem (i : VarId) :
+    ∀ (payload : List (DenseExpr p)) (slot : Nat), denseVarSlot i payload = some slot →
+      i ∈ payload.flatMap DenseExpr.vars := by
+  intro payload
+  induction payload with
+  | nil => intro slot h; simp [denseVarSlot] at h
+  | cons e rest ih =>
+      intro slot h
+      rw [denseVarSlot] at h
+      by_cases hv : denseIsVarOf i e = true
+      · cases e with
+        | var j =>
+            have : j = i := by simpa [denseIsVarOf] using hv
+            subst this
+            simp [DenseExpr.vars]
+        | const n => simp [denseIsVarOf] at hv
+        | add a b => simp [denseIsVarOf] at hv
+        | mul a b => simp [denseIsVarOf] at hv
+      · rw [if_neg hv] at h
+        cases hrec : denseVarSlot i rest with
+        | none => rw [hrec] at h; simp at h
+        | some s =>
+            simp only [List.flatMap_cons, List.mem_append]
+            exact Or.inr (ih s hrec)
+
+/-- An interaction can only bound `x` if it mentions `x`. -/
+private theorem denseInteractionBound_mem (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bi : BusInteraction (DenseExpr p)) (x : VarId) (B : Nat)
+    (h : denseInteractionBound bs facts bi x = some B) : x ∈ denseBIVars bi := by
+  unfold denseInteractionBound at h
+  cases hm : bi.multiplicity.constValue? with
+  | none => simp only [hm] at h; exact absurd h.symm (Option.some_ne_none B)
+  | some mval =>
+      simp only [hm] at h
+      split_ifs at h with hz
+      cases hs : denseVarSlot x bi.payload with
+      | none => simp only [hs] at h; exact absurd h.symm (Option.some_ne_none B)
+      | some slot =>
+          rw [denseBIVars]
+          exact List.mem_append_right _ (denseVarSlot_mem x bi.payload slot hs)
+
+/-- A nonzero `splitAt` coefficient certifies occurrence. -/
+private theorem denseSplitAt_ne_zero_mem (x : VarId) :
+    ∀ (e : DenseExpr p) (k : ZMod p) (R : DenseExpr p),
+      e.splitAt x = some (k, R) → k ≠ 0 → x ∈ e.vars := by
+  intro e
+  induction e with
+  | const n =>
+      intro k R h hk
+      rw [DenseExpr.splitAt] at h
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      exact absurd h.1.symm hk
+  | var y =>
+      intro k R h hk
+      rw [DenseExpr.splitAt] at h
+      by_cases hyx : y = x
+      · subst hyx; simp [DenseExpr.vars]
+      · rw [if_neg hyx] at h
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        exact absurd h.1.symm hk
+  | add a b iha ihb =>
+      intro k R h hk
+      rw [DenseExpr.splitAt] at h
+      cases ha : a.splitAt x with
+      | none => rw [ha] at h; simp at h
+      | some pa =>
+          cases hb : b.splitAt x with
+          | none => rw [ha, hb] at h; simp at h
+          | some pb =>
+              obtain ⟨ka, ra⟩ := pa
+              obtain ⟨kb, rb⟩ := pb
+              rw [ha, hb] at h
+              simp only [Option.some.injEq, Prod.mk.injEq] at h
+              have : ka ≠ 0 ∨ kb ≠ 0 := by
+                by_contra hc
+                rw [not_or, not_ne_iff, not_ne_iff] at hc
+                exact hk (by rw [← h.1, hc.1, hc.2, add_zero])
+              rw [DenseExpr.vars]
+              rcases this with h1 | h1
+              · exact List.mem_append_left _ (iha _ _ ha h1)
+              · exact List.mem_append_right _ (ihb _ _ hb h1)
+  | mul a b iha ihb =>
+      intro k R h hk
+      rw [DenseExpr.splitAt] at h
+      by_cases hmen : (a.mentions x || b.mentions x) = true
+      · rw [if_pos hmen] at h
+        cases hca : a.constValue? with
+        | some k0 =>
+            rw [hca] at h
+            cases hsb : b.splitAt x with
+            | none => rw [hsb] at h; simp at h
+            | some pb =>
+                obtain ⟨cb, rb⟩ := pb
+                rw [hsb] at h
+                simp only [Option.some.injEq, Prod.mk.injEq] at h
+                have hcb : cb ≠ 0 := fun hz => hk (by rw [← h.1, hz, mul_zero])
+                rw [DenseExpr.vars]
+                exact List.mem_append_right _ (ihb _ _ hsb hcb)
+        | none =>
+            rw [hca] at h
+            cases hcb : b.constValue? with
+            | some k0 =>
+                rw [hcb] at h
+                cases hsa : a.splitAt x with
+                | none => rw [hsa] at h; simp at h
+                | some pa =>
+                    obtain ⟨ca, ra⟩ := pa
+                    rw [hsa] at h
+                    simp only [Option.some.injEq, Prod.mk.injEq] at h
+                    have hca' : ca ≠ 0 := fun hz => hk (by rw [← h.1, hz, mul_zero])
+                    rw [DenseExpr.vars]
+                    exact List.mem_append_left _ (iha _ _ hsa hca')
+            | none => rw [hcb] at h; simp at h
+      · rw [if_neg hmen] at h
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        exact absurd h.1.symm hk
+
+/-- The domain-served scaled bound equals the scanning one, pointwise in the domain lookup. -/
+private theorem denseScaledSlotBoundD_eq (bs : BusSemantics p) (facts : BusFacts p bs)
+    (domCs : List (DenseExpr p)) (dom : VarId → Option (List (ZMod p)))
+    (hdom : ∀ v, dom v = denseFindDomainAlg domCs v) (bi : BusInteraction (DenseExpr p))
+    (x : VarId) :
+    denseScaledSlotBoundD bs facts dom bi x = denseScaledSlotBound bs facts domCs bi x := by
+  unfold denseScaledSlotBound denseScaledSlotBoundD
+  simp only [hdom]
+
+/-- A scaled slot can only bound `x` if the interaction mentions `x` (the accepted slot's
+    coefficient is nonzero once `1 ≠ 0`). -/
+private theorem denseScaledSlotBoundD_mem (bs : BusSemantics p) (facts : BusFacts p bs)
+    (dom : VarId → Option (List (ZMod p))) (bi : BusInteraction (DenseExpr p)) (x : VarId)
+    (hp1 : (1 : ZMod p) ≠ 0) (B : Nat)
+    (h : denseScaledSlotBoundD bs facts dom bi x = some B) : x ∈ denseBIVars bi := by
+  unfold denseScaledSlotBoundD at h
+  cases hm : bi.multiplicity.constValue? with
+  | none => simp only [hm] at h; exact absurd h.symm (Option.some_ne_none B)
+  | some mval =>
+      simp only [hm] at h
+      split_ifs at h with hz
+      obtain ⟨slot, _hslot, hfs⟩ := List.exists_of_findSome?_eq_some h
+      cases hpay : bi.payload[slot]? with
+      | none => simp only [hpay] at hfs; exact absurd hfs.symm (Option.some_ne_none B)
+      | some O =>
+          simp only [hpay] at hfs
+          cases hb : facts.slotBound bi.busId mval (bi.payload.map DenseExpr.constValue?) slot with
+          | none => simp only [hb] at hfs; exact absurd hfs.symm (Option.some_ne_none B)
+          | some bound =>
+              simp only [hb] at hfs
+              cases hsp : O.splitAt x with
+              | none => simp only [hsp] at hfs; exact absurd hfs.symm (Option.some_ne_none B)
+              | some kR =>
+                  obtain ⟨k, R⟩ := kR
+                  simp only [hsp] at hfs
+                  split_ifs at hfs with hcond hbnd
+                  have hk : k ≠ 0 := by
+                    intro hk0
+                    have h1 := hcond.1
+                    rw [hk0, zero_mul] at h1
+                    exact hp1 h1.symm
+                  have hxO : x ∈ O.vars := denseSplitAt_ne_zero_mem x O k R hsp hk
+                  rw [denseBIVars]
+                  exact List.mem_append_right _
+                    (List.mem_flatMap.mpr ⟨O, List.mem_of_getElem? hpay, hxO⟩)
+
+/-- The per-variable bucket is exactly the mention-filtered sublist, in source order. -/
+private theorem denseVarBucketAdd_getD {α : Type} (a : α) (x : VarId) :
+    ∀ (vs : List VarId), vs.Nodup → ∀ (m : Std.HashMap VarId (List α)),
+      (denseVarBucketAdd m vs a).getD x [] =
+        if x ∈ vs then a :: m.getD x [] else m.getD x [] := by
+  intro vs
+  induction vs with
+  | nil => intro _ m; simp [denseVarBucketAdd]
+  | cons w ws ih =>
+      intro hnd m
+      show (denseVarBucketAdd (m.insert w (a :: m.getD w [])) ws a).getD x []
+        = if x ∈ w :: ws then a :: m.getD x [] else m.getD x []
+      rw [ih (List.nodup_cons.mp hnd).2]
+      by_cases hxw : x = w
+      · subst hxw
+        have hnotin : x ∉ ws := (List.nodup_cons.mp hnd).1
+        rw [if_neg hnotin, if_pos (List.mem_cons_self ..), Std.HashMap.getD_insert_self]
+      · have hins : (m.insert w (a :: m.getD w [])).getD x [] = m.getD x [] := by
+          rw [Std.HashMap.getD_insert, if_neg (by simpa using fun h => hxw (eq_of_beq h).symm)]
+        rw [hins]
+        by_cases hxs : x ∈ ws
+        · rw [if_pos hxs, if_pos (List.mem_cons_of_mem _ hxs)]
+        · rw [if_neg hxs, if_neg (by
+            rw [List.mem_cons]
+            rintro (rfl | hmem)
+            · exact hxw rfl
+            · exact hxs hmem)]
+
+private theorem denseVarBucket_lookup_eq {α : Type} (varsOf : α → List VarId) (x : VarId) :
+    ∀ (items : List α),
+      denseVarBucketLookup (denseVarBucket varsOf items) x
+        = items.filter (fun a => decide (x ∈ varsOf a)) := by
+  intro items
+  induction items with
+  | nil => simp [denseVarBucket, denseVarBucketLookup]
+  | cons a rest ih =>
+      show (denseVarBucketAdd (denseVarBucket varsOf rest) ((varsOf a).eraseDups) a).getD x []
+        = List.filter (fun a => decide (x ∈ varsOf a)) (a :: rest)
+      rw [denseVarBucketAdd_getD a x _ (eraseDups_nodup _), List.filter_cons]
+      by_cases hxa : x ∈ varsOf a
+      · rw [if_pos (List.mem_eraseDups.mpr hxa), if_pos (by simpa using hxa)]
+        exact congrArg _ ih
+      · rw [if_neg (fun h => hxa (List.mem_eraseDups.mp h)), if_neg (by simpa using hxa)]
+        exact ih
+
+/-- A `denseDomStep` at another variable leaves `v`'s entry alone. -/
+private theorem denseDomStep_untouched (c : DenseExpr p) (v w : VarId) (hvw : v ≠ w)
+    (m : Std.HashMap VarId (List (ZMod p))) : (denseDomStep c m w)[v]? = m[v]? := by
+  rw [denseDomStep]
+  split
+  · rfl
+  · split
+    · rw [Std.HashMap.getElem?_insert, if_neg (by simpa using fun h => hvw (eq_of_beq h).symm)]
+    · rfl
+
+/-- A whole inner sweep not covering `v` leaves `v`'s entry alone. -/
+private theorem denseDomInner_untouched (c : DenseExpr p) (v : VarId) :
+    ∀ (vs : List VarId), v ∉ vs → ∀ (m : Std.HashMap VarId (List (ZMod p))),
+      (vs.foldl (denseDomStep c) m)[v]? = m[v]? := by
+  intro vs
+  induction vs with
+  | nil => intro _ m; rfl
+  | cons w ws ih =>
+      intro hv m
+      rw [List.foldl_cons, ih (fun h => hv (List.mem_cons_of_mem _ h))]
+      exact denseDomStep_untouched c v w (fun h => hv (h ▸ List.mem_cons_self ..)) m
+
+/-- An inner sweep covering `v` records `c`'s yield for `v` behind any earlier entry. -/
+private theorem denseDomInner_getElem (c : DenseExpr p) (v : VarId) :
+    ∀ (vs : List VarId), vs.Nodup → v ∈ vs → ∀ (m : Std.HashMap VarId (List (ZMod p))),
+      (vs.foldl (denseDomStep c) m)[v]? = (m[v]?).or (denseRootsIn v c) := by
+  intro vs
+  induction vs with
+  | nil => intro _ hv; simp at hv
+  | cons w ws ih =>
+      intro hnd hv m
+      rw [List.foldl_cons]
+      by_cases hvw : v = w
+      · subst hvw
+        have hnotin : v ∉ ws := (List.nodup_cons.mp hnd).1
+        rw [denseDomInner_untouched c v ws hnotin, denseDomStep]
+        by_cases hc : m.contains v = true
+        · rw [if_pos hc]
+          rw [Std.HashMap.contains_eq_isSome_getElem?] at hc
+          obtain ⟨d, hd⟩ := Option.isSome_iff_exists.mp hc
+          rw [hd]
+          rfl
+        · have hnone : m[v]? = none := by
+            rw [← Option.not_isSome_iff_eq_none, ← Std.HashMap.contains_eq_isSome_getElem?]
+            simpa using hc
+          rw [if_neg hc]
+          cases hr : denseRootsIn v c
+          · rw [hnone]
+            rfl
+          · rw [Std.HashMap.getElem?_insert_self, hnone]
+            rfl
+      · have hvs : v ∈ ws := by
+          rcases List.mem_cons.mp hv with h | h
+          · exact absurd h hvw
+          · exact h
+        rw [ih (List.nodup_cons.mp hnd).2 hvs, denseDomStep_untouched c v w hvw]
+
+/-- The outer sweep prepends the earlier constraints' yields, in `denseFindDomainAlg` order. -/
+private theorem denseDomFold_getElem (v : VarId) :
+    ∀ (all : List (DenseExpr p)) (m : Std.HashMap VarId (List (ZMod p))),
+      (all.foldl (fun m c =>
+          (HashedDedup.hashedEraseDups (hash ·) c.vars).foldl (denseDomStep c) m) m)[v]?
+        = (m[v]?).or (denseFindDomainAlg all v) := by
+  intro all
+  induction all with
+  | nil =>
+      intro m
+      show m[v]? = (m[v]?).or none
+      rw [Option.or_none]
+  | cons c rest ih =>
+      intro m
+      rw [List.foldl_cons, ih, HashedDedup.hashedEraseDups_eq]
+      by_cases hmem : v ∈ c.vars.eraseDups
+      · have hmen : c.mentions v = true :=
+          (denseMentions_iff_mem v c).mpr (List.mem_eraseDups.mp hmem)
+        rw [denseDomInner_getElem c v _ (eraseDups_nodup _) hmem, Option.or_assoc]
+        show _ = (m[v]?).or (denseFindDomainAlg (c :: rest) v)
+        rw [denseFindDomainAlg, if_pos hmen]
+        congr 1
+        cases denseRootsIn v c <;> rfl
+      · have hmen : c.mentions v = false := by
+          rw [Bool.eq_false_iff]
+          exact fun h => hmem (List.mem_eraseDups.mpr ((denseMentions_iff_mem v c).mp h))
+        rw [denseDomInner_untouched c v _ hmem]
+        show _ = (m[v]?).or (denseFindDomainAlg (c :: rest) v)
+        rw [denseFindDomainAlg, if_neg (by simp [hmen])]
+
+/-- The tabulated domain map answers exactly `denseFindDomainAlg`. -/
+private theorem denseFindDomainMap_getElem? (all : List (DenseExpr p)) (v : VarId) :
+    (denseFindDomainMap all)[v]? = denseFindDomainAlg all v := by
+  have h := denseDomFold_getElem v all ∅
+  rw [denseFindDomainMap, h]
+  simp
+
+/-- The indexed any-bound answers exactly the scanning one. -/
+private theorem denseAnyVarBoundIdx_eq (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bis : List (BusInteraction (DenseExpr p))) (domCs : List (DenseExpr p))
+    (dom : VarId → Option (List (ZMod p)))
+    (hdom : ∀ v, dom v = denseFindDomainAlg domCs v)
+    (hp1 : (1 : ZMod p) ≠ 0) (x : VarId) :
+    denseAnyVarBoundIdx bs facts
+      (denseVarBucketLookup (denseVarBucket denseBIVars bis)) dom x
+      = denseAnyVarBound bs facts bis domCs x := by
+  have hscaled : ∀ bi, denseScaledSlotBoundD bs facts dom bi x
+      = denseScaledSlotBound bs facts domCs bi x :=
+    fun bi => denseScaledSlotBoundD_eq bs facts domCs dom hdom bi x
+  unfold denseAnyVarBoundIdx denseAnyVarBound
+  rw [denseVarBucket_lookup_eq denseBIVars x bis,
+    denseFindVarBound_filter_eq bs facts x _ bis (fun bi _ hne => by
+      cases hb : denseInteractionBound bs facts bi x with
+      | none => exact absurd hb hne
+      | some B => exact decide_eq_true (denseInteractionBound_mem bs facts bi x B hb))]
+  cases denseFindVarBound bs facts bis x with
+  | some B => rfl
+  | none =>
+      rw [findSome?_congr' _ (fun bi _ => hscaled bi)]
+      exact findSome?_filter_eq _ _ bis (fun bi _ hne => by
+        cases hb : denseScaledSlotBound bs facts domCs bi x with
+        | none => exact absurd hb hne
+        | some B =>
+            refine decide_eq_true (denseScaledSlotBoundD_mem bs facts
+              (fun v => denseFindDomainAlg domCs v) bi x hp1 B ?_)
+            rw [denseScaledSlotBoundD_eq bs facts domCs _ (fun _ => rfl) bi x, hb])
+
+/-- The indexed pair certificate answers exactly the scanning one. -/
+private theorem denseRpCheckPairIdx_eq (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bis : List (BusInteraction (DenseExpr p))) (domCs : List (DenseExpr p))
+    (dom : VarId → Option (List (ZMod p)))
+    (hdom : ∀ v, dom v = denseFindDomainAlg domCs v)
+    (hp1 : (1 : ZMod p) ≠ 0) (cX cY : DenseExpr p) (x y : VarId) :
+    denseRpCheckPairIdx bs facts (denseVarBucketLookup (denseVarBucket denseBIVars bis)) dom
+        cX cY x y
+      = denseRpCheckPair bs facts bis domCs cX cY x y := by
+  unfold denseRpCheckPairIdx denseRpCheckPair
+  rw [denseAnyVarBoundIdx_eq bs facts bis domCs dom hdom hp1 x,
+    denseAnyVarBoundIdx_eq bs facts bis domCs dom hdom hp1 y]
+
+/-- The indexed scan loop computes the same solution map. -/
+private theorem denseRpLoopIdx_eq (bs : BusSemantics p) (facts : BusFacts p bs)
+    (bis : List (BusInteraction (DenseExpr p))) (domCs : List (DenseExpr p))
+    (dom : VarId → Option (List (ZMod p)))
+    (hdom : ∀ v, dom v = denseFindDomainAlg domCs v)
+    (hp1 : (1 : ZMod p) ≠ 0) :
+    ∀ (cs : List (DenseExpr p)) (seen : Std.HashMap UInt64 (List (DenseRPSeen p)))
+      (σ : DenseSolved p),
+      denseRpLoopIdx bs facts (denseVarBucketLookup (denseVarBucket denseBIVars bis)) dom
+          cs seen σ
+        = denseRpLoop bs facts bis domCs cs seen σ := by
+  intro cs
+  induction cs with
+  | nil => intro seen σ; rfl
+  | cons c rest ih =>
+      intro seen σ
+      have hfind : (denseRpCandidates c).findSome? (fun xk =>
+          (seen.getD (denseRpKeyHash xk.2) []).findSome? (fun e =>
+            if e.key == xk.2 && e.x != xk.1 &&
+                denseRpCheckPairIdx bs facts
+                  (denseVarBucketLookup (denseVarBucket denseBIVars bis)) dom e.c c e.x xk.1
+            then some (e, xk.1) else none))
+          = (denseRpCandidates c).findSome? (fun xk =>
+          (seen.getD (denseRpKeyHash xk.2) []).findSome? (fun e =>
+            if e.key == xk.2 && e.x != xk.1 &&
+                denseRpCheckPair bs facts bis domCs e.c c e.x xk.1
+            then some (e, xk.1) else none)) := by
+        refine findSome?_congr' _ (fun xk _ => findSome?_congr' _ (fun e _ => ?_))
+        rw [denseRpCheckPairIdx_eq bs facts bis domCs dom hdom hp1]
+      simp only [denseRpLoopIdx, denseRpLoop]
+      rw [hfind]
+      cases (denseRpCandidates c).findSome? (fun xk =>
+          (seen.getD (denseRpKeyHash xk.2) []).findSome? (fun e =>
+            if e.key == xk.2 && e.x != xk.1 &&
+                denseRpCheckPair bs facts bis domCs e.c c e.x xk.1
+            then some (e, xk.1) else none)) with
+      | some ex => exact ih _ _
+      | none => exact ih _ _
+
+/-- The pass with indexed lookups, installed as `denseRootPairUnifyF`'s compiled body. -/
+@[csimp] theorem denseRootPairUnifyF_eq_fast :
+    @denseRootPairUnifyF = @denseRootPairUnifyFFast := by
+  funext p pw bs facts d
+  by_cases hp : pw.isPrime = true
+  · haveI : Fact p.Prime := ⟨pw.correct hp⟩
+    have hp1 : (1 : ZMod p) ≠ 0 := one_ne_zero
+    have hloop := denseRpLoopIdx_eq bs facts d.busInteractions d.algebraicConstraints
+      (fun v => (denseFindDomainMap d.algebraicConstraints)[v]?)
+      (fun v => denseFindDomainMap_getElem? d.algebraicConstraints v) hp1
+      d.algebraicConstraints ∅ DenseSolved.empty
+    show (if pw.isPrime = true then
+        if (denseRpLoop bs facts d.busInteractions d.algebraicConstraints
+            d.algebraicConstraints ∅ DenseSolved.empty).map.isEmpty then d
+        else d.substF (denseRpLoop bs facts d.busInteractions d.algebraicConstraints
+            d.algebraicConstraints ∅ DenseSolved.empty).fn
+      else d)
+      = (if pw.isPrime = true then
+        if (denseRpLoopIdx bs facts
+            (denseVarBucketLookup (denseVarBucket denseBIVars d.busInteractions))
+            (fun v => (denseFindDomainMap d.algebraicConstraints)[v]?)
+            d.algebraicConstraints ∅ DenseSolved.empty).map.isEmpty then d
+        else d.substF (denseRpLoopIdx bs facts
+            (denseVarBucketLookup (denseVarBucket denseBIVars d.busInteractions))
+            (fun v => (denseFindDomainMap d.algebraicConstraints)[v]?)
+            d.algebraicConstraints ∅ DenseSolved.empty).fn
+      else d)
+    rw [hloop]
+  · show (if pw.isPrime = true then _ else d) = (if pw.isPrime = true then _ else d)
+    rw [if_neg hp, if_neg hp]
+
 /-- The dense `rootPairUnify` pass (see `denseRootPairUnifyF`). -/
 def denseRootPairUnifyPass (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of (denseRootPairUnifyF pw) (fun _ _ _ => [])
