@@ -955,6 +955,178 @@ theorem denseDomainFoldFV_covered (pw : PrimeWitness p) (reg : VarRegistry)
       exact denseFoldLoopDirectV_covered reg (denseTargetsV d) d hcov
   · rw [if_neg hpB]; exact hcov
 
+/-! ## The array-native loop equals the list loop (`@[csimp]` runtime replacement)
+
+`denseFoldLoopArrV` (`DomainFoldRuntime.lean`) threads only the array-backed `DenseFoldIdx`,
+applying an accepted fold with `Array.modify` at the touched positions instead of re-materializing
+the whole list system per accept. The lemmas below relate it to `denseFoldLoopV` under the loop's
+array-sync invariant; `denseDomainFoldFV_eq_fast` installs the fast body via `@[csimp]`, so the
+correctness proofs above keep talking about the list-loop specification. -/
+
+/-- Folding `Array.modify` over distinct positions applies `f` exactly at the listed in-range
+    positions. -/
+theorem foldl_modify_getElem? {α : Type} (f : α → α) :
+    ∀ (l : List Nat), l.Nodup → ∀ (arr : Array α) (i : Nat),
+      (l.foldl (fun a j => a.modify j f) arr)[i]?
+        = if i ∈ l then arr[i]?.map f else arr[i]? := by
+  intro l
+  induction l with
+  | nil => intro _ arr i; simp
+  | cons j rest ih =>
+      intro hnd arr i
+      rw [List.foldl_cons, ih (List.Nodup.of_cons hnd) (arr.modify j f) i]
+      by_cases hij : j = i
+      · subst hij
+        have hnotin : j ∉ rest := (List.nodup_cons.mp hnd).1
+        rw [if_neg hnotin, if_pos (List.mem_cons_self ..), Array.getElem?_modify, if_pos rfl]
+      · rw [Array.getElem?_modify, if_neg hij]
+        by_cases hmem : i ∈ rest
+        · rw [if_pos hmem, if_pos (List.mem_cons_of_mem _ hmem)]
+        · rw [if_neg hmem, if_neg (by
+            rw [List.mem_cons]
+            rintro (rfl | h)
+            · exact hij rfl
+            · exact hmem h)]
+
+/-- The touched-position `Array.modify` fold computes the sparse positional map, list-level. -/
+theorem foldl_modify_toList {α : Type} (f : α → α) (s : Std.HashSet Nat) (l : List α) :
+    (s.toList.foldl (fun a j => a.modify j f) l.toArray).toList
+      = l.zipIdx.map (fun ai => if s.contains ai.2 then f ai.1 else ai.1) := by
+  have hnd : s.toList.Nodup := Std.HashSet.distinct_toList.imp (fun {a b} h => by simpa using h)
+  refine List.ext_getElem? (fun i => ?_)
+  rw [Array.getElem?_toList, foldl_modify_getElem? f s.toList hnd l.toArray i,
+    List.getElem?_map, List.getElem?_zipIdx]
+  have htoa : l.toArray[i]? = l[i]? := List.getElem?_toArray
+  have hmem : (i ∈ s.toList) ↔ s.contains i = true := by
+    rw [Std.HashSet.mem_toList, Std.HashSet.mem_iff_contains]
+  cases hl : l[i]? with
+  | none =>
+      rw [htoa, hl]
+      simp
+  | some a =>
+      rw [htoa, hl]
+      by_cases hc : s.contains i = true
+      · rw [if_pos (hmem.mpr hc)]
+        simp only [Option.map_some, Nat.zero_add]
+        rw [if_pos hc]
+      · rw [if_neg (fun h => hc (hmem.mp h))]
+        simp only [Option.map_some, Nat.zero_add]
+        rw [if_neg hc]
+
+/-- `denseFoldOutArrV` is `denseFoldOutIdxV` followed by the (no-rebuild) `refresh`, under array
+    sync. -/
+theorem denseFoldOutArrV_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p)
+    (xs : List VarId) (survsV : List (List (ZMod p)))
+    (harr : fidx.arr = d.algebraicConstraints.toArray)
+    (hbis : fidx.arrBis = d.busInteractions.toArray) :
+    denseFoldOutArrV fidx xs survsV = fidx.refresh (denseFoldOutIdxV d fidx xs survsV) := by
+  obtain ⟨idx, arr, bisIdx, arrBis⟩ := fidx
+  dsimp only at harr hbis
+  subst harr hbis
+  show DenseFoldIdx.mk idx _ bisIdx _ = DenseFoldIdx.mk idx _ bisIdx _
+  congr 1
+  · -- constraint side
+    have h := foldl_modify_toList
+      (fun c => if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c)
+      (denseTouchedSet idx xs) d.algebraicConstraints
+    calc (denseTouchedSet idx xs).toList.foldl
+          (fun a i => a.modify i
+            (fun c => if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c))
+          d.algebraicConstraints.toArray
+        = ((denseTouchedSet idx xs).toList.foldl
+            (fun a i => a.modify i
+              (fun c => if denseCoveredBy xs c then c else denseFoldRewriteIdxV xs survsV c))
+            d.algebraicConstraints.toArray).toList.toArray := by rw [Array.toArray_toList]
+      _ = _ := by rw [h]; simp only [denseFoldOutIdxV]
+  · -- interaction side
+    have h := foldl_modify_toList
+      (fun bi => { bi with
+        multiplicity := denseFoldRewriteIdxV xs survsV bi.multiplicity,
+        payload := bi.payload.map (denseFoldRewriteIdxV xs survsV) })
+      (denseTouchedSet bisIdx xs) d.busInteractions
+    calc (denseTouchedSet bisIdx xs).toList.foldl
+          (fun a i => a.modify i
+            (fun bi => { bi with
+              multiplicity := denseFoldRewriteIdxV xs survsV bi.multiplicity,
+              payload := bi.payload.map (denseFoldRewriteIdxV xs survsV) }))
+          d.busInteractions.toArray
+        = ((denseTouchedSet bisIdx xs).toList.foldl
+            (fun a i => a.modify i
+              (fun bi => { bi with
+                multiplicity := denseFoldRewriteIdxV xs survsV bi.multiplicity,
+                payload := bi.payload.map (denseFoldRewriteIdxV xs survsV) }))
+            d.busInteractions.toArray).toList.toArray := by rw [Array.toArray_toList]
+      _ = _ := by rw [h]; simp only [denseFoldOutIdxV]
+
+/-- Interaction-side analog of `denseFoldStepV_snd_arr`. -/
+theorem denseFoldStepV_snd_arrBis (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p)
+    (xs : List VarId) (hbis : fidx.arrBis = d.busInteractions.toArray) :
+    (denseFoldStepV d fidx xs).2.arrBis
+      = (denseFoldStepV d fidx xs).1.busInteractions.toArray := by
+  simp only [denseFoldStepV]; split
+  · exact hbis
+  · split_ifs <;> first | rfl | exact hbis
+
+/-- One array-native step is exactly the list step's refreshed index, under array sync. -/
+theorem denseFoldStepArrV_eq (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p)
+    (xs : List VarId)
+    (harr : fidx.arr = d.algebraicConstraints.toArray)
+    (hbis : fidx.arrBis = d.busInteractions.toArray) :
+    denseFoldStepArrV fidx xs = (denseFoldStepV d fidx xs).2 := by
+  simp only [denseFoldStepArrV, denseFoldStepV]
+  cases denseGroupDoms (denseCoveredIdx fidx.idx fidx.arr (denseCoveredBy xs) xs) xs with
+  | none => rfl
+  | some doms =>
+      dsimp only
+      split
+      · split
+        · exact denseFoldOutArrV_eq d fidx xs _ harr hbis
+        · rfl
+      · rfl
+
+/-- The array-native loop lands on the list loop's output arrays. -/
+theorem denseFoldLoopArrV_eq :
+    ∀ (targets : List (List VarId)) (d : DenseConstraintSystem p) (fidx : DenseFoldIdx p),
+      fidx.arr = d.algebraicConstraints.toArray →
+      fidx.arrBis = d.busInteractions.toArray →
+      (denseFoldLoopArrV targets fidx).arr
+          = (denseFoldLoopV targets d fidx).algebraicConstraints.toArray
+        ∧ (denseFoldLoopArrV targets fidx).arrBis
+          = (denseFoldLoopV targets d fidx).busInteractions.toArray := by
+  intro targets
+  induction targets with
+  | nil => intro d fidx harr hbis; exact ⟨harr, hbis⟩
+  | cons xs rest ih =>
+      intro d fidx harr hbis
+      show (denseFoldLoopArrV rest (denseFoldStepArrV fidx xs)).arr
+            = (denseFoldLoopV rest (denseFoldStepV d fidx xs).1
+                (denseFoldStepV d fidx xs).2).algebraicConstraints.toArray
+          ∧ (denseFoldLoopArrV rest (denseFoldStepArrV fidx xs)).arrBis
+            = (denseFoldLoopV rest (denseFoldStepV d fidx xs).1
+                (denseFoldStepV d fidx xs).2).busInteractions.toArray
+      rw [denseFoldStepArrV_eq d fidx xs harr hbis]
+      exact ih (denseFoldStepV d fidx xs).1 (denseFoldStepV d fidx xs).2
+        (denseFoldStepV_snd_arr d fidx xs harr) (denseFoldStepV_snd_arrBis d fidx xs hbis)
+
+/-- The pass transform with the array-native loop, installed as `denseDomainFoldFV`'s compiled
+    body. Every call site keeps the list-loop specification for its proofs. -/
+@[csimp] theorem denseDomainFoldFV_eq_fast : @denseDomainFoldFV = @denseDomainFoldFVFast := by
+  funext p pw d
+  unfold denseDomainFoldFV denseDomainFoldFVFast
+  by_cases hpB : pw.isPrime = true
+  · rw [if_pos hpB, if_pos hpB]
+    by_cases hthr : domainFoldIndexThreshold ≤ d.algebraicConstraints.length
+    · rw [if_pos hthr, if_pos hthr]
+      obtain ⟨h1, h2⟩ := denseFoldLoopArrV_eq (denseTargetsV d) d (DenseFoldIdx.mk' d) rfl rfl
+      show denseFoldLoopV (denseTargetsV d) d (DenseFoldIdx.mk' d)
+          = { algebraicConstraints :=
+                (denseFoldLoopArrV (denseTargetsV d) (DenseFoldIdx.mk' d)).arr.toList,
+              busInteractions :=
+                (denseFoldLoopArrV (denseTargetsV d) (DenseFoldIdx.mk' d)).arrBis.toList }
+      rw [h1, h2, List.toList_toArray, List.toList_toArray]
+    · rw [if_neg hthr, if_neg hthr]
+  · rw [if_neg hpB, if_neg hpB]
+
 /-- The registered domain-fold pass (transform `denseDomainFoldFV`, `DomainFoldRuntime.lean`). -/
 def denseDomainFoldPassV (pw : PrimeWitness p) : DenseVerifiedPassW p :=
   DenseVerifiedPassW.of
