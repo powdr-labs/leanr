@@ -84,13 +84,18 @@ def empty : VarRegistry where
 /-! ## Append-only registration -/
 
 /-- Register `v`, returning the (possibly extended) registry and `v`'s stable `VarId`. Already
-    registered `v` returns its existing ID; otherwise a fresh trailing ID is allocated. -/
+    registered `v` returns its existing ID; otherwise a fresh trailing ID is allocated.
+
+    `n` is bound before the `push` so the push is `byId`'s last use: with the size read after it,
+    the compiler would keep `byId` alive across the push and `Array.push` would copy the whole
+    (registry-sized) array on every fresh registration. -/
 def register (r : VarRegistry) (v : Variable) : VarRegistry × VarId :=
   match hlook : r.toId[v]? with
   | some i => (r, i)
   | none =>
+    let n := r.byId.size
     ({ byId := r.byId.push v
-       toId := r.toId.insert v ⟨r.byId.size⟩
+       toId := r.toId.insert v ⟨n⟩
        fwd := by
          intro w j hj
          rw [Std.HashMap.getElem?_insert] at hj
@@ -126,7 +131,7 @@ def register (r : VarRegistry) (v : Variable) : VarRegistry × VarId :=
              simp at hlook
            rw [if_neg (by simpa using hne)]
            exact hbwd },
-     ⟨r.byId.size⟩)
+     ⟨n⟩)
 
 /-! ## Extension -/
 
