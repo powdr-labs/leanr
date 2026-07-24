@@ -1,6 +1,7 @@
 import ApcOptimizer.Implementation.OptimizerPasses.AddrDiseq
 import ApcOptimizer.Implementation.OptimizerPasses.DomainFold
 import ApcOptimizer.Implementation.OptimizerPasses.HashedDedup
+import ApcOptimizer.Implementation.OptimizerPasses.VarBucket
 
 set_option autoImplicit false
 
@@ -199,6 +200,118 @@ def denseRootPairUnifyF (pw : PrimeWitness p) (bs : BusSemantics p) (facts : Bus
     (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
   if pw.isPrime = true then
     let σ := denseRpLoop bs facts d.busInteractions d.algebraicConstraints
+      d.algebraicConstraints ∅ DenseSolved.empty
+    if σ.map.isEmpty then d else d.substF σ.fn
+  else d
+
+/-! ## Indexed bound lookups (runtime twins)
+
+`denseAnyVarBound` is queried per candidate pair with the *full* interaction and constraint lists:
+`denseFindVarBound` walks every interaction, and on failure `denseScaledSlotBound` walks every
+interaction again, resolving finite domains with an O(constraints) `denseFindDomainAlg` scan per
+offset variable. The twins below serve the same queries from a per-variable interaction index and
+a tabulated first-yield domain map, both built once per pass invocation.
+`denseRootPairUnifyF_eq_fast` (`Proofs/RootPairUnify.lean`) proves the pass equal and installs it
+via `@[csimp]`. -/
+
+/-- One tabulation step: record `c`'s root domain for `v` unless an earlier constraint already
+    yielded one. -/
+def denseDomStep (c : DenseExpr p) (m : Std.HashMap VarId (List (ZMod p))) (v : VarId) :
+    Std.HashMap VarId (List (ZMod p)) :=
+  if m.contains v then m
+  else match denseRootsIn v c with
+    | some d => m.insert v d
+    | none => m
+
+/-- `denseFindDomainAlg all` tabulated for every variable by one in-order sweep; insert-if-absent
+    keeps the first yielding constraint, matching the scan's first-hit semantics. -/
+def denseFindDomainMap (all : List (DenseExpr p)) : Std.HashMap VarId (List (ZMod p)) :=
+  all.foldl (fun m c =>
+    (HashedDedup.hashedEraseDups (hash ·) c.vars).foldl (denseDomStep c) m) ∅
+
+/-- `denseScaledSlotBound` with the offset variables' domains served by `dom`. -/
+def denseScaledSlotBoundD (bs : BusSemantics p) (facts : BusFacts p bs)
+    (dom : VarId → Option (List (ZMod p))) (bi : BusInteraction (DenseExpr p)) (x : VarId) :
+    Option Nat :=
+  match bi.multiplicity.constValue? with
+  | none => none
+  | some mval =>
+    if mval = 0 then none else
+    (List.range bi.payload.length).findSome? (fun slot =>
+      match bi.payload[slot]? with
+      | none => none
+      | some O =>
+        match facts.slotBound bi.busId mval (bi.payload.map DenseExpr.constValue?) slot with
+        | none => none
+        | some bound =>
+          match O.splitAt x with
+          | none => none
+          | some (k, R) =>
+            let m := k⁻¹
+            let others := R.vars.eraseDups
+            let doms := others.filterMap (fun v => (dom v).map (fun d => (v, d)))
+            if k * m = 1 ∧ doms.map Prod.fst = others ∧
+                (doms.map (fun vd => vd.2.length)).prod ≤ 16 then
+              if m.val * (bound - 1) + ((denseAssignments doms).map
+                    (fun pt => ((-m) * R.eval (denseEnvOfFast pt)).val)).foldl max 0 < p then
+                some (m.val * (bound - 1) + ((denseAssignments doms).map
+                  (fun pt => ((-m) * R.eval (denseEnvOfFast pt)).val)).foldl max 0 + 1)
+              else none
+            else none)
+
+/-- `denseAnyVarBound` served from the per-variable index `witsOf` and the domain lookup `dom`. -/
+def denseAnyVarBoundIdx (bs : BusSemantics p) (facts : BusFacts p bs)
+    (witsOf : VarId → List (BusInteraction (DenseExpr p)))
+    (dom : VarId → Option (List (ZMod p))) (x : VarId) : Option Nat :=
+  match denseFindVarBound bs facts (witsOf x) x with
+  | some B => some B
+  | none => (witsOf x).findSome? (fun bi => denseScaledSlotBoundD bs facts dom bi x)
+
+/-- `denseRpCheckPair` with indexed bound lookups. -/
+def denseRpCheckPairIdx (bs : BusSemantics p) (facts : BusFacts p bs)
+    (witsOf : VarId → List (BusInteraction (DenseExpr p)))
+    (dom : VarId → Option (List (ZMod p)))
+    (cX cY : DenseExpr p) (x y : VarId) : Bool :=
+  match denseTwoRootOf? cX x, denseTwoRootOf? cY y with
+  | some (k, A, δ), some (k', A', δ') =>
+    decide (k' = k) && decide (A'.terms = A.terms) && decide (A'.const = A.const) &&
+    decide (δ' = δ) && decide (k * k⁻¹ = 1) &&
+    decide (x ∈ cX.vars) && decide (y ∈ cY.vars) &&
+    (match denseAnyVarBoundIdx bs facts witsOf dom x, denseAnyVarBoundIdx bs facts witsOf dom y with
+     | some Bx, some By =>
+       decide (max Bx By ≤ (k⁻¹ * δ).val) && decide (max Bx By ≤ p - (k⁻¹ * δ).val)
+     | _, _ => false)
+  | _, _ => false
+
+/-- `denseRpLoop` with indexed bound lookups. -/
+def denseRpLoopIdx (bs : BusSemantics p) (facts : BusFacts p bs)
+    (witsOf : VarId → List (BusInteraction (DenseExpr p)))
+    (dom : VarId → Option (List (ZMod p))) :
+    List (DenseExpr p) → Std.HashMap UInt64 (List (DenseRPSeen p)) → DenseSolved p → DenseSolved p
+  | [], _, σ => σ
+  | c :: rest, seen, σ =>
+    let cands := denseRpCandidates c
+    match cands.findSome? (fun xk =>
+        (seen.getD (denseRpKeyHash xk.2) []).findSome? (fun e =>
+          if e.key == xk.2 && e.x != xk.1 &&
+              denseRpCheckPairIdx bs facts witsOf dom e.c c e.x xk.1
+          then some (e, xk.1) else none)) with
+    | some ex =>
+        denseRpLoopIdx bs facts witsOf dom rest
+          (denseRpInsertAll seen ((cands.filter (fun xk => xk.1 != ex.2)).map
+            (fun xk => (⟨c, xk.1, xk.2⟩ : DenseRPSeen p))))
+          (σ.insertAll [(ex.2, DenseExpr.var ex.1.x)])
+    | none =>
+        denseRpLoopIdx bs facts witsOf dom rest
+          (denseRpInsertAll seen (cands.map (fun xk => (⟨c, xk.1, xk.2⟩ : DenseRPSeen p)))) σ
+
+/-- `denseRootPairUnifyF` with the per-variable interaction index and the tabulated domain map. -/
+def denseRootPairUnifyFFast (pw : PrimeWitness p) (bs : BusSemantics p) (facts : BusFacts p bs)
+    (d : DenseConstraintSystem p) : DenseConstraintSystem p :=
+  if pw.isPrime = true then
+    let witsIdx := denseVarBucket denseBIVars d.busInteractions
+    let domMap := denseFindDomainMap d.algebraicConstraints
+    let σ := denseRpLoopIdx bs facts (denseVarBucketLookup witsIdx) (fun v => domMap[v]?)
       d.algebraicConstraints ∅ DenseSolved.empty
     if σ.map.isEmpty then d else d.substF σ.fn
   else d

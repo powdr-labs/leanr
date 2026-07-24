@@ -1,5 +1,6 @@
 import ApcOptimizer.Implementation.OptimizerPasses.ByteCheckPack
 import ApcOptimizer.Implementation.OptimizerPasses.BusPairCancelJustify
+import ApcOptimizer.Implementation.OptimizerPasses.VarBucket
 
 set_option autoImplicit false
 
@@ -21,21 +22,6 @@ base interactions bounding it (`wits`). Computing those by filtering the whole s
 operand query is O(system) per query. We instead build, once per pass, a per-variable index mapping
 each variable to the items mentioning it, and feed those lookups to `denseByteJustifiedW`. Uncapped
 and order-preserving so a lookup returns exactly the same list a `filter (mentions x)` would. -/
-
-/-- Record `a` under each variable in `vs` (prepending, so a right-to-left build keeps source
-    order). -/
-def denseVarBucketAdd {α : Type} (m : Std.HashMap VarId (List α)) (vs : List VarId) (a : α) :
-    Std.HashMap VarId (List α) :=
-  vs.foldl (fun m x => m.insert x (a :: m.getD x [])) m
-
-/-- Index each item under every variable it mentions (via `varsOf`), keeping source order. -/
-def denseVarBucket {α : Type} (varsOf : α → List VarId) (items : List α) :
-    Std.HashMap VarId (List α) :=
-  items.foldr (fun a m => denseVarBucketAdd m ((varsOf a).eraseDups) a) ∅
-
-/-- Look up the items indexed under `x`. -/
-def denseVarBucketLookup {α : Type} (I : Std.HashMap VarId (List α)) (x : VarId) : List α :=
-  I.getD x []
 
 /-- The operands whose byte-ness *implies* this interaction's acceptance (at any multiplicity):
     the checked operands of any fold-recognized shape, packed pair included (`denseByteShape?`);
