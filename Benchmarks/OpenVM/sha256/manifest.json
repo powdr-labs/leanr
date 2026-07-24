@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "source": {
+    "note": "SHA-256 guest APC (standalone stress case); byte-identical to powdr's autoprecompiles/tests/sha256_apc_pre_opt.json.gz (md5 96399bca0f336fd1462d4e8c40176ead). The single largest autoprecompile by variable count from powdr's OpenVM SHA-256 guest benchmark: ~170k variables / ~200k constraints / ~84k bus interactions.",
+    "powdr_opt_stage": "generated as ApcWithBusMap gzipped JSON by running powdr's native optimize() (the autoprecompiles/tests/optimizer.rs::test_sha256 configuration: default_openvm_bus_map, DEFAULT_DEGREE_BOUND); counts match that test's snapshot",
+    "date": "2026-07-24"
+  },
+  "entries": [
+    {
+      "rank": 1,
+      "files": {
+        "unopt": "apc_001_pcsha256.json.gz",
+        "powdr_opt": "apc_001_pcsha256.powdr_opt.json.gz"
+      },
+      "stats": {
+        "before": {
+          "main_columns": 168915,
+          "constraints": 199740,
+          "bus_interactions": 83564
+        }
+      },
+      "powdr_opt_stats": {
+        "main_columns": 12034,
+        "constraints": 3770,
+        "bus_interactions": 9539
+      }
+    }
+  ]
+}
