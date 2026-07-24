@@ -1,5 +1,5 @@
 import VersoManual
-import Paper
+import Docs
 
 open Verso.Genre Manual
 
@@ -9,4 +9,4 @@ def config : RenderConfig where
   emitHtmlMulti := .no
 
 def main (args : List String) : IO UInt32 :=
-  manualMain (%doc Paper) (options := args) (config := config)
+  manualMain (%doc Docs) (options := args) (config := config)

@@ -2,12 +2,12 @@ import VersoManual
 
 open Verso.Genre.Manual
 
-/-! Bibliographic references, cited from `Paper.lean`. Verso renders each cite inline as
+/-! Bibliographic references, cited from `Docs.lean`. Verso renders each cite inline as
     author–year and drops the full entry in the margin. Verso's `Article` type is used for
     whitepapers and ePrint reports (`journal` carries the venue label; `volume`/`number` left
     empty). -/
 
-namespace Paper
+namespace Docs
 
 def powdr : Article where
   title := inlines!"powdr: a modular stack for zkVMs and proof systems"
@@ -123,4 +123,4 @@ def twistShout : Article where
   number := inlines!""
   url := some "https://eprint.iacr.org/2025/105"
 
-end Paper
+end Docs

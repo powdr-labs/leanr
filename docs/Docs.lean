@@ -6,12 +6,12 @@ import ApcOptimizer.OpenVmSemantics
 import ApcOptimizer.Sp1Semantics
 import ApcOptimizer.Optimizer
 
-import Paper.Bibliography
+import Docs.Bibliography
 
 open Verso.Genre Manual
 open Verso.Genre.Manual.InlineLean
 
-open Paper
+open Docs
 
 set_option pp.rawOnError true
 

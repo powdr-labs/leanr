@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Build the audited-surface paper and emit a self-contained single-page HTML site.
-# Usage: docs/paper/build.sh [--serve]
+# Build the audited-surface docs site and emit a self-contained single-page HTML site.
+# Usage: docs/build.sh [--serve]
 set -euo pipefail
-cd "$(dirname "$0")/../.."          # repo root
+cd "$(dirname "$0")/.."             # repo root
 
-OUT=docs/paper/_out
+OUT=docs/_out
 HTML="$OUT/html-single"
 
 # Render the trust-map figure from its Graphviz source (skips if `dot` is absent).
 if command -v dot >/dev/null 2>&1; then
-  dot -Tsvg docs/paper/assets/trust.dot -o docs/paper/assets/trust.svg
+  dot -Tsvg docs/assets/trust.dot -o docs/assets/trust.svg
 fi
 
-lake build paper
+lake build docs
 rm -rf "$OUT"
-lake exe paper --output "$OUT"
+lake exe docs --output "$OUT"
 
 # Ship the figure alongside the page (Verso references it relatively).
-cp docs/paper/assets/trust.svg "$HTML/"
+cp docs/assets/trust.svg "$HTML/"
 
 echo "Wrote $HTML/index.html"
 if [[ "${1:-}" == "--serve" ]]; then

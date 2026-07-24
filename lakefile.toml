@@ -2,7 +2,7 @@ name = "apc-optimizer"
 version = "0.1.0"
 defaultTargets = ["ApcOptimizer", "apc-optimizer"]
 
-# Documentation-only dependency: builds the audited-surface "paper" (docs/paper).
+# Documentation-only dependency: builds the audited-surface docs site (docs/).
 # Not in defaultTargets, so `lake build` and CI never build it. Declared before
 # mathlib so mathlib's shared-dependency pins (e.g. plausible) take precedence —
 # keeping `lake exe cache get` hashes correct.
@@ -26,11 +26,11 @@ name = "apc-optimizer"
 root = "Main"
 
 [[lean_lib]]
-name = "Paper"
-srcDir = "docs/paper"
+name = "Docs"
+srcDir = "docs"
 
 [[lean_exe]]
-name = "paper"
-srcDir = "docs/paper"
-root = "PaperMain"
+name = "docs"
+srcDir = "docs"
+root = "DocsMain"
 supportInterpreter = true
