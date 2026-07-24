@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "source": {
+    "note": "SHA-256 guest APC (standalone runtime stress case): the single largest autoprecompile by variable count from powdr's OpenVM SHA-256 guest benchmark. Generated as an ApcWithBusMap gzipped JSON (the {machine, bus_map, next_free_id} shape the parser reads) from powdr's pre-optimization APC export.",
+    "purpose": "Runtime-only stress benchmark. ~170k variables / ~200k constraints / ~84k bus interactions; one apc-optimizer run takes ~20 minutes, so CI benches it on its own runner (see the bench-runtime-sha job in .github/workflows/lean_action_ci.yml).",
+    "date": "2026-07-24"
+  },
+  "entries": [
+    {
+      "rank": 1,
+      "files": {
+        "unopt": "apc_001_pcsha256.json.gz"
+      },
+      "stats": {
+        "before": {
+          "main_columns": 168915,
+          "constraints": 199740,
+          "bus_interactions": 83564
+        }
+      }
+    }
+  ]
+}

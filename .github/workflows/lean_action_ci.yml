@@ -133,11 +133,54 @@ jobs:
           path: rt-*.json
           if-no-files-found: ignore
 
+  # SHA-256 runtime stress bench: the single ~170k-variable / ~200k-constraint APC. One optimizer
+  # run takes ~20 min, so it gets its OWN runner (off the openvm-eth critical path) with a longer
+  # timeout, and runs both this PR's binary and latest main on the SAME runner so the comparison is
+  # honest. `--no-profile` records only the total `run` time (skips the second per-pass profiling
+  # run), keeping the job to ~2×20 min.
+  bench-runtime-sha:
+    if: github.event_name == 'pull_request'
+    needs: build
+    runs-on: warp-ubuntu-2404-x64-32x
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: apc-optimizer-bin
+          path: bin-target
+      - run: chmod +x bin-target/apc-optimizer
+      - name: Latest-main binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list --workflow "Lean Action CI" --branch main --status success \
+            --limit 1 --json databaseId -q '.[0].databaseId // empty')
+          if [ -n "$run_id" ] && gh run download "$run_id" -n apc-optimizer-bin -D bin-base; then
+            chmod +x bin-base/apc-optimizer
+          fi
+      - name: Runtime, sha256 (~20 min/side, total time only)
+        run: |
+          python3 Benchmarks/runtime_bench.py sha256 --no-profile \
+            --binary bin-target/apc-optimizer --json rt-sha-pr.json
+          if [ -f bin-base/apc-optimizer ]; then
+            python3 Benchmarks/runtime_bench.py sha256 --no-profile \
+              --binary bin-base/apc-optimizer --json rt-sha-main.json
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-runtime-sha
+          path: rt-sha-*.json
+          if-no-files-found: ignore
+
   # One sticky comment: per set an effectiveness table (with a report-only runtime row) and, for
   # openvm-eth, the collapsed runtime detail from bench-runtime. Runs even if a job was skipped.
   report:
     if: always() && github.event_name == 'pull_request'
-    needs: [effectiveness, bench-runtime]
+    needs: [effectiveness, bench-runtime, bench-runtime-sha]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -154,6 +197,9 @@ jobs:
         continue-on-error: true
       - uses: actions/download-artifact@v4
         with: { name: bench-runtime, path: rt }
+        continue-on-error: true
+      - uses: actions/download-artifact@v4
+        with: { name: bench-runtime-sha, path: rt-sha }
         continue-on-error: true
       - name: Baseline sha
         id: base
@@ -185,6 +231,15 @@ jobs:
             fi
             printf '\n' >> bench.md
           done
+          # SHA-256 runtime stress case, benched on its own runner (bench-runtime-sha). ~20 min/side,
+          # total `run` time only (--no-profile), so the report is a plain total-time comparison.
+          if [ -f rt-sha/rt-sha-main.json ] && [ -f rt-sha/rt-sha-pr.json ]; then
+            printf '### sha256 runtime (stress case, own runner)\n\n' >> bench.md
+            python3 Benchmarks/runtime_bench.py \
+              --compare rt-sha/rt-sha-main.json rt-sha/rt-sha-pr.json --md rt-sha.md
+            cat rt-sha.md >> bench.md
+            printf '\n' >> bench.md
+          fi
       - name: Report
         uses: ./.github/actions/report-bench
         with:
